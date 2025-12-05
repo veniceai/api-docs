@@ -1,6 +1,9 @@
 // Venice AI Model Browser - Fetches from API
+console.log('[Venice Models] Script loaded');
 (function() {
+  console.log('[Venice Models] Checking path:', window.location.pathname);
   if (!window.location.pathname.includes('/models')) return;
+  console.log('[Venice Models] Initializing...');
 
   // Configuration
   const API_BASE = 'https://api.venice.ai/api/v1/models';
