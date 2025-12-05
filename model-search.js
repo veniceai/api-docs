@@ -295,14 +295,14 @@
           left: 50%;
           transform: translateX(-50%);
           padding: 10px 14px;
-          background: #1a1a1a;
-          border: 1px solid rgba(255,255,255,0.1);
+          background: #fafafa;
+          border: 1px solid #e4e4e7;
           border-radius: 8px;
           font-size: 13px;
           font-weight: 400;
           text-transform: none;
           line-height: 1.5;
-          color: rgba(255,255,255,0.9);
+          color: #18181b;
           white-space: normal;
           width: 280px;
           max-width: 280px;
@@ -311,7 +311,7 @@
           transition: opacity 0.15s ease, visibility 0.15s ease;
           pointer-events: none;
           z-index: 1000;
-          box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+          box-shadow: 0 4px 20px rgba(0,0,0,0.1);
         }
         .vmb-tooltip::before {
           content: '';
@@ -320,11 +320,20 @@
           left: 50%;
           transform: translateX(-50%);
           border: 6px solid transparent;
-          border-top-color: #1a1a1a;
+          border-top-color: #fafafa;
           opacity: 0;
           visibility: hidden;
           transition: opacity 0.15s ease, visibility 0.15s ease;
           z-index: 1001;
+        }
+        .dark .vmb-tooltip::after {
+          background: #18181b;
+          border-color: #3f3f46;
+          color: #fafafa;
+          box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        .dark .vmb-tooltip::before {
+          border-top-color: #18181b;
         }
         .vmb-tooltip:hover::after,
         .vmb-tooltip:hover::before {
@@ -603,7 +612,7 @@
         const isUncensored = traits.includes('most_uncensored') || 
           model.id.toLowerCase().includes('uncensored') || 
           model.id.toLowerCase().includes('lustify');
-        const uncensoredTooltip = 'This model has fewer content restrictions.';
+        const uncensoredTooltip = 'Responds to all prompts without content-based refusals or filtering.';
         const uncensoredBadge = isUncensored ? `<span class="vmb-uncensored-badge vmb-tooltip" data-tooltip="${uncensoredTooltip}">Uncensored</span>` : '';
         
         // Copy button with SVG icons
