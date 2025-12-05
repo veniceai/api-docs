@@ -129,11 +129,21 @@
   async function fetchModelsFromAPI() {
     const fetchPromises = MODEL_TYPES.map(type => 
       fetch(`${API_BASE}?type=${type}`)
-        .then(r => r.json())
-        .catch(() => ({ data: [] }))
+        .then(r => {
+          if (!r.ok) throw new Error(`API returned ${r.status}`);
+          return r.json();
+        })
+        .catch(err => {
+          console.warn(`[Venice Models] Failed to fetch ${type}:`, err.message);
+          return { data: [] };
+        })
     );
     const results = await Promise.all(fetchPromises);
     const rawModels = results.flatMap(r => r.data || []);
+    
+    if (rawModels.length === 0) {
+      console.error('[Venice Models] No models returned from API - possible CORS issue');
+    }
     
     // Deduplicate by model ID
     const seen = new Set();
