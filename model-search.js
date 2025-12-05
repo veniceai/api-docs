@@ -25,6 +25,7 @@
     'claude-opus-45'
   ]);
   const DEPRECATED_MODELS = new Set(['qwen3-235b']);
+  const ANONYMIZED_MODELS = new Set(['gemini-3-pro-preview']);
   const PRIVATE_TYPES = new Set(['upscale']);
 
   // Filter categories
@@ -80,6 +81,7 @@
 
   function isAnonymizedModel(model) {
     const spec = model.model_spec || {};
+    if (ANONYMIZED_MODELS.has(model.id)) return true;
     if (spec.privacy) return spec.privacy === 'anonymized';
     const isPrivateType = PRIVATE_TYPES.has(model.type);
     return !isPrivateType && (!spec.modelSource || spec.modelSource === '');
