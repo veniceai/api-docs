@@ -1,9 +1,14 @@
 // Venice AI Model Browser - Fetches from API
 (function() {
 
+  // ========== FEATURE FLAGS ==========
+  // Set to true to enable, false to hide
+  const ENABLE_VIDEO = false;  // Video models (coming soon)
+  // ===================================
+
   // Configuration
   const API_BASE = 'https://api.venice.ai/api/v1/models';
-  const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video'];
+  const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', ...(ENABLE_VIDEO ? ['video'] : [])];
   const CACHE_KEY = 'venice-models-cache';
   const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
   
@@ -172,7 +177,7 @@
           <button class="vmb-filter active" data-filter="all" aria-pressed="true">All</button>
           <button class="vmb-filter" data-filter="text" aria-pressed="false">Text</button>
           <button class="vmb-filter" data-filter="image" aria-pressed="false">Image</button>
-          <button class="vmb-filter" data-filter="video" aria-pressed="false">Video</button>
+          ${ENABLE_VIDEO ? '<button class="vmb-filter" data-filter="video" aria-pressed="false">Video</button>' : ''}
           <button class="vmb-filter" data-filter="audio" aria-pressed="false">Audio</button>
           <button class="vmb-filter" data-filter="embedding" aria-pressed="false">Embedding</button>
         </span>
@@ -182,10 +187,10 @@
           <button class="vmb-filter vmb-text-only" data-filter="function" aria-pressed="false">Function Calling</button>
           <button class="vmb-filter vmb-text-only" data-filter="code" aria-pressed="false">Code</button>
         </span>
-        <span class="vmb-video-filters" role="group" aria-label="Video type filters">
+        ${ENABLE_VIDEO ? `<span class="vmb-video-filters" role="group" aria-label="Video type filters">
           <button class="vmb-filter" data-filter="text-to-video" aria-pressed="false">Text to Video</button>
           <button class="vmb-filter" data-filter="image-to-video" aria-pressed="false">Image to Video</button>
-        </span>
+        </span>` : ''}
         <span class="vmb-image-filters" role="group" aria-label="Image type filters">
           <button class="vmb-filter" data-filter="image-gen" aria-pressed="false">Generation</button>
           <button class="vmb-filter" data-filter="image-upscale" aria-pressed="false">Upscale</button>
@@ -208,7 +213,7 @@
     const modelsContainer = container.querySelector('.vmb-models');
     const categoryFilters = container.querySelector('.vmb-category-filters');
     const capabilityFilters = container.querySelector('.vmb-capability-filters');
-    const videoFilters = container.querySelector('.vmb-video-filters');
+    const videoFilters = ENABLE_VIDEO ? container.querySelector('.vmb-video-filters') : null;
     const imageFilters = container.querySelector('.vmb-image-filters');
     
     // Configure filter visibility based on page context
@@ -221,11 +226,11 @@
       };
       const config = filterVisibility[presetFilter] || { capability: false, video: false, image: false };
       capabilityFilters.style.display = config.capability ? 'contents' : 'none';
-      videoFilters.style.display = config.video ? 'contents' : 'none';
+      if (videoFilters) videoFilters.style.display = config.video ? 'contents' : 'none';
       imageFilters.style.display = config.image ? 'contents' : 'none';
     } else {
       capabilityFilters.style.display = 'none';
-      videoFilters.style.display = 'none';
+      if (videoFilters) videoFilters.style.display = 'none';
       imageFilters.style.display = 'none';
     }
 
@@ -452,7 +457,7 @@
             btn.classList.add('active');
             updateAriaPressed(btn, true);
           }
-        } else if (isVideoType) {
+        } else if (isVideoType && videoFilters) {
           if (activeVideoType === filter) {
             activeVideoType = null;
             btn.classList.remove('active');
