@@ -1,9 +1,6 @@
 // Venice AI Model Browser - Fetches from API
-console.log('[Venice Models] Script loaded');
 (function() {
-  console.log('[Venice Models] Checking path:', window.location.pathname);
   if (!window.location.pathname.includes('/models')) return;
-  console.log('[Venice Models] Initializing...');
 
   // Configuration
   const API_BASE = 'https://api.venice.ai/api/v1/models';
@@ -136,17 +133,10 @@ console.log('[Venice Models] Script loaded');
           if (!r.ok) throw new Error(`API returned ${r.status}`);
           return r.json();
         })
-        .catch(err => {
-          console.warn(`[Venice Models] Failed to fetch ${type}:`, err.message);
-          return { data: [] };
-        })
+        .catch(() => ({ data: [] }))
     );
     const results = await Promise.all(fetchPromises);
     const rawModels = results.flatMap(r => r.data || []);
-    
-    if (rawModels.length === 0) {
-      console.error('[Venice Models] No models returned from API - possible CORS issue');
-    }
     
     // Deduplicate by model ID
     const seen = new Set();
@@ -262,15 +252,15 @@ console.log('[Venice Models] Script loaded');
       // No cache - fetch and show loading
       try {
         allModels = await fetchModelsFromAPI();
-      if (allModels.length === 0) {
-        modelsContainer.innerHTML = '<div class="vmb-error">No models found.</div>';
+        if (allModels.length === 0) {
+          modelsContainer.innerHTML = '<div class="vmb-error">No models found.</div>';
+          isInitializing = false;
+          return;
+        }
+        renderModels();
+      } catch (error) {
+        modelsContainer.innerHTML = '<div class="vmb-error">Failed to load models. Please refresh the page.</div>';
         isInitializing = false;
-        return;
-      }
-      renderModels();
-    } catch (error) {
-      modelsContainer.innerHTML = '<div class="vmb-error">Failed to load models.</div>';
-      isInitializing = false;
       }
     }
 
