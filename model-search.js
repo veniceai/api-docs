@@ -3,7 +3,7 @@
 
   // ========== FEATURE FLAGS ==========
   // Set to true to enable, false to hide
-  const ENABLE_VIDEO = false;  // Video models (coming soon)
+  const ENABLE_VIDEO = true;  // Video models
   // ===================================
 
   // Configuration
@@ -256,15 +256,15 @@
       // No cache - fetch and show loading
       try {
         allModels = await fetchModelsFromAPI();
-        if (allModels.length === 0) {
-          modelsContainer.innerHTML = '<div class="vmb-error">No models found.</div>';
-          isInitializing = false;
-          return;
-        }
-        renderModels();
-      } catch (error) {
-        modelsContainer.innerHTML = '<div class="vmb-error">Failed to load models. Please refresh the page.</div>';
+      if (allModels.length === 0) {
+        modelsContainer.innerHTML = '<div class="vmb-error">No models found.</div>';
         isInitializing = false;
+        return;
+      }
+      renderModels();
+    } catch (error) {
+        modelsContainer.innerHTML = '<div class="vmb-error">Failed to load models. Please refresh the page.</div>';
+      isInitializing = false;
       }
     }
 
@@ -419,7 +419,7 @@
               ${priceStr ? `<span>|</span><span>${priceStr}</span>` : ''}
               ${caps.length > 0 ? `<span>|</span><span class="vmb-model-caps">${caps.join(' · ')}</span>` : ''}
             ${videoMeta}
-          </div>
+            </div>
           </div>
         `;
     }
