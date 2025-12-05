@@ -1,6 +1,5 @@
 // Venice AI Model Browser - Fetches from API
 (function() {
-  if (!window.location.pathname.includes('/models')) return;
 
   // Configuration
   const API_BASE = 'https://api.venice.ai/api/v1/models';
@@ -510,22 +509,26 @@
     });
   }
 
-  // Initialize
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => setTimeout(init, 300));
-  } else {
-    setTimeout(init, 300);
-  }
-
-  // Watch for SPA navigation
-  const observer = new MutationObserver(() => {
+  function tryInit() {
+    if (!window.location.pathname.includes('/models')) return;
     const placeholder = document.getElementById('model-search-placeholder');
     const existing = document.getElementById('venice-model-browser');
-    if (placeholder && !existing && window.location.pathname.includes('/models')) {
+    if (placeholder && !existing) {
       isInitializing = false;
-      // Use requestAnimationFrame for smoother transition
-      requestAnimationFrame(() => init());
+      init();
     }
+  }
+
+  // Initialize on page load
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(tryInit, 100));
+  } else {
+    setTimeout(tryInit, 100);
+  }
+
+  // Watch for SPA navigation (works even when starting from non-models page)
+  const observer = new MutationObserver(() => {
+    requestAnimationFrame(tryInit);
   });
   observer.observe(document.body, { childList: true, subtree: true });
 })();
