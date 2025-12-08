@@ -25,7 +25,87 @@
     'claude-opus-45'
   ]);
   const DEPRECATED_MODELS = new Set(['qwen3-235b']);
+  const ANONYMIZED_MODELS = new Set(['gemini-3-pro-preview']);
   const PRIVATE_TYPES = new Set(['upscale']);
+
+  // Fallback pricing for image-to-video (API requires image param we can't provide)
+  const IMAGE_TO_VIDEO_PRICING = {
+    'wan-2.5-preview-image-to-video': { base: 0.056, mult: { '480': 1, '720': 2, '1080': 3 } },
+    'wan-2.1-pro-image-to-video': { fixed: 0.88 },
+    'ltx-2-fast-image-to-video': { base: 0.043, mult: { '1080': 1, '1440': 2, '2160': 4 } },
+    'ltx-2-full-image-to-video': { base: 0.067, mult: { '1080': 1, '1440': 2, '2160': 4 } },
+    'kling-2.6-pro-image-to-video': { base: 0.154 },
+    'kling-2.5-turbo-pro-image-to-video': { base: 0.078 },
+    'veo3-fast-image-to-video': { base: 0.11 },
+    'veo3-full-image-to-video': { base: 0.22 },
+    'veo3.1-fast-image-to-video': { base: 0.165 },
+    'veo3.1-full-image-to-video': { base: 0.44 },
+    'sora-2-image-to-video': { base: 0.11 },
+    'sora-2-pro-image-to-video': { base: 0.33, mult: { '720': 1, '1080': 1.68 } },
+    'longcat-distilled-image-to-video': { base: 0.018 },
+    'longcat-image-to-video': { base: 0.05 },
+    'ovi-image-to-video': { fixed: 0.50 },
+  };
+
+  const videoQuoteCache = new Map();
+
+  function getAspectRatios(constraints) {
+    const ar = constraints.aspect_ratios;
+    if (!ar) return [];
+    if (Array.isArray(ar)) return ar;
+    if (typeof ar === 'string') return [ar];
+    return [];
+  }
+
+  function getImageToVideoPrice(modelId, resolution) {
+    const p = IMAGE_TO_VIDEO_PRICING[modelId];
+    if (!p) return null;
+    
+    if (p.fixed !== undefined) return p.fixed;
+    
+    const resKey = (resolution || '720p').replace('p', '');
+    const mult = p.mult?.[resKey] || 1;
+    return p.base * mult;
+  }
+
+  async function fetchVideoQuote(modelId, model, resolution) {
+    const constraints = model.model_spec?.constraints || {};
+    
+    // Image-to-video requires image param - use hardcoded pricing
+    if (constraints.model_type === 'image-to-video') {
+      return getImageToVideoPrice(modelId, resolution);
+    }
+    
+    const duration = constraints.durations?.[0] || '5s';
+    const aspectRatios = getAspectRatios(constraints);
+    const aspectRatio = aspectRatios[0];
+    
+    const cacheKey = `${modelId}:${resolution || 'default'}`;
+    if (videoQuoteCache.has(cacheKey)) {
+      return videoQuoteCache.get(cacheKey);
+    }
+
+    const body = { model: modelId, prompt: 'quote' };
+    if (resolution) body.resolution = resolution;
+    if (duration) body.duration = duration;
+    if (aspectRatio) body.aspect_ratio = aspectRatio;
+
+    try {
+      const res = await fetch('https://api.venice.ai/api/v1/video/quote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const dur = parseFloat(duration) || 5;
+      const perSecond = data.quote / dur;
+      videoQuoteCache.set(cacheKey, perSecond);
+      return perSecond;
+    } catch {
+      return null;
+    }
+  }
 
   // Filter categories
   const CAPABILITY_FILTERS = ['reasoning', 'vision', 'function', 'code'];
@@ -54,6 +134,22 @@
     return '$' + price.toFixed(2);
   }
 
+  function formatVideoPricing(modelId) {
+    return `<span class="vmb-video-price" data-model="${modelId}">...</span>`;
+  }
+
+  async function updateVideoPrice(modelId, model, resolution, container) {
+    const priceEl = (container || document).querySelector(`.vmb-video-price[data-model="${modelId}"]`);
+    if (!priceEl) return;
+    
+    const perSecond = await fetchVideoQuote(modelId, model, resolution);
+    if (perSecond !== null) {
+      priceEl.textContent = `${formatPrice(perSecond)}/s`;
+    } else {
+      priceEl.textContent = '—';
+    }
+  }
+
   function getCapabilities(caps) {
     if (!caps) return [];
     const list = [];
@@ -80,6 +176,7 @@
 
   function isAnonymizedModel(model) {
     const spec = model.model_spec || {};
+    if (ANONYMIZED_MODELS.has(model.id)) return true;
     if (spec.privacy) return spec.privacy === 'anonymized';
     const isPrivateType = PRIVATE_TYPES.has(model.type);
     return !isPrivateType && (!spec.modelSource || spec.modelSource === '');
@@ -256,15 +353,15 @@
       // No cache - fetch and show loading
       try {
         allModels = await fetchModelsFromAPI();
-      if (allModels.length === 0) {
-        modelsContainer.innerHTML = '<div class="vmb-error">No models found.</div>';
-        isInitializing = false;
-        return;
-      }
-      renderModels();
-    } catch (error) {
+        if (allModels.length === 0) {
+          modelsContainer.innerHTML = '<div class="vmb-error">No models found.</div>';
+          isInitializing = false;
+          return;
+        }
+        renderModels();
+      } catch (error) {
         modelsContainer.innerHTML = '<div class="vmb-error">Failed to load models. Please refresh the page.</div>';
-      isInitializing = false;
+        isInitializing = false;
       }
     }
 
@@ -336,6 +433,13 @@
       }
 
       modelsContainer.innerHTML = filtered.map(model => renderModelCard(model)).join('');
+
+      // Fetch video prices after render
+      filtered.filter(m => m.type === 'video').forEach(model => {
+        const constraints = model.model_spec?.constraints || {};
+        const defaultRes = constraints.resolutions?.[0];
+        updateVideoPrice(model.id, model, defaultRes, modelsContainer);
+      });
     }
 
     function renderModelCard(model) {
@@ -349,14 +453,26 @@
         if (spec.availableContextTokens) {
           contextStr = `${formatContext(spec.availableContextTokens)} context`;
       } else if (model.type === 'video' && constraints.resolutions?.length > 0) {
-          contextStr = `up to ${constraints.resolutions[constraints.resolutions.length - 1]}`;
+          // Resolution + price group for video models
+          const resOptions = constraints.resolutions.map((r, i) => 
+            `<option value="${r}"${i === 0 ? ' selected' : ''}>${r}</option>`
+          ).join('');
+          const priceHtml = formatVideoPricing(model.id);
+          contextStr = `<span class="vmb-pricing-group"><select class="vmb-res-select" data-model="${model.id}">${resOptions}</select>${priceHtml}</span>`;
+      } else if (model.type === 'video') {
+          // Video without resolution options - just show price
+          const priceHtml = formatVideoPricing(model.id);
+          contextStr = priceHtml ? `<span class="vmb-pricing-group">${priceHtml}</span>` : '';
       } else if (model.type === 'tts' && spec.voices?.length > 0) {
           contextStr = `${spec.voices.length} voices`;
         }
         
-      // Pricing string
+      // Pricing string (not for video - handled above)
         let priceStr = '';
-        if (pricing.input && pricing.output) {
+        if (model.type === 'video') {
+          // Price shown in context area with resolution
+          priceStr = '';
+        } else if (pricing.input && pricing.output) {
           priceStr = `${formatPrice(pricing.input.usd)}/M input | ${formatPrice(pricing.output.usd)}/M output`;
         } else if (pricing.input && model.type === 'tts') {
           priceStr = `${formatPrice(pricing.input.usd)}/M chars`;
@@ -375,9 +491,13 @@
           ? `<a href="${escapeHtml(spec.modelSource)}" target="_blank" rel="noopener" class="vmb-model-name">${modelName}</a>`
           : `<span class="vmb-model-name">${modelName}</span>`;
 
-      // Badges
-      const typeBadge = model.type !== 'text' 
+      // Badges (skip type badge for video - we use video type badge instead)
+      const typeBadge = model.type !== 'text' && model.type !== 'video'
         ? `<span class="vmb-type-badge">${escapeHtml(model.type)}</span>` 
+        : '';
+      
+      const videoTypeBadge = model.type === 'video' && constraints.model_type
+        ? `<span class="vmb-video-type-badge ${constraints.model_type === 'text-to-video' ? 'ttv' : 'itv'}">${constraints.model_type === 'text-to-video' ? 'TEXT TO VIDEO' : 'IMAGE TO VIDEO'}</span>`
         : '';
       
       const privacyBadge = isAnonymizedModel(model)
@@ -401,9 +521,10 @@
         const checkIcon = `<svg class="check-icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>`;
       const copyBtn = `<button class="vmb-copy-btn" data-model-id="${modelId}" title="Copy model ID" aria-label="Copy model ID ${modelId}">${copyIcon}${checkIcon}</button>`;
 
-      // Video-specific metadata
+      // Video-specific metadata (model_type now shown as badge)
+      const aspectRatios = getAspectRatios(constraints);
       const videoMeta = model.type === 'video' ? [
-        constraints.model_type ? `<span>${constraints.model_type === 'text-to-video' ? 'Text to Video' : 'Image to Video'}</span>` : '',
+        aspectRatios.length ? `<span>${aspectRatios.join(', ')}</span>` : '',
         constraints.durations?.length ? `<span>${constraints.durations.join(', ')}</span>` : '',
         constraints.audio ? `<span class="vmb-model-caps">Audio</span>` : ''
       ].filter(Boolean).map(s => `<span>|</span>${s}`).join('') : '';
@@ -411,7 +532,7 @@
         return `
         <div class="vmb-model" role="listitem">
             <div class="vmb-model-header">
-              <div>${nameLink}${copyBtn}${typeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${uncensoredBadge}</div>
+              <div>${nameLink}${copyBtn}${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${uncensoredBadge}</div>
               <span class="vmb-model-context">${contextStr}</span>
             </div>
             <div class="vmb-model-meta">
@@ -419,7 +540,7 @@
               ${priceStr ? `<span>|</span><span>${priceStr}</span>` : ''}
               ${caps.length > 0 ? `<span>|</span><span class="vmb-model-caps">${caps.join(' · ')}</span>` : ''}
             ${videoMeta}
-            </div>
+          </div>
           </div>
         `;
     }
@@ -511,6 +632,20 @@
         await navigator.clipboard.writeText(modelId).catch(() => {});
         copyBtn.classList.add('copied');
       setTimeout(() => copyBtn.classList.remove('copied'), 1500);
+    });
+
+    // Event: Resolution select (delegated)
+    modelsContainer.addEventListener('change', (e) => {
+      const resSelect = e.target.closest('.vmb-res-select');
+      if (!resSelect) return;
+      
+      const modelId = resSelect.dataset.model;
+      const resolution = resSelect.value;
+      const model = allModels.find(m => m.id === modelId);
+      
+      if (model) {
+        updateVideoPrice(modelId, model, resolution, modelsContainer);
+      }
     });
   }
 
