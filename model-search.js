@@ -3,7 +3,7 @@
 
   // ========== FEATURE FLAGS ==========
   // Set to true to enable, false to hide
-  const ENABLE_VIDEO = false;  // Video models (coming soon)
+  const ENABLE_VIDEO = true;  // Video models
   // ===================================
 
   // Configuration
@@ -27,6 +27,94 @@
   const DEPRECATED_MODELS = new Set(['qwen3-235b']);
   const ANONYMIZED_MODELS = new Set(['gemini-3-pro-preview']);
   const PRIVATE_TYPES = new Set(['upscale']);
+
+  // Video model display configuration (can't be detected from API)
+  // - audioPricing: show audio toggle (price differs with audio on/off)
+  // - resPricing: false = hide resolution dropdown (price same at all resolutions)
+  // Note: audio_configurable in API just means toggle exists, not that price changes
+  const VIDEO_MODEL_CONFIG = {
+    // Veo 3.1 - audio toggle available, resolution doesn't affect price
+    'veo3.1-fast-text-to-video': { audioPricing: true, resPricing: false },
+    'veo3.1-full-text-to-video': { audioPricing: true, resPricing: false },
+    'veo3.1-fast-image-to-video': { resPricing: false },
+    'veo3.1-full-image-to-video': { resPricing: false },
+    // Veo 3 - no audio toggle, resolution doesn't affect price
+    'veo3-fast-text-to-video': { resPricing: false },
+    'veo3-full-text-to-video': { resPricing: false },
+    'veo3-fast-image-to-video': { resPricing: false },
+    'veo3-full-image-to-video': { resPricing: false },
+    // Kling 2.6 Pro - audio toggle available
+    'kling-2.6-pro-text-to-video': { audioPricing: true },
+    // Sora 2 (non-Pro) - only has 720p, resolution doesn't matter
+    'sora-2-text-to-video': { resPricing: false },
+    'sora-2-image-to-video': { resPricing: false },
+  };
+  
+  function getVideoModelConfig(modelId) {
+    return VIDEO_MODEL_CONFIG[modelId] || {};
+  }
+
+  const videoQuoteCache = new Map();
+
+  function getAspectRatios(constraints) {
+    const ar = constraints.aspect_ratios;
+    if (!ar) return [];
+    if (Array.isArray(ar)) return ar;
+    if (typeof ar === 'string') return [ar];
+    return [];
+  }
+
+  function isFixedPriceModel(modelId, model) {
+    if (!model) return false;
+    
+    const constraints = model.model_spec?.constraints || {};
+    const config = getVideoModelConfig(modelId);
+    const durations = constraints.durations || [];
+    const resolutions = constraints.resolutions || [];
+    const resPricing = config.resPricing !== false;
+    
+    // Fixed if: single duration AND (single/no resolution OR resolution doesn't affect price)
+    return durations.length <= 1 && (resolutions.length <= 1 || !resPricing);
+  }
+
+  // Placeholder image for I2V quote requests (price is same regardless of image content)
+  const PLACEHOLDER_IMAGE_URL = 'https://venice.ai/favicon.ico';
+
+  async function fetchVideoQuote(modelId, model, { resolution, duration, audio } = {}) {
+    const constraints = model.model_spec?.constraints || {};
+    const isImageToVideo = constraints.model_type === 'image-to-video';
+    
+    const effectiveDuration = duration || constraints.durations?.[0] || '5s';
+    const aspectRatios = getAspectRatios(constraints);
+    const aspectRatio = aspectRatios[0];
+    
+    const cacheKey = `${modelId}:${resolution || 'default'}:${effectiveDuration}:${audio ?? 'default'}`;
+    if (videoQuoteCache.has(cacheKey)) {
+      return videoQuoteCache.get(cacheKey);
+    }
+
+    const body = { model: modelId, prompt: 'quote' };
+    if (isImageToVideo) body.image_url = PLACEHOLDER_IMAGE_URL;
+    if (resolution) body.resolution = resolution;
+    if (effectiveDuration) body.duration = effectiveDuration;
+    if (aspectRatio) body.aspect_ratio = aspectRatio;
+    // Only send audio if explicitly set (true/false), not undefined
+    if (typeof audio === 'boolean') body.audio = audio;
+
+    try {
+      const res = await fetch('https://api.venice.ai/api/v1/video/quote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      videoQuoteCache.set(cacheKey, data.quote);
+      return data.quote;
+    } catch {
+      return null;
+    }
+  }
 
   // Filter categories
   const CAPABILITY_FILTERS = ['reasoning', 'vision', 'function', 'code'];
@@ -53,6 +141,25 @@
 
   function formatPrice(price) {
     return '$' + price.toFixed(2);
+  }
+
+  function formatVideoPricing(modelId, model) {
+    const isFixed = isFixedPriceModel(modelId, model);
+    const prefix = isFixed ? '<span class="vmb-fixed-label">FIXED</span> ' : '';
+    return `${prefix}<span class="vmb-video-price" data-model="${modelId}">...</span>`;
+  }
+
+  async function updateVideoPrice(modelId, model, { resolution, duration, audio } = {}, container) {
+    const priceEl = (container || document).querySelector(`.vmb-video-price[data-model="${modelId}"]`);
+    if (!priceEl) return;
+    
+    const price = await fetchVideoQuote(modelId, model, { resolution, duration, audio });
+    
+    if (price !== null) {
+      priceEl.textContent = formatPrice(price);
+    } else {
+      priceEl.textContent = '—';
+    }
   }
 
   function getCapabilities(caps) {
@@ -338,6 +445,17 @@
       }
 
       modelsContainer.innerHTML = filtered.map(model => renderModelCard(model)).join('');
+
+      // Fetch video prices after render
+      filtered.filter(m => m.type === 'video').forEach(model => {
+        const constraints = model.model_spec?.constraints || {};
+        const config = getVideoModelConfig(model.id);
+        const defaultRes = constraints.resolutions?.[0];
+        const defaultDur = constraints.durations?.[0];
+        // Only send audio param for models that support audio pricing
+        const defaultAudio = config.audioPricing ? true : undefined;
+        updateVideoPrice(model.id, model, { resolution: defaultRes, duration: defaultDur, audio: defaultAudio }, modelsContainer);
+      });
     }
 
     function renderModelCard(model) {
@@ -350,15 +468,60 @@
         let contextStr = '';
         if (spec.availableContextTokens) {
           contextStr = `${formatContext(spec.availableContextTokens)} context`;
-      } else if (model.type === 'video' && constraints.resolutions?.length > 0) {
-          contextStr = `up to ${constraints.resolutions[constraints.resolutions.length - 1]}`;
+      } else if (model.type === 'video') {
+          // Video pricing controls based on model config
+          const config = getVideoModelConfig(model.id);
+          const priceHtml = formatVideoPricing(model.id, model);
+          const resolutions = constraints.resolutions || [];
+          const durations = constraints.durations || [];
+          
+          let controlsHtml = '';
+          let hasResDropdown = false;
+          let hasDurDropdown = false;
+          let hasAudioToggle = false;
+          
+          // Resolution selector (if multiple options AND affects pricing)
+          const resPricing = config.resPricing !== false; // default true
+          if (resolutions.length > 1 && resPricing) {
+            hasResDropdown = true;
+            const resOptions = resolutions.map((r, i) => 
+              `<option value="${r}"${i === 0 ? ' selected' : ''}>${r}</option>`
+            ).join('');
+            controlsHtml += `<select class="vmb-res-select" data-model="${model.id}">${resOptions}</select>`;
+          }
+          
+          // Audio toggle (if model supports audio pricing)
+          if (config.audioPricing) {
+            hasAudioToggle = true;
+            controlsHtml += `<span class="vmb-audio-toggle" data-model="${model.id}" data-audio="true">♪ AUDIO</span>`;
+          }
+          
+          // Duration selector (if multiple options)
+          if (durations.length > 1) {
+            hasDurDropdown = true;
+            const durOptions = durations.map((d, i) => 
+              `<option value="${d}"${i === 0 ? ' selected' : ''}>${d}</option>`
+            ).join('');
+            controlsHtml += `<select class="vmb-dur-select" data-model="${model.id}">${durOptions}</select>`;
+          }
+          
+          controlsHtml += priceHtml;
+          contextStr = `<span class="vmb-pricing-group">${controlsHtml}</span>`;
+          
+          // Store state for metadata section
+          model._hasResDropdown = hasResDropdown;
+          model._hasDurDropdown = hasDurDropdown;
+          model._hasAudioToggle = hasAudioToggle;
       } else if (model.type === 'tts' && spec.voices?.length > 0) {
           contextStr = `${spec.voices.length} voices`;
         }
         
-      // Pricing string
+      // Pricing string (not for video - handled above)
         let priceStr = '';
-        if (pricing.input && pricing.output) {
+        if (model.type === 'video') {
+          // Price shown in context area with resolution
+          priceStr = '';
+        } else if (pricing.input && pricing.output) {
           priceStr = `${formatPrice(pricing.input.usd)}/M input | ${formatPrice(pricing.output.usd)}/M output`;
         } else if (pricing.input && model.type === 'tts') {
           priceStr = `${formatPrice(pricing.input.usd)}/M chars`;
@@ -377,9 +540,13 @@
           ? `<a href="${escapeHtml(spec.modelSource)}" target="_blank" rel="noopener" class="vmb-model-name">${modelName}</a>`
           : `<span class="vmb-model-name">${modelName}</span>`;
 
-      // Badges
-      const typeBadge = model.type !== 'text' 
+      // Badges (skip type badge for video - we use video type badge instead)
+      const typeBadge = model.type !== 'text' && model.type !== 'video'
         ? `<span class="vmb-type-badge">${escapeHtml(model.type)}</span>` 
+        : '';
+      
+      const videoTypeBadge = model.type === 'video' && constraints.model_type
+        ? `<span class="vmb-video-type-badge ${constraints.model_type === 'text-to-video' ? 'ttv' : 'itv'}">${constraints.model_type === 'text-to-video' ? 'TEXT TO VIDEO' : 'IMAGE TO VIDEO'}</span>`
         : '';
       
       const privacyBadge = isAnonymizedModel(model)
@@ -403,17 +570,28 @@
         const checkIcon = `<svg class="check-icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>`;
       const copyBtn = `<button class="vmb-copy-btn" data-model-id="${modelId}" title="Copy model ID" aria-label="Copy model ID ${modelId}">${copyIcon}${checkIcon}</button>`;
 
-      // Video-specific metadata
+      // Video-specific metadata (show items not already in controls, always show audio capability)
+      const aspectRatios = getAspectRatios(constraints);
+      const aspectRatioHtml = aspectRatios.length > 0 
+        ? `<span class="vmb-aspect-ratios">${aspectRatios.map(ar => {
+            const [w, h] = ar.split(':').map(Number);
+            const isLandscape = w > h;
+            const isPortrait = h > w;
+            const cls = isLandscape ? 'landscape' : isPortrait ? 'portrait' : 'square';
+            return `<span class="vmb-ar ${cls}" title="${ar}"></span>`;
+          }).join('')}</span>` 
+        : '';
       const videoMeta = model.type === 'video' ? [
-        constraints.model_type ? `<span>${constraints.model_type === 'text-to-video' ? 'Text to Video' : 'Image to Video'}</span>` : '',
-        constraints.durations?.length ? `<span>${constraints.durations.join(', ')}</span>` : '',
-        constraints.audio ? `<span class="vmb-model-caps">Audio</span>` : ''
+        aspectRatioHtml,
+        !model._hasResDropdown && constraints.resolutions?.length ? `<span>${constraints.resolutions.join(', ')}</span>` : '',
+        !model._hasDurDropdown && constraints.durations?.length ? `<span>${constraints.durations.join(', ')}</span>` : '',
+        constraints.audio ? `<span class="vmb-model-caps">Audio</span>` : '' // Always show audio capability
       ].filter(Boolean).map(s => `<span>|</span>${s}`).join('') : '';
 
         return `
         <div class="vmb-model" role="listitem">
             <div class="vmb-model-header">
-              <div>${nameLink}${copyBtn}${typeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${uncensoredBadge}</div>
+              <div>${nameLink}${copyBtn}${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${uncensoredBadge}</div>
               <span class="vmb-model-context">${contextStr}</span>
             </div>
             <div class="vmb-model-meta">
@@ -513,6 +691,56 @@
         await navigator.clipboard.writeText(modelId).catch(() => {});
         copyBtn.classList.add('copied');
       setTimeout(() => copyBtn.classList.remove('copied'), 1500);
+    });
+
+    // Event: Video pricing controls - dropdowns
+    modelsContainer.addEventListener('change', (e) => {
+      const target = e.target;
+      const isResSelect = target.classList.contains('vmb-res-select');
+      const isDurSelect = target.classList.contains('vmb-dur-select');
+      
+      if (!isResSelect && !isDurSelect) return;
+      
+      const modelId = target.dataset.model;
+      const model = allModels.find(m => m.id === modelId);
+      if (!model) return;
+      
+      const card = target.closest('.vmb-model');
+      const resSelect = card.querySelector('.vmb-res-select');
+      const durSelect = card.querySelector('.vmb-dur-select');
+      const audioToggle = card.querySelector('.vmb-audio-toggle');
+      
+      const resolution = resSelect?.value;
+      const duration = durSelect?.value;
+      // Only pass audio if there's an audio toggle, otherwise undefined
+      const audio = audioToggle ? audioToggle.dataset.audio === 'true' : undefined;
+      
+      updateVideoPrice(modelId, model, { resolution, duration, audio }, modelsContainer);
+    });
+
+    // Event: Audio toggle click
+    modelsContainer.addEventListener('click', (e) => {
+      const toggle = e.target.closest('.vmb-audio-toggle');
+      if (!toggle) return;
+      
+      const isOn = toggle.dataset.audio === 'true';
+      toggle.dataset.audio = isOn ? 'false' : 'true';
+      toggle.textContent = isOn ? '♪ NO AUDIO' : '♪ AUDIO';
+      toggle.classList.toggle('off', isOn);
+      
+      const modelId = toggle.dataset.model;
+      const model = allModels.find(m => m.id === modelId);
+      if (!model) return;
+      
+      const card = toggle.closest('.vmb-model');
+      const resSelect = card.querySelector('.vmb-res-select');
+      const durSelect = card.querySelector('.vmb-dur-select');
+      
+      updateVideoPrice(modelId, model, { 
+        resolution: resSelect?.value, 
+        duration: durSelect?.value, 
+        audio: !isOn 
+      }, modelsContainer);
     });
   }
 
