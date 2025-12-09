@@ -28,6 +28,47 @@
   const ANONYMIZED_MODELS = new Set(['gemini-3-pro-preview']);
   const PRIVATE_TYPES = new Set(['upscale']);
 
+  // Rate limit tiers - default limits by model size category
+  // Models not listed default to their type's standard tier
+  const RATE_LIMIT_TIERS = {
+    xsmall: { rpm: 500, tpm: 1000000, label: 'XS', tooltip: '500 RPM · 1M TPM' },
+    small:  { rpm: 75,  tpm: 750000,  label: 'S',  tooltip: '75 RPM · 750K TPM' },
+    medium: { rpm: 50,  tpm: 750000,  label: 'M',  tooltip: '50 RPM · 750K TPM' },
+    large:  { rpm: 20,  tpm: 500000,  label: 'L',  tooltip: '20 RPM · 500K TPM' }
+  };
+
+  // Model to rate limit tier mapping (text/embedding models only)
+  const MODEL_RATE_LIMIT_TIER = {
+    // XSmall - fastest/smallest models
+    'qwen3-4b': 'xsmall',
+    'llama-3.2-3b': 'xsmall',
+    'text-embedding-bge-m3': 'xsmall',
+    // Small - efficient mid-size models
+    'mistral-31-24b': 'small',
+    'venice-uncensored': 'small',
+    // Medium - capable models
+    'llama-3.3-70b': 'medium',
+    'qwen3-next-80b': 'medium',
+    'google-gemma-3-27b-it': 'medium',
+    // Large - flagship models (default for unknown text models)
+    'qwen3-235b': 'large',
+    'qwen3-235b-a22b-instruct-2507': 'large',
+    'qwen3-235b-a22b-thinking-2507': 'large',
+    'deepseek-ai-DeepSeek-R1': 'large',
+    'grok-41-fast': 'large',
+    'kimi-k2-thinking': 'large',
+    'gemini-3-pro-preview': 'large',
+    'hermes-3-llama-3.1-405b': 'large',
+    'qwen3-coder-480b-a35b-instruct': 'large',
+    'zai-org-glm-4.6': 'large',
+    'openai-gpt-oss-120b': 'large'
+  };
+
+  function getModelRateLimitTier(modelId, modelType) {
+    if (modelType !== 'text' && modelType !== 'embedding') return null;
+    return MODEL_RATE_LIMIT_TIER[modelId] || 'large'; // Default to large for unknown text models
+  }
+
   // Video model display configuration (can't be detected from API)
   // - audioPricing: show audio toggle (price differs with audio on/off)
   // - resPricing: false = hide resolution dropdown (price same at all resolutions)
@@ -565,6 +606,12 @@
         ? `<span class="vmb-uncensored-badge vmb-tooltip" data-tooltip="${TOOLTIPS.uncensored}">Uncensored</span>` 
         : '';
       
+      // Rate limit tier badge (text/embedding only)
+      const rateTier = getModelRateLimitTier(model.id, model.type);
+      const rateLimitBadge = rateTier
+        ? `<span class="vmb-ratelimit-badge vmb-tooltip tier-${rateTier}" data-tooltip="${RATE_LIMIT_TIERS[rateTier].tooltip}">${RATE_LIMIT_TIERS[rateTier].label}</span>`
+        : '';
+
       // Copy button SVGs
         const copyIcon = `<svg class="copy-icon" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
         const checkIcon = `<svg class="check-icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>`;
@@ -591,7 +638,7 @@
         return `
         <div class="vmb-model" role="listitem">
             <div class="vmb-model-header">
-              <div>${nameLink}${copyBtn}${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${uncensoredBadge}</div>
+              <div>${nameLink}${copyBtn}${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${uncensoredBadge}${rateLimitBadge}</div>
               <span class="vmb-model-context">${contextStr}</span>
             </div>
             <div class="vmb-model-meta">
