@@ -28,9 +28,10 @@
   const ANONYMIZED_MODELS = new Set(['gemini-3-pro-preview']);
   const PRIVATE_TYPES = new Set(['upscale']);
 
-  // Video model pricing configuration
-  // - audioPricing: true = show audio toggle (turning off audio reduces price)
-  // - resPricing: false = resolution doesn't affect price (show in metadata instead of dropdown)
+  // Video model display configuration (can't be detected from API)
+  // - audioPricing: show audio toggle (price differs with audio on/off)
+  // - resPricing: false = hide resolution dropdown (price same at all resolutions)
+  // Note: audio_configurable in API just means toggle exists, not that price changes
   const VIDEO_MODEL_CONFIG = {
     // Veo 3.1 - audio toggle available, resolution doesn't affect price
     'veo3.1-fast-text-to-video': { audioPricing: true, resPricing: false },
@@ -76,8 +77,8 @@
     return durations.length <= 1 && (resolutions.length <= 1 || !resPricing);
   }
 
-  // Placeholder image for I2V quote requests
-  const PLACEHOLDER_IMAGE_URL = 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400';
+  // Placeholder image for I2V quote requests (price is same regardless of image content)
+  const PLACEHOLDER_IMAGE_URL = 'https://placehold.co/512x512/png';
 
   async function fetchVideoQuote(modelId, model, { resolution, duration, audio } = {}) {
     const constraints = model.model_spec?.constraints || {};
