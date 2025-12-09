@@ -53,25 +53,6 @@
     return VIDEO_MODEL_CONFIG[modelId] || {};
   }
 
-  // Fallback pricing for image-to-video (API requires image param we can't provide)
-  const IMAGE_TO_VIDEO_PRICING = {
-    'wan-2.5-preview-image-to-video': { base: 0.056, mult: { '480': 1, '720': 2, '1080': 3 } },
-    'wan-2.1-pro-image-to-video': { fixed: 0.88 },
-    'ltx-2-fast-image-to-video': { base: 0.043, mult: { '1080': 1, '1440': 2, '2160': 4 } },
-    'ltx-2-full-image-to-video': { base: 0.067, mult: { '1080': 1, '1440': 2, '2160': 4 } },
-    'kling-2.6-pro-image-to-video': { base: 0.154 },
-    'kling-2.5-turbo-pro-image-to-video': { base: 0.078 },
-    'veo3-fast-image-to-video': { fixed: 0.88 },      // 0.11 * 8s
-    'veo3-full-image-to-video': { fixed: 1.76 },     // 0.22 * 8s
-    'veo3.1-fast-image-to-video': { fixed: 1.32 },   // 0.165 * 8s
-    'veo3.1-full-image-to-video': { fixed: 3.52 },   // 0.44 * 8s
-    'sora-2-image-to-video': { base: 0.11 },
-    'sora-2-pro-image-to-video': { base: 0.33, mult: { '720': 1, '1080': 1.68 } },
-    'longcat-distilled-image-to-video': { base: 0.018 },
-    'longcat-image-to-video': { base: 0.05 },
-    'ovi-image-to-video': { fixed: 0.50 },
-  };
-
   const videoQuoteCache = new Map();
 
   function getAspectRatios(constraints) {
@@ -82,49 +63,25 @@
     return [];
   }
 
-  function getImageToVideoPrice(modelId, resolution, duration) {
-    const p = IMAGE_TO_VIDEO_PRICING[modelId];
-    if (!p) return null;
+  function isFixedPriceModel(modelId, model) {
+    if (!model) return false;
     
-    if (p.fixed !== undefined) return p.fixed;
+    const constraints = model.model_spec?.constraints || {};
+    const config = getVideoModelConfig(modelId);
+    const durations = constraints.durations || [];
+    const resolutions = constraints.resolutions || [];
+    const resPricing = config.resPricing !== false;
     
-    const resKey = (resolution || '720p').replace('p', '');
-    const resMult = p.mult?.[resKey] || 1;
-    // Parse duration (e.g., "6s" -> 6) and calculate total price
-    const durSeconds = parseFloat(duration) || 5;
-    return p.base * resMult * durSeconds;
+    // Fixed if: single duration AND (single/no resolution OR resolution doesn't affect price)
+    return durations.length <= 1 && (resolutions.length <= 1 || !resPricing);
   }
 
-  function isFixedPriceModel(modelId, model) {
-    // Check hardcoded fixed pricing first
-    const p = IMAGE_TO_VIDEO_PRICING[modelId];
-    if (p?.fixed !== undefined) return true;
-    
-    // Also consider models with single duration AND (single resolution OR no res pricing) as effectively fixed
-    if (model) {
-      const constraints = model.model_spec?.constraints || {};
-      const config = getVideoModelConfig(modelId);
-      const durations = constraints.durations || [];
-      const resolutions = constraints.resolutions || [];
-      const resPricing = config.resPricing !== false;
-      
-      // If only one duration AND (only one resolution OR resolution doesn't affect price)
-      if (durations.length <= 1 && (resolutions.length <= 1 || !resPricing)) {
-        return true;
-      }
-    }
-    
-    return false;
-  }
+  // Placeholder image for I2V quote requests
+  const PLACEHOLDER_IMAGE_URL = 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400';
 
   async function fetchVideoQuote(modelId, model, { resolution, duration, audio } = {}) {
     const constraints = model.model_spec?.constraints || {};
-    
-    // Image-to-video requires image param - use hardcoded pricing
-    if (constraints.model_type === 'image-to-video') {
-      const effectiveDur = duration || constraints.durations?.[0] || '5s';
-      return getImageToVideoPrice(modelId, resolution, effectiveDur);
-    }
+    const isImageToVideo = constraints.model_type === 'image-to-video';
     
     const effectiveDuration = duration || constraints.durations?.[0] || '5s';
     const aspectRatios = getAspectRatios(constraints);
@@ -136,6 +93,7 @@
     }
 
     const body = { model: modelId, prompt: 'quote' };
+    if (isImageToVideo) body.image_url = PLACEHOLDER_IMAGE_URL;
     if (resolution) body.resolution = resolution;
     if (effectiveDuration) body.duration = effectiveDuration;
     if (aspectRatio) body.aspect_ratio = aspectRatio;
