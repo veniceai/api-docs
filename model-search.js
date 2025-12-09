@@ -613,8 +613,17 @@
 
       // Video-specific metadata (show items not already in controls, always show audio capability)
       const aspectRatios = getAspectRatios(constraints);
+      const aspectRatioHtml = aspectRatios.length > 0 
+        ? `<span class="vmb-aspect-ratios">${aspectRatios.map(ar => {
+            const [w, h] = ar.split(':').map(Number);
+            const isLandscape = w > h;
+            const isPortrait = h > w;
+            const cls = isLandscape ? 'landscape' : isPortrait ? 'portrait' : 'square';
+            return `<span class="vmb-ar ${cls}" title="${ar}"></span>`;
+          }).join('')}</span>` 
+        : '';
       const videoMeta = model.type === 'video' ? [
-        aspectRatios.length > 1 ? `<span>${aspectRatios.join(', ')}</span>` : '',
+        aspectRatioHtml,
         !model._hasResDropdown && constraints.resolutions?.length ? `<span>${constraints.resolutions.join(', ')}</span>` : '',
         !model._hasDurDropdown && constraints.durations?.length ? `<span>${constraints.durations.join(', ')}</span>` : '',
         constraints.audio ? `<span class="vmb-model-caps">Audio</span>` : '' // Always show audio capability
