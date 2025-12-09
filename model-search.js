@@ -78,7 +78,7 @@
   }
 
   // Placeholder image for I2V quote requests (price is same regardless of image content)
-  const PLACEHOLDER_IMAGE_URL = 'https://placehold.co/512x512/png';
+  const PLACEHOLDER_IMAGE_URL = 'https://venice.ai/favicon.ico';
 
   async function fetchVideoQuote(modelId, model, { resolution, duration, audio } = {}) {
     const constraints = model.model_spec?.constraints || {};
