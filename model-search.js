@@ -472,9 +472,9 @@
 
     if (chatEl) {
       chatEl.innerHTML = `
-        <p>Prices per 1M tokens, with separate pricing for input and output tokens. You will only be charged for the tokens you use.</p>
+        <p>Prices per 1M tokens.</p>
         ${renderPricingChatTable(models)}
-        <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and not recommended for production use. They may be changed or removed without notice. <a href="/overview/deprecations#beta-models">Learn more</a></p>
+        <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and may be removed without notice. <a href="/overview/deprecations#beta-models">Learn more</a></p>
       `;
     }
 
@@ -487,12 +487,12 @@
 
     if (imageEl) {
       imageEl.innerHTML = `
-        <p>Image models are priced per generation.</p>
-        <h4>Image Generation</h4>
+        <p>Priced per generation.</p>
+        <h4>Generation</h4>
         ${renderPricingImageTable(models)}
-        <h4>Image Upscaling</h4>
+        <h4>Upscaling</h4>
         ${renderPricingUpscaleTable(models)}
-        <h4>Image Editing (Inpaint)</h4>
+        <h4>Editing</h4>
         ${renderPricingInpaintTable(models)}
       `;
     }
@@ -500,21 +500,11 @@
     if (audioEl) {
       audioEl.innerHTML = `
         <h4>Text-to-Speech</h4>
-        <p>Prices per 1M characters:</p>
+        <p>Per 1M characters:</p>
         ${renderPricingTTSTable(models)}
         ${asrHtml ? `<h4>Speech-to-Text</h4>${asrHtml}` : ''}
       `;
     }
-
-    // Copy button handler
-    document.querySelectorAll('.vpt-copy-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const modelId = btn.dataset.modelId;
-        await navigator.clipboard.writeText(modelId).catch(() => {});
-        btn.classList.add('copied');
-        setTimeout(() => btn.classList.remove('copied'), 1500);
-      });
-    });
   }
 
   // ========== MODEL BROWSER FUNCTIONS ==========
@@ -1012,6 +1002,16 @@
   let modelsInitialized = false;
   let lastUrl = window.location.href;
 
+  // Global copy button handler (event delegation)
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.vpt-copy-btn');
+    if (!btn) return;
+    const modelId = btn.dataset.modelId;
+    await navigator.clipboard.writeText(modelId).catch(() => {});
+    btn.classList.add('copied');
+    setTimeout(() => btn.classList.remove('copied'), 1500);
+  });
+
   function tryInitModels() {
     if (modelsInitialized) return;
     if (!window.location.pathname.includes('/models')) return;
@@ -1050,7 +1050,6 @@
       return;
     }
     const observer = new MutationObserver(() => {
-      // Only run if not already initialized for current page
       if (!modelsInitialized || !pricingInitialized) {
         tryInitAll();
       }
@@ -1058,7 +1057,7 @@
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
-  // Fast initial load
+  // Initial load
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
       tryInitAll();
