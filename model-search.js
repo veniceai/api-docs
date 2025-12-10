@@ -447,62 +447,73 @@
     return `<table class="vpt-table"><thead><tr><th>Model</th><th>Model ID</th><th class="vpt-price">Price</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
-  function renderPricingPage(models) {
-    const asrHtml = renderPricingASRTable(models);
-    return `
-      <h3 id="chat-models">Chat Models</h3>
-      <p>Prices per 1M tokens, with separate pricing for input and output tokens. You will only be charged for the tokens you use.</p>
-      ${renderPricingChatTable(models)}
-      <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and not recommended for production use. They may be changed or removed without notice. <a href="/overview/deprecations#beta-models">Learn more</a></p>
-      <h3 id="embedding-models">Embedding Models</h3>
-      <p>Prices per 1M tokens:</p>
-      ${renderPricingEmbeddingTable(models)}
-      <h3 id="image-models">Image Models</h3>
-      <p>Image models are priced per generation.</p>
-      <h4 id="image-generation">Image Generation</h4>
-      ${renderPricingImageTable(models)}
-      <h4 id="image-upscaling">Image Upscaling</h4>
-      ${renderPricingUpscaleTable(models)}
-      <h4 id="image-editing">Image Editing (Inpaint)</h4>
-      ${renderPricingInpaintTable(models)}
-      <h3 id="audio-models">Audio Models</h3>
-      <h4 id="text-to-speech">Text-to-Speech</h4>
-      <p>Prices per 1M characters:</p>
-      ${renderPricingTTSTable(models)}
-      ${asrHtml ? `<h4 id="speech-to-text">Speech-to-Text</h4>${asrHtml}` : ''}
-    `;
-  }
-
   async function initPricing() {
-    const placeholder = document.getElementById('pricing-tables-placeholder');
-    if (!placeholder) return;
+    const chatEl = document.getElementById('pricing-chat-placeholder');
+    const embeddingEl = document.getElementById('pricing-embedding-placeholder');
+    const imageEl = document.getElementById('pricing-image-placeholder');
+    const audioEl = document.getElementById('pricing-audio-placeholder');
+    
+    if (!chatEl && !embeddingEl && !imageEl && !audioEl) return;
 
     let models = getCachedModels();
     if (!models || models.length === 0) {
-      placeholder.innerHTML = '<p style="opacity:0.6;">Loading pricing...</p>';
+      if (chatEl) chatEl.innerHTML = '<p style="opacity:0.6;">Loading...</p>';
       try {
         models = await fetchModelsFromAPI();
       } catch (err) {
-        placeholder.innerHTML = '<p>Failed to load pricing data. Please refresh.</p>';
+        if (chatEl) chatEl.innerHTML = '<p>Failed to load. Please refresh.</p>';
         return;
       }
     }
 
-    if (!models || models.length === 0) {
-      placeholder.innerHTML = '<p>No pricing data available.</p>';
-      return;
+    if (!models || models.length === 0) return;
+
+    const asrHtml = renderPricingASRTable(models);
+
+    if (chatEl) {
+      chatEl.innerHTML = `
+        <p>Prices per 1M tokens, with separate pricing for input and output tokens. You will only be charged for the tokens you use.</p>
+        ${renderPricingChatTable(models)}
+        <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and not recommended for production use. They may be changed or removed without notice. <a href="/overview/deprecations#beta-models">Learn more</a></p>
+      `;
     }
 
-    placeholder.innerHTML = renderPricingPage(models);
+    if (embeddingEl) {
+      embeddingEl.innerHTML = `
+        <p>Prices per 1M tokens:</p>
+        ${renderPricingEmbeddingTable(models)}
+      `;
+    }
+
+    if (imageEl) {
+      imageEl.innerHTML = `
+        <p>Image models are priced per generation.</p>
+        <h4>Image Generation</h4>
+        ${renderPricingImageTable(models)}
+        <h4>Image Upscaling</h4>
+        ${renderPricingUpscaleTable(models)}
+        <h4>Image Editing (Inpaint)</h4>
+        ${renderPricingInpaintTable(models)}
+      `;
+    }
+
+    if (audioEl) {
+      audioEl.innerHTML = `
+        <h4>Text-to-Speech</h4>
+        <p>Prices per 1M characters:</p>
+        ${renderPricingTTSTable(models)}
+        ${asrHtml ? `<h4>Speech-to-Text</h4>${asrHtml}` : ''}
+      `;
+    }
 
     // Copy button handler
-    placeholder.addEventListener('click', async (e) => {
-      const btn = e.target.closest('.vpt-copy-btn');
-      if (!btn) return;
-      const modelId = btn.dataset.modelId;
-      await navigator.clipboard.writeText(modelId).catch(() => {});
-      btn.classList.add('copied');
-      setTimeout(() => btn.classList.remove('copied'), 1500);
+    document.querySelectorAll('.vpt-copy-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const modelId = btn.dataset.modelId;
+        await navigator.clipboard.writeText(modelId).catch(() => {});
+        btn.classList.add('copied');
+        setTimeout(() => btn.classList.remove('copied'), 1500);
+      });
     });
   }
 
@@ -1016,8 +1027,8 @@
   function tryInitPricing() {
     if (pricingInitialized) return;
     if (!window.location.pathname.toLowerCase().includes('pricing')) return;
-    const placeholder = document.getElementById('pricing-tables-placeholder');
-    if (!placeholder) return;
+    const chatEl = document.getElementById('pricing-chat-placeholder');
+    if (!chatEl) return;
     pricingInitialized = true;
     initPricing();
   }
