@@ -455,18 +455,25 @@
     
     if (!chatEl && !embeddingEl && !imageEl && !audioEl) return;
 
+    // Show loading immediately
+    if (chatEl) chatEl.innerHTML = '<p style="opacity:0.6;">Loading pricing...</p>';
+
+    // Always try cache first, then fetch
     let models = getCachedModels();
+    
     if (!models || models.length === 0) {
-      if (chatEl) chatEl.innerHTML = '<p style="opacity:0.6;">Loading...</p>';
       try {
         models = await fetchModelsFromAPI();
       } catch (err) {
-        if (chatEl) chatEl.innerHTML = '<p>Failed to load. Please refresh.</p>';
+        if (chatEl) chatEl.innerHTML = '<p>Failed to load pricing. <a href="javascript:location.reload()">Refresh</a></p>';
         return;
       }
     }
 
-    if (!models || models.length === 0) return;
+    if (!models || models.length === 0) {
+      if (chatEl) chatEl.innerHTML = '<p>No pricing data available.</p>';
+      return;
+    }
 
     const asrHtml = renderPricingASRTable(models);
 
@@ -474,7 +481,7 @@
       chatEl.innerHTML = `
         <p>Prices per 1M tokens.</p>
         ${renderPricingChatTable(models)}
-        <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and may be removed without notice. <a href="/overview/deprecations#beta-models">Learn more</a></p>
+        <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and not recommended for production use. These models may be changed, removed, or replaced at any time without notice. <a href="/overview/deprecations#beta-models">Learn more</a></p>
       `;
     }
 
@@ -1024,13 +1031,31 @@
     }
   }
 
+  let pricingPromise = null;
+  let pricingRendered = false;
+  
   function tryInitPricing() {
-    if (pricingInitialized) return;
     if (!window.location.pathname.toLowerCase().includes('pricing')) return;
+    
     const chatEl = document.getElementById('pricing-chat-placeholder');
     if (!chatEl) return;
+    
+    // Check if content was reset by Mintlify re-render
+    const wasReset = pricingRendered && chatEl.textContent.includes('Loading');
+    if (wasReset) {
+      pricingInitialized = false;
+      pricingRendered = false;
+    }
+    
+    if (pricingInitialized) return;
+    if (pricingPromise) return;
+    
     pricingInitialized = true;
-    initPricing();
+    pricingPromise = initPricing().then(() => {
+      pricingRendered = true;
+    }).finally(() => {
+      pricingPromise = null;
+    });
   }
 
   function tryInitAll() {
@@ -1044,27 +1069,46 @@
     tryInitPricing();
   }
 
+  let observerTimeout = null;
+  
   function setupObserver() {
     if (!document.body) {
       setTimeout(setupObserver, 50);
       return;
     }
     const observer = new MutationObserver(() => {
-      if (!modelsInitialized || !pricingInitialized) {
+      // Debounce to avoid excessive calls during render
+      if (observerTimeout) return;
+      observerTimeout = setTimeout(() => {
+        observerTimeout = null;
         tryInitAll();
-      }
+      }, 50);
     });
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
-  // Initial load
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      tryInitAll();
-      setupObserver();
-    });
-  } else {
+  // Initial load with retry for pricing
+  function startWithRetry() {
     tryInitAll();
     setupObserver();
+    
+    // Retry for pricing page in case element loads late
+    if (window.location.pathname.toLowerCase().includes('pricing') && !pricingInitialized) {
+      let retries = 0;
+      const retryInterval = setInterval(() => {
+        if (pricingInitialized || retries > 20) {
+          clearInterval(retryInterval);
+          return;
+        }
+        retries++;
+        tryInitPricing();
+      }, 100);
+    }
+  }
+  
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startWithRetry);
+  } else {
+    startWithRetry();
   }
 })();
