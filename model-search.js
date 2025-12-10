@@ -13,6 +13,7 @@
   
   // Models requiring manual status flags (until API supports these fields)
   const BETA_MODELS = new Set([
+    // Text models
     'grok-41-fast',
     'gemini-3-pro-preview',
     'kimi-k2-thinking',
@@ -22,7 +23,9 @@
     'deepseek-ai-DeepSeek-R1',
     'deepseek-v3.2',
     'hermes-3-llama-3.1-405b',
-    'claude-opus-45'
+    'claude-opus-45',
+    // Image models
+    'nano-banana-pro'
   ]);
   const DEPRECATED_MODELS = new Set(['qwen3-235b']);
   const ANONYMIZED_MODELS = new Set(['gemini-3-pro-preview']);
@@ -337,7 +340,7 @@
       const priceStr = `${formatPrice(pricing.input?.usd)} / ${formatPrice(pricing.output?.usd)}`;
       const caps = getCapabilities(spec.capabilities);
       const capsStr = caps.join(', ') || (isUncensoredModel(model) ? 'Uncensored' : '');
-      const betaTag = isBetaModel(model) ? ' <span class="vpt-beta">Beta</span>' : '';
+      const betaTag = isBetaModel(model) ? ' <span class="vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
 
       return `<tr${isBetaModel(model) ? ' class="vpt-beta-row"' : ''}>
         <td>${name}${betaTag}</td>
@@ -380,7 +383,8 @@
 
     const rows = imageModels.map(model => {
       const spec = model.model_spec || {};
-      return `<tr><td>${escapeHtml(spec.name || model.id)}</td><td class="vpt-price">${formatPrice(spec.pricing?.generation?.usd)}</td></tr>`;
+      const betaTag = isBetaModel(model) ? ' <span class="vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
+      return `<tr${isBetaModel(model) ? ' class="vpt-beta-row"' : ''}><td>${escapeHtml(spec.name || model.id)}${betaTag}</td><td class="vpt-price">${formatPrice(spec.pricing?.generation?.usd)}</td></tr>`;
     }).join('');
 
     return `<table class="vpt-table"><thead><tr><th>Model</th><th class="vpt-price">Price</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -449,6 +453,7 @@
       <h3 id="chat-models">Chat Models</h3>
       <p>Prices per 1M tokens, with separate pricing for input and output tokens. You will only be charged for the tokens you use.</p>
       ${renderPricingChatTable(models)}
+      <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and not recommended for production use. They may be changed or removed without notice. <a href="/overview/deprecations#beta-models">Learn more</a></p>
       <h3 id="embedding-models">Embedding Models</h3>
       <p>Prices per 1M tokens:</p>
       ${renderPricingEmbeddingTable(models)}
@@ -994,7 +999,7 @@
 
   let pricingInitialized = false;
   let modelsInitialized = false;
-  let debounceTimer = null;
+  let lastUrl = window.location.href;
 
   function tryInitModels() {
     if (modelsInitialized) return;
@@ -1018,30 +1023,14 @@
   }
 
   function tryInitAll() {
-    tryInitModels();
-    tryInitPricing();
-  }
-
-  // Debounced observer callback - max once per 300ms
-  function debouncedTryInit() {
-    if (debounceTimer) return;
-    debounceTimer = setTimeout(() => {
-      debounceTimer = null;
-      // Reset flags on navigation (URL change means new page)
-      tryInitAll();
-    }, 300);
-  }
-
-  // Track URL for SPA navigation detection
-  let lastUrl = window.location.href;
-
-  function checkNavigation() {
+    // Reset on URL change (SPA navigation)
     if (window.location.href !== lastUrl) {
       lastUrl = window.location.href;
       modelsInitialized = false;
       pricingInitialized = false;
-      tryInitAll();
     }
+    tryInitModels();
+    tryInitPricing();
   }
 
   function setupObserver() {
@@ -1049,23 +1038,23 @@
       setTimeout(setupObserver, 50);
       return;
     }
-    // Lightweight observer - only checks on navigation, not every DOM change
     const observer = new MutationObserver(() => {
-      checkNavigation();
+      // Only run if not already initialized for current page
       if (!modelsInitialized || !pricingInitialized) {
-        debouncedTryInit();
+        tryInitAll();
       }
     });
-    observer.observe(document.body, { childList: true, subtree: false }); // subtree: false = lighter
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 
+  // Fast initial load
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
-      setTimeout(tryInitAll, 100);
+      tryInitAll();
       setupObserver();
     });
   } else {
-    setTimeout(tryInitAll, 100);
+    tryInitAll();
     setupObserver();
   }
 })();
