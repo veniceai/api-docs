@@ -21,6 +21,7 @@
     'google-gemma-3-27b-it',
     'qwen3-next-80b',
     'deepseek-ai-DeepSeek-R1',
+    'deepseek-v3.2',
     'hermes-3-llama-3.1-405b',
     'claude-opus-45'
   ]);
