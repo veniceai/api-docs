@@ -1,9 +1,8 @@
-// Venice AI Model Browser - Fetches from API
+// Venice AI Model Browser & Pricing Tables - Fetches from API
 (function() {
 
   // ========== FEATURE FLAGS ==========
-  // Set to true to enable, false to hide
-  const ENABLE_VIDEO = true;  // Video models
+  const ENABLE_VIDEO = true;  // Video models on /models pages
   // ===================================
 
   // Configuration
@@ -182,6 +181,7 @@
   }
 
   function formatPrice(price) {
+    if (price === null || price === undefined) return '—';
     return '$' + price.toFixed(2);
   }
 
@@ -304,6 +304,204 @@
     setCachedModels(models);
     return models;
   }
+
+  // ========== PRICING TABLE FUNCTIONS ==========
+
+  // Copy button for pricing tables
+  const copyIcon = `<svg class="copy-icon" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+  const checkIcon = `<svg class="check-icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>`;
+  function pricingCopyBtn(modelId) {
+    return `<button class="vpt-copy-btn" data-model-id="${modelId}" title="Copy">${copyIcon}${checkIcon}</button>`;
+  }
+
+  function renderPricingChatTable(models) {
+    const chatModels = models
+      .filter(m => m.type === 'text')
+      .filter(m => !isDeprecatedModel(m))
+      .sort((a, b) => {
+        const aBeta = isBetaModel(a) ? 1 : 0;
+        const bBeta = isBetaModel(b) ? 1 : 0;
+        if (aBeta !== bBeta) return aBeta - bBeta;
+        const pA = a.model_spec?.pricing?.input?.usd || 999;
+        const pB = b.model_spec?.pricing?.input?.usd || 999;
+        return pA - pB;
+      });
+
+    if (chatModels.length === 0) return '<p>No models available.</p>';
+
+    const rows = chatModels.map(model => {
+      const spec = model.model_spec || {};
+      const pricing = spec.pricing || {};
+      const name = escapeHtml(spec.name || model.id);
+      const modelId = escapeHtml(model.id);
+      const priceStr = `${formatPrice(pricing.input?.usd)} / ${formatPrice(pricing.output?.usd)}`;
+      const caps = getCapabilities(spec.capabilities);
+      const capsStr = caps.join(', ') || (isUncensoredModel(model) ? 'Uncensored' : '');
+      const betaTag = isBetaModel(model) ? ' <span class="vpt-beta">Beta</span>' : '';
+
+      return `<tr${isBetaModel(model) ? ' class="vpt-beta-row"' : ''}>
+        <td>${name}${betaTag}</td>
+        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
+        <td class="vpt-price">${priceStr}</td>
+        <td>${capsStr}</td>
+      </tr>`;
+    }).join('');
+
+    return `<table class="vpt-table"><thead><tr>
+      <th>Model</th><th>Model ID</th><th class="vpt-price">Price (In / Out)</th><th>Capabilities</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function renderPricingEmbeddingTable(models) {
+    const embModels = models.filter(m => m.type === 'embedding').filter(m => !isDeprecatedModel(m));
+    if (embModels.length === 0) return '<p>No models available.</p>';
+
+    const rows = embModels.map(model => {
+      const spec = model.model_spec || {};
+      const pricing = spec.pricing || {};
+      const modelId = escapeHtml(model.id);
+      const priceStr = `${formatPrice(pricing.input?.usd)} / ${formatPrice(pricing.output?.usd)}`;
+      return `<tr>
+        <td>${escapeHtml(spec.name || model.id)}</td>
+        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
+        <td class="vpt-price">${priceStr}</td>
+      </tr>`;
+    }).join('');
+
+    return `<table class="vpt-table"><thead><tr>
+      <th>Model</th><th>Model ID</th><th class="vpt-price">Price (In / Out)</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function renderPricingImageTable(models) {
+    const imageModels = models.filter(m => m.type === 'image').filter(m => !isDeprecatedModel(m))
+      .sort((a, b) => (b.model_spec?.pricing?.generation?.usd || 0) - (a.model_spec?.pricing?.generation?.usd || 0));
+    if (imageModels.length === 0) return '<p>No models available.</p>';
+
+    const rows = imageModels.map(model => {
+      const spec = model.model_spec || {};
+      return `<tr><td>${escapeHtml(spec.name || model.id)}</td><td class="vpt-price">${formatPrice(spec.pricing?.generation?.usd)}</td></tr>`;
+    }).join('');
+
+    return `<table class="vpt-table"><thead><tr><th>Model</th><th class="vpt-price">Price</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function renderPricingUpscaleTable(models) {
+    const upscaleModels = models.filter(m => m.type === 'upscale').filter(m => !isDeprecatedModel(m));
+    if (upscaleModels.length === 0) return '<p>No models available.</p>';
+
+    const pricing = upscaleModels[0]?.model_spec?.pricing || {};
+    const rows = [];
+    if (pricing['2x']?.usd) rows.push(`<tr><td>Upscale / Enhance (2x)</td><td class="vpt-price">${formatPrice(pricing['2x'].usd)}</td></tr>`);
+    if (pricing['4x']?.usd) rows.push(`<tr><td>Upscale / Enhance (4x)</td><td class="vpt-price">${formatPrice(pricing['4x'].usd)}</td></tr>`);
+    if (rows.length === 0) return '<p>Upscaling pricing varies.</p>';
+
+    return `<table class="vpt-table"><thead><tr><th>Model</th><th class="vpt-price">Price</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  }
+
+  function renderPricingInpaintTable(models) {
+    const inpaintModels = models.filter(m => m.type === 'inpaint').filter(m => !isDeprecatedModel(m));
+    if (inpaintModels.length === 0) return '<p>No models available.</p>';
+
+    const rows = inpaintModels.map(model => {
+      const spec = model.model_spec || {};
+      return `<tr><td>${escapeHtml(spec.name || model.id)}</td><td class="vpt-price">${formatPrice(spec.pricing?.generation?.usd)}</td></tr>`;
+    }).join('');
+
+    return `<table class="vpt-table"><thead><tr><th>Model</th><th class="vpt-price">Price</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function renderPricingTTSTable(models) {
+    const ttsModels = models.filter(m => m.type === 'tts').filter(m => !isDeprecatedModel(m));
+    if (ttsModels.length === 0) return '<p>No models available.</p>';
+
+    const rows = ttsModels.map(model => {
+      const spec = model.model_spec || {};
+      const modelId = escapeHtml(model.id);
+      return `<tr>
+        <td>${escapeHtml(spec.name || model.id)}</td>
+        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
+        <td class="vpt-price">${formatPrice(spec.pricing?.input?.usd)}</td>
+      </tr>`;
+    }).join('');
+
+    return `<table class="vpt-table"><thead><tr><th>Model</th><th>Model ID</th><th class="vpt-price">Price</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function renderPricingASRTable(models) {
+    const asrModels = models.filter(m => m.type === 'asr').filter(m => !isDeprecatedModel(m));
+    if (asrModels.length === 0) return '';
+
+    const rows = asrModels.map(model => {
+      const spec = model.model_spec || {};
+      const pricing = spec.pricing || {};
+      const modelId = escapeHtml(model.id);
+      const price = pricing.perSecond?.usd ? formatPrice(pricing.perSecond.usd) + '/sec' : formatPrice(pricing.input?.usd) + '/M';
+      return `<tr><td>${escapeHtml(spec.name || model.id)}</td><td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td><td class="vpt-price">${price}</td></tr>`;
+    }).join('');
+
+    return `<table class="vpt-table"><thead><tr><th>Model</th><th>Model ID</th><th class="vpt-price">Price</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function renderPricingPage(models) {
+    const asrHtml = renderPricingASRTable(models);
+    return `
+      <h3 id="chat-models">Chat Models</h3>
+      <p>Prices per 1M tokens, with separate pricing for input and output tokens. You will only be charged for the tokens you use.</p>
+      ${renderPricingChatTable(models)}
+      <h3 id="embedding-models">Embedding Models</h3>
+      <p>Prices per 1M tokens:</p>
+      ${renderPricingEmbeddingTable(models)}
+      <h3 id="image-models">Image Models</h3>
+      <p>Image models are priced per generation.</p>
+      <h4 id="image-generation">Image Generation</h4>
+      ${renderPricingImageTable(models)}
+      <h4 id="image-upscaling">Image Upscaling</h4>
+      ${renderPricingUpscaleTable(models)}
+      <h4 id="image-editing">Image Editing (Inpaint)</h4>
+      ${renderPricingInpaintTable(models)}
+      <h3 id="audio-models">Audio Models</h3>
+      <h4 id="text-to-speech">Text-to-Speech</h4>
+      <p>Prices per 1M characters:</p>
+      ${renderPricingTTSTable(models)}
+      ${asrHtml ? `<h4 id="speech-to-text">Speech-to-Text</h4>${asrHtml}` : ''}
+    `;
+  }
+
+  async function initPricing() {
+    const placeholder = document.getElementById('pricing-tables-placeholder');
+    if (!placeholder) return;
+
+    let models = getCachedModels();
+    if (!models || models.length === 0) {
+      placeholder.innerHTML = '<p style="opacity:0.6;">Loading pricing...</p>';
+      try {
+        models = await fetchModelsFromAPI();
+      } catch (err) {
+        placeholder.innerHTML = '<p>Failed to load pricing data. Please refresh.</p>';
+        return;
+      }
+    }
+
+    if (!models || models.length === 0) {
+      placeholder.innerHTML = '<p>No pricing data available.</p>';
+      return;
+    }
+
+    placeholder.innerHTML = renderPricingPage(models);
+
+    // Copy button handler
+    placeholder.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.vpt-copy-btn');
+      if (!btn) return;
+      const modelId = btn.dataset.modelId;
+      await navigator.clipboard.writeText(modelId).catch(() => {});
+      btn.classList.add('copied');
+      setTimeout(() => btn.classList.remove('copied'), 1500);
+    });
+  }
+
+  // ========== MODEL BROWSER FUNCTIONS ==========
 
   async function init() {
     if (isInitializing) return;
@@ -792,26 +990,82 @@
     });
   }
 
-  function tryInit() {
+  // ========== INITIALIZATION ==========
+
+  let pricingInitialized = false;
+  let modelsInitialized = false;
+  let debounceTimer = null;
+
+  function tryInitModels() {
+    if (modelsInitialized) return;
     if (!window.location.pathname.includes('/models')) return;
     const placeholder = document.getElementById('model-search-placeholder');
     const existing = document.getElementById('venice-model-browser');
     if (placeholder && !existing) {
+      modelsInitialized = true;
       isInitializing = false;
       init();
     }
   }
 
-  // Initialize on page load
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => setTimeout(tryInit, 100));
-  } else {
-    setTimeout(tryInit, 100);
+  function tryInitPricing() {
+    if (pricingInitialized) return;
+    if (!window.location.pathname.toLowerCase().includes('pricing')) return;
+    const placeholder = document.getElementById('pricing-tables-placeholder');
+    if (!placeholder) return;
+    pricingInitialized = true;
+    initPricing();
   }
 
-  // Watch for SPA navigation (works even when starting from non-models page)
-  const observer = new MutationObserver(() => {
-    requestAnimationFrame(tryInit);
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
+  function tryInitAll() {
+    tryInitModels();
+    tryInitPricing();
+  }
+
+  // Debounced observer callback - max once per 300ms
+  function debouncedTryInit() {
+    if (debounceTimer) return;
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      // Reset flags on navigation (URL change means new page)
+      tryInitAll();
+    }, 300);
+  }
+
+  // Track URL for SPA navigation detection
+  let lastUrl = window.location.href;
+
+  function checkNavigation() {
+    if (window.location.href !== lastUrl) {
+      lastUrl = window.location.href;
+      modelsInitialized = false;
+      pricingInitialized = false;
+      tryInitAll();
+    }
+  }
+
+  function setupObserver() {
+    if (!document.body) {
+      setTimeout(setupObserver, 50);
+      return;
+    }
+    // Lightweight observer - only checks on navigation, not every DOM change
+    const observer = new MutationObserver(() => {
+      checkNavigation();
+      if (!modelsInitialized || !pricingInitialized) {
+        debouncedTryInit();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: false }); // subtree: false = lighter
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      setTimeout(tryInitAll, 100);
+      setupObserver();
+    });
+  } else {
+    setTimeout(tryInitAll, 100);
+    setupObserver();
+  }
 })();
