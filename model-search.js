@@ -506,15 +506,6 @@
       `;
     }
 
-    // Copy button handler
-    document.querySelectorAll('.vpt-copy-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const modelId = btn.dataset.modelId;
-        await navigator.clipboard.writeText(modelId).catch(() => {});
-        btn.classList.add('copied');
-        setTimeout(() => btn.classList.remove('copied'), 1500);
-      });
-    });
   }
 
   // ========== MODEL BROWSER FUNCTIONS ==========
@@ -1011,6 +1002,16 @@
   let pricingInitialized = false;
   let modelsInitialized = false;
   let lastUrl = window.location.href;
+
+  // Global copy button handler (event delegation)
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.vpt-copy-btn');
+    if (!btn) return;
+    const modelId = btn.dataset.modelId;
+    await navigator.clipboard.writeText(modelId).catch(() => {});
+    btn.classList.add('copied');
+    setTimeout(() => btn.classList.remove('copied'), 1500);
+  });
 
   function tryInitModels() {
     if (modelsInitialized) return;
