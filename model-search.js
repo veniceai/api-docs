@@ -481,7 +481,7 @@
       chatEl.innerHTML = `
         <p>Prices per 1M tokens.</p>
         ${renderPricingChatTable(models)}
-        <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and may be removed without notice. <a href="/overview/deprecations#beta-models">Learn more</a></p>
+        <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and not recommended for production use. These models may be changed, removed, or replaced at any time without notice. <a href="/overview/deprecations#beta-models">Learn more</a></p>
       `;
     }
 
