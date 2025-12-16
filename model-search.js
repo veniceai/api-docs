@@ -27,7 +27,7 @@
     'nano-banana-pro'
   ]);
   const DEPRECATED_MODELS = new Set(['qwen3-235b']);
-  const ANONYMIZED_MODELS = new Set(['gemini-3-pro-preview']);
+  const ANONYMIZED_MODELS = new Set(['gemini-3-pro-preview', 'kimi-k2-thinking']);
   const PRIVATE_TYPES = new Set(['upscale']);
 
   // Rate limit tiers - default limits by model size category
