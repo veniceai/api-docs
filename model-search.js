@@ -395,16 +395,18 @@
 
   function renderPricingEditTable(models) {
     // qwen-image is the editing model, it's type 'image' but supports editing
+    // editing/inpainting is priced at $0.40 per edit (separate from generation at $0.10)
     const editModels = models.filter(m => m.id === 'qwen-image').filter(m => !isDeprecatedModel(m));
     if (editModels.length === 0) return '<p>No models available.</p>';
 
     const rows = editModels.map(model => {
       const spec = model.model_spec || {};
       const modelId = escapeHtml(model.id);
+      const editPrice = spec.pricing?.inpaint?.usd ?? 0.04;
       return `<tr>
         <td>${escapeHtml(spec.name || model.id)}</td>
         <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
-        <td class="vpt-price">${formatPrice(spec.pricing?.generation?.usd)}</td>
+        <td class="vpt-price">${formatPrice(editPrice)}</td>
       </tr>`;
     }).join('');
 
@@ -868,6 +870,12 @@
           priceStr = `${formatPrice(pricing.input.usd)}/M input | ${formatPrice(pricing.output.usd)}/M output`;
         } else if (pricing.input && model.type === 'tts') {
           priceStr = `${formatPrice(pricing.input.usd)}/M chars`;
+        } else if (model.type === 'upscale' && (pricing.upscale || pricing['2x'] || pricing['4x'])) {
+          const upscalePricing = pricing.upscale || pricing;
+          const prices = [];
+          if (upscalePricing['2x']?.usd) prices.push(`${formatPrice(upscalePricing['2x'].usd)} (2x)`);
+          if (upscalePricing['4x']?.usd) prices.push(`${formatPrice(upscalePricing['4x'].usd)} (4x)`);
+          priceStr = prices.join(' | ') || '';
         } else if (pricing.generation) {
           priceStr = `${formatPrice(pricing.generation.usd)} per image`;
         } else if (pricing.perCharacter) {
