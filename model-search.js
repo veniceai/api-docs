@@ -153,7 +153,8 @@
     anonymized: 'The provider of this model maintains prompt data (though it is anonymized by Venice). For sensitive content, use a private model.',
     beta: 'Experimental model that may change or be removed without notice. Not recommended for production.',
     deprecated: 'This model is scheduled for removal. See the deprecations page for timeline and migration guide.',
-    uncensored: 'Responds to all prompts without content-based refusals or filtering.'
+    uncensored: 'Responds to all prompts without content-based refusals or filtering.',
+    upgraded: 'A newer version of this model is available with improved performance.'
   };
 
   let isInitializing = false;
@@ -224,6 +225,13 @@
 
   function isDeprecatedModel(model) {
     return model.model_spec?.deprecation?.date != null;
+  }
+
+  // Models that have been superseded by a newer version
+  const UPGRADED_MODELS = new Set(['zai-org-glm-4.6']);
+
+  function isUpgradedModel(model) {
+    return UPGRADED_MODELS.has(model.id);
   }
 
   function matchesCodeFilter(model) {
@@ -318,9 +326,10 @@
       const caps = getCapabilities(spec.capabilities);
       const capsStr = caps.join(', ') || (isUncensoredModel(model) ? 'Uncensored' : '');
       const betaTag = isBetaModel(model) ? ' <span class="vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
+      const upgradedTag = isUpgradedModel(model) ? ' <span class="vpt-upgraded vpt-tooltip" data-tooltip="A newer version of this model is available with improved performance.">Upgraded</span>' : '';
 
-      return `<tr${isBetaModel(model) ? ' class="vpt-beta-row"' : ''}>
-        <td>${name}${betaTag}</td>
+      return `<tr${isBetaModel(model) ? ' class="vpt-beta-row"' : ''}${isUpgradedModel(model) ? ' class="vpt-upgraded-row"' : ''}>
+        <td>${name}${betaTag}${upgradedTag}</td>
         <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
         <td class="vpt-price">${priceStr}</td>
         <td>${capsStr}</td>
@@ -955,6 +964,10 @@
         ? `<span class="vmb-uncensored-badge vmb-tooltip" data-tooltip="${TOOLTIPS.uncensored}">Uncensored</span>` 
         : '';
       
+      const upgradedBadge = isUpgradedModel(model)
+        ? `<span class="vmb-upgraded-badge vmb-tooltip" data-tooltip="${TOOLTIPS.upgraded}">Upgraded</span>` 
+        : '';
+      
       // Rate limit tier badge (text/embedding only)
       const rateTier = getModelRateLimitTier(model.id, model.type);
       const rateLimitBadge = rateTier
@@ -987,7 +1000,7 @@
         return `
         <div class="vmb-model" role="listitem">
             <div class="vmb-model-header">
-              <div>${nameLink}${copyBtn}${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${uncensoredBadge}${rateLimitBadge}</div>
+              <div>${nameLink}${copyBtn}${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${rateLimitBadge}</div>
               <span class="vmb-model-context">${contextStr}</span>
             </div>
             <div class="vmb-model-meta">
