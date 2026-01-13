@@ -10,6 +10,9 @@
   const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', ...(ENABLE_VIDEO ? ['video'] : [])];
   const CACHE_KEY = 'venice-models-cache';
   const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+  // Static fallback data for instant pricing page load (updated periodically)
+  const STATIC_MODELS = [{"id":"venice-uncensored","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.2},"output":{"usd":0.9}},"traits":["most_uncensored"],"name":"Venice Uncensored 1.1","capabilities":{"optimizedForCode":false,"supportsFunctionCalling":false,"supportsReasoning":false,"supportsVision":false}}},{"id":"zai-org-glm-4.7","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.55},"output":{"usd":2.65}},"name":"GLM 4.7","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"qwen3-4b","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.05},"output":{"usd":0.15}},"name":"Venice Small","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"mistral-31-24b","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.5},"output":{"usd":2}},"traits":["default_vision"],"name":"Venice Medium","capabilities":{"supportsFunctionCalling":true,"supportsVision":true}}},{"id":"qwen3-235b-a22b-thinking-2507","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.45},"output":{"usd":3.5}},"name":"Qwen 3 235B A22B Thinking 2507","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"qwen3-235b-a22b-instruct-2507","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.15},"output":{"usd":0.75}},"name":"Qwen 3 235B A22B Instruct 2507","capabilities":{"supportsFunctionCalling":true}}},{"id":"qwen3-next-80b","type":"text","model_spec":{"betaModel":true,"privacy":"private","pricing":{"input":{"usd":0.35},"output":{"usd":1.9}},"name":"Qwen 3 Next 80b","capabilities":{"supportsFunctionCalling":true}}},{"id":"qwen3-coder-480b-a35b-instruct","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.75},"output":{"usd":3}},"traits":["default_code"],"name":"Qwen 3 Coder 480b","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true}}},{"id":"hermes-3-llama-3.1-405b","type":"text","model_spec":{"betaModel":true,"privacy":"private","pricing":{"input":{"usd":1.1},"output":{"usd":3}},"name":"Hermes 3 Llama 3.1 405b"}},{"id":"google-gemma-3-27b-it","type":"text","model_spec":{"betaModel":true,"privacy":"private","pricing":{"input":{"usd":0.12},"output":{"usd":0.2}},"name":"Google Gemma 3 27B Instruct","capabilities":{"supportsFunctionCalling":true,"supportsVision":true}}},{"id":"grok-41-fast","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":0.5},"cache_input":{"usd":0.125},"output":{"usd":1.25}},"name":"Grok 4.1 Fast","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"gemini-3-pro-preview","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":2.5},"cache_input":{"usd":0.625},"output":{"usd":15}},"name":"Gemini 3 Pro Preview","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"gemini-3-flash-preview","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":0.7},"cache_input":{"usd":0.07},"output":{"usd":3.75}},"name":"Gemini 3 Flash Preview","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"claude-opus-45","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":6},"cache_input":{"usd":0.6},"cache_write":{"usd":7.5},"output":{"usd":30}},"name":"Claude Opus 4.5","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"openai-gpt-oss-120b","type":"text","model_spec":{"betaModel":true,"privacy":"private","pricing":{"input":{"usd":0.07},"output":{"usd":0.3}},"name":"OpenAI GPT OSS 120B","capabilities":{"supportsFunctionCalling":true}}},{"id":"kimi-k2-thinking","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":0.75},"cache_input":{"usd":0.375},"output":{"usd":3.2}},"name":"Kimi K2 Thinking","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"deepseek-v3.2","type":"text","model_spec":{"betaModel":true,"privacy":"private","pricing":{"input":{"usd":0.4},"cache_input":{"usd":0.2},"output":{"usd":1}},"name":"DeepSeek V3.2","capabilities":{"supportsReasoning":true}}},{"id":"llama-3.2-3b","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.15},"output":{"usd":0.6}},"traits":["fastest"],"name":"Llama 3.2 3B","capabilities":{"supportsFunctionCalling":true}}},{"id":"llama-3.3-70b","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.7},"output":{"usd":2.8}},"traits":["function_calling_default","default"],"name":"Llama 3.3 70B","capabilities":{"supportsFunctionCalling":true}}},{"id":"openai-gpt-52","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":2.19},"cache_input":{"usd":0.219},"output":{"usd":17.5}},"name":"GPT-5.2","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"minimax-m21","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":0.4},"cache_input":{"usd":0.04},"output":{"usd":1.6}},"name":"MiniMax M2.1","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"grok-code-fast-1","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":0.25},"cache_input":{"usd":0.03},"output":{"usd":1.87}},"name":"Grok Code Fast 1","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"venice-sd35","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"traits":["default","eliza-default"],"name":"Venice SD35"}},{"id":"hidream","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01}},"name":"HiDream"}},{"id":"flux-2-pro","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.04}},"name":"Flux 2 Pro"}},{"id":"flux-2-max","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.09}},"name":"Flux 2 Max"}},{"id":"gpt-image-1-5","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.23}},"name":"GPT Image 1.5"}},{"id":"nano-banana-pro","type":"image","model_spec":{"privacy":"anonymized","pricing":{"resolutions":{"1K":{"usd":0.18},"2K":{"usd":0.24},"4K":{"usd":0.35}}},"name":"Nano Banana Pro"}},{"id":"seedream-v4","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.05}},"name":"SeedreamV4.5"}},{"id":"lustify-sdxl","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01}},"name":"Lustify SDXL"}},{"id":"lustify-v7","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01}},"name":"Lustify v7"}},{"id":"qwen-image","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"inpaint":{"usd":0.04}},"traits":["highest_quality"],"name":"Qwen Image"}},{"id":"wai-Illustrious","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01}},"name":"Anime (WAI)"}},{"id":"z-image-turbo","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01}},"name":"Z-Image Turbo"}},{"id":"tts-kokoro","type":"tts","model_spec":{"privacy":"private","pricing":{"input":{"usd":3.5}},"name":"Kokoro Text to Speech"}},{"id":"text-embedding-bge-m3","type":"embedding","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.15},"output":{"usd":0.6}},"name":"BGE-M3"}},{"id":"upscaler","type":"upscale","model_spec":{"privacy":"private","pricing":{"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"Upscaler"}}];
   
   // Privacy types that are always private (no API privacy field needed)
   const PRIVATE_TYPES = new Set(['upscale']);
@@ -524,14 +527,84 @@
     </tr></thead><tbody>${rows}</tbody></table>`;
   }
 
+  // Returns models immediately (from cache or static fallback), fetches fresh data in background
+  function getModelsSync() {
+    const cached = getCachedModels();
+    if (cached?.length) return cached;
+    return STATIC_MODELS;
+  }
+
   async function getModelsOrFetch() {
+    const cached = getCachedModels();
+    if (cached?.length) return cached;
+    // Return static data immediately, fetch fresh in background
+    fetchModelsFromAPI().catch(() => {});
+    return STATIC_MODELS;
+  }
+
+  // For pages that need fresh data (model browser), wait for API
+  async function getModelsFresh() {
     const cached = getCachedModels();
     if (cached?.length) return cached;
     try {
       return await fetchModelsFromAPI();
     } catch {
-      return [];
+      return STATIC_MODELS;
     }
+  }
+
+  // Cache pricing table for prompt caching guide
+  function renderCachePricingTable(models) {
+    const cacheModels = models
+      .filter(m => m.type === 'text' && m.model_spec?.pricing?.cache_input)
+      .filter(m => !isDeprecatedModel(m))
+      .sort((a, b) => {
+        const pA = a.model_spec?.pricing?.input?.usd || 999;
+        const pB = b.model_spec?.pricing?.input?.usd || 999;
+        return pB - pA; // Sort by input price descending (premium models first)
+      });
+
+    if (cacheModels.length === 0) return '<p>No models with cache pricing available.</p>';
+
+    const rows = cacheModels.map(model => {
+      const pricing = model.model_spec?.pricing || {};
+      const modelId = escapeHtml(model.id);
+      const input = pricing.input?.usd;
+      const cacheRead = pricing.cache_input?.usd;
+      const cacheWrite = pricing.cache_write?.usd;
+      const output = pricing.output?.usd;
+      const discount = input && cacheRead ? Math.round((1 - cacheRead / input) * 100) : null;
+
+      return `<tr>
+        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
+        <td class="vpt-price">${formatPrice(input)}</td>
+        <td class="vpt-price">${formatPrice(cacheRead)}</td>
+        <td class="vpt-price">${cacheWrite ? formatPrice(cacheWrite) : '—'}</td>
+        <td class="vpt-price">${formatPrice(output)}</td>
+        <td>${discount ? discount + '%' : '—'}</td>
+      </tr>`;
+    }).join('');
+
+    return `<table class="vpt-table"><thead><tr>
+      <th>Model</th><th class="vpt-price">Input</th><th class="vpt-price">Cache Read</th><th class="vpt-price">Cache Write</th><th class="vpt-price">Output</th><th>Read Discount</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  async function initCachePricing() {
+    const el = document.getElementById('cache-pricing-placeholder');
+    if (!el) return;
+    el.innerHTML = '<p style="opacity:0.6;">Loading pricing...</p>';
+
+    const models = await getModelsOrFetch();
+    if (!models.length) {
+      el.innerHTML = '<p>Failed to load pricing. <a href="javascript:location.reload()">Refresh</a></p>';
+      return;
+    }
+
+    el.innerHTML = `
+      <p>Prices per 1M tokens. Models without cache pricing listed still benefit from caching at the provider level, they just aren't billed separately.</p>
+      ${renderCachePricingTable(models)}
+    `;
   }
 
   async function initDeprecations() {
@@ -734,19 +807,16 @@
         }
       }).catch(() => {});
     } else {
-      // No cache - fetch and show loading
-      try {
-        allModels = await fetchModelsFromAPI();
-        if (allModels.length === 0) {
-          modelsContainer.innerHTML = '<div class="vmb-error">No models found.</div>';
-          isInitializing = false;
-          return;
+      // No cache - render static data immediately, then fetch fresh
+      allModels = STATIC_MODELS;
+      renderModels();
+      // Fetch fresh data in background and update
+      fetchModelsFromAPI().then(freshModels => {
+        if (freshModels.length > 0) {
+          allModels = freshModels;
+          renderModels();
         }
-        renderModels();
-      } catch (error) {
-        modelsContainer.innerHTML = '<div class="vmb-error">Failed to load models. Please refresh the page.</div>';
-        isInitializing = false;
-      }
+      }).catch(() => {});
     }
 
     function matchesCategory(model) {
@@ -1174,7 +1244,8 @@
   const pageInitializers = {
     pricing: { initialized: false, rendered: false, promise: null },
     deprecations: { initialized: false, rendered: false, promise: null },
-    betaModels: { initialized: false, rendered: false, promise: null }
+    betaModels: { initialized: false, rendered: false, promise: null },
+    cachePricing: { initialized: false, rendered: false, promise: null }
   };
 
   // Global copy button handler
@@ -1263,6 +1334,14 @@
     resetCheck: el => el.innerHTML === ''
   });
 
+  const tryInitCachePricing = createPageInitializer({
+    name: 'cachePricing',
+    pathMatch: 'prompt-caching',
+    elementId: 'cache-pricing-placeholder',
+    initFn: initCachePricing,
+    resetCheck: el => el.textContent.includes('Loading')
+  });
+
   function resetAllInitializers() {
     modelsInitialized = false;
     Object.values(pageInitializers).forEach(state => {
@@ -1279,6 +1358,7 @@
     tryInitPricing();
     tryInitDeprecations();
     tryInitBetaModels();
+    tryInitCachePricing();
   }
 
   function setupObserver() {
@@ -1319,6 +1399,7 @@
     retryInit('pricing', () => pageInitializers.pricing.initialized, tryInitPricing);
     retryInit('deprecation', () => pageInitializers.deprecations.initialized, tryInitDeprecations);
     retryInit('beta-models', () => pageInitializers.betaModels.initialized, tryInitBetaModels);
+    retryInit('prompt-caching', () => pageInitializers.cachePricing.initialized, tryInitCachePricing);
   }
   
   if (document.readyState === 'loading') {
