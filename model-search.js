@@ -153,7 +153,8 @@
     anonymized: 'The provider of this model maintains prompt data (though it is anonymized by Venice). For sensitive content, use a private model.',
     beta: 'Experimental model that may change or be removed without notice. Not recommended for production.',
     deprecated: 'This model is scheduled for removal. See the deprecations page for timeline and migration guide.',
-    uncensored: 'Responds to all prompts without content-based refusals or filtering.'
+    uncensored: 'Responds to all prompts without content-based refusals or filtering.',
+    upgraded: 'A newer version of this model is available with improved performance.'
   };
 
   let isInitializing = false;
@@ -224,6 +225,13 @@
 
   function isDeprecatedModel(model) {
     return model.model_spec?.deprecation?.date != null;
+  }
+
+  // Models that have been superseded by a newer version
+  const UPGRADED_MODELS = new Set(['zai-org-glm-4.6']);
+
+  function isUpgradedModel(model) {
+    return UPGRADED_MODELS.has(model.id);
   }
 
   function matchesCodeFilter(model) {
@@ -318,9 +326,10 @@
       const caps = getCapabilities(spec.capabilities);
       const capsStr = caps.join(', ') || (isUncensoredModel(model) ? 'Uncensored' : '');
       const betaTag = isBetaModel(model) ? ' <span class="vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
+      const upgradedTag = isUpgradedModel(model) ? ' <span class="vpt-upgraded vpt-tooltip" data-tooltip="A newer version of this model is available with improved performance.">Upgraded</span>' : '';
 
-      return `<tr${isBetaModel(model) ? ' class="vpt-beta-row"' : ''}>
-        <td>${name}${betaTag}</td>
+      return `<tr${isBetaModel(model) ? ' class="vpt-beta-row"' : ''}${isUpgradedModel(model) ? ' class="vpt-upgraded-row"' : ''}>
+        <td>${name}${betaTag}${upgradedTag}</td>
         <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
         <td class="vpt-price">${priceStr}</td>
         <td>${capsStr}</td>
@@ -353,13 +362,26 @@
     </tr></thead><tbody>${rows}</tbody></table>`;
   }
 
+  function formatResolutionPricingDropdown(modelId, resolutions, defaultRes) {
+    if (!resolutions) return '';
+    const keys = Object.keys(resolutions);
+    const def = defaultRes || keys[0];
+    const options = keys.map(res => 
+      `<option value="${res}"${res === def ? ' selected' : ''}>${res}</option>`
+    ).join('');
+    const defaultPrice = resolutions[def]?.usd;
+    return `<select class="vpt-res-select" data-model="${modelId}">${options}</select><span class="vpt-res-price" data-model="${modelId}">${formatPrice(defaultPrice)}</span>`;
+  }
+
   function renderPricingImageTable(models) {
     const imageModels = models.filter(m => m.type === 'image').filter(m => !isDeprecatedModel(m))
       .sort((a, b) => {
         const aBeta = isBetaModel(a) ? 1 : 0;
         const bBeta = isBetaModel(b) ? 1 : 0;
         if (aBeta !== bBeta) return aBeta - bBeta;
-        return (b.model_spec?.pricing?.generation?.usd || 0) - (a.model_spec?.pricing?.generation?.usd || 0);
+        const priceA = a.model_spec?.pricing?.generation?.usd || a.model_spec?.pricing?.resolutions?.['1K']?.usd || 0;
+        const priceB = b.model_spec?.pricing?.generation?.usd || b.model_spec?.pricing?.resolutions?.['1K']?.usd || 0;
+        return priceB - priceA;
       });
     if (imageModels.length === 0) return '<p>No models available.</p>';
 
@@ -367,10 +389,15 @@
       const spec = model.model_spec || {};
       const modelId = escapeHtml(model.id);
       const betaTag = isBetaModel(model) ? ' <span class="vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
+      const resPricing = spec.pricing?.resolutions;
+      const defaultRes = spec.constraints?.defaultResolution;
+      const priceDisplay = resPricing 
+        ? formatResolutionPricingDropdown(modelId, resPricing, defaultRes) 
+        : formatPrice(spec.pricing?.generation?.usd);
       return `<tr${isBetaModel(model) ? ' class="vpt-beta-row"' : ''}>
         <td>${escapeHtml(spec.name || model.id)}${betaTag}</td>
         <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
-        <td class="vpt-price">${formatPrice(spec.pricing?.generation?.usd)}</td>
+        <td class="vpt-price">${priceDisplay}</td>
       </tr>`;
     }).join('');
 
@@ -857,14 +884,35 @@
           model._hasResDropdown = hasResDropdown;
           model._hasDurDropdown = hasDurDropdown;
           model._hasAudioToggle = hasAudioToggle;
+      } else if (model.type === 'image' && pricing.resolutions) {
+          // Image models with resolution-based pricing (like nano-banana-pro)
+          const resolutions = constraints.resolutions || Object.keys(pricing.resolutions);
+          const defaultRes = constraints.defaultResolution || resolutions[0];
+          const defaultPrice = pricing.resolutions[defaultRes]?.usd;
+          
+          let controlsHtml = '';
+          if (resolutions.length > 1) {
+            const resOptions = resolutions.map(r => 
+              `<option value="${r}"${r === defaultRes ? ' selected' : ''}>${r}</option>`
+            ).join('');
+            controlsHtml += `<select class="vmb-res-select vmb-img-res" data-model="${model.id}">${resOptions}</select>`;
+          }
+          controlsHtml += `<span class="vmb-img-price" data-model="${model.id}">${formatPrice(defaultPrice)}</span>`;
+          contextStr = `<span class="vmb-pricing-group">${controlsHtml}</span>`;
+          model._hasImagePricing = true;
+      } else if (model.type === 'image' && pricing.generation) {
+          // Standard image models with flat pricing
+          contextStr = `<span class="vmb-img-price">${formatPrice(pricing.generation.usd)}</span>`;
+          model._hasImagePricing = true;
       } else if (model.type === 'tts' && spec.voices?.length > 0) {
           contextStr = `${spec.voices.length} voices`;
         }
         
-      // Pricing string (not for video - handled above)
+      // Pricing string (not for video/image - handled above)
         let priceStr = '';
         if (model.type === 'video') {
-          // Price shown in context area with resolution
+          priceStr = '';
+        } else if (model._hasImagePricing) {
           priceStr = '';
         } else if (pricing.input && pricing.output) {
           priceStr = `${formatPrice(pricing.input.usd)}/M input | ${formatPrice(pricing.output.usd)}/M output`;
@@ -916,6 +964,10 @@
         ? `<span class="vmb-uncensored-badge vmb-tooltip" data-tooltip="${TOOLTIPS.uncensored}">Uncensored</span>` 
         : '';
       
+      const upgradedBadge = isUpgradedModel(model)
+        ? `<span class="vmb-upgraded-badge vmb-tooltip" data-tooltip="${TOOLTIPS.upgraded}">Upgraded</span>` 
+        : '';
+      
       // Rate limit tier badge (text/embedding only)
       const rateTier = getModelRateLimitTier(model.id, model.type);
       const rateLimitBadge = rateTier
@@ -948,7 +1000,7 @@
         return `
         <div class="vmb-model" role="listitem">
             <div class="vmb-model-header">
-              <div>${nameLink}${copyBtn}${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${uncensoredBadge}${rateLimitBadge}</div>
+              <div>${nameLink}${copyBtn}${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${rateLimitBadge}</div>
               <span class="vmb-model-context">${contextStr}</span>
             </div>
             <div class="vmb-model-meta">
@@ -1050,11 +1102,12 @@
       setTimeout(() => copyBtn.classList.remove('copied'), 1500);
     });
 
-    // Event: Video pricing controls - dropdowns
+    // Event: Resolution/duration pricing controls
     modelsContainer.addEventListener('change', (e) => {
       const target = e.target;
       const isResSelect = target.classList.contains('vmb-res-select');
       const isDurSelect = target.classList.contains('vmb-dur-select');
+      const isImgRes = target.classList.contains('vmb-img-res');
       
       if (!isResSelect && !isDurSelect) return;
       
@@ -1062,6 +1115,18 @@
       const model = allModels.find(m => m.id === modelId);
       if (!model) return;
       
+      // Handle image resolution pricing
+      if (isImgRes) {
+        const resolution = target.value;
+        const price = model.model_spec?.pricing?.resolutions?.[resolution]?.usd;
+        const priceEl = target.closest('.vmb-model')?.querySelector('.vmb-img-price');
+        if (priceEl && price !== undefined) {
+          priceEl.textContent = formatPrice(price);
+        }
+        return;
+      }
+      
+      // Handle video pricing
       const card = target.closest('.vmb-model');
       const resSelect = card.querySelector('.vmb-res-select');
       const durSelect = card.querySelector('.vmb-dur-select');
@@ -1069,7 +1134,6 @@
       
       const resolution = resSelect?.value;
       const duration = durSelect?.value;
-      // Only pass audio if there's an audio toggle, otherwise undefined
       const audio = audioToggle ? audioToggle.dataset.audio === 'true' : undefined;
       
       updateVideoPrice(modelId, model, { resolution, duration, audio }, modelsContainer);
@@ -1120,6 +1184,22 @@
     await navigator.clipboard.writeText(btn.dataset.modelId).catch(() => {});
     btn.classList.add('copied');
     setTimeout(() => btn.classList.remove('copied'), 1500);
+  });
+
+  // Pricing table resolution dropdown handler
+  document.addEventListener('change', async (e) => {
+    const select = e.target.closest('.vpt-res-select');
+    if (!select) return;
+    const modelId = select.dataset.model;
+    const resolution = select.value;
+    const models = getCachedModels() || await fetchModelsFromAPI();
+    const model = models.find(m => m.id === modelId);
+    if (!model) return;
+    const price = model.model_spec?.pricing?.resolutions?.[resolution]?.usd;
+    const priceEl = document.querySelector(`.vpt-res-price[data-model="${modelId}"]`);
+    if (priceEl && price !== undefined) {
+      priceEl.textContent = formatPrice(price);
+    }
   });
 
   function tryInitModels() {
