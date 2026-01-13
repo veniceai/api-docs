@@ -170,7 +170,8 @@
   }
 
   function formatPrice(price) {
-    if (price === null || price === undefined) return '—';
+    if (price === null || price === undefined) return '-';
+    if (price < 0.01 && price > 0) return '$' + price.toFixed(4);
     return '$' + price.toFixed(2);
   }
 
@@ -470,7 +471,7 @@
       const spec = model.model_spec || {};
       const pricing = spec.pricing || {};
       const modelId = escapeHtml(model.id);
-      const price = pricing.perSecond?.usd ? formatPrice(pricing.perSecond.usd) + '/sec' : formatPrice(pricing.input?.usd) + '/M';
+      const price = pricing.per_audio_second?.usd ? formatPrice(pricing.per_audio_second.usd) : formatPrice(pricing.input?.usd);
       return `<tr><td>${escapeHtml(spec.name || model.id)}</td><td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td><td class="vpt-price">${price}</td></tr>`;
     }).join('');
 
@@ -701,7 +702,7 @@
         <h4>Text-to-Speech</h4>
         <p>Per 1M characters:</p>
         ${renderPricingTTSTable(models)}
-        ${asrHtml ? `<h4>Speech-to-Text</h4>${asrHtml}` : ''}
+        ${asrHtml ? `<h4>Speech-to-Text</h4><p>Per second of audio:</p>${asrHtml}` : ''}
       `;
     }
   }
@@ -998,8 +999,8 @@
           priceStr = `${formatPrice(pricing.generation.usd)} per image`;
         } else if (pricing.perCharacter) {
           priceStr = `${formatPrice(pricing.perCharacter.usd * 1000000)}/M chars`;
-        } else if (pricing.perSecond) {
-          priceStr = `${formatPrice(pricing.perSecond.usd)}/sec`;
+        } else if (pricing.per_audio_second) {
+          priceStr = `${formatPrice(pricing.per_audio_second.usd)}/sec`;
         }
         
         const modelName = escapeHtml(spec.name || model.id);
