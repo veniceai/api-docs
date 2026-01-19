@@ -528,32 +528,6 @@
     </tr></thead><tbody>${rows}</tbody></table>`;
   }
 
-  // Returns models immediately (from cache or static fallback), fetches fresh data in background
-  function getModelsSync() {
-    const cached = getCachedModels();
-    if (cached?.length) return cached;
-    return STATIC_MODELS;
-  }
-
-  async function getModelsOrFetch() {
-    const cached = getCachedModels();
-    if (cached?.length) return cached;
-    // Return static data immediately, fetch fresh in background
-    fetchModelsFromAPI().catch(() => {});
-    return STATIC_MODELS;
-  }
-
-  // For pages that need fresh data (model browser), wait for API
-  async function getModelsFresh() {
-    const cached = getCachedModels();
-    if (cached?.length) return cached;
-    try {
-      return await fetchModelsFromAPI();
-    } catch {
-      return STATIC_MODELS;
-    }
-  }
-
   // Cache pricing table for prompt caching guide
   function renderCachePricingTable(models) {
     const cacheModels = models
@@ -591,27 +565,62 @@
     </tr></thead><tbody>${rows}</tbody></table>`;
   }
 
-  async function initCachePricing() {
-    const el = document.getElementById('cache-pricing-placeholder');
-    if (!el) return;
-    el.innerHTML = '<p style="opacity:0.6;">Loading pricing...</p>';
-
-    const models = await getModelsOrFetch();
-    if (!models.length) {
-      el.innerHTML = '<p>Failed to load pricing. <a href="javascript:location.reload()">Refresh</a></p>';
-      return;
-    }
-
-    el.innerHTML = `
+  function renderCachePricingContent(models) {
+    return `
       <p>Prices per 1M tokens. Models without cache pricing listed still benefit from caching at the provider level, they just aren't billed separately.</p>
       ${renderCachePricingTable(models)}
     `;
   }
 
+  async function initCachePricing() {
+    const el = document.getElementById('cache-pricing-placeholder');
+    if (!el) return;
+    el.innerHTML = '<p style="opacity:0.6;">Loading pricing...</p>';
+
+    // Try cache first for instant render
+    const cachedModels = getCachedModels();
+    if (cachedModels && cachedModels.length > 0) {
+      el.innerHTML = renderCachePricingContent(cachedModels);
+      // Refresh in background
+      fetchModelsFromAPI().then(freshModels => {
+        if (freshModels.length > 0) {
+          el.innerHTML = renderCachePricingContent(freshModels);
+        }
+      }).catch(() => {});
+    } else {
+      // No cache - render static data immediately, then fetch fresh
+      el.innerHTML = renderCachePricingContent(STATIC_MODELS);
+      fetchModelsFromAPI().then(freshModels => {
+        if (freshModels.length > 0) {
+          el.innerHTML = renderCachePricingContent(freshModels);
+        }
+      }).catch(() => {});
+    }
+  }
+
   async function initDeprecations() {
     const el = document.getElementById('deprecation-tracker-placeholder');
     if (!el) return;
-    el.innerHTML = renderDeprecationTable(await getModelsOrFetch());
+
+    // Try cache first for instant render
+    const cachedModels = getCachedModels();
+    if (cachedModels && cachedModels.length > 0) {
+      el.innerHTML = renderDeprecationTable(cachedModels);
+      // Refresh in background
+      fetchModelsFromAPI().then(freshModels => {
+        if (freshModels.length > 0) {
+          el.innerHTML = renderDeprecationTable(freshModels);
+        }
+      }).catch(() => {});
+    } else {
+      // No cache - render static data immediately, then fetch fresh
+      el.innerHTML = renderDeprecationTable(STATIC_MODELS);
+      fetchModelsFromAPI().then(freshModels => {
+        if (freshModels.length > 0) {
+          el.innerHTML = renderDeprecationTable(freshModels);
+        }
+      }).catch(() => {});
+    }
   }
 
   function renderBetaModelsTable(models) {
@@ -651,23 +660,33 @@
   async function initBetaModels() {
     const el = document.getElementById('beta-models-placeholder');
     if (!el) return;
-    el.innerHTML = renderBetaModelsTable(await getModelsOrFetch());
+
+    // Try cache first for instant render
+    const cachedModels = getCachedModels();
+    if (cachedModels && cachedModels.length > 0) {
+      el.innerHTML = renderBetaModelsTable(cachedModels);
+      // Refresh in background
+      fetchModelsFromAPI().then(freshModels => {
+        if (freshModels.length > 0) {
+          el.innerHTML = renderBetaModelsTable(freshModels);
+        }
+      }).catch(() => {});
+    } else {
+      // No cache - render static data immediately, then fetch fresh
+      el.innerHTML = renderBetaModelsTable(STATIC_MODELS);
+      fetchModelsFromAPI().then(freshModels => {
+        if (freshModels.length > 0) {
+          el.innerHTML = renderBetaModelsTable(freshModels);
+        }
+      }).catch(() => {});
+    }
   }
 
-  async function initPricing() {
+  function renderPricingTables(models) {
     const chatEl = document.getElementById('pricing-chat-placeholder');
     const embeddingEl = document.getElementById('pricing-embedding-placeholder');
     const imageEl = document.getElementById('pricing-image-placeholder');
     const audioEl = document.getElementById('pricing-audio-placeholder');
-    
-    if (!chatEl && !embeddingEl && !imageEl && !audioEl) return;
-    if (chatEl) chatEl.innerHTML = '<p style="opacity:0.6;">Loading pricing...</p>';
-
-    const models = await getModelsOrFetch();
-    if (!models.length) {
-      if (chatEl) chatEl.innerHTML = '<p>Failed to load pricing. <a href="javascript:location.reload()">Refresh</a></p>';
-      return;
-    }
 
     if (chatEl) {
       chatEl.innerHTML = `
@@ -704,6 +723,37 @@
         ${renderPricingTTSTable(models)}
         ${asrHtml ? `<h4>Speech-to-Text</h4><p>Per second of audio:</p>${asrHtml}` : ''}
       `;
+    }
+  }
+
+  async function initPricing() {
+    const chatEl = document.getElementById('pricing-chat-placeholder');
+    const embeddingEl = document.getElementById('pricing-embedding-placeholder');
+    const imageEl = document.getElementById('pricing-image-placeholder');
+    const audioEl = document.getElementById('pricing-audio-placeholder');
+    
+    if (!chatEl && !embeddingEl && !imageEl && !audioEl) return;
+    if (chatEl) chatEl.innerHTML = '<p style="opacity:0.6;">Loading pricing...</p>';
+
+    // Try cache first for instant render
+    const cachedModels = getCachedModels();
+    if (cachedModels && cachedModels.length > 0) {
+      renderPricingTables(cachedModels);
+      // Refresh in background (don't await)
+      fetchModelsFromAPI().then(freshModels => {
+        if (freshModels.length > 0) {
+          renderPricingTables(freshModels);
+        }
+      }).catch(() => {});
+    } else {
+      // No cache - render static data immediately, then fetch fresh
+      renderPricingTables(STATIC_MODELS);
+      // Fetch fresh data in background and update
+      fetchModelsFromAPI().then(freshModels => {
+        if (freshModels.length > 0) {
+          renderPricingTables(freshModels);
+        }
+      }).catch(() => {});
     }
   }
 
