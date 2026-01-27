@@ -48,7 +48,7 @@
     'gemini-3-pro-preview': 'large',
     'hermes-3-llama-3.1-405b': 'large',
     'qwen3-coder-480b-a35b-instruct': 'large',
-    'zai-org-glm-4.6': 'large',
+    'zai-org-glm-4.7': 'large',
     'openai-gpt-oss-120b': 'large'
   };
 
@@ -232,7 +232,7 @@
   }
 
   // Models that have been superseded by a newer version
-  const UPGRADED_MODELS = new Set(['zai-org-glm-4.6']);
+  const UPGRADED_MODELS = new Set(['zai-org-glm-4.7']);
 
   function isUpgradedModel(model) {
     return UPGRADED_MODELS.has(model.id);
