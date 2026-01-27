@@ -11,8 +11,8 @@
   const CACHE_KEY = 'venice-models-cache';
   const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-  // Static fallback data for instant pricing page load (updated periodically)
-  const STATIC_MODELS = [{"id":"venice-uncensored","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.2},"output":{"usd":0.9}},"traits":["most_uncensored"],"name":"Venice Uncensored 1.1","capabilities":{"optimizedForCode":false,"supportsFunctionCalling":false,"supportsReasoning":false,"supportsVision":false}}},{"id":"zai-org-glm-4.7","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.55},"output":{"usd":2.65}},"name":"GLM 4.7","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"qwen3-4b","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.05},"output":{"usd":0.15}},"name":"Venice Small","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"mistral-31-24b","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.5},"output":{"usd":2}},"traits":["default_vision"],"name":"Venice Medium","capabilities":{"supportsFunctionCalling":true,"supportsVision":true}}},{"id":"qwen3-235b-a22b-thinking-2507","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.45},"output":{"usd":3.5}},"name":"Qwen 3 235B A22B Thinking 2507","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"qwen3-235b-a22b-instruct-2507","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.15},"output":{"usd":0.75}},"name":"Qwen 3 235B A22B Instruct 2507","capabilities":{"supportsFunctionCalling":true}}},{"id":"qwen3-next-80b","type":"text","model_spec":{"betaModel":true,"privacy":"private","pricing":{"input":{"usd":0.35},"output":{"usd":1.9}},"name":"Qwen 3 Next 80b","capabilities":{"supportsFunctionCalling":true}}},{"id":"qwen3-coder-480b-a35b-instruct","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.75},"output":{"usd":3}},"traits":["default_code"],"name":"Qwen 3 Coder 480b","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true}}},{"id":"hermes-3-llama-3.1-405b","type":"text","model_spec":{"betaModel":true,"privacy":"private","pricing":{"input":{"usd":1.1},"output":{"usd":3}},"name":"Hermes 3 Llama 3.1 405b"}},{"id":"google-gemma-3-27b-it","type":"text","model_spec":{"betaModel":true,"privacy":"private","pricing":{"input":{"usd":0.12},"output":{"usd":0.2}},"name":"Google Gemma 3 27B Instruct","capabilities":{"supportsFunctionCalling":true,"supportsVision":true}}},{"id":"grok-41-fast","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":0.5},"cache_input":{"usd":0.125},"output":{"usd":1.25}},"name":"Grok 4.1 Fast","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"gemini-3-pro-preview","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":2.5},"cache_input":{"usd":0.625},"output":{"usd":15}},"name":"Gemini 3 Pro Preview","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"gemini-3-flash-preview","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":0.7},"cache_input":{"usd":0.07},"output":{"usd":3.75}},"name":"Gemini 3 Flash Preview","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"claude-opus-45","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":6},"cache_input":{"usd":0.6},"cache_write":{"usd":7.5},"output":{"usd":30}},"name":"Claude Opus 4.5","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"openai-gpt-oss-120b","type":"text","model_spec":{"betaModel":true,"privacy":"private","pricing":{"input":{"usd":0.07},"output":{"usd":0.3}},"name":"OpenAI GPT OSS 120B","capabilities":{"supportsFunctionCalling":true}}},{"id":"kimi-k2-thinking","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":0.75},"cache_input":{"usd":0.375},"output":{"usd":3.2}},"name":"Kimi K2 Thinking","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"deepseek-v3.2","type":"text","model_spec":{"betaModel":true,"privacy":"private","pricing":{"input":{"usd":0.4},"cache_input":{"usd":0.2},"output":{"usd":1}},"name":"DeepSeek V3.2","capabilities":{"supportsReasoning":true}}},{"id":"llama-3.2-3b","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.15},"output":{"usd":0.6}},"traits":["fastest"],"name":"Llama 3.2 3B","capabilities":{"supportsFunctionCalling":true}}},{"id":"llama-3.3-70b","type":"text","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.7},"output":{"usd":2.8}},"traits":["function_calling_default","default"],"name":"Llama 3.3 70B","capabilities":{"supportsFunctionCalling":true}}},{"id":"openai-gpt-52","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":2.19},"cache_input":{"usd":0.219},"output":{"usd":17.5}},"name":"GPT-5.2","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"minimax-m21","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":0.4},"cache_input":{"usd":0.04},"output":{"usd":1.6}},"name":"MiniMax M2.1","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"grok-code-fast-1","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"input":{"usd":0.25},"cache_input":{"usd":0.03},"output":{"usd":1.87}},"name":"Grok Code Fast 1","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"venice-sd35","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"traits":["default","eliza-default"],"name":"Venice SD35"}},{"id":"hidream","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01}},"name":"HiDream"}},{"id":"flux-2-pro","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.04}},"name":"Flux 2 Pro"}},{"id":"flux-2-max","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.09}},"name":"Flux 2 Max"}},{"id":"gpt-image-1-5","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.23}},"name":"GPT Image 1.5"}},{"id":"nano-banana-pro","type":"image","model_spec":{"privacy":"anonymized","pricing":{"resolutions":{"1K":{"usd":0.18},"2K":{"usd":0.24},"4K":{"usd":0.35}}},"name":"Nano Banana Pro"}},{"id":"seedream-v4","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.05}},"name":"SeedreamV4.5"}},{"id":"lustify-sdxl","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01}},"name":"Lustify SDXL"}},{"id":"lustify-v7","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01}},"name":"Lustify v7"}},{"id":"qwen-image","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"inpaint":{"usd":0.04}},"traits":["highest_quality"],"name":"Qwen Image"}},{"id":"wai-Illustrious","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01}},"name":"Anime (WAI)"}},{"id":"z-image-turbo","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01}},"name":"Z-Image Turbo"}},{"id":"tts-kokoro","type":"tts","model_spec":{"privacy":"private","pricing":{"input":{"usd":3.5}},"name":"Kokoro Text to Speech"}},{"id":"text-embedding-bge-m3","type":"embedding","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.15},"output":{"usd":0.6}},"name":"BGE-M3"}},{"id":"upscaler","type":"upscale","model_spec":{"privacy":"private","pricing":{"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"Upscaler"}}];
+  // Static fallback data for instant pricing page load (updated 2026-01-27)
+  const STATIC_MODELS = [{"id":"text-embedding-bge-m3","type":"embedding","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.15},"output":{"usd":0.6}},"name":"BGE-M3"}},{"id":"upscaler","type":"upscale","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"Upscaler"}},{"id":"nvidia/parakeet-tdt-0.6b-v3","type":"asr","model_spec":{"privacy":"private","pricing":{"per_audio_second":{"usd":0.0001}},"name":"Parakeet ASR"}},{"id":"qwen-edit","type":"inpaint","model_spec":{"privacy":"private","pricing":{},"name":"Qwen Edit 2511"}},{"id":"venice-sd35","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"traits":["eliza-default"],"name":"Venice SD35"}},{"id":"hidream","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"HiDream"}},{"id":"flux-2-pro","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.04},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"Flux 2 Pro"}},{"id":"flux-2-max","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.09},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"Flux 2 Max"}},{"id":"gpt-image-1-5","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.23},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"GPT Image 1.5"}},{"id":"nano-banana-pro","type":"image","model_spec":{"privacy":"anonymized","pricing":{"resolutions":{"1K":{"usd":0.18},"2K":{"usd":0.24},"4K":{"usd":0.35}},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"Nano Banana Pro"}},{"id":"seedream-v4","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.05},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"SeedreamV4.5"}},{"id":"lustify-sdxl","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"Lustify SDXL"}},{"id":"lustify-v7","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"traits":["most_uncensored"],"name":"Lustify v7"}},{"id":"qwen-image","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"traits":["highest_quality"],"name":"Qwen Image"}},{"id":"wai-Illustrious","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"Anime (WAI)"}},{"id":"z-image-turbo","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"traits":["default","fastest"],"name":"Z-Image Turbo"}},{"id":"bg-remover","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.02},"upscale":{"2x":{"usd":0.02},"4x":{"usd":0.08}}},"name":"Background Remover"}},{"id":"wan-2.6-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Wan 2.6"}},{"id":"wan-2.6-flash-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Wan 2.6 Flash"}},{"id":"wan-2.6-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Wan 2.6"}},{"id":"wan-2.5-preview-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Wan 2.5 Preview"}},{"id":"wan-2.5-preview-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Wan 2.5 Preview"}},{"id":"wan-2.2-a14b-text-to-video","type":"video","model_spec":{"privacy":"private","pricing":{},"name":"Wan 2.2 A14B"}},{"id":"wan-2.1-pro-image-to-video","type":"video","model_spec":{"privacy":"private","pricing":{},"name":"Wan 2.1 Pro"}},{"id":"ltx-2-fast-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"LTX Video 2.0 Fast"}},{"id":"ltx-2-fast-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"LTX Video 2.0 Fast"}},{"id":"ltx-2-full-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"LTX Video 2.0 Full Quality"}},{"id":"ltx-2-full-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"LTX Video 2.0 Full Quality"}},{"id":"ltx-2-19b-full-text-to-video","type":"video","model_spec":{"privacy":"private","pricing":{},"name":"LTX Video 2.0 19B"}},{"id":"ltx-2-19b-full-image-to-video","type":"video","model_spec":{"privacy":"private","pricing":{},"name":"LTX Video 2.0 19B"}},{"id":"ltx-2-19b-distilled-text-to-video","type":"video","model_spec":{"privacy":"private","pricing":{},"name":"LTX Video 2.0 19B Distilled"}},{"id":"ltx-2-19b-distilled-image-to-video","type":"video","model_spec":{"privacy":"private","pricing":{},"name":"LTX Video 2.0 19B Distilled"}},{"id":"ovi-image-to-video","type":"video","model_spec":{"privacy":"private","pricing":{},"name":"Ovi"}},{"id":"kling-2.6-pro-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Kling 2.6 Pro"}},{"id":"kling-2.6-pro-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Kling 2.6 Pro"}},{"id":"kling-2.5-turbo-pro-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Kling 2.5 Turbo Pro"}},{"id":"kling-2.5-turbo-pro-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Kling 2.5 Turbo Pro"}},{"id":"longcat-distilled-image-to-video","type":"video","model_spec":{"privacy":"private","pricing":{},"name":"Longcat Distilled"}},{"id":"longcat-distilled-text-to-video","type":"video","model_spec":{"privacy":"private","pricing":{},"name":"Longcat Distilled"}},{"id":"longcat-image-to-video","type":"video","model_spec":{"privacy":"private","pricing":{},"name":"Longcat Full Quality"}},{"id":"longcat-text-to-video","type":"video","model_spec":{"privacy":"private","pricing":{},"name":"Longcat Full Quality"}},{"id":"veo3-fast-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Veo 3 Fast"}},{"id":"veo3-fast-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Veo 3 Fast"}},{"id":"veo3-full-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Veo 3 Full Quality"}},{"id":"veo3-full-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Veo 3 Full Quality"}},{"id":"veo3.1-fast-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Veo 3.1 Fast"}},{"id":"veo3.1-fast-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Veo 3.1 Fast"}},{"id":"veo3.1-full-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Veo 3.1 Full Quality"}},{"id":"veo3.1-full-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Veo 3.1 Full Quality"}},{"id":"sora-2-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Sora 2"}},{"id":"sora-2-pro-image-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Sora 2 Pro"}},{"id":"sora-2-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Sora 2"}},{"id":"sora-2-pro-text-to-video","type":"video","model_spec":{"privacy":"anonymized","pricing":{},"name":"Sora 2 Pro"}},{"id":"tts-kokoro","type":"tts","model_spec":{"privacy":"private","pricing":{"input":{"usd":3.5}},"name":"Kokoro Text to Speech"}},{"id":"venice-uncensored","type":"text","model_spec":{"privacy":"private","availableContextTokens":32768,"pricing":{"input":{"usd":0.2},"output":{"usd":0.9}},"traits":["most_uncensored"],"name":"Venice Uncensored 1.1"}},{"id":"zai-org-glm-4.7","type":"text","model_spec":{"privacy":"private","availableContextTokens":202752,"pricing":{"input":{"usd":0.55},"cache_input":{"usd":0.11},"output":{"usd":2.65}},"traits":["default","most_intelligent"],"name":"GLM 4.7","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"qwen3-4b","type":"text","model_spec":{"privacy":"private","availableContextTokens":32768,"pricing":{"input":{"usd":0.05},"output":{"usd":0.15}},"traits":["fastest"],"name":"Venice Small","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"mistral-31-24b","type":"text","model_spec":{"privacy":"private","availableContextTokens":131072,"pricing":{"input":{"usd":0.5},"output":{"usd":2}},"traits":["default_vision","function_calling_default"],"name":"Venice Medium","capabilities":{"supportsFunctionCalling":true,"supportsVision":true}}},{"id":"qwen3-235b-a22b-thinking-2507","type":"text","model_spec":{"privacy":"private","availableContextTokens":131072,"pricing":{"input":{"usd":0.45},"output":{"usd":3.5}},"traits":["default_reasoning"],"name":"Qwen 3 235B A22B Thinking 2507","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"qwen3-235b-a22b-instruct-2507","type":"text","model_spec":{"privacy":"private","availableContextTokens":131072,"pricing":{"input":{"usd":0.15},"output":{"usd":0.75}},"name":"Qwen 3 235B A22B Instruct 2507","capabilities":{"supportsFunctionCalling":true}}},{"id":"qwen3-next-80b","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":262144,"pricing":{"input":{"usd":0.35},"output":{"usd":1.9}},"name":"Qwen 3 Next 80b","capabilities":{"supportsFunctionCalling":true}}},{"id":"qwen3-coder-480b-a35b-instruct","type":"text","model_spec":{"privacy":"private","availableContextTokens":262144,"pricing":{"input":{"usd":0.75},"output":{"usd":3}},"traits":["default_code"],"name":"Qwen 3 Coder 480b","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true}}},{"id":"hermes-3-llama-3.1-405b","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":131072,"pricing":{"input":{"usd":1.1},"output":{"usd":3}},"name":"Hermes 3 Llama 3.1 405b"}},{"id":"google-gemma-3-27b-it","type":"text","model_spec":{"privacy":"private","availableContextTokens":202752,"pricing":{"input":{"usd":0.12},"output":{"usd":0.2}},"name":"Google Gemma 3 27B Instruct","capabilities":{"supportsFunctionCalling":true,"supportsVision":true}}},{"id":"grok-41-fast","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":262144,"pricing":{"input":{"usd":0.5},"cache_input":{"usd":0.125},"output":{"usd":1.25}},"name":"Grok 4.1 Fast","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"gemini-3-pro-preview","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":202752,"pricing":{"input":{"usd":2.5},"cache_input":{"usd":0.625},"output":{"usd":15}},"name":"Gemini 3 Pro Preview","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"gemini-3-flash-preview","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":262144,"pricing":{"input":{"usd":0.7},"cache_input":{"usd":0.07},"output":{"usd":3.75}},"name":"Gemini 3 Flash Preview","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"claude-opus-45","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":202752,"pricing":{"input":{"usd":6},"cache_input":{"usd":0.6},"cache_write":{"usd":7.5},"output":{"usd":30}},"name":"Claude Opus 4.5","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"claude-sonnet-45","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":202752,"pricing":{"input":{"usd":3.75},"cache_input":{"usd":0.375},"cache_write":{"usd":4.69},"output":{"usd":18.75}},"name":"Claude Sonnet 4.5","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"openai-gpt-oss-120b","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":131072,"pricing":{"input":{"usd":0.07},"output":{"usd":0.3}},"name":"OpenAI GPT OSS 120B","capabilities":{"supportsFunctionCalling":true}}},{"id":"kimi-k2-thinking","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":262144,"pricing":{"input":{"usd":0.75},"cache_input":{"usd":0.375},"output":{"usd":3.2}},"name":"Kimi K2 Thinking","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"deepseek-v3.2","type":"text","model_spec":{"privacy":"private","availableContextTokens":163840,"pricing":{"input":{"usd":0.4},"cache_input":{"usd":0.2},"output":{"usd":1}},"name":"DeepSeek V3.2","capabilities":{"supportsReasoning":true}}},{"id":"llama-3.2-3b","type":"text","model_spec":{"privacy":"private","availableContextTokens":131072,"pricing":{"input":{"usd":0.15},"output":{"usd":0.6}},"name":"Llama 3.2 3B","capabilities":{"supportsFunctionCalling":true}}},{"id":"llama-3.3-70b","type":"text","model_spec":{"privacy":"private","availableContextTokens":131072,"pricing":{"input":{"usd":0.7},"output":{"usd":2.8}},"name":"Llama 3.3 70B","capabilities":{"supportsFunctionCalling":true}}},{"id":"openai-gpt-52","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":262144,"pricing":{"input":{"usd":2.19},"cache_input":{"usd":0.219},"output":{"usd":17.5}},"name":"GPT-5.2","capabilities":{"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"openai-gpt-52-codex","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":262144,"pricing":{"input":{"usd":2.19},"cache_input":{"usd":0.219},"output":{"usd":17.5}},"name":"GPT-5.2 Codex","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true,"supportsVision":true}}},{"id":"minimax-m21","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":202752,"pricing":{"input":{"usd":0.4},"cache_input":{"usd":0.04},"output":{"usd":1.6}},"name":"MiniMax M2.1","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"grok-code-fast-1","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":262144,"pricing":{"input":{"usd":0.25},"cache_input":{"usd":0.03},"output":{"usd":1.87}},"name":"Grok Code Fast 1","capabilities":{"optimizedForCode":true,"supportsFunctionCalling":true,"supportsReasoning":true}}},{"id":"qwen3-vl-235b-a22b","type":"text","model_spec":{"privacy":"private","availableContextTokens":262144,"pricing":{"input":{"usd":0.25},"output":{"usd":1.5}},"name":"Qwen3 VL 235B","capabilities":{"supportsFunctionCalling":true,"supportsVision":true}}}];
   
   // Privacy types that are always private (no API privacy field needed)
   const PRIVATE_TYPES = new Set(['upscale']);
@@ -204,6 +204,26 @@
     return list;
   }
 
+  function getCapabilityTags(caps, isUncensored) {
+    const tags = [];
+    if (caps?.supportsFunctionCalling) {
+      tags.push('<span class="vpt-cap-tag">Tools</span>');
+    }
+    if (caps?.supportsReasoning) {
+      tags.push('<span class="vpt-cap-tag">Reasoning</span>');
+    }
+    if (caps?.supportsVision) {
+      tags.push('<span class="vpt-cap-tag">Vision</span>');
+    }
+    if (caps?.optimizedForCode) {
+      tags.push('<span class="vpt-cap-tag">Code</span>');
+    }
+    if (isUncensored) {
+      tags.push('<span class="vpt-cap-tag vpt-cap-uncensored">Uncensored</span>');
+    }
+    return tags.join('');
+  }
+
   function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -332,25 +352,46 @@
       const pricing = spec.pricing || {};
       const name = escapeHtml(spec.name || model.id);
       const modelId = escapeHtml(model.id);
-      const priceStr = `${formatPrice(pricing.input?.usd)} / ${formatPrice(pricing.output?.usd)}`;
-      const cachedStr = pricing.cache_input?.usd ? formatPrice(pricing.cache_input.usd) : '—';
-      const caps = getCapabilities(spec.capabilities);
-      const capsStr = caps.join(', ') || (isUncensoredModel(model) ? 'Uncensored' : '');
-      const betaTag = isBetaModel(model) ? ' <span class="vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
-      const upgradedTag = isUpgradedModel(model) ? ' <span class="vpt-upgraded vpt-tooltip" data-tooltip="A newer version of this model is available with improved performance.">Upgraded</span>' : '';
+      const inputPrice = formatPrice(pricing.input?.usd);
+      const outputPrice = formatPrice(pricing.output?.usd);
+      const cacheReadStr = pricing.cache_input?.usd ? formatPrice(pricing.cache_input.usd) : null;
+      const cacheWriteStr = pricing.cache_write?.usd ? formatPrice(pricing.cache_write.usd) : null;
+      const contextWindow = spec.availableContextTokens || spec.constraints?.maxContextTokens;
+      const contextStr = contextWindow ? (contextWindow >= 1000 ? `${Math.round(contextWindow / 1000)}K` : contextWindow) : null;
+      const capTags = getCapabilityTags(spec.capabilities, isUncensoredModel(model));
+      const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
+      const upgradedTag = isUpgradedModel(model) ? '<span class="vpt-badge vpt-upgraded vpt-tooltip" data-tooltip="A newer version of this model is available with improved performance.">Upgraded</span>' : '';
+      const privacyTag = isAnonymizedModel(model) 
+        ? `<span class="vpt-cap-tag vpt-cap-anonymized vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
+        : `<span class="vpt-cap-tag vpt-cap-private vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
 
-      return `<tr${isBetaModel(model) ? ' class="vpt-beta-row"' : ''}${isUpgradedModel(model) ? ' class="vpt-upgraded-row"' : ''}>
-        <td>${name}${betaTag}${upgradedTag}</td>
-        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
-        <td class="vpt-price">${priceStr}</td>
-        <td class="vpt-price">${cachedStr}</td>
-        <td>${capsStr}</td>
-      </tr>`;
+      let priceItems = `
+        <span class="vpt-price-item"><span class="vpt-price-label">Input Price</span><span class="vpt-price-value">${inputPrice}</span></span>
+        <span class="vpt-price-item"><span class="vpt-price-label">Output Price</span><span class="vpt-price-value">${outputPrice}</span></span>
+      `;
+      if (cacheReadStr) {
+        priceItems += `<span class="vpt-price-item vpt-tooltip" data-tooltip="Discounted rate for cached input tokens."><span class="vpt-price-label">Cache Read</span><span class="vpt-price-value">${cacheReadStr}</span></span>`;
+      }
+      if (cacheWriteStr) {
+        priceItems += `<span class="vpt-price-item vpt-tooltip" data-tooltip="Cost to write tokens to cache."><span class="vpt-price-label">Cache Write</span><span class="vpt-price-value">${cacheWriteStr}</span></span>`;
+      }
+
+      return `<div class="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}${isUpgradedModel(model) ? ' vpt-upgraded-row' : ''}">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">${name}</span>${betaTag}${upgradedTag}
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
+          </div>
+          <div class="vpt-row-right">${privacyTag}${capTags}</div>
+        </div>
+        <div class="vpt-row-bottom">
+          ${priceItems}
+          ${contextStr ? `<span class="vpt-price-item vpt-context-right"><span class="vpt-price-label">Context</span><span class="vpt-price-value vpt-context-value">${contextStr}</span></span>` : ''}
+        </div>
+      </div>`;
     }).join('');
 
-    return `<table class="vpt-table"><thead><tr>
-      <th>Model</th><th>Model ID</th><th class="vpt-price">Price (In / Out)</th><th class="vpt-price vpt-tooltip" data-tooltip="Discounted rate for cached input tokens. See Prompt Caching guide.">Cache</th><th>Capabilities</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
+    return `<div class="vpt-list">${rows}</div>`;
   }
 
   function renderPricingEmbeddingTable(models) {
@@ -361,17 +402,27 @@
       const spec = model.model_spec || {};
       const pricing = spec.pricing || {};
       const modelId = escapeHtml(model.id);
-      const priceStr = `${formatPrice(pricing.input?.usd)} / ${formatPrice(pricing.output?.usd)}`;
-      return `<tr>
-        <td>${escapeHtml(spec.name || model.id)}</td>
-        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
-        <td class="vpt-price">${priceStr}</td>
-      </tr>`;
+      const name = escapeHtml(spec.name || model.id);
+      const privacyTag = isAnonymizedModel(model) 
+        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
+        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+
+      return `<div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">${name}</span>
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
+          </div>
+          <div class="vpt-row-right">${privacyTag}</div>
+        </div>
+        <div class="vpt-row-bottom">
+          <span class="vpt-price-item"><span class="vpt-price-label">Input (per 1M tokens)</span><span class="vpt-price-value">${formatPrice(pricing.input?.usd)}</span></span>
+          <span class="vpt-price-item"><span class="vpt-price-label">Output (per 1M tokens)</span><span class="vpt-price-value">${formatPrice(pricing.output?.usd)}</span></span>
+        </div>
+      </div>`;
     }).join('');
 
-    return `<table class="vpt-table"><thead><tr>
-      <th>Model</th><th>Model ID</th><th class="vpt-price">Price (In / Out)</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
+    return `<div class="vpt-list">${rows}</div>`;
   }
 
   function formatResolutionPricingDropdown(modelId, resolutions, defaultRes) {
@@ -382,7 +433,7 @@
       `<option value="${res}"${res === def ? ' selected' : ''}>${res}</option>`
     ).join('');
     const defaultPrice = resolutions[def]?.usd;
-    return `<select class="vpt-res-select" data-model="${modelId}">${options}</select><span class="vpt-res-price" data-model="${modelId}">${formatPrice(defaultPrice)}</span>`;
+    return `<span class="vpt-res-group"><select class="vpt-res-select" data-model="${modelId}">${options}</select><span class="vpt-price-value vpt-res-price" data-model="${modelId}">${formatPrice(defaultPrice)}</span></span>`;
   }
 
   function renderPricingImageTable(models) {
@@ -400,22 +451,40 @@
     const rows = imageModels.map(model => {
       const spec = model.model_spec || {};
       const modelId = escapeHtml(model.id);
-      const betaTag = isBetaModel(model) ? ' <span class="vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
+      const name = escapeHtml(spec.name || model.id);
+      const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
+      const privacyTag = isAnonymizedModel(model) 
+        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
+        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
       const resPricing = spec.pricing?.resolutions;
       const defaultRes = spec.constraints?.defaultResolution;
-      const priceDisplay = resPricing 
-        ? formatResolutionPricingDropdown(modelId, resPricing, defaultRes) 
-        : formatPrice(spec.pricing?.generation?.usd);
-      return `<tr${isBetaModel(model) ? ' class="vpt-beta-row"' : ''}>
-        <td>${escapeHtml(spec.name || model.id)}${betaTag}</td>
-        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
-        <td class="vpt-price">${priceDisplay}</td>
-      </tr>`;
+      
+      let priceItems = '';
+      if (resPricing) {
+        // Show each resolution price separately
+        const resKeys = Object.keys(resPricing);
+        priceItems = resKeys.map(res => 
+          `<span class="vpt-price-item"><span class="vpt-price-label">${res}</span><span class="vpt-price-value">${formatPrice(resPricing[res]?.usd)}</span></span>`
+        ).join('');
+      } else {
+        priceItems = `<span class="vpt-price-item"><span class="vpt-price-label">Per Image</span><span class="vpt-price-value">${formatPrice(spec.pricing?.generation?.usd)}</span></span>`;
+      }
+
+      return `<div class="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">${name}</span>${betaTag}
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
+          </div>
+          <div class="vpt-row-right">${privacyTag}</div>
+        </div>
+        <div class="vpt-row-bottom">
+          ${priceItems}
+        </div>
+      </div>`;
     }).join('');
 
-    return `<table class="vpt-table"><thead><tr>
-      <th>Model</th><th>Model ID</th><th class="vpt-price">Price</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
+    return `<div class="vpt-list">${rows}</div>`;
   }
 
   function renderPricingUpscaleTable(models) {
@@ -423,35 +492,49 @@
     if (upscaleModels.length === 0) return '<p>No models available.</p>';
 
     const pricing = upscaleModels[0]?.model_spec?.pricing || {};
-    const upscalePricing = pricing.upscale || pricing; // Support both nested and flat structure
-    const rows = [];
-    if (upscalePricing['2x']?.usd) rows.push(`<tr><td>Upscale / Enhance (2x)</td><td class="vpt-price">${formatPrice(upscalePricing['2x'].usd)}</td></tr>`);
-    if (upscalePricing['4x']?.usd) rows.push(`<tr><td>Upscale / Enhance (4x)</td><td class="vpt-price">${formatPrice(upscalePricing['4x'].usd)}</td></tr>`);
-    if (rows.length === 0) return '<p>Upscaling pricing varies.</p>';
+    const upscalePricing = pricing.upscale || pricing;
+    const items = [];
+    if (upscalePricing['2x']?.usd) items.push(`<span class="vpt-price-item"><span class="vpt-price-label">2x Upscale</span><span class="vpt-price-value">${formatPrice(upscalePricing['2x'].usd)}</span></span>`);
+    if (upscalePricing['4x']?.usd) items.push(`<span class="vpt-price-item"><span class="vpt-price-label">4x Upscale</span><span class="vpt-price-value">${formatPrice(upscalePricing['4x'].usd)}</span></span>`);
+    if (items.length === 0) return '<p>Upscaling pricing varies.</p>';
 
-    return `<table class="vpt-table"><thead><tr><th>Model</th><th class="vpt-price">Price</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    return `<div class="vpt-list">
+      <div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">Image Upscaler</span>
+            <code class="vpt-model-id">upscaler</code>${pricingCopyBtn('upscaler')}
+          </div>
+        </div>
+        <div class="vpt-row-bottom">${items.join('')}</div>
+      </div>
+    </div>`;
   }
 
   function renderPricingEditTable(models) {
-    // qwen-image is the editing model, it's type 'image' but supports editing
-    // editing/inpainting is priced at $0.40 per edit (separate from generation at $0.10)
     const editModels = models.filter(m => m.id === 'qwen-image').filter(m => !isDeprecatedModel(m));
     if (editModels.length === 0) return '<p>No models available.</p>';
 
     const rows = editModels.map(model => {
       const spec = model.model_spec || {};
       const modelId = escapeHtml(model.id);
+      const name = escapeHtml(spec.name || model.id);
       const editPrice = spec.pricing?.inpaint?.usd ?? 0.04;
-      return `<tr>
-        <td>${escapeHtml(spec.name || model.id)}</td>
-        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
-        <td class="vpt-price">${formatPrice(editPrice)}</td>
-      </tr>`;
+
+      return `<div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">${name}</span>
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
+          </div>
+        </div>
+        <div class="vpt-row-bottom">
+          <span class="vpt-price-item"><span class="vpt-price-label">Per Edit</span><span class="vpt-price-value">${formatPrice(editPrice)}</span></span>
+        </div>
+      </div>`;
     }).join('');
 
-    return `<table class="vpt-table"><thead><tr>
-      <th>Model</th><th>Model ID</th><th class="vpt-price">Price</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
+    return `<div class="vpt-list">${rows}</div>`;
   }
 
   function renderPricingTTSTable(models) {
@@ -461,14 +544,26 @@
     const rows = ttsModels.map(model => {
       const spec = model.model_spec || {};
       const modelId = escapeHtml(model.id);
-      return `<tr>
-        <td>${escapeHtml(spec.name || model.id)}</td>
-        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
-        <td class="vpt-price">${formatPrice(spec.pricing?.input?.usd)}</td>
-      </tr>`;
+      const name = escapeHtml(spec.name || model.id);
+      const privacyTag = isAnonymizedModel(model) 
+        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
+        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+
+      return `<div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">${name}</span>
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
+          </div>
+          <div class="vpt-row-right">${privacyTag}</div>
+        </div>
+        <div class="vpt-row-bottom">
+          <span class="vpt-price-item"><span class="vpt-price-label">Per 1M Characters</span><span class="vpt-price-value">${formatPrice(spec.pricing?.input?.usd)}</span></span>
+        </div>
+      </div>`;
     }).join('');
 
-    return `<table class="vpt-table"><thead><tr><th>Model</th><th>Model ID</th><th class="vpt-price">Price</th></tr></thead><tbody>${rows}</tbody></table>`;
+    return `<div class="vpt-list">${rows}</div>`;
   }
 
   function renderPricingASRTable(models) {
@@ -479,11 +574,108 @@
       const spec = model.model_spec || {};
       const pricing = spec.pricing || {};
       const modelId = escapeHtml(model.id);
+      const name = escapeHtml(spec.name || model.id);
       const price = pricing.per_audio_second?.usd ? formatPrice(pricing.per_audio_second.usd) : formatPrice(pricing.input?.usd);
-      return `<tr><td>${escapeHtml(spec.name || model.id)}</td><td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td><td class="vpt-price">${price}</td></tr>`;
+      const privacyTag = isAnonymizedModel(model) 
+        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
+        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+
+      return `<div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">${name}</span>
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
+          </div>
+          <div class="vpt-row-right">${privacyTag}</div>
+        </div>
+        <div class="vpt-row-bottom">
+          <span class="vpt-price-item"><span class="vpt-price-label">Per Audio Second</span><span class="vpt-price-value">${price}</span></span>
+        </div>
+      </div>`;
     }).join('');
 
-    return `<table class="vpt-table"><thead><tr><th>Model</th><th>Model ID</th><th class="vpt-price">Price</th></tr></thead><tbody>${rows}</tbody></table>`;
+    return `<div class="vpt-list">${rows}</div>`;
+  }
+
+  function renderPricingWebSearchTable() {
+    return `<div class="vpt-list">
+      <div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">Web Search</span>
+            <code class="vpt-model-id">enable_web_search: true</code>${pricingCopyBtn('enable_web_search: true')}
+          </div>
+        </div>
+        <div class="vpt-row-bottom">
+          <span class="vpt-price-item"><span class="vpt-price-label">Per 1K Calls</span><span class="vpt-price-value">$10.00</span></span>
+        </div>
+      </div>
+      <div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">Web Scraping</span>
+            <code class="vpt-model-id">enable_web_scraping: true</code>${pricingCopyBtn('enable_web_scraping: true')}
+          </div>
+        </div>
+        <div class="vpt-row-bottom">
+          <span class="vpt-price-item"><span class="vpt-price-label">Per 1K Calls</span><span class="vpt-price-value">$10.00</span></span>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderPricingVideoTable(models) {
+    const videoModels = models.filter(m => m.type === 'video').filter(m => !isDeprecatedModel(m))
+      .sort((a, b) => {
+        const aName = a.model_spec?.name || a.id;
+        const bName = b.model_spec?.name || b.id;
+        return aName.localeCompare(bName);
+      });
+    if (videoModels.length === 0) return '<p>No video models available.</p>';
+
+    const rows = videoModels.map(model => {
+      const spec = model.model_spec || {};
+      const constraints = spec.constraints || {};
+      const modelId = escapeHtml(model.id);
+      const name = escapeHtml(spec.name || model.id);
+      const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
+      const privacyTag = isAnonymizedModel(model) 
+        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
+        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const videoType = constraints.model_type === 'image-to-video' ? 'Image to Video' : 'Text to Video';
+      const videoTypeBadge = `<span class="vpt-cap-tag">${videoType}</span>`;
+      const durations = constraints.durations || [];
+      const resolutions = constraints.resolutions || [];
+
+      return `<div class="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}" data-video-model="${modelId}">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">${name}</span>${betaTag}
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
+          </div>
+          <div class="vpt-row-right">${privacyTag}${videoTypeBadge}</div>
+        </div>
+        <div class="vpt-row-bottom">
+          ${durations.length > 0 ? `<span class="vpt-price-item"><span class="vpt-price-label">Durations</span><span class="vpt-price-value vpt-context-value">${durations.join(', ')}</span></span>` : ''}
+          ${resolutions.length > 0 ? `<span class="vpt-price-item"><span class="vpt-price-label">Resolutions</span><span class="vpt-price-value vpt-context-value">${resolutions.join(', ')}</span></span>` : ''}
+          <span class="vpt-price-item"><span class="vpt-price-label">Starting At</span><span class="vpt-price-value vmb-video-price" data-model="${modelId}">...</span></span>
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<div class="vpt-list vpt-video-list">${rows}</div>`;
+  }
+
+  async function updateVideoPricesForPricingPage(models) {
+    const videoModels = models.filter(m => m.type === 'video').filter(m => !isDeprecatedModel(m));
+    for (const model of videoModels) {
+      const constraints = model.model_spec?.constraints || {};
+      // Skip if no constraints (static data doesn't have them)
+      if (!constraints.resolutions && !constraints.durations) continue;
+      const defaultRes = constraints.resolutions?.[0];
+      const defaultDur = constraints.durations?.[0];
+      await updateVideoPrice(model.id, model, { resolution: defaultRes, duration: defaultDur });
+    }
   }
 
   function formatDeprecationDate(dateStr) {
@@ -583,52 +775,41 @@
   async function initCachePricing() {
     const el = document.getElementById('cache-pricing-placeholder');
     if (!el) return;
-    el.innerHTML = '<p style="opacity:0.6;">Loading pricing...</p>';
 
-    // Try cache first for instant render
+    // Always render static data immediately for instant display
+    el.innerHTML = renderCachePricingContent(STATIC_MODELS);
+
+    // Then try cache or fetch fresh data to update
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
       el.innerHTML = renderCachePricingContent(cachedModels);
-      // Refresh in background
-      fetchModelsFromAPI().then(freshModels => {
-        if (freshModels.length > 0) {
-          el.innerHTML = renderCachePricingContent(freshModels);
-        }
-      }).catch(() => {});
-    } else {
-      // No cache - render static data immediately, then fetch fresh
-      el.innerHTML = renderCachePricingContent(STATIC_MODELS);
-      fetchModelsFromAPI().then(freshModels => {
-        if (freshModels.length > 0) {
-          el.innerHTML = renderCachePricingContent(freshModels);
-        }
-      }).catch(() => {});
     }
+    // Fetch fresh data in background and update
+    fetchModelsFromAPI().then(freshModels => {
+      if (freshModels.length > 0) {
+        el.innerHTML = renderCachePricingContent(freshModels);
+      }
+    }).catch(() => {});
   }
 
   async function initDeprecations() {
     const el = document.getElementById('deprecation-tracker-placeholder');
     if (!el) return;
 
-    // Try cache first for instant render
+    // Always render static data immediately for instant display
+    el.innerHTML = renderDeprecationTable(STATIC_MODELS);
+
+    // Then try cache or fetch fresh data to update
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
       el.innerHTML = renderDeprecationTable(cachedModels);
-      // Refresh in background
-      fetchModelsFromAPI().then(freshModels => {
-        if (freshModels.length > 0) {
-          el.innerHTML = renderDeprecationTable(freshModels);
-        }
-      }).catch(() => {});
-    } else {
-      // No cache - render static data immediately, then fetch fresh
-      el.innerHTML = renderDeprecationTable(STATIC_MODELS);
-      fetchModelsFromAPI().then(freshModels => {
-        if (freshModels.length > 0) {
-          el.innerHTML = renderDeprecationTable(freshModels);
-        }
-      }).catch(() => {});
     }
+    // Fetch fresh data in background and update
+    fetchModelsFromAPI().then(freshModels => {
+      if (freshModels.length > 0) {
+        el.innerHTML = renderDeprecationTable(freshModels);
+      }
+    }).catch(() => {});
   }
 
   function renderBetaModelsTable(models) {
@@ -669,25 +850,20 @@
     const el = document.getElementById('beta-models-placeholder');
     if (!el) return;
 
-    // Try cache first for instant render
+    // Always render static data immediately for instant display
+    el.innerHTML = renderBetaModelsTable(STATIC_MODELS);
+
+    // Then try cache or fetch fresh data to update
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
       el.innerHTML = renderBetaModelsTable(cachedModels);
-      // Refresh in background
-      fetchModelsFromAPI().then(freshModels => {
-        if (freshModels.length > 0) {
-          el.innerHTML = renderBetaModelsTable(freshModels);
-        }
-      }).catch(() => {});
-    } else {
-      // No cache - render static data immediately, then fetch fresh
-      el.innerHTML = renderBetaModelsTable(STATIC_MODELS);
-      fetchModelsFromAPI().then(freshModels => {
-        if (freshModels.length > 0) {
-          el.innerHTML = renderBetaModelsTable(freshModels);
-        }
-      }).catch(() => {});
     }
+    // Fetch fresh data in background and update
+    fetchModelsFromAPI().then(freshModels => {
+      if (freshModels.length > 0) {
+        el.innerHTML = renderBetaModelsTable(freshModels);
+      }
+    }).catch(() => {});
   }
 
   function renderPricingTables(models) {
@@ -695,25 +871,22 @@
     const embeddingEl = document.getElementById('pricing-embedding-placeholder');
     const imageEl = document.getElementById('pricing-image-placeholder');
     const audioEl = document.getElementById('pricing-audio-placeholder');
+    const websearchEl = document.getElementById('pricing-websearch-placeholder');
+    const videoEl = document.getElementById('pricing-video-placeholder');
 
     if (chatEl) {
       chatEl.innerHTML = `
-        <p>Prices per 1M tokens.</p>
         ${renderPricingChatTable(models)}
         <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and not recommended for production use. These models may be changed, removed, or replaced at any time without notice. <a href="/overview/beta-models">Learn more</a></p>
       `;
     }
 
     if (embeddingEl) {
-      embeddingEl.innerHTML = `
-        <p>Prices per 1M tokens:</p>
-        ${renderPricingEmbeddingTable(models)}
-      `;
+      embeddingEl.innerHTML = renderPricingEmbeddingTable(models);
     }
 
     if (imageEl) {
       imageEl.innerHTML = `
-        <p>Priced per generation.</p>
         <h4>Generation</h4>
         ${renderPricingImageTable(models)}
         <h4>Upscaling</h4>
@@ -727,10 +900,22 @@
       const asrHtml = renderPricingASRTable(models);
       audioEl.innerHTML = `
         <h4>Text-to-Speech</h4>
-        <p>Per 1M characters:</p>
         ${renderPricingTTSTable(models)}
-        ${asrHtml ? `<h4>Speech-to-Text</h4><p>Per second of audio:</p>${asrHtml}` : ''}
+        ${asrHtml ? `<h4>Speech-to-Text</h4>${asrHtml}` : ''}
       `;
+    }
+
+    if (websearchEl) {
+      websearchEl.innerHTML = renderPricingWebSearchTable();
+    }
+
+    if (videoEl) {
+      videoEl.innerHTML = `
+        <p class="vpt-video-note">Video pricing varies by resolution and duration. Visit the <a href="/models/video">Video Models page</a> for exact quotes, or use the <a href="/api-reference/endpoint/video/quote">Video Quote API</a>.</p>
+        ${renderPricingVideoTable(models)}
+      `;
+      // Fetch video prices asynchronously
+      updateVideoPricesForPricingPage(models);
     }
   }
 
@@ -741,28 +926,21 @@
     const audioEl = document.getElementById('pricing-audio-placeholder');
     
     if (!chatEl && !embeddingEl && !imageEl && !audioEl) return;
-    if (chatEl) chatEl.innerHTML = '<p style="opacity:0.6;">Loading pricing...</p>';
 
-    // Try cache first for instant render
+    // Immediately render dynamic version from cache or STATIC_MODELS (instant, adds JS interactivity)
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
       renderPricingTables(cachedModels);
-      // Refresh in background (don't await)
-      fetchModelsFromAPI().then(freshModels => {
-        if (freshModels.length > 0) {
-          renderPricingTables(freshModels);
-        }
-      }).catch(() => {});
     } else {
-      // No cache - render static data immediately, then fetch fresh
       renderPricingTables(STATIC_MODELS);
-      // Fetch fresh data in background and update
-      fetchModelsFromAPI().then(freshModels => {
-        if (freshModels.length > 0) {
-          renderPricingTables(freshModels);
-        }
-      }).catch(() => {});
     }
+    
+    // Fetch fresh data in background and update when ready
+    fetchModelsFromAPI().then(freshModels => {
+      if (freshModels.length > 0) {
+        renderPricingTables(freshModels);
+      }
+    }).catch(() => {});
   }
 
   // ========== MODEL BROWSER FUNCTIONS ==========
@@ -778,9 +956,9 @@
     
     isInitializing = true;
     const presetFilter = placeholder.dataset.filter || null;
-    const hasCachedData = getCachedModels() !== null;
+    const hasCachedData = getCachedModels() !== null || STATIC_MODELS.length > 0;
 
-    // Create container - show loading only if no cache
+    // Create container - show loading only if no data available
     const container = document.createElement('div');
     container.id = 'venice-model-browser';
     container.innerHTML = `
@@ -853,30 +1031,23 @@
     let activeVideoType = null;
     let activeImageType = null;
 
-    // Try cache first for instant render
+    // Always render static data immediately for instant display
+    allModels = STATIC_MODELS;
+    renderModels();
+
+    // Then try cache or fetch fresh data to update
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
       allModels = cachedModels;
       renderModels();
-      // Refresh in background (don't await)
-      fetchModelsFromAPI().then(freshModels => {
-        if (freshModels.length > 0) {
-          allModels = freshModels;
-          renderModels();
-        }
-      }).catch(() => {});
-    } else {
-      // No cache - render static data immediately, then fetch fresh
-      allModels = STATIC_MODELS;
-      renderModels();
-      // Fetch fresh data in background and update
-      fetchModelsFromAPI().then(freshModels => {
-        if (freshModels.length > 0) {
-          allModels = freshModels;
-          renderModels();
-        }
-      }).catch(() => {});
     }
+    // Fetch fresh data in background and update
+    fetchModelsFromAPI().then(freshModels => {
+      if (freshModels.length > 0) {
+        allModels = freshModels;
+        renderModels();
+      }
+    }).catch(() => {});
 
     function matchesCategory(model) {
       if (activeFilter === 'all') return true;
@@ -1046,7 +1217,10 @@
         } else if (pricing.input && pricing.output) {
           priceStr = `${formatPrice(pricing.input.usd)}/M input | ${formatPrice(pricing.output.usd)}/M output`;
           if (pricing.cache_input?.usd) {
-            priceStr += ` | ${formatPrice(pricing.cache_input.usd)}/M cache`;
+            priceStr += ` | ${formatPrice(pricing.cache_input.usd)}/M cache read`;
+          }
+          if (pricing.cache_write?.usd) {
+            priceStr += ` | ${formatPrice(pricing.cache_write.usd)}/M cache write`;
           }
         } else if (pricing.input && model.type === 'tts') {
           priceStr = `${formatPrice(pricing.input.usd)}/M chars`;
