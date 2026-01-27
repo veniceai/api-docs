@@ -232,7 +232,7 @@
   }
 
   // Models that have been superseded by a newer version
-  const UPGRADED_MODELS = new Set(['zai-org-glm-4.7']);
+  const UPGRADED_MODELS = new Set([]);
 
   function isUpgradedModel(model) {
     return UPGRADED_MODELS.has(model.id);
@@ -311,9 +311,15 @@
       .filter(m => m.type === 'text')
       .filter(m => !isDeprecatedModel(m))
       .sort((a, b) => {
+        // Models with cache pricing first
+        const aCache = a.model_spec?.pricing?.cache_input ? 0 : 1;
+        const bCache = b.model_spec?.pricing?.cache_input ? 0 : 1;
+        if (aCache !== bCache) return aCache - bCache;
+        // Beta models last
         const aBeta = isBetaModel(a) ? 1 : 0;
         const bBeta = isBetaModel(b) ? 1 : 0;
         if (aBeta !== bBeta) return aBeta - bBeta;
+        // Then by input price
         const pA = a.model_spec?.pricing?.input?.usd || 999;
         const pB = b.model_spec?.pricing?.input?.usd || 999;
         return pA - pB;
@@ -327,6 +333,7 @@
       const name = escapeHtml(spec.name || model.id);
       const modelId = escapeHtml(model.id);
       const priceStr = `${formatPrice(pricing.input?.usd)} / ${formatPrice(pricing.output?.usd)}`;
+      const cachedStr = pricing.cache_input?.usd ? formatPrice(pricing.cache_input.usd) : '—';
       const caps = getCapabilities(spec.capabilities);
       const capsStr = caps.join(', ') || (isUncensoredModel(model) ? 'Uncensored' : '');
       const betaTag = isBetaModel(model) ? ' <span class="vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
@@ -336,12 +343,13 @@
         <td>${name}${betaTag}${upgradedTag}</td>
         <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
         <td class="vpt-price">${priceStr}</td>
+        <td class="vpt-price">${cachedStr}</td>
         <td>${capsStr}</td>
       </tr>`;
     }).join('');
 
     return `<table class="vpt-table"><thead><tr>
-      <th>Model</th><th>Model ID</th><th class="vpt-price">Price (In / Out)</th><th>Capabilities</th>
+      <th>Model</th><th>Model ID</th><th class="vpt-price">Price (In / Out)</th><th class="vpt-price vpt-tooltip" data-tooltip="Discounted rate for cached input tokens. See Prompt Caching guide.">Cache</th><th>Capabilities</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
   }
 
@@ -1037,6 +1045,9 @@
           priceStr = '';
         } else if (pricing.input && pricing.output) {
           priceStr = `${formatPrice(pricing.input.usd)}/M input | ${formatPrice(pricing.output.usd)}/M output`;
+          if (pricing.cache_input?.usd) {
+            priceStr += ` | ${formatPrice(pricing.cache_input.usd)}/M cache`;
+          }
         } else if (pricing.input && model.type === 'tts') {
           priceStr = `${formatPrice(pricing.input.usd)}/M chars`;
         } else if (model.type === 'upscale' && (pricing.upscale || pricing['2x'] || pricing['4x'])) {
