@@ -20,10 +20,10 @@
   // Rate limit tiers - default limits by model size category
   // Models not listed default to their type's standard tier
   const RATE_LIMIT_TIERS = {
-    xsmall: { rpm: 500, tpm: 1000000, label: 'XS', tooltip: '500 RPM · 1M TPM' },
-    small:  { rpm: 75,  tpm: 750000,  label: 'S',  tooltip: '75 RPM · 750K TPM' },
-    medium: { rpm: 50,  tpm: 750000,  label: 'M',  tooltip: '50 RPM · 750K TPM' },
-    large:  { rpm: 20,  tpm: 500000,  label: 'L',  tooltip: '20 RPM · 500K TPM' }
+    xsmall: { rpm: 500, tpm: 1000000, label: 'XS', tooltip: 'Rate Limit: 500 RPM · 1M TPM' },
+    small:  { rpm: 75,  tpm: 750000,  label: 'S',  tooltip: 'Rate Limit: 75 RPM · 750K TPM' },
+    medium: { rpm: 50,  tpm: 750000,  label: 'M',  tooltip: 'Rate Limit: 50 RPM · 750K TPM' },
+    large:  { rpm: 20,  tpm: 500000,  label: 'L',  tooltip: 'Rate Limit: 20 RPM · 500K TPM' }
   };
 
   // Model to rate limit tier mapping (text/embedding models only)
@@ -169,6 +169,23 @@
     return tokens;
   }
 
+  function formatAddedDate(timestamp) {
+    if (!timestamp) return null;
+    const date = new Date(timestamp * 1000);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    
+    // Format: "Jan 15, 2025"
+    const dateStr = `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+    
+    // New models (< 30 days) get a "NEW" badge
+    const isNew = diffDays <= 30;
+    
+    return { dateStr, isNew };
+  }
+
   function formatPrice(price) {
     if (price === null || price === undefined) return '-';
     if (price < 0.01 && price > 0) return '$' + price.toFixed(4);
@@ -194,6 +211,18 @@
     }
   }
 
+  // Capability icons (simple SVG line icons)
+  const CAP_ICONS = {
+    // Plug icon - connects to external tools/APIs
+    function: '<svg class="vmb-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>',
+    // Brain icon - thinking/reasoning
+    reasoning: '<svg class="vmb-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M12 18v-5"/></svg>',
+    // Eye icon - vision/image understanding
+    vision: '<svg class="vmb-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+    // Code brackets - optimized for coding
+    code: '<svg class="vmb-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
+  };
+
   function getCapabilities(caps) {
     if (!caps) return [];
     const list = [];
@@ -204,19 +233,29 @@
     return list;
   }
 
+  function getCapabilityIcons(caps) {
+    if (!caps) return '';
+    const icons = [];
+    if (caps.supportsFunctionCalling) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Function Calling">${CAP_ICONS.function}</span>`);
+    if (caps.supportsReasoning) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Reasoning">${CAP_ICONS.reasoning}</span>`);
+    if (caps.supportsVision) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Vision">${CAP_ICONS.vision}</span>`);
+    if (caps.optimizedForCode) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Code Optimized">${CAP_ICONS.code}</span>`);
+    return icons.join('');
+  }
+
   function getCapabilityTags(caps, isUncensored) {
     const tags = [];
     if (caps?.supportsFunctionCalling) {
-      tags.push('<span class="vpt-cap-tag">Tools</span>');
+      tags.push(`<span class="vpt-cap vpt-tooltip" data-tooltip="Function Calling">${CAP_ICONS.function}</span>`);
     }
     if (caps?.supportsReasoning) {
-      tags.push('<span class="vpt-cap-tag">Reasoning</span>');
+      tags.push(`<span class="vpt-cap vpt-tooltip" data-tooltip="Reasoning">${CAP_ICONS.reasoning}</span>`);
     }
     if (caps?.supportsVision) {
-      tags.push('<span class="vpt-cap-tag">Vision</span>');
+      tags.push(`<span class="vpt-cap vpt-tooltip" data-tooltip="Vision">${CAP_ICONS.vision}</span>`);
     }
     if (caps?.optimizedForCode) {
-      tags.push('<span class="vpt-cap-tag">Code</span>');
+      tags.push(`<span class="vpt-cap vpt-tooltip" data-tooltip="Code Optimized">${CAP_ICONS.code}</span>`);
     }
     if (isUncensored) {
       tags.push('<span class="vpt-cap-tag vpt-cap-uncensored">Uncensored</span>');
@@ -962,7 +1001,18 @@
     const container = document.createElement('div');
     container.id = 'venice-model-browser';
     container.innerHTML = `
-      <input type="text" class="vmb-search" placeholder="Filter models" aria-label="Filter models by name or capability" />
+      <div class="vmb-toolbar">
+        <div class="vmb-toolbar-left">
+          <input type="text" class="vmb-search" placeholder="Search models..." aria-label="Search models" />
+        </div>
+        <div class="vmb-toolbar-right">
+          <button class="vmb-sort-toggle" aria-label="Sort by date" title="Sort by date">
+            <svg class="vmb-sort-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"/>
+            </svg>
+          </button>
+        </div>
+      </div>
       <div class="vmb-filters" role="toolbar" aria-label="Model filters">
         <span class="vmb-category-filters" role="group" aria-label="Category filters">
           <button class="vmb-filter active" data-filter="all" aria-pressed="true">All</button>
@@ -989,7 +1039,9 @@
           <button class="vmb-filter" data-filter="image-uncensored" aria-pressed="false">Uncensored</button>
         </span>
       </div>
-      <div class="vmb-count" aria-live="polite">${hasCachedData ? '' : 'Loading...'}</div>
+      <div class="vmb-results-bar">
+        <span class="vmb-count" aria-live="polite">${hasCachedData ? '' : 'Loading...'}</span>
+      </div>
       <div class="vmb-models" role="list" aria-label="Model list">
         ${hasCachedData ? '' : '<div class="vmb-loading">Loading models...</div>'}
       </div>
@@ -1030,6 +1082,9 @@
     let activeCapability = null;
     let activeVideoType = null;
     let activeImageType = null;
+    let activeSort = 'default';
+    
+    const sortToggle = container.querySelector('.vmb-sort-toggle');
 
     // Always render static data immediately for instant display
     allModels = STATIC_MODELS;
@@ -1088,6 +1143,35 @@
       return true;
     }
 
+    function getModelPrice(model) {
+      const pricing = model.model_spec?.pricing || {};
+      return pricing.input?.usd || pricing.generation?.usd || pricing.per_audio_second?.usd || 0;
+    }
+
+    function sortModels(models) {
+      if (activeSort === 'default') return models; // Keep API order
+      
+      const sorted = [...models];
+      switch (activeSort) {
+        case 'newest':
+          return sorted.sort((a, b) => (b.created || 0) - (a.created || 0));
+        case 'oldest':
+          return sorted.sort((a, b) => (a.created || 0) - (b.created || 0));
+        case 'price-low':
+          return sorted.sort((a, b) => getModelPrice(a) - getModelPrice(b));
+        case 'price-high':
+          return sorted.sort((a, b) => getModelPrice(b) - getModelPrice(a));
+        case 'name':
+          return sorted.sort((a, b) => {
+            const nameA = a.model_spec?.name || a.id || '';
+            const nameB = b.model_spec?.name || b.id || '';
+            return nameA.localeCompare(nameB);
+          });
+        default:
+          return models;
+      }
+    }
+
     function renderModels() {
       const query = searchInput.value.toLowerCase().trim();
       
@@ -1109,17 +1193,19 @@
                matchesImageType(model);
       });
 
-      countDisplay.textContent = filtered.length + ' model' + (filtered.length !== 1 ? 's' : '');
+      const sorted = sortModels(filtered);
 
-      if (filtered.length === 0) {
+      countDisplay.textContent = sorted.length + ' model' + (sorted.length !== 1 ? 's' : '');
+
+      if (sorted.length === 0) {
         modelsContainer.innerHTML = '<div class="vmb-loading">No models match your filters</div>';
         return;
       }
 
-      modelsContainer.innerHTML = filtered.map(model => renderModelCard(model)).join('');
+      modelsContainer.innerHTML = sorted.map(model => renderModelCard(model)).join('');
 
       // Fetch video prices after render
-      filtered.filter(m => m.type === 'video').forEach(model => {
+      sorted.filter(m => m.type === 'video').forEach(model => {
         const constraints = model.model_spec?.constraints || {};
         const config = getVideoModelConfig(model.id);
         const defaultRes = constraints.resolutions?.[0];
@@ -1141,97 +1227,76 @@
         if (spec.availableContextTokens) {
           contextStr = `${formatContext(spec.availableContextTokens)} context`;
       } else if (model.type === 'video') {
-          // Video pricing controls based on model config
+          // Video models - store config for info row
           const config = getVideoModelConfig(model.id);
-          const priceHtml = formatVideoPricing(model.id, model);
           const resolutions = constraints.resolutions || [];
           const durations = constraints.durations || [];
           
-          let controlsHtml = '';
-          let hasResDropdown = false;
-          let hasDurDropdown = false;
-          let hasAudioToggle = false;
-          
-          // Resolution selector (if multiple options AND affects pricing)
-          const resPricing = config.resPricing !== false; // default true
-          if (resolutions.length > 1 && resPricing) {
-            hasResDropdown = true;
-            const resOptions = resolutions.map((r, i) => 
-              `<option value="${r}"${i === 0 ? ' selected' : ''}>${r}</option>`
-            ).join('');
-            controlsHtml += `<select class="vmb-res-select" data-model="${model.id}">${resOptions}</select>`;
-          }
-          
-          // Audio toggle (if model supports audio pricing)
-          if (config.audioPricing) {
-            hasAudioToggle = true;
-            controlsHtml += `<span class="vmb-audio-toggle" data-model="${model.id}" data-audio="true">♪ AUDIO</span>`;
-          }
-          
-          // Duration selector (if multiple options)
-          if (durations.length > 1) {
-            hasDurDropdown = true;
-            const durOptions = durations.map((d, i) => 
-              `<option value="${d}"${i === 0 ? ' selected' : ''}>${d}</option>`
-            ).join('');
-            controlsHtml += `<select class="vmb-dur-select" data-model="${model.id}">${durOptions}</select>`;
-          }
-          
-          controlsHtml += priceHtml;
-          contextStr = `<span class="vmb-pricing-group">${controlsHtml}</span>`;
-          
-          // Store state for metadata section
-          model._hasResDropdown = hasResDropdown;
-          model._hasDurDropdown = hasDurDropdown;
-          model._hasAudioToggle = hasAudioToggle;
-      } else if (model.type === 'image' && pricing.resolutions) {
-          // Image models with resolution-based pricing (like nano-banana-pro)
-          const resolutions = constraints.resolutions || Object.keys(pricing.resolutions);
-          const defaultRes = constraints.defaultResolution || resolutions[0];
-          const defaultPrice = pricing.resolutions[defaultRes]?.usd;
-          
-          let controlsHtml = '';
-          if (resolutions.length > 1) {
-            const resOptions = resolutions.map(r => 
-              `<option value="${r}"${r === defaultRes ? ' selected' : ''}>${r}</option>`
-            ).join('');
-            controlsHtml += `<select class="vmb-res-select vmb-img-res" data-model="${model.id}">${resOptions}</select>`;
-          }
-          controlsHtml += `<span class="vmb-img-price" data-model="${model.id}">${formatPrice(defaultPrice)}</span>`;
-          contextStr = `<span class="vmb-pricing-group">${controlsHtml}</span>`;
-          model._hasImagePricing = true;
-      } else if (model.type === 'image' && pricing.generation) {
-          // Standard image models with flat pricing
-          contextStr = `<span class="vmb-img-price">${formatPrice(pricing.generation.usd)}</span>`;
-          model._hasImagePricing = true;
+          model._videoConfig = config;
+          model._hasResDropdown = resolutions.length > 1 && config.resPricing !== false;
+          model._hasDurDropdown = durations.length > 1;
+          model._hasAudioToggle = !!config.audioPricing;
+          model._resolutions = resolutions;
+          model._durations = durations;
       } else if (model.type === 'tts' && spec.voices?.length > 0) {
           contextStr = `${spec.voices.length} voices`;
         }
         
-      // Pricing string (not for video/image - handled above)
+      // Pricing display
         let priceStr = '';
+        let videoControlsHtml = '';
         if (model.type === 'video') {
-          priceStr = '';
-        } else if (model._hasImagePricing) {
-          priceStr = '';
-        } else if (pricing.input && pricing.output) {
-          priceStr = `${formatPrice(pricing.input.usd)}/M input | ${formatPrice(pricing.output.usd)}/M output`;
-          if (pricing.cache_input?.usd) {
-            priceStr += ` | ${formatPrice(pricing.cache_input.usd)}/M cache read`;
+          // Build video controls for info row
+          const resolutions = model._resolutions || [];
+          const durations = model._durations || [];
+          
+          if (model._hasResDropdown) {
+            const resOptions = resolutions.map((r, i) => 
+              `<option value="${r}"${i === 0 ? ' selected' : ''}>${r}</option>`
+            ).join('');
+            videoControlsHtml += `<select class="vmb-res-select vmb-video-select" data-model="${model.id}">${resOptions}</select>`;
           }
-          if (pricing.cache_write?.usd) {
-            priceStr += ` | ${formatPrice(pricing.cache_write.usd)}/M cache write`;
+          if (model._hasDurDropdown) {
+            const durOptions = durations.map((d, i) => 
+              `<option value="${d}"${i === 0 ? ' selected' : ''}>${d}</option>`
+            ).join('');
+            videoControlsHtml += `<select class="vmb-dur-select vmb-video-select" data-model="${model.id}">${durOptions}</select>`;
+          }
+          if (model._hasAudioToggle) {
+            videoControlsHtml += `<span class="vmb-audio-toggle" data-model="${model.id}" data-audio="true">♪ Audio</span>`;
+          }
+          videoControlsHtml += `<span class="vmb-video-price" data-model="${model.id}">...</span>`;
+        } else if (model.type === 'image' && pricing.resolutions) {
+          // Image models with resolution-based pricing
+          const resolutions = constraints.resolutions || Object.keys(pricing.resolutions);
+          const defaultRes = constraints.defaultResolution || resolutions[0];
+          const defaultPrice = pricing.resolutions[defaultRes]?.usd;
+          if (resolutions.length > 1) {
+            const resOptions = resolutions.map(r => 
+              `<option value="${r}"${r === defaultRes ? ' selected' : ''}>${r}</option>`
+            ).join('');
+            contextStr = `<select class="vmb-res-select vmb-img-res" data-model="${model.id}">${resOptions}</select>`;
+          }
+          priceStr = `<span class="vmb-img-price-val" data-model="${model.id}">${formatPrice(defaultPrice)}</span>/image`;
+        } else if (model.type === 'image' && pricing.generation) {
+          priceStr = `${formatPrice(pricing.generation.usd)}/image`;
+        } else if (pricing.input && pricing.output) {
+          priceStr = `${formatPrice(pricing.input.usd)}/M input <span class="vmb-pipe">|</span> ${formatPrice(pricing.output.usd)}/M output`;
+          if (pricing.cache_input?.usd && pricing.cache_write?.usd) {
+            priceStr += ` <span class="vmb-pipe">|</span> ${formatPrice(pricing.cache_input.usd)}/${formatPrice(pricing.cache_write.usd)} cache`;
+          } else if (pricing.cache_input?.usd) {
+            priceStr += ` <span class="vmb-pipe">|</span> ${formatPrice(pricing.cache_input.usd)} cache`;
           }
         } else if (pricing.input && model.type === 'tts') {
           priceStr = `${formatPrice(pricing.input.usd)}/M chars`;
         } else if (model.type === 'upscale' && (pricing.upscale || pricing['2x'] || pricing['4x'])) {
           const upscalePricing = pricing.upscale || pricing;
           const prices = [];
-          if (upscalePricing['2x']?.usd) prices.push(`${formatPrice(upscalePricing['2x'].usd)} (2x)`);
-          if (upscalePricing['4x']?.usd) prices.push(`${formatPrice(upscalePricing['4x'].usd)} (4x)`);
-          priceStr = prices.join(' | ') || '';
+          if (upscalePricing['2x']?.usd) prices.push(`${formatPrice(upscalePricing['2x'].usd)} 2x`);
+          if (upscalePricing['4x']?.usd) prices.push(`${formatPrice(upscalePricing['4x'].usd)} 4x`);
+          priceStr = prices.join(' · ');
         } else if (pricing.generation) {
-          priceStr = `${formatPrice(pricing.generation.usd)} per image`;
+          priceStr = `${formatPrice(pricing.generation.usd)}/image`;
         } else if (pricing.perCharacter) {
           priceStr = `${formatPrice(pricing.perCharacter.usd * 1000000)}/M chars`;
         } else if (pricing.per_audio_second) {
@@ -1240,6 +1305,10 @@
         
         const modelName = escapeHtml(spec.name || model.id);
         const modelId = escapeHtml(model.id);
+      
+      // Release date for NEW badge
+      const dateInfo = formatAddedDate(model.created);
+      
       const hasLink = spec.modelSource?.length > 0;
         const nameLink = hasLink
           ? `<a href="${escapeHtml(spec.modelSource)}" target="_blank" rel="noopener" class="vmb-model-name">${modelName}</a>`
@@ -1274,6 +1343,10 @@
         ? `<span class="vmb-upgraded-badge vmb-tooltip" data-tooltip="${TOOLTIPS.upgraded}">Upgraded</span>` 
         : '';
       
+      const newBadge = dateInfo?.isNew
+        ? '<span class="vmb-new-badge">NEW</span>'
+        : '';
+      
       // Rate limit tier badge (text/embedding only)
       const rateTier = getModelRateLimitTier(model.id, model.type);
       const rateLimitBadge = rateTier
@@ -1298,23 +1371,41 @@
         : '';
       const videoMeta = model.type === 'video' ? [
         aspectRatioHtml,
-        !model._hasResDropdown && constraints.resolutions?.length ? `<span>${constraints.resolutions.join(', ')}</span>` : '',
-        !model._hasDurDropdown && constraints.durations?.length ? `<span>${constraints.durations.join(', ')}</span>` : '',
-        constraints.audio ? `<span class="vmb-model-caps">Audio</span>` : '' // Always show audio capability
-      ].filter(Boolean).map(s => `<span>|</span>${s}`).join('') : '';
+        !model._hasResDropdown && constraints.resolutions?.length ? constraints.resolutions.join(', ') : '',
+        !model._hasDurDropdown && constraints.durations?.length ? constraints.durations.join(', ') : '',
+        constraints.audio ? 'Audio' : ''
+      ].filter(Boolean).join(' · ') : '';
+
+      // Capability icons
+      const capIcons = getCapabilityIcons(spec.capabilities);
+      
+      // Left side: model-id and pricing (or video controls)
+      const leftParts = [
+        `<span class="vmb-model-id">${modelId}</span>`,
+        model.type === 'video' && videoControlsHtml 
+          ? `<span class="vmb-video-controls">${videoControlsHtml}</span>` 
+          : (priceStr ? `<span class="vmb-pricing">${priceStr}</span>` : ''),
+        videoMeta && model.type !== 'video' ? `<span class="vmb-video-info">${videoMeta}</span>` : ''
+      ].filter(Boolean);
+
+      // Right side: capabilities and date
+      const releaseDateHtml = dateInfo ? `<span class="vmb-release-date">Added ${dateInfo.dateStr}</span>` : '';
 
         return `
         <div class="vmb-model" role="listitem">
-            <div class="vmb-model-header">
-              <div>${nameLink}${copyBtn}${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${rateLimitBadge}</div>
-              <span class="vmb-model-context">${contextStr}</span>
+            <div class="vmb-model-row">
+              <div class="vmb-model-left">
+                ${nameLink}${copyBtn}${dateInfo?.isNew ? '<span class="vmb-new-dot" title="Recently added">New</span>' : ''}
+              </div>
+              <div class="vmb-model-right">
+                ${contextStr ? `<span class="vmb-context">${contextStr}</span>` : ''}
+                ${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${rateLimitBadge}
+              </div>
             </div>
-            <div class="vmb-model-meta">
-              <span class="vmb-model-id">${modelId}</span>
-              ${priceStr ? `<span>|</span><span>${priceStr}</span>` : ''}
-              ${caps.length > 0 ? `<span>|</span><span class="vmb-model-caps">${caps.join(' · ')}</span>` : ''}
-            ${videoMeta}
-          </div>
+            <div class="vmb-model-info">
+              <span class="vmb-info-left">${leftParts.join('<span class="vmb-dot">·</span>')}</span>
+              <span class="vmb-info-right">${capIcons}${releaseDateHtml}</span>
+            </div>
           </div>
         `;
     }
@@ -1328,6 +1419,22 @@
     searchInput.addEventListener('input', () => {
       clearTimeout(searchTimeout);
       searchTimeout = setTimeout(renderModels, 100);
+    });
+
+    // Event: Sort toggle - cycles through: default → newest → oldest → default
+    sortToggle.addEventListener('click', () => {
+      const cycle = ['default', 'newest', 'oldest'];
+      const currentIndex = cycle.indexOf(activeSort);
+      const nextIndex = (currentIndex + 1) % cycle.length;
+      activeSort = cycle[nextIndex];
+      
+      // Update icon direction and active state
+      sortToggle.classList.toggle('active', activeSort !== 'default');
+      sortToggle.classList.toggle('asc', activeSort === 'oldest');
+      sortToggle.title = activeSort === 'default' ? 'Sort by date' : 
+                         activeSort === 'newest' ? 'Newest first (click for oldest)' : 
+                         'Oldest first (click to reset)';
+      renderModels();
     });
 
     // Event: Filter buttons
@@ -1425,7 +1532,7 @@
       if (isImgRes) {
         const resolution = target.value;
         const price = model.model_spec?.pricing?.resolutions?.[resolution]?.usd;
-        const priceEl = target.closest('.vmb-model')?.querySelector('.vmb-img-price');
+        const priceEl = target.closest('.vmb-model')?.querySelector('.vmb-img-price-val');
         if (priceEl && price !== undefined) {
           priceEl.textContent = formatPrice(price);
         }
@@ -1452,7 +1559,7 @@
       
       const isOn = toggle.dataset.audio === 'true';
       toggle.dataset.audio = isOn ? 'false' : 'true';
-      toggle.textContent = isOn ? '♪ NO AUDIO' : '♪ AUDIO';
+      toggle.textContent = isOn ? '♪ No Audio' : '♪ Audio';
       toggle.classList.toggle('off', isOn);
       
       const modelId = toggle.dataset.model;
