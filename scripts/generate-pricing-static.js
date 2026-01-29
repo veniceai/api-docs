@@ -63,19 +63,27 @@ function isUncensoredModel(model) {
          modelId.includes('lustify');
 }
 
+// Capability icons (same as model-search.js)
+const CAP_ICONS = {
+  function: '<svg className="vpt-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>',
+  reasoning: '<svg className="vpt-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M12 18v-5"/></svg>',
+  vision: '<svg className="vpt-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  code: '<svg className="vpt-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
+};
+
 function getCapabilityTags(caps, isUncensored) {
   const tags = [];
   if (caps?.supportsFunctionCalling) {
-    tags.push('<span className="vpt-cap-tag">Tools</span>');
+    tags.push(`<span className="vpt-cap vpt-tooltip" data-tooltip="Function Calling">${CAP_ICONS.function}</span>`);
   }
   if (caps?.supportsReasoning) {
-    tags.push('<span className="vpt-cap-tag">Reasoning</span>');
+    tags.push(`<span className="vpt-cap vpt-tooltip" data-tooltip="Reasoning">${CAP_ICONS.reasoning}</span>`);
   }
   if (caps?.supportsVision) {
-    tags.push('<span className="vpt-cap-tag">Vision</span>');
+    tags.push(`<span className="vpt-cap vpt-tooltip" data-tooltip="Vision">${CAP_ICONS.vision}</span>`);
   }
   if (caps?.optimizedForCode) {
-    tags.push('<span className="vpt-cap-tag">Code</span>');
+    tags.push(`<span className="vpt-cap vpt-tooltip" data-tooltip="Code Optimized">${CAP_ICONS.code}</span>`);
   }
   if (isUncensored) {
     tags.push('<span className="vpt-cap-tag vpt-cap-uncensored">Uncensored</span>');
