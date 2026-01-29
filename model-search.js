@@ -240,7 +240,8 @@
     if (caps.supportsReasoning) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Reasoning">${CAP_ICONS.reasoning}</span>`);
     if (caps.supportsVision) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Vision">${CAP_ICONS.vision}</span>`);
     if (caps.optimizedForCode) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Code Optimized">${CAP_ICONS.code}</span>`);
-    return icons.join('');
+    if (icons.length === 0) return '';
+    return `<span class="vmb-caps">${icons.join('')}</span>`;
   }
 
   function getCapabilityTags(caps, isUncensored) {
@@ -1379,9 +1380,15 @@
       // Capability icons
       const capIcons = getCapabilityIcons(spec.capabilities);
       
+      // Copy button for model ID
+      const idCopyBtn = `<button class="vmb-id-copy-btn" data-model-id="${modelId}" title="Copy model ID" aria-label="Copy model ID">
+        <svg class="copy-icon" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        <svg class="check-icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+      </button>`;
+      
       // Left side: model-id and pricing (or video controls)
       const leftParts = [
-        `<span class="vmb-model-id">${modelId}</span>`,
+        `<span class="vmb-model-id"><span class="vmb-id-text">${modelId}</span>${idCopyBtn}</span>`,
         model.type === 'video' && videoControlsHtml 
           ? `<span class="vmb-video-controls">${videoControlsHtml}</span>` 
           : (priceStr ? `<span class="vmb-pricing">${priceStr}</span>` : ''),
@@ -1391,20 +1398,23 @@
       // Right side: capabilities and date
       const releaseDateHtml = dateInfo ? `<span class="vmb-release-date">Added ${dateInfo.dateStr}</span>` : '';
 
-        return `
+        // Context for mobile bottom row
+      const contextMobile = contextStr ? `<span class="vmb-context vmb-context-mobile">${contextStr}</span>` : '';
+      
+      return `
         <div class="vmb-model" role="listitem">
             <div class="vmb-model-row">
               <div class="vmb-model-left">
                 ${nameLink}${copyBtn}${dateInfo?.isNew ? '<span class="vmb-new-dot" title="Recently added">New</span>' : ''}
               </div>
               <div class="vmb-model-right">
-                ${contextStr ? `<span class="vmb-context">${contextStr}</span>` : ''}
+                ${contextStr ? `<span class="vmb-context vmb-context-desktop">${contextStr}</span>` : ''}
                 ${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${rateLimitBadge}
               </div>
             </div>
             <div class="vmb-model-info">
               <span class="vmb-info-left">${leftParts.join('<span class="vmb-dot">·</span>')}</span>
-              <span class="vmb-info-right">${capIcons}${releaseDateHtml}</span>
+              <span class="vmb-info-right">${capIcons}${contextMobile}${releaseDateHtml}</span>
             </div>
           </div>
         `;
@@ -1504,15 +1514,28 @@
       });
     });
 
-    // Event: Copy button (delegated)
+    // Event: Copy button (delegated) - handles both name and ID copy buttons
     modelsContainer.addEventListener('click', async (e) => {
-      const copyBtn = e.target.closest('.vmb-copy-btn');
+      const copyBtn = e.target.closest('.vmb-copy-btn, .vmb-id-copy-btn');
       if (!copyBtn) return;
       
-        const modelId = copyBtn.dataset.modelId;
-        await navigator.clipboard.writeText(modelId).catch(() => {});
-        copyBtn.classList.add('copied');
-      setTimeout(() => copyBtn.classList.remove('copied'), 1500);
+      const modelId = copyBtn.dataset.modelId;
+      await navigator.clipboard.writeText(modelId).catch(() => {});
+      copyBtn.classList.add('copied');
+      
+      // Show copied tooltip
+      const existingTooltip = copyBtn.querySelector('.vmb-copied-tooltip');
+      if (existingTooltip) existingTooltip.remove();
+      
+      const tooltip = document.createElement('span');
+      tooltip.className = 'vmb-copied-tooltip';
+      tooltip.textContent = 'Copied';
+      copyBtn.appendChild(tooltip);
+      
+      setTimeout(() => {
+        copyBtn.classList.remove('copied');
+        tooltip.remove();
+      }, 1500);
     });
 
     // Event: Resolution/duration pricing controls
