@@ -852,6 +852,119 @@
     }).catch(() => {});
   }
 
+  // Traits list for deprecations page
+  const TRAITS_CACHE_KEY = 'venice-traits-cache';
+  const TRAITS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+  function getCachedTraits() {
+    try {
+      const cached = sessionStorage.getItem(TRAITS_CACHE_KEY);
+      if (!cached) return null;
+      const { data, timestamp } = JSON.parse(cached);
+      if (Date.now() - timestamp > TRAITS_CACHE_TTL) {
+        sessionStorage.removeItem(TRAITS_CACHE_KEY);
+        return null;
+      }
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  function setCachedTraits(traits) {
+    try {
+      sessionStorage.setItem(TRAITS_CACHE_KEY, JSON.stringify({
+        data: traits,
+        timestamp: Date.now()
+      }));
+    } catch {
+      // Storage full or disabled
+    }
+  }
+
+  async function fetchTraitsFromAPI() {
+    try {
+      const res = await fetch('https://api.venice.ai/api/v1/models/traits?type=text');
+      if (!res.ok) throw new Error(`API returned ${res.status}`);
+      const json = await res.json();
+      const traits = json.data || {};
+      setCachedTraits(traits);
+      return traits;
+    } catch {
+      return null;
+    }
+  }
+
+  // Static fallback traits (updated when STATIC_MODELS changes)
+  function getStaticTraits() {
+    const traits = {};
+    STATIC_MODELS.forEach(model => {
+      if (model.type === 'text' && model.model_spec?.traits) {
+        model.model_spec.traits.forEach(trait => {
+          traits[trait] = model.id;
+        });
+      }
+    });
+    return traits;
+  }
+
+  function renderTraitsList(traits) {
+    if (!traits || Object.keys(traits).length === 0) {
+      return '<p style="opacity: 0.6;">No traits available.</p>';
+    }
+
+    // Define display order and labels for common traits
+    const traitOrder = ['default', 'function_calling_default', 'default_vision', 'default_reasoning', 'default_code', 'most_uncensored', 'fastest', 'most_intelligent'];
+    const traitLabels = {
+      'default': 'default',
+      'function_calling_default': 'function_calling_default',
+      'default_vision': 'default_vision',
+      'default_reasoning': 'default_reasoning',
+      'default_code': 'default_code',
+      'most_uncensored': 'most_uncensored',
+      'fastest': 'fastest',
+      'most_intelligent': 'most_intelligent'
+    };
+
+    // Sort traits: known traits first in order, then others alphabetically
+    const sortedTraits = Object.keys(traits).sort((a, b) => {
+      const aIndex = traitOrder.indexOf(a);
+      const bIndex = traitOrder.indexOf(b);
+      if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+      if (aIndex !== -1) return -1;
+      if (bIndex !== -1) return 1;
+      return a.localeCompare(b);
+    });
+
+    const items = sortedTraits.map(trait => {
+      const modelId = traits[trait];
+      const label = traitLabels[trait] || trait;
+      return `<li><code>${escapeHtml(label)}</code> → currently routes to <code>${escapeHtml(modelId)}</code></li>`;
+    }).join('\n');
+
+    return `<ul>\n${items}\n</ul>`;
+  }
+
+  async function initTraitsList() {
+    const el = document.getElementById('traits-list-placeholder');
+    if (!el) return;
+
+    // Render static traits immediately
+    el.innerHTML = renderTraitsList(getStaticTraits());
+
+    // Try cached traits
+    const cachedTraits = getCachedTraits();
+    if (cachedTraits) {
+      el.innerHTML = renderTraitsList(cachedTraits);
+    }
+
+    // Fetch fresh traits from API
+    const freshTraits = await fetchTraitsFromAPI();
+    if (freshTraits) {
+      el.innerHTML = renderTraitsList(freshTraits);
+    }
+  }
+
   function renderBetaModelsTable(models) {
     const betaModels = models
       .filter(isBetaModel)
@@ -1610,6 +1723,7 @@
   const pageInitializers = {
     pricing: { initialized: false, rendered: false, promise: null },
     deprecations: { initialized: false, rendered: false, promise: null },
+    traitsList: { initialized: false, rendered: false, promise: null },
     betaModels: { initialized: false, rendered: false, promise: null },
     cachePricing: { initialized: false, rendered: false, promise: null }
   };
@@ -1692,6 +1806,14 @@
     resetCheck: el => el.innerHTML === ''
   });
 
+  const tryInitTraitsList = createPageInitializer({
+    name: 'traitsList',
+    pathMatch: 'deprecation',
+    elementId: 'traits-list-placeholder',
+    initFn: initTraitsList,
+    resetCheck: el => el.innerHTML === ''
+  });
+
   const tryInitBetaModels = createPageInitializer({
     name: 'betaModels',
     pathMatch: 'beta-models',
@@ -1723,6 +1845,7 @@
     tryInitModels();
     tryInitPricing();
     tryInitDeprecations();
+    tryInitTraitsList();
     tryInitBetaModels();
     tryInitCachePricing();
   }
@@ -1764,6 +1887,7 @@
     // Retry for pages where elements may load late
     retryInit('pricing', () => pageInitializers.pricing.initialized, tryInitPricing);
     retryInit('deprecation', () => pageInitializers.deprecations.initialized, tryInitDeprecations);
+    retryInit('deprecation', () => pageInitializers.traitsList.initialized, tryInitTraitsList);
     retryInit('beta-models', () => pageInitializers.betaModels.initialized, tryInitBetaModels);
     retryInit('prompt-caching', () => pageInitializers.cachePricing.initialized, tryInitCachePricing);
   }
