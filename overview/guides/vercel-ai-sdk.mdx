@@ -1,0 +1,326 @@
+---
+title: "Vercel AI SDK"
+description: "Build AI-powered Next.js and React apps with Venice AI and the Vercel AI SDK"
+"og:title": "Vercel AI SDK | Venice API Docs"
+"og:description": "Stream Venice AI responses in Next.js apps with the Vercel AI SDK"
+---
+
+The [Vercel AI SDK](https://sdk.vercel.ai/) is the most popular way to build AI features in Next.js, React, Svelte, and Vue apps. Venice works out of the box as an OpenAI-compatible provider.
+
+## Setup
+
+```bash
+npm install ai @ai-sdk/openai
+```
+
+## Provider Configuration
+
+Create a Venice provider using the OpenAI-compatible adapter:
+
+```typescript
+// lib/venice.ts
+import { createOpenAI } from '@ai-sdk/openai';
+
+export const venice = createOpenAI({
+  apiKey: process.env.VENICE_API_KEY!,
+  baseURL: 'https://api.venice.ai/api/v1',
+});
+```
+
+## Streaming Chat (Next.js App Router)
+
+### API Route
+
+```typescript
+// app/api/chat/route.ts
+import { streamText } from 'ai';
+import { venice } from '@/lib/venice';
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const result = streamText({
+    model: venice('venice-uncensored'),
+    system: 'You are a helpful, privacy-respecting AI assistant.',
+    messages,
+  });
+
+  return result.toDataStreamResponse();
+}
+```
+
+### React Component
+
+```tsx
+// app/page.tsx
+'use client';
+
+import { useChat } from '@ai-sdk/react';
+
+export default function Chat() {
+  const { messages, input, handleInputChange, handleSubmit, isLoading } = useChat();
+
+  return (
+    <div className="max-w-2xl mx-auto p-4">
+      <div className="space-y-4 mb-4">
+        {messages.map((m) => (
+          <div key={m.id} className={m.role === 'user' ? 'text-right' : 'text-left'}>
+            <span className="font-bold">{m.role === 'user' ? 'You' : 'Venice'}:</span>
+            <p className="whitespace-pre-wrap">{m.content}</p>
+          </div>
+        ))}
+      </div>
+
+      <form onSubmit={handleSubmit} className="flex gap-2">
+        <input
+          value={input}
+          onChange={handleInputChange}
+          placeholder="Ask anything..."
+          className="flex-1 border rounded px-3 py-2"
+          disabled={isLoading}
+        />
+        <button type="submit" disabled={isLoading} className="bg-red-600 text-white px-4 py-2 rounded">
+          Send
+        </button>
+      </form>
+    </div>
+  );
+}
+```
+
+## Generating Text (Non-Streaming)
+
+```typescript
+import { generateText } from 'ai';
+import { venice } from '@/lib/venice';
+
+const { text } = await generateText({
+  model: venice('zai-org-glm-4.7'),
+  prompt: 'Explain zero-knowledge proofs in simple terms.',
+});
+
+console.log(text);
+```
+
+## Structured Output
+
+```typescript
+import { generateObject } from 'ai';
+import { venice } from '@/lib/venice';
+import { z } from 'zod';
+
+const { object } = await generateObject({
+  model: venice('venice-uncensored'),
+  schema: z.object({
+    recipe: z.object({
+      name: z.string(),
+      ingredients: z.array(z.string()),
+      steps: z.array(z.string()),
+      prepTimeMinutes: z.number(),
+    }),
+  }),
+  prompt: 'Generate a recipe for chocolate chip cookies.',
+});
+
+console.log(object.recipe.name);
+console.log(`Prep time: ${object.recipe.prepTimeMinutes} minutes`);
+```
+
+## Tool Calling
+
+```typescript
+import { streamText, tool } from 'ai';
+import { venice } from '@/lib/venice';
+import { z } from 'zod';
+
+const result = streamText({
+  model: venice('zai-org-glm-4.7'),
+  messages: [{ role: 'user', content: 'What is the weather in Tokyo?' }],
+  tools: {
+    getWeather: tool({
+      description: 'Get current weather for a location',
+      parameters: z.object({
+        location: z.string().describe('City name'),
+      }),
+      execute: async ({ location }) => {
+        // Your weather API call here
+        return { temperature: 22, condition: 'Sunny', location };
+      },
+    }),
+  },
+});
+
+for await (const part of result.fullStream) {
+  if (part.type === 'text-delta') {
+    process.stdout.write(part.textDelta);
+  } else if (part.type === 'tool-result') {
+    console.log('Tool result:', part.result);
+  }
+}
+```
+
+## Image Generation
+
+Venice image generation can be called directly alongside the AI SDK:
+
+```typescript
+// app/api/image/route.ts
+export async function POST(req: Request) {
+  const { prompt } = await req.json();
+
+  const response = await fetch('https://api.venice.ai/api/v1/image/generate', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.VENICE_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'qwen-image',
+      prompt,
+      width: 1024,
+      height: 1024,
+    }),
+  });
+
+  const data = await response.json();
+  return Response.json({ image: data.images[0] });
+}
+```
+
+## Multi-Model Chat (Model Selector)
+
+Let users choose between Venice models:
+
+```typescript
+// app/api/chat/route.ts
+import { streamText } from 'ai';
+import { venice } from '@/lib/venice';
+
+const ALLOWED_MODELS = [
+  'venice-uncensored',
+  'zai-org-glm-4.7',
+  'mistral-31-24b',
+  'qwen3-4b',
+];
+
+export async function POST(req: Request) {
+  const { messages, model: modelId } = await req.json();
+
+  if (!ALLOWED_MODELS.includes(modelId)) {
+    return new Response('Invalid model', { status: 400 });
+  }
+
+  const result = streamText({
+    model: venice(modelId),
+    messages,
+  });
+
+  return result.toDataStreamResponse();
+}
+```
+
+```tsx
+// Client component with model selector
+'use client';
+
+import { useChat } from '@ai-sdk/react';
+import { useState } from 'react';
+
+const MODELS = [
+  { id: 'venice-uncensored', name: 'Venice Uncensored', desc: 'Fast & uncensored' },
+  { id: 'zai-org-glm-4.7', name: 'GLM 4.7', desc: 'Most intelligent (private)' },
+  { id: 'mistral-31-24b', name: 'Venice Medium', desc: 'Vision + tools' },
+  { id: 'qwen3-4b', name: 'Venice Small', desc: 'Fastest & cheapest' },
+];
+
+export default function Chat() {
+  const [model, setModel] = useState('venice-uncensored');
+  const { messages, input, handleInputChange, handleSubmit } = useChat({
+    body: { model },
+  });
+
+  return (
+    <div>
+      <select value={model} onChange={(e) => setModel(e.target.value)}>
+        {MODELS.map((m) => (
+          <option key={m.id} value={m.id}>{m.name} — {m.desc}</option>
+        ))}
+      </select>
+      {/* ... chat UI ... */}
+    </div>
+  );
+}
+```
+
+## Web Search Integration
+
+Pass Venice parameters for web search:
+
+```typescript
+import { streamText } from 'ai';
+import { venice } from '@/lib/venice';
+
+const result = streamText({
+  model: venice('venice-uncensored'),
+  messages: [{ role: 'user', content: 'What happened in AI news today?' }],
+  // Venice-specific parameters
+  experimental_providerMetadata: {
+    venice_parameters: {
+      enable_web_search: 'auto',
+    },
+  },
+});
+```
+
+<Note>
+If `experimental_providerMetadata` doesn't pass through, you can use a custom fetch wrapper or call the Venice API directly for web search features.
+</Note>
+
+## Embeddings
+
+```typescript
+import { embed, embedMany } from 'ai';
+import { venice } from '@/lib/venice';
+
+// Single embedding
+const { embedding } = await embed({
+  model: venice.embedding('text-embedding-bge-m3'),
+  value: 'Privacy-first AI infrastructure',
+});
+
+// Batch embeddings
+const { embeddings } = await embedMany({
+  model: venice.embedding('text-embedding-bge-m3'),
+  values: [
+    'Venice AI provides private inference.',
+    'Zero data retention guaranteed.',
+    'OpenAI SDK compatible.',
+  ],
+});
+```
+
+## Environment Variables
+
+```bash
+# .env.local
+VENICE_API_KEY=your-venice-api-key
+```
+
+## Recommended Models
+
+| Use Case | Model | Why |
+|----------|-------|-----|
+| Chat apps | `venice-uncensored` | Fast, cheap, no filtering |
+| Complex tasks | `zai-org-glm-4.7` | Private flagship reasoning |
+| Vision apps | `mistral-31-24b` | Image understanding |
+| High-volume | `qwen3-4b` | Cheapest at $0.05/1M |
+| Tool calling | `zai-org-glm-4.7` | Reliable function calling |
+
+<CardGroup cols={2}>
+  <Card title="Vercel AI SDK Docs" icon="book" href="https://sdk.vercel.ai/docs">
+    Official Vercel AI SDK documentation
+  </Card>
+  <Card title="Venice Models" icon="database" href="/models/overview">
+    Browse all Venice models
+  </Card>
+</CardGroup>
