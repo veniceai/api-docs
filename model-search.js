@@ -1394,6 +1394,8 @@
           priceStr = `<span class="vmb-img-price-val" data-model="${model.id}">${formatPrice(defaultPrice)}</span>/image`;
         } else if (model.type === 'image' && pricing.generation) {
           priceStr = `${formatPrice(pricing.generation.usd)}/image`;
+        } else if (model.type === 'inpaint' && pricing.inpaint) {
+          priceStr = `${formatPrice(pricing.inpaint.usd)}/edit`;
         } else if (pricing.input && pricing.output) {
           priceStr = `${formatPrice(pricing.input.usd)}/M input <span class="vmb-pipe">|</span> ${formatPrice(pricing.output.usd)}/M output`;
           if (pricing.cache_input?.usd && pricing.cache_write?.usd) {
