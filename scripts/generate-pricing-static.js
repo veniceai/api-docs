@@ -161,6 +161,45 @@ function renderPricingChatTable(models) {
 <span className="vpt-price-value vpt-context-value">${contextStr}</span>
 </span>` : '';
 
+    let extendedRow = '';
+    if (pricing.extended) {
+      const ext = pricing.extended;
+      const thresholdStr = ext.context_token_threshold >= 1000 ? `${Math.round(ext.context_token_threshold / 1000)}K` : ext.context_token_threshold;
+      let extPriceItems = `
+<span className="vpt-price-item">
+<span className="vpt-price-label">Input Price</span>
+<span className="vpt-price-value">${formatPrice(ext.input?.usd)}</span>
+</span>
+<span className="vpt-price-item">
+<span className="vpt-price-label">Output Price</span>
+<span className="vpt-price-value">${formatPrice(ext.output?.usd)}</span>
+</span>`;
+      if (ext.cache_input?.usd) {
+        extPriceItems += `
+<span className="vpt-price-item">
+<span className="vpt-price-label">Cache Read</span>
+<span className="vpt-price-value">${formatPrice(ext.cache_input.usd)}</span>
+</span>`;
+      }
+      if (ext.cache_write?.usd) {
+        extPriceItems += `
+<span className="vpt-price-item">
+<span className="vpt-price-label">Cache Write</span>
+<span className="vpt-price-value">${formatPrice(ext.cache_write.usd)}</span>
+</span>`;
+      }
+      extendedRow = `
+<div className="vpt-row vpt-extended-row">
+<div className="vpt-row-top">
+<div className="vpt-row-left">
+<span className="vpt-extended-label">&nbsp;&nbsp;↳ &gt;${thresholdStr} Context</span>
+</div>
+</div>
+<div className="vpt-row-bottom">${extPriceItems}
+</div>
+</div>`;
+    }
+
     return `<div className="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}">
 <div className="vpt-row-top">
 <div className="vpt-row-left">
@@ -174,7 +213,7 @@ ${capTags}
 </div>
 <div className="vpt-row-bottom">${priceItems}${contextItem}
 </div>
-</div>`;
+</div>${extendedRow}`;
   }).join('\n');
 
   return `<div className="vpt-list">
