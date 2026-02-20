@@ -406,9 +406,12 @@
       if (pricing.extended) {
         const ext = pricing.extended;
         const thresholdStr = ext.context_token_threshold >= 1000 ? `${Math.round(ext.context_token_threshold / 1000)}K` : ext.context_token_threshold;
-        extendedLine = `<div class="vpt-extended-line">↳ &gt;${thresholdStr} context: ${formatPrice(ext.input?.usd)} input, ${formatPrice(ext.output?.usd)} output`;
-        if (ext.cache_input?.usd) extendedLine += `, ${formatPrice(ext.cache_input.usd)} cache read`;
-        if (ext.cache_write?.usd) extendedLine += `, ${formatPrice(ext.cache_write.usd)} cache write`;
+        extendedLine = `<div class="vpt-extended-line vpt-tooltip" data-tooltip="This model uses higher rates when your prompt exceeds ${thresholdStr} tokens.">&gt;${thresholdStr} context: ${formatPrice(ext.input?.usd)}/M input · ${formatPrice(ext.output?.usd)}/M output`;
+        if (ext.cache_input?.usd && ext.cache_write?.usd) {
+          extendedLine += ` · ${formatPrice(ext.cache_input.usd)}/${formatPrice(ext.cache_write.usd)} cache`;
+        } else if (ext.cache_input?.usd) {
+          extendedLine += ` · ${formatPrice(ext.cache_input.usd)} cache`;
+        }
         extendedLine += `</div>`;
       }
 
@@ -1411,7 +1414,7 @@
           if (pricing.extended) {
             const ext = pricing.extended;
             const threshold = ext.context_token_threshold >= 1000 ? `${Math.round(ext.context_token_threshold / 1000)}K` : ext.context_token_threshold;
-            priceStr += `<br><span class="vmb-extended-pricing">&gt;${threshold} context: ${formatPrice(ext.input?.usd)}/${formatPrice(ext.output?.usd)}`;
+            priceStr += `<br><span class="vmb-extended-pricing vmb-tooltip" data-tooltip="This model uses higher rates when your prompt exceeds ${threshold} tokens.">&gt;${threshold} context: ${formatPrice(ext.input?.usd)}/${formatPrice(ext.output?.usd)}`;
             if (ext.cache_input?.usd && ext.cache_write?.usd) {
               priceStr += ` <span class="vmb-pipe">|</span> ${formatPrice(ext.cache_input.usd)}/${formatPrice(ext.cache_write.usd)} cache`;
             } else if (ext.cache_input?.usd) {
