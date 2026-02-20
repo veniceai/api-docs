@@ -3,8 +3,10 @@
  * Generate static pricing content for pricing.mdx
  * 
  * This script reads STATIC_MODELS from model-search.js and generates
- * the same HTML that the JavaScript would render, but with className
- * instead of class for MDX/JSX compatibility.
+ * markdown tables for pricing data, ensuring agent-friendly plain text format.
+ * 
+ * Placeholder divs are preserved so model-search.js can detect the pricing
+ * page and replace static content with live API data at runtime.
  * 
  * Usage: node scripts/generate-pricing-static.js
  * Output: Writes directly to overview/pricing.mdx
@@ -54,213 +56,61 @@ function isDeprecatedModel(model) {
   return model.model_spec?.deprecation?.date != null;
 }
 
-function isUncensoredModel(model) {
-  const spec = model.model_spec || {};
-  const traits = spec.traits || [];
-  const modelId = model.id.toLowerCase();
-  return traits.includes('most_uncensored') || 
-         modelId.includes('uncensored') || 
-         modelId.includes('lustify');
-}
-
-// Capability icons (same as model-search.js)
-const CAP_ICONS = {
-  function: '<svg className="vpt-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>',
-  reasoning: '<svg className="vpt-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M12 18v-5"/></svg>',
-  vision: '<svg className="vpt-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
-  code: '<svg className="vpt-cap-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
-};
-
-function getCapabilityTags(caps, isUncensored) {
-  const tags = [];
-  if (caps?.supportsFunctionCalling) {
-    tags.push(`<span className="vpt-cap vpt-tooltip" data-tooltip="Function Calling">${CAP_ICONS.function}</span>`);
-  }
-  if (caps?.supportsReasoning) {
-    tags.push(`<span className="vpt-cap vpt-tooltip" data-tooltip="Reasoning">${CAP_ICONS.reasoning}</span>`);
-  }
-  if (caps?.supportsVision) {
-    tags.push(`<span className="vpt-cap vpt-tooltip" data-tooltip="Vision">${CAP_ICONS.vision}</span>`);
-  }
-  if (caps?.optimizedForCode) {
-    tags.push(`<span className="vpt-cap vpt-tooltip" data-tooltip="Code Optimized">${CAP_ICONS.code}</span>`);
-  }
-  if (isUncensored) {
-    tags.push('<span className="vpt-cap-tag vpt-cap-uncensored">Uncensored</span>');
-  }
-  return tags.join('\n');
-}
-
 // Render Chat Models Table
 function renderPricingChatTable(models) {
   const chatModels = models
     .filter(m => m.type === 'text')
-    .filter(m => !isDeprecatedModel(m))
-    .sort((a, b) => {
-      // Models with cache pricing first
-      const aCache = a.model_spec?.pricing?.cache_input ? 0 : 1;
-      const bCache = b.model_spec?.pricing?.cache_input ? 0 : 1;
-      if (aCache !== bCache) return aCache - bCache;
-      // Beta models last
-      const aBeta = isBetaModel(a) ? 1 : 0;
-      const bBeta = isBetaModel(b) ? 1 : 0;
-      if (aBeta !== bBeta) return aBeta - bBeta;
-      // Then by input price
-      const pA = a.model_spec?.pricing?.input?.usd || 999;
-      const pB = b.model_spec?.pricing?.input?.usd || 999;
-      return pA - pB;
-    });
+    .filter(m => !isDeprecatedModel(m));
 
-  if (chatModels.length === 0) return '<p>No models available.</p>';
+  if (chatModels.length === 0) return 'No models available.';
 
+  const header = `| Model | ID | Input Price | Output Price | Cache Read | Cache Write | Context | Privacy |\n|---|---|---|---|---|---|---|---|`;
+  
   const rows = chatModels.map(model => {
     const spec = model.model_spec || {};
     const pricing = spec.pricing || {};
-    const name = escapeHtml(spec.name || model.id);
-    const modelId = escapeHtml(model.id);
+    const name = escapeHtml(spec.name || model.id) + (isBetaModel(model) ? ' (Beta)' : '');
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
     const inputPrice = formatPrice(pricing.input?.usd);
     const outputPrice = formatPrice(pricing.output?.usd);
-    const cacheReadStr = pricing.cache_input?.usd ? formatPrice(pricing.cache_input.usd) : null;
-    const cacheWriteStr = pricing.cache_write?.usd ? formatPrice(pricing.cache_write.usd) : null;
+    const cacheReadStr = pricing.cache_input?.usd ? formatPrice(pricing.cache_input.usd) : '-';
+    const cacheWriteStr = pricing.cache_write?.usd ? formatPrice(pricing.cache_write.usd) : '-';
     const contextWindow = spec.availableContextTokens || spec.constraints?.maxContextTokens;
-    const contextStr = contextWindow ? (contextWindow >= 1000 ? `${Math.round(contextWindow / 1000)}K` : contextWindow) : null;
-    const capTags = getCapabilityTags(spec.capabilities, isUncensoredModel(model));
-    const betaTag = isBetaModel(model) ? '<span className="vpt-badge vpt-beta">Beta</span>' : '';
-    const privacyTag = isAnonymizedModel(model) 
-      ? '<span className="vpt-cap-tag vpt-cap-anonymized">Anonymized</span>' 
-      : '<span className="vpt-cap-tag vpt-cap-private">Private</span>';
+    const contextStr = contextWindow ? (contextWindow >= 1000 ? `${Math.round(contextWindow / 1000)}K` : contextWindow) : '-';
+    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
 
-    let priceItems = `
-<span className="vpt-price-item">
-<span className="vpt-price-label">Input Price</span>
-<span className="vpt-price-value">${inputPrice}</span>
-</span>
-<span className="vpt-price-item">
-<span className="vpt-price-label">Output Price</span>
-<span className="vpt-price-value">${outputPrice}</span>
-</span>`;
-    
-    if (cacheReadStr) {
-      priceItems += `
-<span className="vpt-price-item">
-<span className="vpt-price-label">Cache Read</span>
-<span className="vpt-price-value">${cacheReadStr}</span>
-</span>`;
-    }
-    if (cacheWriteStr) {
-      priceItems += `
-<span className="vpt-price-item">
-<span className="vpt-price-label">Cache Write</span>
-<span className="vpt-price-value">${cacheWriteStr}</span>
-</span>`;
-    }
-
-    const contextItem = contextStr ? `
-<span className="vpt-price-item vpt-context-right">
-<span className="vpt-price-label">Context</span>
-<span className="vpt-price-value vpt-context-value">${contextStr}</span>
-</span>` : '';
+    let row = `| ${name} | ${modelId} | ${inputPrice} | ${outputPrice} | ${cacheReadStr} | ${cacheWriteStr} | ${contextStr} | ${privacyTag} |`;
 
     let extendedRow = '';
     if (pricing.extended) {
       const ext = pricing.extended;
       const thresholdStr = ext.context_token_threshold >= 1000 ? `${Math.round(ext.context_token_threshold / 1000)}K` : ext.context_token_threshold;
-      let extPriceItems = `
-<span className="vpt-price-item">
-<span className="vpt-price-label">Input Price</span>
-<span className="vpt-price-value">${formatPrice(ext.input?.usd)}</span>
-</span>
-<span className="vpt-price-item">
-<span className="vpt-price-label">Output Price</span>
-<span className="vpt-price-value">${formatPrice(ext.output?.usd)}</span>
-</span>`;
-      if (ext.cache_input?.usd) {
-        extPriceItems += `
-<span className="vpt-price-item">
-<span className="vpt-price-label">Cache Read</span>
-<span className="vpt-price-value">${formatPrice(ext.cache_input.usd)}</span>
-</span>`;
-      }
-      if (ext.cache_write?.usd) {
-        extPriceItems += `
-<span className="vpt-price-item">
-<span className="vpt-price-label">Cache Write</span>
-<span className="vpt-price-value">${formatPrice(ext.cache_write.usd)}</span>
-</span>`;
-      }
-      extendedRow = `
-<div className="vpt-row vpt-extended-row">
-<div className="vpt-row-top">
-<div className="vpt-row-left">
-<span className="vpt-extended-label">&nbsp;&nbsp;↳ &gt;${thresholdStr} Context</span>
-</div>
-</div>
-<div className="vpt-row-bottom">${extPriceItems}
-</div>
-</div>`;
+      extendedRow = `\n| ↳ >${thresholdStr} Context | | ${formatPrice(ext.input?.usd)} | ${formatPrice(ext.output?.usd)} | ${ext.cache_input?.usd ? formatPrice(ext.cache_input.usd) : '-'} | ${ext.cache_write?.usd ? formatPrice(ext.cache_write.usd) : '-'} | | |`;
     }
 
-    return `<div className="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}">
-<div className="vpt-row-top">
-<div className="vpt-row-left">
-<span className="vpt-model-name">${name}</span>${betaTag}
-<code className="vpt-model-id">${modelId}</code>
-</div>
-<div className="vpt-row-right">
-${privacyTag}
-${capTags}
-</div>
-</div>
-<div className="vpt-row-bottom">${priceItems}${contextItem}
-</div>
-</div>${extendedRow}`;
+    return row + extendedRow;
   }).join('\n');
 
-  return `<div className="vpt-list">
-${rows}
-</div>`;
+  return header + '\n' + rows + '\n';
 }
 
 // Render Embedding Models Table
 function renderPricingEmbeddingTable(models) {
   const embModels = models.filter(m => m.type === 'embedding').filter(m => !isDeprecatedModel(m));
-  if (embModels.length === 0) return '<p>No models available.</p>';
+  if (embModels.length === 0) return 'No models available.';
 
+  const header = `| Model | ID | Input (per 1M tokens) | Output (per 1M tokens) | Privacy |\n|---|---|---|---|---|`;
   const rows = embModels.map(model => {
     const spec = model.model_spec || {};
     const pricing = spec.pricing || {};
-    const modelId = escapeHtml(model.id);
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
-    const privacyTag = isAnonymizedModel(model) 
-      ? '<span className="vpt-cap-tag vpt-cap-anonymized">Anonymized</span>' 
-      : '<span className="vpt-cap-tag vpt-cap-private">Private</span>';
+    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
 
-    return `<div className="vpt-row">
-<div className="vpt-row-top">
-<div className="vpt-row-left">
-<span className="vpt-model-name">${name}</span>
-<code className="vpt-model-id">${modelId}</code>
-</div>
-<div className="vpt-row-right">
-${privacyTag}
-</div>
-</div>
-<div className="vpt-row-bottom">
-<span className="vpt-price-item">
-<span className="vpt-price-label">Input (per 1M tokens)</span>
-<span className="vpt-price-value">${formatPrice(pricing.input?.usd)}</span>
-</span>
-<span className="vpt-price-item">
-<span className="vpt-price-label">Output (per 1M tokens)</span>
-<span className="vpt-price-value">${formatPrice(pricing.output?.usd)}</span>
-</span>
-</div>
-</div>`;
+    return `| ${name} | ${modelId} | ${formatPrice(pricing.input?.usd)} | ${formatPrice(pricing.output?.usd)} | ${privacyTag} |`;
   }).join('\n');
 
-  return `<div className="vpt-list">
-${rows}
-</div>`;
+  return header + '\n' + rows + '\n';
 }
 
 // Render Image Generation Table
@@ -274,159 +124,82 @@ function renderPricingImageTable(models) {
       const priceB = b.model_spec?.pricing?.generation?.usd || b.model_spec?.pricing?.resolutions?.['1K']?.usd || 0;
       return priceB - priceA;
     });
-  if (imageModels.length === 0) return '<p>No models available.</p>';
+  if (imageModels.length === 0) return 'No models available.';
 
+  const header = `| Model | ID | Price | Privacy |\n|---|---|---|---|`;
   const rows = imageModels.map(model => {
     const spec = model.model_spec || {};
-    const modelId = escapeHtml(model.id);
-    const name = escapeHtml(spec.name || model.id);
-    const betaTag = isBetaModel(model) ? '<span className="vpt-badge vpt-beta">Beta</span>' : '';
-    const privacyTag = isAnonymizedModel(model) 
-      ? '<span className="vpt-cap-tag vpt-cap-anonymized">Anonymized</span>' 
-      : '<span className="vpt-cap-tag vpt-cap-private">Private</span>';
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
+    const name = escapeHtml(spec.name || model.id) + (isBetaModel(model) ? ' (Beta)' : '');
+    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
     const resPricing = spec.pricing?.resolutions;
     
-    let priceItems = '';
+    let priceStr = '';
     if (resPricing) {
       const resKeys = Object.keys(resPricing);
-      priceItems = resKeys.map(res => 
-        `<span className="vpt-price-item">
-<span className="vpt-price-label">${res}</span>
-<span className="vpt-price-value">${formatPrice(resPricing[res]?.usd)}</span>
-</span>`
-      ).join('\n');
+      priceStr = resKeys.map(res => `${res}: ${formatPrice(resPricing[res]?.usd)}`).join(', ');
     } else {
-      priceItems = `<span className="vpt-price-item">
-<span className="vpt-price-label">Per Image</span>
-<span className="vpt-price-value">${formatPrice(spec.pricing?.generation?.usd)}</span>
-</span>`;
+      priceStr = `Per Image: ${formatPrice(spec.pricing?.generation?.usd)}`;
     }
 
-    return `<div className="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}">
-<div className="vpt-row-top">
-<div className="vpt-row-left">
-<span className="vpt-model-name">${name}</span>${betaTag}
-<code className="vpt-model-id">${modelId}</code>
-</div>
-<div className="vpt-row-right">
-${privacyTag}
-</div>
-</div>
-<div className="vpt-row-bottom">
-${priceItems}
-</div>
-</div>`;
+    return `| ${name} | ${modelId} | ${priceStr} | ${privacyTag} |`;
   }).join('\n');
 
-  return `<div className="vpt-list">
-${rows}
-</div>`;
+  return header + '\n' + rows + '\n';
 }
 
 // Render Upscale Table
 function renderPricingUpscaleTable(models) {
   const upscaleModels = models.filter(m => m.type === 'upscale').filter(m => !isDeprecatedModel(m));
-  if (upscaleModels.length === 0) return '<p>No models available.</p>';
+  if (upscaleModels.length === 0) return 'No models available.';
 
   const pricing = upscaleModels[0]?.model_spec?.pricing || {};
   const upscalePricing = pricing.upscale || pricing;
-  const items = [];
-  if (upscalePricing['2x']?.usd) {
-    items.push(`<span className="vpt-price-item">
-<span className="vpt-price-label">2x Upscale</span>
-<span className="vpt-price-value">${formatPrice(upscalePricing['2x'].usd)}</span>
-</span>`);
-  }
-  if (upscalePricing['4x']?.usd) {
-    items.push(`<span className="vpt-price-item">
-<span className="vpt-price-label">4x Upscale</span>
-<span className="vpt-price-value">${formatPrice(upscalePricing['4x'].usd)}</span>
-</span>`);
-  }
-  if (items.length === 0) return '<p>Upscaling pricing varies.</p>';
+  const p2x = upscalePricing['2x']?.usd ? formatPrice(upscalePricing['2x'].usd) : '-';
+  const p4x = upscalePricing['4x']?.usd ? formatPrice(upscalePricing['4x'].usd) : '-';
+  
+  if (p2x === '-' && p4x === '-') return 'Upscaling pricing varies.';
 
-  return `<div className="vpt-list">
-<div className="vpt-row">
-<div className="vpt-row-top">
-<div className="vpt-row-left">
-<span className="vpt-model-name">Image Upscaler</span>
-<code className="vpt-model-id">upscaler</code>
-</div>
-</div>
-<div className="vpt-row-bottom">
-${items.join('\n')}
-</div>
-</div>
-</div>`;
+  const header = `| Model | ID | 2x Upscale | 4x Upscale |\n|---|---|---|---|`;
+  const row = `| Image Upscaler | \`upscaler\` | ${p2x} | ${p4x} |`;
+  
+  return header + '\n' + row + '\n';
 }
 
 // Render Edit Table
 function renderPricingEditTable(models) {
   const editModels = models.filter(m => m.id === 'qwen-image' || m.type === 'inpaint').filter(m => !isDeprecatedModel(m));
-  if (editModels.length === 0) return '<p>No models available.</p>';
+  if (editModels.length === 0) return 'No models available.';
 
+  const header = `| Model | ID | Per Edit |\n|---|---|---|`;
   const rows = editModels.map(model => {
     const spec = model.model_spec || {};
-    const modelId = escapeHtml(model.id);
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
     const editPrice = spec.pricing?.inpaint?.usd ?? 0.04;
 
-    return `<div className="vpt-row">
-<div className="vpt-row-top">
-<div className="vpt-row-left">
-<span className="vpt-model-name">${name}</span>
-<code className="vpt-model-id">${modelId}</code>
-</div>
-</div>
-<div className="vpt-row-bottom">
-<span className="vpt-price-item">
-<span className="vpt-price-label">Per Edit</span>
-<span className="vpt-price-value">${formatPrice(editPrice)}</span>
-</span>
-</div>
-</div>`;
+    return `| ${name} | ${modelId} | ${formatPrice(editPrice)} |`;
   }).join('\n');
 
-  return `<div className="vpt-list">
-${rows}
-</div>`;
+  return header + '\n' + rows + '\n';
 }
 
 // Render TTS Table
 function renderPricingTTSTable(models) {
   const ttsModels = models.filter(m => m.type === 'tts').filter(m => !isDeprecatedModel(m));
-  if (ttsModels.length === 0) return '<p>No models available.</p>';
+  if (ttsModels.length === 0) return 'No models available.';
 
+  const header = `| Model | ID | Per 1M Characters | Privacy |\n|---|---|---|---|`;
   const rows = ttsModels.map(model => {
     const spec = model.model_spec || {};
-    const modelId = escapeHtml(model.id);
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
-    const privacyTag = isAnonymizedModel(model) 
-      ? '<span className="vpt-cap-tag vpt-cap-anonymized">Anonymized</span>' 
-      : '<span className="vpt-cap-tag vpt-cap-private">Private</span>';
+    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
 
-    return `<div className="vpt-row">
-<div className="vpt-row-top">
-<div className="vpt-row-left">
-<span className="vpt-model-name">${name}</span>
-<code className="vpt-model-id">${modelId}</code>
-</div>
-<div className="vpt-row-right">
-${privacyTag}
-</div>
-</div>
-<div className="vpt-row-bottom">
-<span className="vpt-price-item">
-<span className="vpt-price-label">Per 1M Characters</span>
-<span className="vpt-price-value">${formatPrice(spec.pricing?.input?.usd)}</span>
-</span>
-</div>
-</div>`;
+    return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.input?.usd)} | ${privacyTag} |`;
   }).join('\n');
 
-  return `<div className="vpt-list">
-${rows}
-</div>`;
+  return header + '\n' + rows + '\n';
 }
 
 // Render ASR Table
@@ -434,47 +207,27 @@ function renderPricingASRTable(models) {
   const asrModels = models.filter(m => m.type === 'asr').filter(m => !isDeprecatedModel(m));
   if (asrModels.length === 0) return '';
 
+  const header = `| Model | ID | Per Audio Second | Privacy |\n|---|---|---|---|`;
   const rows = asrModels.map(model => {
     const spec = model.model_spec || {};
     const pricing = spec.pricing || {};
-    const modelId = escapeHtml(model.id);
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
     const price = pricing.per_audio_second?.usd ? formatPrice(pricing.per_audio_second.usd) : formatPrice(pricing.input?.usd);
-    const privacyTag = isAnonymizedModel(model) 
-      ? '<span className="vpt-cap-tag vpt-cap-anonymized">Anonymized</span>' 
-      : '<span className="vpt-cap-tag vpt-cap-private">Private</span>';
+    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
 
-    return `<div className="vpt-row">
-<div className="vpt-row-top">
-<div className="vpt-row-left">
-<span className="vpt-model-name">${name}</span>
-<code className="vpt-model-id">${modelId}</code>
-</div>
-<div className="vpt-row-right">
-${privacyTag}
-</div>
-</div>
-<div className="vpt-row-bottom">
-<span className="vpt-price-item">
-<span className="vpt-price-label">Per Audio Second</span>
-<span className="vpt-price-value">${price}</span>
-</span>
-</div>
-</div>`;
+    return `| ${name} | ${modelId} | ${price} | ${privacyTag} |`;
   }).join('\n');
 
-  return `<div className="vpt-list">
-${rows}
-</div>`;
+  return header + '\n' + rows + '\n';
 }
 
-// Detect video type from model ID (since STATIC_MODELS doesn't have constraints)
+// Detect video type from model ID
 function getVideoType(modelId) {
-  if (modelId.includes('image-to-video')) return 'image-to-video';
-  if (modelId.includes('text-to-video')) return 'text-to-video';
-  // Fallback: check for common patterns
-  if (modelId.includes('-i2v') || modelId.endsWith('-itv')) return 'image-to-video';
-  return 'text-to-video'; // default
+  if (modelId.includes('image-to-video')) return 'Image to Video';
+  if (modelId.includes('text-to-video')) return 'Text to Video';
+  if (modelId.includes('-i2v') || modelId.endsWith('-itv')) return 'Image to Video';
+  return 'Text to Video';
 }
 
 // Render Video Table
@@ -485,77 +238,27 @@ function renderPricingVideoTable(models) {
       const bName = b.model_spec?.name || b.id;
       return aName.localeCompare(bName);
     });
-  if (videoModels.length === 0) return '<p>No video models available.</p>';
+  if (videoModels.length === 0) return 'No video models available.';
 
+  const header = `| Model | ID | Type | Pricing | Privacy |\n|---|---|---|---|---|`;
   const rows = videoModels.map(model => {
     const spec = model.model_spec || {};
-    const modelId = escapeHtml(model.id);
-    const name = escapeHtml(spec.name || model.id);
-    const betaTag = isBetaModel(model) ? '<span className="vpt-badge vpt-beta">Beta</span>' : '';
-    const privacyTag = isAnonymizedModel(model) 
-      ? '<span className="vpt-cap-tag vpt-cap-anonymized">Anonymized</span>' 
-      : '<span className="vpt-cap-tag vpt-cap-private">Private</span>';
-    const videoTypeVal = getVideoType(model.id);
-    const videoType = videoTypeVal === 'image-to-video' ? 'Image to Video' : 'Text to Video';
-    const videoTypeBadge = `<span className="vpt-cap-tag">${videoType}</span>`;
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
+    const name = escapeHtml(spec.name || model.id) + (isBetaModel(model) ? ' (Beta)' : '');
+    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const videoType = getVideoType(model.id);
 
-    return `<div className="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}">
-<div className="vpt-row-top">
-<div className="vpt-row-left">
-<span className="vpt-model-name">${name}</span>${betaTag}
-<code className="vpt-model-id">${modelId}</code>
-</div>
-<div className="vpt-row-right">
-${privacyTag}
-${videoTypeBadge}
-</div>
-</div>
-<div className="vpt-row-bottom">
-<span className="vpt-price-item">
-<span className="vpt-price-label">Pricing</span>
-<span className="vpt-price-value">Variable</span>
-</span>
-</div>
-</div>`;
+    return `| ${name} | ${modelId} | ${videoType} | Variable | ${privacyTag} |`;
   }).join('\n');
 
-  return `<div className="vpt-list vpt-video-list">
-${rows}
-</div>`;
+  return header + '\n' + rows + '\n';
 }
 
-// Render Web Search Table (matches JS version exactly)
+// Render Web Search Table
 function renderPricingWebSearchTable() {
-  return `<div className="vpt-list">
-<div className="vpt-row">
-<div className="vpt-row-top">
-<div className="vpt-row-left">
-<span className="vpt-model-name">Web Search</span>
-<code className="vpt-model-id">enable_web_search: true</code>
-</div>
-</div>
-<div className="vpt-row-bottom">
-<span className="vpt-price-item">
-<span className="vpt-price-label">Per 1K Calls</span>
-<span className="vpt-price-value">$10.00</span>
-</span>
-</div>
-</div>
-<div className="vpt-row">
-<div className="vpt-row-top">
-<div className="vpt-row-left">
-<span className="vpt-model-name">Web Scraping</span>
-<code className="vpt-model-id">enable_web_scraping: true</code>
-</div>
-</div>
-<div className="vpt-row-bottom">
-<span className="vpt-price-item">
-<span className="vpt-price-label">Per 1K Calls</span>
-<span className="vpt-price-value">$10.00</span>
-</span>
-</div>
-</div>
-</div>`;
+  const header = `| Feature | Config | Per 1K Calls |\n|---|---|---|`;
+  const rows = `| Web Search | \`enable_web_search: true\` | $10.00 |\n| Web Scraping | \`enable_web_scraping: true\` | $10.00 |`;
+  return header + '\n' + rows + '\n';
 }
 
 // Generate the complete pricing.mdx content
@@ -572,98 +275,104 @@ function generatePricingMdx() {
   const videoHtml = renderPricingVideoTable(models);
   const websearchHtml = renderPricingWebSearchTable();
 
-  return `---
-title: API Pricing
-"og:title": "Pricing | Venice API Docs"
-"og:description": "Learn about pricing for Venice's API."
----
+  const sections = [];
+  sections.push('---');
+  sections.push('title: API Pricing');
+  sections.push('"og:title": "Pricing | Venice API Docs"');
+  sections.push('"og:description": "Learn about pricing for Venice\'s API."');
+  sections.push('---');
+  sections.push('');
+  sections.push('Prices per 1M tokens unless noted. All prices in USD. 1 Diem = $1/day of compute.');
+  sections.push('');
+  sections.push('## Text Models');
+  sections.push('');
+  sections.push('### Chat Completions');
+  sections.push('');
+  sections.push('<div id="pricing-chat-placeholder">');
+  sections.push('');
+  sections.push(chatHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('*Prices per 1M tokens. [View all models \u2192](/models/text)*');
+  sections.push('');
+  sections.push('### Embeddings');
+  sections.push('');
+  sections.push('<div id="pricing-embedding-placeholder">');
+  sections.push('');
+  sections.push(embeddingHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('## Media Models');
+  sections.push('');
+  sections.push('### Image Generation');
+  sections.push('');
+  sections.push('<div id="pricing-image-placeholder">');
+  sections.push('');
+  sections.push('#### Generation');
+  sections.push('');
+  sections.push(imageHtml);
+  sections.push('#### Upscaling');
+  sections.push('');
+  sections.push(upscaleHtml);
+  sections.push('#### Editing');
+  sections.push('');
+  sections.push(editHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('### Audio');
+  sections.push('');
+  sections.push('<div id="pricing-audio-placeholder">');
+  sections.push('');
+  sections.push('#### Text-to-Speech');
+  sections.push('');
+  sections.push(ttsHtml);
+  sections.push('#### Speech-to-Text');
+  sections.push('');
+  sections.push(asrHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('### Video');
+  sections.push('');
+  sections.push('<div id="pricing-video-placeholder">');
+  sections.push('');
+  sections.push('Video pricing varies by resolution and duration. Visit the [Video Models page](/models/video) for exact quotes, or use the [Video Quote API](/api-reference/endpoint/video/quote).');
+  sections.push('');
+  sections.push(videoHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('## Additional Features');
+  sections.push('');
+  sections.push('### Web Search and Scraping');
+  sections.push('');
+  sections.push('<div id="pricing-websearch-placeholder">');
+  sections.push('');
+  sections.push(websearchHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('<Info>');
+  sections.push('Web Scraping automatically detects up to 3 URLs per message, scrapes and converts content into structured markdown, and adds the extracted text into model context. These charges apply in addition to standard model token pricing.');
+  sections.push('</Info>');
+  sections.push('');
+  sections.push('## Payment Options');
+  sections.push('');
+  sections.push('<CardGroup cols={3}>');
+  sections.push('  <Card title="USD" icon="credit-card" href="https://venice.ai/settings/api">');
+  sections.push('    Buy API credits with credit card. Credits never expire.');
+  sections.push('  </Card>');
+  sections.push('  <Card title="Crypto" icon="bitcoin" href="https://venice.ai/settings/api">');
+  sections.push('    Buy API credits with cryptocurrency. Same rates as USD.');
+  sections.push('  </Card>');
+  sections.push('  <Card title="Stake DIEM" icon="coins" href="https://venice.ai/token">');
+  sections.push('    Each Diem = $1/day of credits that refresh daily.');
+  sections.push('  </Card>');
+  sections.push('</CardGroup>');
+  sections.push('');
+  sections.push('### Pro Users');
+  sections.push('');
+  sections.push('Pro subscribers receive a one-time $10 API credit when upgrading to Pro. Use it to test and build small apps.');
+  sections.push('');
 
-All prices are in USD. Diem users pay the same rates (1 Diem = $1 of compute per day).
-
-## Text Models
-
-### Chat Completions
-
-<div id="pricing-chat-placeholder">
-${chatHtml}
-</div>
-
-*Prices per 1M tokens. [View all models →](/models/text)*
-
-### Embeddings
-
-<div id="pricing-embedding-placeholder">
-${embeddingHtml}
-</div>
-
-## Media Models
-
-### Image Generation
-
-<div id="pricing-image-placeholder">
-<h4>Generation</h4>
-
-${imageHtml}
-
-<h4>Upscaling</h4>
-
-${upscaleHtml}
-
-<h4>Editing</h4>
-
-${editHtml}
-</div>
-
-### Audio
-
-<div id="pricing-audio-placeholder">
-<h4>Text-to-Speech</h4>
-
-${ttsHtml}
-
-<h4>Speech-to-Text</h4>
-
-${asrHtml}
-</div>
-
-### Video
-
-<div id="pricing-video-placeholder">
-<p className="vpt-video-note">Video pricing varies by resolution and duration. Visit the <a href="/models/video">Video Models page</a> for exact quotes, or use the <a href="/api-reference/endpoint/video/quote">Video Quote API</a>.</p>
-
-${videoHtml}
-</div>
-
-## Additional Features
-
-### Web Search and Scraping
-
-<div id="pricing-websearch-placeholder">
-${websearchHtml}
-</div>
-
-<Info>
-Web Scraping automatically detects up to 3 URLs per message, scrapes and converts content into structured markdown, and adds the extracted text into model context. These charges apply in addition to standard model token pricing.
-</Info>
-
-## Payment Options
-
-<CardGroup cols={3}>
-  <Card title="USD" icon="credit-card" href="https://venice.ai/settings/api">
-    Buy API credits with credit card. Credits never expire.
-  </Card>
-  <Card title="Crypto" icon="bitcoin" href="https://venice.ai/settings/api">
-    Buy API credits with cryptocurrency. Same rates as USD.
-  </Card>
-  <Card title="Stake DIEM" icon="coins" href="https://venice.ai/token">
-    Each Diem = $1/day of credits that refresh daily.
-  </Card>
-</CardGroup>
-
-### Pro Users
-
-Pro subscribers receive a one-time $10 API credit when upgrading to Pro. Use it to test and build small apps.
-`;
+  return sections.join('\n');
 }
 
 // Main execution
@@ -678,4 +387,3 @@ try {
   console.error('Error generating pricing.mdx:', error.message);
   process.exit(1);
 }
-
