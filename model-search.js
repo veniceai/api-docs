@@ -1423,6 +1423,17 @@
           } else if (pricing.cache_input?.usd) {
             priceStr += ` <span class="vmb-pipe">|</span> ${formatPrice(pricing.cache_input.usd)} cache`;
           }
+          if (pricing.extended) {
+            const ext = pricing.extended;
+            const threshold = ext.context_token_threshold >= 1000 ? `${Math.round(ext.context_token_threshold / 1000)}K` : ext.context_token_threshold;
+            priceStr += `<br><span class="vmb-extended-pricing">&gt;${threshold} context: ${formatPrice(ext.input?.usd)}/${formatPrice(ext.output?.usd)}`;
+            if (ext.cache_input?.usd && ext.cache_write?.usd) {
+              priceStr += ` <span class="vmb-pipe">|</span> ${formatPrice(ext.cache_input.usd)}/${formatPrice(ext.cache_write.usd)} cache`;
+            } else if (ext.cache_input?.usd) {
+              priceStr += ` <span class="vmb-pipe">|</span> ${formatPrice(ext.cache_input.usd)} cache`;
+            }
+            priceStr += `</span>`;
+          }
         } else if (pricing.input && model.type === 'tts') {
           priceStr = `${formatPrice(pricing.input.usd)}/M chars`;
         } else if (model.type === 'upscale' && (pricing.upscale || pricing['2x'] || pricing['4x'])) {
