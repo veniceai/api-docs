@@ -5,6 +5,9 @@
  * This script reads STATIC_MODELS from model-search.js and generates
  * markdown tables for pricing data, ensuring agent-friendly plain text format.
  * 
+ * Placeholder divs are preserved so model-search.js can detect the pricing
+ * page and replace static content with live API data at runtime.
+ * 
  * Usage: node scripts/generate-pricing-static.js
  * Output: Writes directly to overview/pricing.mdx
  */
@@ -57,21 +60,7 @@ function isDeprecatedModel(model) {
 function renderPricingChatTable(models) {
   const chatModels = models
     .filter(m => m.type === 'text')
-    .filter(m => !isDeprecatedModel(m))
-    .sort((a, b) => {
-      // Models with cache pricing first
-      const aCache = a.model_spec?.pricing?.cache_input ? 0 : 1;
-      const bCache = b.model_spec?.pricing?.cache_input ? 0 : 1;
-      if (aCache !== bCache) return aCache - bCache;
-      // Beta models last
-      const aBeta = isBetaModel(a) ? 1 : 0;
-      const bBeta = isBetaModel(b) ? 1 : 0;
-      if (aBeta !== bBeta) return aBeta - bBeta;
-      // Then by input price
-      const pA = a.model_spec?.pricing?.input?.usd || 999;
-      const pB = b.model_spec?.pricing?.input?.usd || 999;
-      return pA - pB;
-    });
+    .filter(m => !isDeprecatedModel(m));
 
   if (chatModels.length === 0) return 'No models available.';
 
@@ -286,88 +275,104 @@ function generatePricingMdx() {
   const videoHtml = renderPricingVideoTable(models);
   const websearchHtml = renderPricingWebSearchTable();
 
-  return `---
-title: API Pricing
-"og:title": "Pricing | Venice API Docs"
-"og:description": "Learn about pricing for Venice's API."
----
+  const sections = [];
+  sections.push('---');
+  sections.push('title: API Pricing');
+  sections.push('"og:title": "Pricing | Venice API Docs"');
+  sections.push('"og:description": "Learn about pricing for Venice\'s API."');
+  sections.push('---');
+  sections.push('');
+  sections.push('Prices per 1M tokens unless noted. All prices in USD. 1 Diem = $1/day of compute.');
+  sections.push('');
+  sections.push('## Text Models');
+  sections.push('');
+  sections.push('### Chat Completions');
+  sections.push('');
+  sections.push('<div id="pricing-chat-placeholder">');
+  sections.push('');
+  sections.push(chatHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('*Prices per 1M tokens. [View all models \u2192](/models/text)*');
+  sections.push('');
+  sections.push('### Embeddings');
+  sections.push('');
+  sections.push('<div id="pricing-embedding-placeholder">');
+  sections.push('');
+  sections.push(embeddingHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('## Media Models');
+  sections.push('');
+  sections.push('### Image Generation');
+  sections.push('');
+  sections.push('<div id="pricing-image-placeholder">');
+  sections.push('');
+  sections.push('#### Generation');
+  sections.push('');
+  sections.push(imageHtml);
+  sections.push('#### Upscaling');
+  sections.push('');
+  sections.push(upscaleHtml);
+  sections.push('#### Editing');
+  sections.push('');
+  sections.push(editHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('### Audio');
+  sections.push('');
+  sections.push('<div id="pricing-audio-placeholder">');
+  sections.push('');
+  sections.push('#### Text-to-Speech');
+  sections.push('');
+  sections.push(ttsHtml);
+  sections.push('#### Speech-to-Text');
+  sections.push('');
+  sections.push(asrHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('### Video');
+  sections.push('');
+  sections.push('<div id="pricing-video-placeholder">');
+  sections.push('');
+  sections.push('Video pricing varies by resolution and duration. Visit the [Video Models page](/models/video) for exact quotes, or use the [Video Quote API](/api-reference/endpoint/video/quote).');
+  sections.push('');
+  sections.push(videoHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('## Additional Features');
+  sections.push('');
+  sections.push('### Web Search and Scraping');
+  sections.push('');
+  sections.push('<div id="pricing-websearch-placeholder">');
+  sections.push('');
+  sections.push(websearchHtml);
+  sections.push('</div>');
+  sections.push('');
+  sections.push('<Info>');
+  sections.push('Web Scraping automatically detects up to 3 URLs per message, scrapes and converts content into structured markdown, and adds the extracted text into model context. These charges apply in addition to standard model token pricing.');
+  sections.push('</Info>');
+  sections.push('');
+  sections.push('## Payment Options');
+  sections.push('');
+  sections.push('<CardGroup cols={3}>');
+  sections.push('  <Card title="USD" icon="credit-card" href="https://venice.ai/settings/api">');
+  sections.push('    Buy API credits with credit card. Credits never expire.');
+  sections.push('  </Card>');
+  sections.push('  <Card title="Crypto" icon="bitcoin" href="https://venice.ai/settings/api">');
+  sections.push('    Buy API credits with cryptocurrency. Same rates as USD.');
+  sections.push('  </Card>');
+  sections.push('  <Card title="Stake DIEM" icon="coins" href="https://venice.ai/token">');
+  sections.push('    Each Diem = $1/day of credits that refresh daily.');
+  sections.push('  </Card>');
+  sections.push('</CardGroup>');
+  sections.push('');
+  sections.push('### Pro Users');
+  sections.push('');
+  sections.push('Pro subscribers receive a one-time $10 API credit when upgrading to Pro. Use it to test and build small apps.');
+  sections.push('');
 
-Venice provides a unified API that exposes multiple AI models with different pricing tiers and privacy constraints. Some models are hosted directly on Venice’s infrastructure (typically open-source, lower cost, more privacy-focused), while others—such as Grok or Claude—are accessed via anonymized proxying to external providers.
-
-All prices are in USD. Diem users pay the same rates (1 Diem = $1 of compute per day).
-
-## Text Models
-
-### Chat Completions
-
-${chatHtml}
-
-*Prices per 1M tokens. [View all models →](/models/text)*
-
-### Embeddings
-
-${embeddingHtml}
-
-## Media Models
-
-### Image Generation
-
-#### Generation
-
-${imageHtml}
-
-#### Upscaling
-
-${upscaleHtml}
-
-#### Editing
-
-${editHtml}
-
-### Audio
-
-#### Text-to-Speech
-
-${ttsHtml}
-
-#### Speech-to-Text
-
-${asrHtml}
-
-### Video
-
-Video pricing varies by resolution and duration. Visit the [Video Models page](/models/video) for exact quotes, or use the [Video Quote API](/api-reference/endpoint/video/quote).
-
-${videoHtml}
-
-## Additional Features
-
-### Web Search and Scraping
-
-${websearchHtml}
-
-<Info>
-Web Scraping automatically detects up to 3 URLs per message, scrapes and converts content into structured markdown, and adds the extracted text into model context. These charges apply in addition to standard model token pricing.
-</Info>
-
-## Payment Options
-
-<CardGroup cols={3}>
-  <Card title="USD" icon="credit-card" href="https://venice.ai/settings/api">
-    Buy API credits with credit card. Credits never expire.
-  </Card>
-  <Card title="Crypto" icon="bitcoin" href="https://venice.ai/settings/api">
-    Buy API credits with cryptocurrency. Same rates as USD.
-  </Card>
-  <Card title="Stake DIEM" icon="coins" href="https://venice.ai/token">
-    Each Diem = $1/day of credits that refresh daily.
-  </Card>
-</CardGroup>
-
-### Pro Users
-
-Pro subscribers receive a one-time $10 API credit when upgrading to Pro. Use it to test and build small apps.
-`;
+  return sections.join('\n');
 }
 
 // Main execution
