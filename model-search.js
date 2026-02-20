@@ -402,30 +402,14 @@
         priceItems += `<span class="vpt-price-item vpt-tooltip" data-tooltip="Cost to write tokens to cache."><span class="vpt-price-label">Cache Write</span><span class="vpt-price-value">${cacheWriteStr}</span></span>`;
       }
 
-      let extendedRow = '';
+      let extendedLine = '';
       if (pricing.extended) {
         const ext = pricing.extended;
         const thresholdStr = ext.context_token_threshold >= 1000 ? `${Math.round(ext.context_token_threshold / 1000)}K` : ext.context_token_threshold;
-        let extPriceItems = `
-          <span class="vpt-price-item"><span class="vpt-price-label">Input Price</span><span class="vpt-price-value">${formatPrice(ext.input?.usd)}</span></span>
-          <span class="vpt-price-item"><span class="vpt-price-label">Output Price</span><span class="vpt-price-value">${formatPrice(ext.output?.usd)}</span></span>
-        `;
-        if (ext.cache_input?.usd) {
-          extPriceItems += `<span class="vpt-price-item vpt-tooltip" data-tooltip="Discounted rate for cached input tokens (extended context)."><span class="vpt-price-label">Cache Read</span><span class="vpt-price-value">${formatPrice(ext.cache_input.usd)}</span></span>`;
-        }
-        if (ext.cache_write?.usd) {
-          extPriceItems += `<span class="vpt-price-item vpt-tooltip" data-tooltip="Cost to write tokens to cache (extended context)."><span class="vpt-price-label">Cache Write</span><span class="vpt-price-value">${formatPrice(ext.cache_write.usd)}</span></span>`;
-        }
-        extendedRow = `<div class="vpt-row vpt-extended-row">
-          <div class="vpt-row-top">
-            <div class="vpt-row-left">
-              <span class="vpt-extended-label">&nbsp;&nbsp;↳ &gt;${thresholdStr} Context</span>
-            </div>
-          </div>
-          <div class="vpt-row-bottom">
-            ${extPriceItems}
-          </div>
-        </div>`;
+        extendedLine = `<div class="vpt-extended-line">↳ &gt;${thresholdStr} context: ${formatPrice(ext.input?.usd)} input, ${formatPrice(ext.output?.usd)} output`;
+        if (ext.cache_input?.usd) extendedLine += `, ${formatPrice(ext.cache_input.usd)} cache read`;
+        if (ext.cache_write?.usd) extendedLine += `, ${formatPrice(ext.cache_write.usd)} cache write`;
+        extendedLine += `</div>`;
       }
 
       return `<div class="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}${isUpgradedModel(model) ? ' vpt-upgraded-row' : ''}">
@@ -440,7 +424,8 @@
           ${priceItems}
           ${contextStr ? `<span class="vpt-price-item vpt-context-right"><span class="vpt-price-label">Context</span><span class="vpt-price-value vpt-context-value">${contextStr}</span></span>` : ''}
         </div>
-      </div>${extendedRow}`;
+        ${extendedLine}
+      </div>`;
     }).join('');
 
     return `<div class="vpt-list">${rows}</div>`;
