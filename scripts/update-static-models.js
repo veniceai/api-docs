@@ -67,6 +67,40 @@ function sortModels(models) {
   });
 }
 
+function updateReasoningModelsDocs(models) {
+  const reasoning = models
+    .filter(m => m.type === 'text'
+      && m.model_spec?.capabilities?.supportsReasoning
+      && !m.model_spec?.deprecation)
+    .sort((a, b) => (a.model_spec?.name || a.id).localeCompare(b.model_spec?.name || b.id));
+
+  if (!reasoning.length) {
+    console.warn('No reasoning models found – skipping reasoning-models.mdx update');
+    return;
+  }
+
+  const mdxPath = path.join(__dirname, '..', 'overview', 'guides', 'reasoning-models.mdx');
+  let mdx = fs.readFileSync(mdxPath, 'utf-8');
+
+  const tableRows = reasoning
+    .map(m => `| ${m.model_spec?.name || m.id} | \`${m.id}\` |`)
+    .join('\n');
+
+  const table = [
+    '| Model | ID |',
+    '|-------|-----|',
+    tableRows,
+  ].join('\n');
+
+  mdx = mdx.replace(
+    /\{\/\* BEGIN_SUPPORTED_MODELS \*\/\}[\s\S]*?\{\/\* END_SUPPORTED_MODELS \*\/\}/,
+    `{/* BEGIN_SUPPORTED_MODELS */}\n${table}\n{/* END_SUPPORTED_MODELS */}`
+  );
+
+  fs.writeFileSync(mdxPath, mdx, 'utf-8');
+  console.log(`Updated reasoning-models.mdx with ${reasoning.length} models`);
+}
+
 async function main() {
   console.log('Fetching models from API...');
   const models = await fetchAllModels();
@@ -86,6 +120,8 @@ async function main() {
 
   fs.writeFileSync(modelSearchPath, content, 'utf-8');
   console.log('Updated STATIC_MODELS in model-search.js');
+
+  updateReasoningModelsDocs(cleaned);
 
   console.log('Regenerating pricing.mdx...');
   require('./generate-pricing-static.js');
