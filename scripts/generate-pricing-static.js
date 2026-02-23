@@ -350,7 +350,7 @@ function generatePricingMdx() {
   sections.push('</div>');
   sections.push('');
   sections.push('<Info>');
-  sections.push('Web Scraping automatically detects up to 5 URLs per request, scrapes and converts content into structured markdown, and adds the extracted text into model context. A 90-second batch timeout applies across all URLs. Only successfully scraped URLs are billed. These charges apply in addition to standard model token pricing.');
+  sections.push('Web Scraping automatically detects up to 5 URLs per request, scrapes and converts content into structured markdown, and adds the extracted text into model context. Only successfully scraped URLs are billed. These charges apply in addition to standard model token pricing.');
   sections.push('</Info>');
   sections.push('');
   sections.push('## Payment Options');
