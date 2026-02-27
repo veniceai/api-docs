@@ -1019,6 +1019,47 @@
     }).catch(() => {});
   }
 
+  function renderReasoningModelsTable(models) {
+    const reasoning = models
+      .filter(m => m.type === 'text' && m.model_spec?.capabilities?.supportsReasoning && !m.model_spec?.deprecation)
+      .sort((a, b) => (a.model_spec?.name || a.id).localeCompare(b.model_spec?.name || b.id));
+
+    const tableHead = '<table class="vpt-table"><thead><tr><th>Model</th><th>Model ID</th></tr></thead>';
+
+    if (reasoning.length === 0) {
+      return `${tableHead}<tbody>
+        <tr><td colspan="2" style="text-align: center; opacity: 0.6; padding: 24px;">Loading reasoning models...</td></tr>
+      </tbody></table>`;
+    }
+
+    const rows = reasoning.map(model => {
+      const modelId = escapeHtml(model.id);
+      return `<tr>
+        <td>${escapeHtml(model.model_spec?.name || model.id)}</td>
+        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
+      </tr>`;
+    }).join('');
+
+    return `${tableHead}<tbody>${rows}</tbody></table>`;
+  }
+
+  async function initReasoningModels() {
+    const el = document.getElementById('reasoning-models-placeholder');
+    if (!el) return;
+
+    el.innerHTML = renderReasoningModelsTable(STATIC_MODELS);
+
+    const cachedModels = getCachedModels();
+    if (cachedModels && cachedModels.length > 0) {
+      el.innerHTML = renderReasoningModelsTable(cachedModels);
+    }
+    fetchModelsFromAPI().then(freshModels => {
+      if (freshModels.length > 0) {
+        el.innerHTML = renderReasoningModelsTable(freshModels);
+      }
+    }).catch(() => {});
+  }
+
   function renderPricingTables(models) {
     const chatEl = document.getElementById('pricing-chat-placeholder');
     const embeddingEl = document.getElementById('pricing-embedding-placeholder');
@@ -1746,7 +1787,8 @@
     deprecations: { initialized: false, rendered: false, promise: null },
     traitsList: { initialized: false, rendered: false, promise: null },
     betaModels: { initialized: false, rendered: false, promise: null },
-    cachePricing: { initialized: false, rendered: false, promise: null }
+    cachePricing: { initialized: false, rendered: false, promise: null },
+    reasoningModels: { initialized: false, rendered: false, promise: null }
   };
 
   // Global copy button handler
@@ -1851,6 +1893,14 @@
     resetCheck: el => el.textContent.includes('Loading')
   });
 
+  const tryInitReasoningModels = createPageInitializer({
+    name: 'reasoningModels',
+    pathMatch: 'reasoning-models',
+    elementId: 'reasoning-models-placeholder',
+    initFn: initReasoningModels,
+    resetCheck: el => el.innerHTML === ''
+  });
+
   function resetAllInitializers() {
     modelsInitialized = false;
     Object.values(pageInitializers).forEach(state => {
@@ -1869,6 +1919,7 @@
     tryInitTraitsList();
     tryInitBetaModels();
     tryInitCachePricing();
+    tryInitReasoningModels();
   }
 
   function setupObserver() {
@@ -1911,6 +1962,7 @@
     retryInit('deprecation', () => pageInitializers.traitsList.initialized, tryInitTraitsList);
     retryInit('beta-models', () => pageInitializers.betaModels.initialized, tryInitBetaModels);
     retryInit('prompt-caching', () => pageInitializers.cachePricing.initialized, tryInitCachePricing);
+    retryInit('reasoning-models', () => pageInitializers.reasoningModels.initialized, tryInitReasoningModels);
   }
   
   if (document.readyState === 'loading') {
