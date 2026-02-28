@@ -80,7 +80,7 @@ async function main() {
 
   const dateStr = new Date().toISOString().split('T')[0];
   content = content.replace(
-    /\/\/ Static fallback data for instant pricing page load \(updated .*?\)\n\s*const STATIC_MODELS = \[[\s\S]*?\];/,
+    /\/\/ Static fallback data for instant pricing page load \(updated .*?\)\r?\n\s*const STATIC_MODELS = \[[\s\S]*?\];/,
     `// Static fallback data for instant pricing page load (updated ${dateStr})\n  const STATIC_MODELS = ${json};`
   );
 
