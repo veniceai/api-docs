@@ -1254,9 +1254,16 @@
     let activeCapability = null;
     let activeVideoType = null;
     let activeImageType = null;
-    let activeSort = 'default';
+    // On overview page (no preset filter), default to newest first
+    let activeSort = presetFilter ? 'default' : 'newest';
     
     const sortToggle = container.querySelector('.vmb-sort-toggle');
+    
+    // Set initial sort toggle UI state for overview page
+    if (!presetFilter) {
+      sortToggle.classList.add('active');
+      sortToggle.title = 'Newest first (click for oldest)';
+    }
 
     // Always render static data immediately for instant display
     allModels = STATIC_MODELS;
