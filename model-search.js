@@ -157,8 +157,21 @@
     beta: 'Experimental model that may change or be removed without notice. Not recommended for production.',
     deprecated: 'This model is scheduled for removal. See the deprecations page for timeline and migration guide.',
     uncensored: 'Responds to all prompts without content-based refusals or filtering.',
-    upgraded: 'A newer version of this model is available with improved performance.'
+    upgraded: 'A newer version of this model is available with improved performance.',
+    content_moderation: 'This model applies upstream content moderation. Requests blocked by the provider\u2019s filters are still billed at the full rate.'
   };
+
+  // Models subject to upstream provider content moderation that still bills on blocked requests
+  const CONTENT_MODERATED_MODELS = new Set([
+    'grok-imagine',
+    'grok-imagine-edit',
+    'grok-imagine-text-to-video',
+    'grok-imagine-image-to-video'
+  ]);
+
+  function hasContentModeration(modelId) {
+    return CONTENT_MODERATED_MODELS.has(modelId);
+  }
 
   let isInitializing = false;
 
@@ -387,6 +400,7 @@
       const capTags = getCapabilityTags(spec.capabilities, isUncensoredModel(model));
       const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
       const upgradedTag = isUpgradedModel(model) ? '<span class="vpt-badge vpt-upgraded vpt-tooltip" data-tooltip="A newer version of this model is available with improved performance.">Upgraded</span>' : '';
+      const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
       const privacyTag = isAnonymizedModel(model) 
         ? `<span class="vpt-cap-tag vpt-cap-anonymized vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
         : `<span class="vpt-cap-tag vpt-cap-private vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
@@ -421,7 +435,7 @@
             <span class="vpt-model-name">${name}</span>${betaTag}${upgradedTag}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
-          <div class="vpt-row-right">${privacyTag}${capTags}</div>
+          <div class="vpt-row-right">${moderationTag}${privacyTag}${capTags}</div>
         </div>
         <div class="vpt-row-bottom">
           ${priceItems}
@@ -493,6 +507,7 @@
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
       const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
+      const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
       const privacyTag = isAnonymizedModel(model) 
         ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
         : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
@@ -516,7 +531,7 @@
             <span class="vpt-model-name">${name}</span>${betaTag}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
-          <div class="vpt-row-right">${privacyTag}</div>
+          <div class="vpt-row-right">${moderationTag}${privacyTag}</div>
         </div>
         <div class="vpt-row-bottom">
           ${priceItems}
@@ -560,6 +575,7 @@
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
       const editPrice = spec.pricing?.inpaint?.usd ?? spec.pricing?.generation?.usd ?? 0.04;
+      const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
 
       return `<div class="vpt-row">
         <div class="vpt-row-top">
@@ -567,6 +583,7 @@
             <span class="vpt-model-name">${name}</span>
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
+          <div class="vpt-row-right">${moderationTag}</div>
         </div>
         <div class="vpt-row-bottom">
           <span class="vpt-price-item"><span class="vpt-price-label">Per Edit</span><span class="vpt-price-value">${formatPrice(editPrice)}</span></span>
@@ -679,6 +696,7 @@
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
       const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
+      const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
       const privacyTag = isAnonymizedModel(model) 
         ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
         : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
@@ -693,7 +711,7 @@
             <span class="vpt-model-name">${name}</span>${betaTag}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
-          <div class="vpt-row-right">${privacyTag}${videoTypeBadge}</div>
+          <div class="vpt-row-right">${moderationTag}${privacyTag}${videoTypeBadge}</div>
         </div>
         <div class="vpt-row-bottom">
           ${durations.length > 0 ? `<span class="vpt-price-item"><span class="vpt-price-label">Durations</span><span class="vpt-price-value vpt-context-value">${durations.join(', ')}</span></span>` : ''}
@@ -1535,6 +1553,10 @@
         ? `<span class="vmb-upgraded-badge vmb-tooltip" data-tooltip="${TOOLTIPS.upgraded}">Upgraded</span>` 
         : '';
       
+      const moderationBadge = hasContentModeration(model.id)
+        ? `<span class="vmb-moderation-badge vmb-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>`
+        : '';
+      
       const newBadge = dateInfo?.isNew
         ? '<span class="vmb-new-badge">NEW</span>'
         : '';
@@ -1600,7 +1622,7 @@
               </div>
               <div class="vmb-model-right">
                 ${contextStr ? `<span class="vmb-context vmb-context-desktop">${contextStr}</span>` : ''}
-                ${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${rateLimitBadge}
+                ${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${moderationBadge}${rateLimitBadge}
               </div>
             </div>
             <div class="vmb-model-info">
