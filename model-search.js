@@ -149,6 +149,7 @@
   const CAPABILITY_FILTERS = ['reasoning', 'vision', 'function', 'code'];
   const VIDEO_FILTERS = ['text-to-video', 'image-to-video'];
   const IMAGE_FILTERS = ['image-gen', 'image-upscale', 'image-edit', 'image-uncensored'];
+  const PRIVACY_FILTERS = ['private', 'anonymized'];
 
   // Tooltip text
   const TOOLTIPS = {
@@ -1212,6 +1213,10 @@
           <button class="vmb-filter" data-filter="audio" aria-pressed="false">Audio</button>
           <button class="vmb-filter" data-filter="embedding" aria-pressed="false">Embedding</button>
         </span>
+        <span class="vmb-privacy-filters" role="group" aria-label="Privacy filters">
+          <button class="vmb-filter" data-filter="private" aria-pressed="false">Private</button>
+          <button class="vmb-filter" data-filter="anonymized" aria-pressed="false">Anonymized</button>
+        </span>
         <span class="vmb-capability-filters" role="group" aria-label="Capability filters">
           <button class="vmb-filter" data-filter="reasoning" aria-pressed="false">Reasoning</button>
           <button class="vmb-filter" data-filter="vision" aria-pressed="false">Vision</button>
@@ -1248,6 +1253,7 @@
     const capabilityFilters = container.querySelector('.vmb-capability-filters');
     const videoFilters = ENABLE_VIDEO ? container.querySelector('.vmb-video-filters') : null;
     const imageFilters = container.querySelector('.vmb-image-filters');
+    const privacyFilters = container.querySelector('.vmb-privacy-filters');
     
     // Configure filter visibility based on page context
     if (presetFilter) {
@@ -1272,6 +1278,7 @@
     let activeCapability = null;
     let activeVideoType = null;
     let activeImageType = null;
+    let activePrivacy = null;
     // On overview page (no preset filter), default to newest first
     let activeSort = presetFilter ? 'default' : 'newest';
     
@@ -1340,6 +1347,14 @@
       return true;
     }
 
+    function matchesPrivacy(model) {
+      if (!activePrivacy) return true;
+      const privacy = model.model_spec?.privacy;
+      if (activePrivacy === 'private') return privacy === 'private' || PRIVATE_TYPES.has(model.type);
+      if (activePrivacy === 'anonymized') return privacy === 'anonymized';
+      return true;
+    }
+
     function getModelPrice(model) {
       const pricing = model.model_spec?.pricing || {};
       return pricing.input?.usd || pricing.generation?.usd || pricing.per_audio_second?.usd || 0;
@@ -1387,7 +1402,8 @@
                matchesCategory(model) && 
                matchesCapability(model) && 
                matchesVideoType(model) && 
-               matchesImageType(model);
+               matchesImageType(model) &&
+               matchesPrivacy(model);
       });
 
       const sorted = sortModels(filtered);
@@ -1667,8 +1683,23 @@
         const isCapability = CAPABILITY_FILTERS.includes(filter);
         const isVideoType = VIDEO_FILTERS.includes(filter);
         const isImageType = IMAGE_FILTERS.includes(filter);
+        const isPrivacy = PRIVACY_FILTERS.includes(filter);
         
-        if (isCapability) {
+        if (isPrivacy) {
+          if (activePrivacy === filter) {
+            activePrivacy = null;
+            btn.classList.remove('active');
+            updateAriaPressed(btn, false);
+          } else {
+            privacyFilters.querySelectorAll('.vmb-filter').forEach(b => {
+              b.classList.remove('active');
+              updateAriaPressed(b, false);
+            });
+            activePrivacy = filter;
+            btn.classList.add('active');
+            updateAriaPressed(btn, true);
+          }
+        } else if (isCapability) {
           if (activeCapability === filter) {
             activeCapability = null;
             btn.classList.remove('active');
@@ -1711,14 +1742,16 @@
             updateAriaPressed(btn, true);
           }
         } else {
-          // Category filter (main page only)
+          // Category filter (main page only) - preserve privacy filter state
           activeFilter = filter;
           activeCapability = null;
           activeVideoType = null;
           activeImageType = null;
           filterButtons.forEach(b => {
-            b.classList.remove('active');
-            updateAriaPressed(b, false);
+            if (!PRIVACY_FILTERS.includes(b.dataset.filter)) {
+              b.classList.remove('active');
+              updateAriaPressed(b, false);
+            }
           });
           btn.classList.add('active');
           updateAriaPressed(btn, true);
