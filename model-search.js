@@ -7,7 +7,7 @@
 
   // Configuration
   const API_BASE = 'https://api.venice.ai/api/v1/models';
-  const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', ...(ENABLE_VIDEO ? ['video'] : [])];
+  const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'music', ...(ENABLE_VIDEO ? ['video'] : [])];
   const CACHE_KEY = 'venice-models-cache';
   const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
