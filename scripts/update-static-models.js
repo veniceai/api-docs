@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 
 const API_BASE = 'https://api.venice.ai/api/v1/models';
-const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video'];
+const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video', 'music'];
 
 async function fetchAllModels() {
   const results = await Promise.all(
