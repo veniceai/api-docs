@@ -56,7 +56,7 @@ function cleanModel(m) {
 }
 
 function sortModels(models) {
-  const typeOrder = ['inpaint', 'tts', 'embedding', 'video', 'text', 'asr', 'upscale', 'image'];
+  const typeOrder = ['inpaint', 'tts', 'embedding', 'music', 'video', 'text', 'asr', 'upscale', 'image'];
   return models.sort((a, b) => {
     const ta = typeOrder.indexOf(a.type);
     const tb = typeOrder.indexOf(b.type);

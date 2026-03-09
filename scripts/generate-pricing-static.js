@@ -222,6 +222,70 @@ function renderPricingASRTable(models) {
   return header + '\n' + rows + '\n';
 }
 
+function getPricingMusicModels(models, pricingKey) {
+  return models
+    .filter(m => m.type === 'music')
+    .filter(m => !isDeprecatedModel(m))
+    .filter(m => m.model_spec?.pricing?.[pricingKey])
+    .sort((a, b) => (a.model_spec?.name || a.id).localeCompare(b.model_spec?.name || b.id));
+}
+
+function renderPricingMusicDurationTable(models) {
+  const musicModels = getPricingMusicModels(models, 'durations');
+  if (musicModels.length === 0) return '';
+
+  const header = `| Model | ID | Duration Pricing | Privacy |\n|---|---|---|---|`;
+  const rows = musicModels.map(model => {
+    const spec = model.model_spec || {};
+    const pricing = spec.pricing || {};
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
+    const name = escapeHtml(spec.name || model.id);
+    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const durationPricing = Object.entries(pricing.durations || {})
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([duration, price]) => `${duration}s: ${formatPrice(price?.usd)}`)
+      .join(', ');
+
+    return `| ${name} | ${modelId} | ${durationPricing} | ${privacyTag} |`;
+  }).join('\n');
+
+  return header + '\n' + rows + '\n';
+}
+
+function renderPricingMusicGenerationTable(models) {
+  const musicModels = getPricingMusicModels(models, 'generation');
+  if (musicModels.length === 0) return '';
+
+  const header = `| Model | ID | Per Generation | Privacy |\n|---|---|---|---|`;
+  const rows = musicModels.map(model => {
+    const spec = model.model_spec || {};
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
+    const name = escapeHtml(spec.name || model.id);
+    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+
+    return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.generation?.usd)} | ${privacyTag} |`;
+  }).join('\n');
+
+  return header + '\n' + rows + '\n';
+}
+
+function renderPricingMusicPerSecondTable(models) {
+  const musicModels = getPricingMusicModels(models, 'per_second');
+  if (musicModels.length === 0) return '';
+
+  const header = `| Model | ID | Per Second | Privacy |\n|---|---|---|---|`;
+  const rows = musicModels.map(model => {
+    const spec = model.model_spec || {};
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
+    const name = escapeHtml(spec.name || model.id);
+    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+
+    return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.per_second?.usd)} | ${privacyTag} |`;
+  }).join('\n');
+
+  return header + '\n' + rows + '\n';
+}
+
 // Detect video type from model ID
 function getVideoType(modelId) {
   if (modelId.includes('image-to-video')) return 'Image to Video';
@@ -272,6 +336,9 @@ function generatePricingMdx() {
   const editHtml = renderPricingEditTable(models);
   const ttsHtml = renderPricingTTSTable(models);
   const asrHtml = renderPricingASRTable(models);
+  const musicDurationHtml = renderPricingMusicDurationTable(models);
+  const musicGenerationHtml = renderPricingMusicGenerationTable(models);
+  const musicPerSecondHtml = renderPricingMusicPerSecondTable(models);
   const videoHtml = renderPricingVideoTable(models);
   const websearchHtml = renderPricingWebSearchTable();
 
@@ -330,6 +397,34 @@ function generatePricingMdx() {
   sections.push('');
   sections.push(asrHtml);
   sections.push('</div>');
+  sections.push('');
+  sections.push('### Music');
+  sections.push('');
+  sections.push('<div id="pricing-music-placeholder">');
+  sections.push('');
+  if (musicDurationHtml) {
+    sections.push('#### Song Generation (Duration-Based)');
+    sections.push('');
+    sections.push(musicDurationHtml);
+  }
+  if (musicGenerationHtml) {
+    sections.push('#### Song Generation (Per-Generation)');
+    sections.push('');
+    sections.push(musicGenerationHtml);
+  }
+  if (musicPerSecondHtml) {
+    sections.push('#### Sound Effects (Per-Second)');
+    sections.push('');
+    sections.push(musicPerSecondHtml);
+  }
+  if (!musicDurationHtml && !musicGenerationHtml && !musicPerSecondHtml) {
+    sections.push('No music models available.');
+  }
+  sections.push('</div>');
+  sections.push('');
+  sections.push('<Info>');
+  sections.push('For exact pricing before generation, use the [Audio Quote API](/api-reference/endpoint/audio/quote). Duration-based models have fixed price tiers, while per-second models charge based on output length.');
+  sections.push('</Info>');
   sections.push('');
   sections.push('### Video');
   sections.push('');
