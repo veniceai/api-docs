@@ -1638,6 +1638,17 @@
           if (upscalePricing['2x']?.usd) prices.push(`${formatPrice(upscalePricing['2x'].usd)} 2x`);
           if (upscalePricing['4x']?.usd) prices.push(`${formatPrice(upscalePricing['4x'].usd)} 4x`);
           priceStr = prices.join(' · ');
+        } else if (model.type === 'music' && pricing.durations) {
+          const durationKeys = Object.keys(pricing.durations).sort((a, b) => Number(a) - Number(b));
+          if (durationKeys.length > 0) {
+            const minDur = durationKeys[0];
+            const minPrice = pricing.durations[minDur]?.usd;
+            priceStr = `from ${formatPrice(minPrice)}/${minDur}s`;
+          }
+        } else if (model.type === 'music' && pricing.per_second) {
+          priceStr = `${formatPrice(pricing.per_second.usd)}/sec`;
+        } else if (model.type === 'music' && pricing.generation) {
+          priceStr = `${formatPrice(pricing.generation.usd)}/audio`;
         } else if (pricing.generation) {
           priceStr = `${formatPrice(pricing.generation.usd)}/image`;
         } else if (pricing.perCharacter) {
