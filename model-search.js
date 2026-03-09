@@ -1315,6 +1315,7 @@
       if (activeFilter === 'video') return model.type === 'video';
       if (activeFilter === 'audio') return model.type === 'tts' || model.type === 'asr';
       if (activeFilter === 'embedding') return model.type === 'embedding';
+      if (activeFilter === 'music') return model.type === 'music';
       return true;
     }
 
