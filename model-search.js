@@ -655,6 +655,104 @@
     return `<div class="vpt-list">${rows}</div>`;
   }
 
+  function renderPricingMusicDurationTable(models) {
+    const durationModels = models.filter(m => m.type === 'music' && m.model_spec?.pricing?.durations).filter(m => !isDeprecatedModel(m));
+    if (durationModels.length === 0) return '';
+
+    const rows = durationModels.map(model => {
+      const spec = model.model_spec || {};
+      const pricing = spec.pricing || {};
+      const modelId = escapeHtml(model.id);
+      const name = escapeHtml(spec.name || model.id);
+      const privacyTag = isAnonymizedModel(model) 
+        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
+        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+
+      const durations = pricing.durations || {};
+      const durationPrices = Object.entries(durations)
+        .sort(([a], [b]) => parseInt(a) - parseInt(b))
+        .map(([sec, price]) => `${sec}s: ${formatPrice(price.usd)}`)
+        .join(', ');
+
+      return `<div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">${name}</span>
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
+          </div>
+          <div class="vpt-row-right">${privacyTag}</div>
+        </div>
+        <div class="vpt-row-bottom">
+          <span class="vpt-price-item"><span class="vpt-price-label">Duration Pricing</span><span class="vpt-price-value">${durationPrices}</span></span>
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<div class="vpt-list">${rows}</div>`;
+  }
+
+  function renderPricingMusicGenerationTable(models) {
+    const genModels = models.filter(m => m.type === 'music' && m.model_spec?.pricing?.generation && !m.model_spec?.pricing?.durations && !m.model_spec?.pricing?.per_second).filter(m => !isDeprecatedModel(m));
+    if (genModels.length === 0) return '';
+
+    const rows = genModels.map(model => {
+      const spec = model.model_spec || {};
+      const pricing = spec.pricing || {};
+      const modelId = escapeHtml(model.id);
+      const name = escapeHtml(spec.name || model.id);
+      const price = formatPrice(pricing.generation?.usd);
+      const privacyTag = isAnonymizedModel(model) 
+        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
+        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+
+      return `<div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">${name}</span>
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
+          </div>
+          <div class="vpt-row-right">${privacyTag}</div>
+        </div>
+        <div class="vpt-row-bottom">
+          <span class="vpt-price-item"><span class="vpt-price-label">Per Generation</span><span class="vpt-price-value">${price}</span></span>
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<div class="vpt-list">${rows}</div>`;
+  }
+
+  function renderPricingMusicPerSecondTable(models) {
+    const perSecModels = models.filter(m => m.type === 'music' && m.model_spec?.pricing?.per_second).filter(m => !isDeprecatedModel(m));
+    if (perSecModels.length === 0) return '';
+
+    const rows = perSecModels.map(model => {
+      const spec = model.model_spec || {};
+      const pricing = spec.pricing || {};
+      const modelId = escapeHtml(model.id);
+      const name = escapeHtml(spec.name || model.id);
+      const price = formatPrice(pricing.per_second?.usd);
+      const privacyTag = isAnonymizedModel(model) 
+        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
+        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+
+      return `<div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">${name}</span>
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
+          </div>
+          <div class="vpt-row-right">${privacyTag}</div>
+        </div>
+        <div class="vpt-row-bottom">
+          <span class="vpt-price-item"><span class="vpt-price-label">Per Second</span><span class="vpt-price-value">${price}</span></span>
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<div class="vpt-list">${rows}</div>`;
+  }
+
   function renderPricingWebSearchTable() {
     return `<div class="vpt-list">
       <div class="vpt-row">
@@ -1093,6 +1191,7 @@
     const embeddingEl = document.getElementById('pricing-embedding-placeholder');
     const imageEl = document.getElementById('pricing-image-placeholder');
     const audioEl = document.getElementById('pricing-audio-placeholder');
+    const musicEl = document.getElementById('pricing-music-placeholder');
     const websearchEl = document.getElementById('pricing-websearch-placeholder');
     const videoEl = document.getElementById('pricing-video-placeholder');
 
@@ -1127,6 +1226,17 @@
       `;
     }
 
+    if (musicEl) {
+      const durationHtml = renderPricingMusicDurationTable(models);
+      const generationHtml = renderPricingMusicGenerationTable(models);
+      const perSecondHtml = renderPricingMusicPerSecondTable(models);
+      musicEl.innerHTML = `
+        ${durationHtml ? `<h4>Song Generation (Duration-Based)</h4>${durationHtml}` : ''}
+        ${generationHtml ? `<h4>Song Generation (Per-Generation)</h4>${generationHtml}` : ''}
+        ${perSecondHtml ? `<h4>Sound Effects (Per-Second)</h4>${perSecondHtml}` : ''}
+      `;
+    }
+
     if (websearchEl) {
       websearchEl.innerHTML = renderPricingWebSearchTable();
     }
@@ -1140,7 +1250,7 @@
       updateVideoPricesForPricingPage(models);
     }
 
-    [chatEl, embeddingEl, imageEl, audioEl, websearchEl, videoEl].forEach(el => {
+    [chatEl, embeddingEl, imageEl, audioEl, musicEl, websearchEl, videoEl].forEach(el => {
       if (el) {
         el.style.visibility = 'visible';
         el.style.height = 'auto';
@@ -1154,8 +1264,9 @@
     const embeddingEl = document.getElementById('pricing-embedding-placeholder');
     const imageEl = document.getElementById('pricing-image-placeholder');
     const audioEl = document.getElementById('pricing-audio-placeholder');
+    const musicEl = document.getElementById('pricing-music-placeholder');
     
-    if (!chatEl && !embeddingEl && !imageEl && !audioEl) return;
+    if (!chatEl && !embeddingEl && !imageEl && !audioEl && !musicEl) return;
 
     // Immediately render dynamic version from cache or STATIC_MODELS (instant, adds JS interactivity)
     const cachedModels = getCachedModels();
