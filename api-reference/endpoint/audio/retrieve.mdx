@@ -7,4 +7,89 @@ openapi: 'POST /audio/retrieve'
 
 Use the `queue_id` returned by `/audio/queue` to check generation status. When the request completes, this endpoint returns the generated audio data.
 
+<Tip>
+When the audio is ready, the response will be **binary audio data** (MP3, FLAC, or WAV depending on the model), not JSON. The `Content-Type` header will indicate the audio format.
+</Tip>
+
+## For AI Agents
+
+<Warning title="Critical: Binary Data Handling">
+**Do NOT capture audio responses in shell variables or pipe through text processing tools.** This corrupts binary data and results in truncated audio files (e.g., 30KB instead of 2MB, 2 seconds instead of 120 seconds).
+
+### ❌ Wrong - Corrupts Binary Data
+
+```bash
+# Capturing in shell variable corrupts binary
+result=$(curl -s -X POST "$URL" -d "$DATA")
+echo "$result" > audio.mp3  # File will be corrupted!
+
+# Piping through jq also corrupts
+queue_id=$(curl ... | jq -r '.queue_id')  # OK for JSON
+# But later: curl ... | jq '.' > audio.mp3  # CORRUPTED!
+```
+
+### ✅ Correct - Save Binary Directly
+
+```bash
+# Use curl -o to save binary directly
+curl -s -o audio.mp3 -X POST "https://api.venice.ai/api/v1/audio/retrieve" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "elevenlabs-music", "queue_id": "..."}'
+
+# Or use Python's requests with binary write
+import requests
+resp = requests.post(url, headers=headers, json=data)
+if resp.headers.get("content-type", "").startswith("audio/"):
+    with open("audio.mp3", "wb") as f:
+        f.write(resp.content)  # Binary write!
+```
+
+**Symptom of corruption:** File size is tiny (30-50KB instead of 1-2MB), duration shows 2-10 seconds instead of requested 60-120 seconds.
+</Warning>
+
+## Polling Pattern
+
+```bash
+# Poll until binary data is returned
+for i in {1..30}; do
+  # Check response before saving
+  http_code=$(curl -s -w "%{http_code}" -o /tmp/check.json \
+    -X POST "https://api.venice.ai/api/v1/audio/retrieve" \
+    -H "Authorization: Bearer $API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"model": "elevenlabs-music", "queue_id": "XXX"}')
+  
+  # If starts with {, still processing (JSON response)
+  if head -c 1 /tmp/check.json | grep -q "{"; then
+    status=$(jq -r '.status' /tmp/check.json 2>/dev/null)
+    echo "Still processing... ($status)"
+    sleep 5
+    continue
+  fi
+  
+  # Binary data! Save properly now
+  curl -s -o audio.mp3 -X POST "https://api.venice.ai/api/v1/audio/retrieve" \
+    -H "Authorization: Bearer $API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"model": "elevenlabs-music", "queue_id": "XXX"}'
+  
+  echo "Audio saved to audio.mp3"
+  break
+done
+```
+
+## Response Format
+
+When still processing, returns JSON:
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 25000,
+  "execution_duration": 15000
+}
+```
+
+When complete, returns binary audio data with `Content-Type: audio/mpeg` (or `audio/flac`, `audio/wav` depending on model).
+
 -------
