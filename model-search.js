@@ -777,7 +777,18 @@
           </div>
         </div>
         <div class="vpt-row-bottom">
-          <span class="vpt-price-item"><span class="vpt-price-label">Per 1K Calls</span><span class="vpt-price-value">$10.00</span></span>
+          <span class="vpt-price-item"><span class="vpt-price-label">Per 1K URLs</span><span class="vpt-price-value">$10.00</span></span>
+        </div>
+      </div>
+      <div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">X Search (xAI)</span>
+            <code class="vpt-model-id">enable_x_search: true</code>${pricingCopyBtn('enable_x_search: true')}
+          </div>
+        </div>
+        <div class="vpt-row-bottom">
+          <span class="vpt-price-item"><span class="vpt-price-label">Per 1K Results</span><span class="vpt-price-value">$10.00</span></span>
         </div>
       </div>
     </div>`;
