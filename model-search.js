@@ -1493,7 +1493,7 @@
       if (!activePrivacy) return true;
       if (activePrivacy === 'e2ee') return isE2EEModel(model);
       if (activePrivacy === 'tee') return isTEEModel(model);
-      if (activePrivacy === 'private') return (model.model_spec?.privacy === 'private' || PRIVATE_TYPES.has(model.type)) && !isTEEModel(model) && !isE2EEModel(model);
+      if (activePrivacy === 'private') return model.model_spec?.privacy === 'private' || PRIVATE_TYPES.has(model.type);
       if (activePrivacy === 'anonymized') return model.model_spec?.privacy === 'anonymized';
       return true;
     }
