@@ -316,10 +316,10 @@
     const cls = variant === 'vpt' ? 'vpt-cap-tag' : 'vmb-privacy-badge';
     const tipCls = variant === 'vpt' ? 'vpt-tooltip' : 'vmb-tooltip';
     if (isE2EEModel(model)) {
-      return `<span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span><span class="${cls} ${tipCls} e2ee" data-tooltip="${TOOLTIPS.e2ee}">E2EE</span>`;
+      return `<span class="${cls} ${tipCls} e2ee" data-tooltip="${TOOLTIPS.e2ee}">E2EE</span><span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
     }
     if (isTEEModel(model)) {
-      return `<span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span><span class="${cls} ${tipCls} tee" data-tooltip="${TOOLTIPS.tee}">TEE</span>`;
+      return `<span class="${cls} ${tipCls} tee" data-tooltip="${TOOLTIPS.tee}">TEE</span><span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
     }
     if (isAnonymizedModel(model)) {
       return `<span class="${cls} ${tipCls} anonymized" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>`;
