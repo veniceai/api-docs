@@ -85,6 +85,7 @@
 
   const videoQuoteCache = new Map();
   const inferredVideoDurations = new Map();
+  const inferredVideoAspectRatios = new Map();
 
   function getAspectRatios(constraints) {
     const ar = constraints.aspect_ratios;
@@ -94,14 +95,26 @@
     return [];
   }
 
-  function extractSupportedDurations(errorData) {
-    if (!errorData) return [];
-    const matches = JSON.stringify(errorData).match(/'(\d+s)'/g) || [];
+  function extractSupportedIssueValues(errorData, field, pattern) {
+    if (!Array.isArray(errorData?.issues)) return [];
+    const matches = errorData.issues
+      .filter(issue => Array.isArray(issue.path) && issue.path[0] === field && typeof issue.expected === 'string')
+      .flatMap(issue => issue.expected.match(pattern) || []);
+
     return [...new Set(
       matches
         .map(match => match.slice(1, -1))
-        .filter(value => /^\d+s$/.test(value))
     )];
+  }
+
+  function extractSupportedDurations(errorData) {
+    return extractSupportedIssueValues(errorData, 'duration', /'(\d+s)'/g)
+      .filter(value => /^\d+s$/.test(value));
+  }
+
+  function extractSupportedAspectRatios(errorData) {
+    return extractSupportedIssueValues(errorData, 'aspect_ratio', /'(\d+:\d+)'/g)
+      .filter(value => /^\d+:\d+$/.test(value));
   }
 
   async function requestVideoQuote(body) {
@@ -141,13 +154,14 @@
     const constraints = model.model_spec?.constraints || {};
     const isImageToVideo = constraints.model_type === 'image-to-video';
     const inferredDuration = inferredVideoDurations.get(modelId);
+    const inferredAspectRatio = inferredVideoAspectRatios.get(modelId);
     const defaultDuration = Array.isArray(constraints.durations) ? constraints.durations[0] : inferredDuration;
     
     const effectiveDuration = duration || defaultDuration;
     const aspectRatios = getAspectRatios(constraints);
-    const aspectRatio = aspectRatios[0];
+    const aspectRatio = aspectRatios[0] || inferredAspectRatio;
     
-    const cacheKey = `${modelId}:${resolution || 'default'}:${effectiveDuration || 'default'}:${audio ?? 'default'}`;
+    const cacheKey = `${modelId}:${resolution || 'default'}:${effectiveDuration || 'default'}:${aspectRatio || 'default'}:${audio ?? 'default'}`;
     if (videoQuoteCache.has(cacheKey)) {
       return videoQuoteCache.get(cacheKey);
     }
@@ -163,11 +177,19 @@
     try {
       let quoteRes = await requestVideoQuote(body);
 
-      if (!quoteRes.ok && !effectiveDuration) {
-        const fallbackDuration = extractSupportedDurations(quoteRes.data)[0];
-        if (fallbackDuration) {
-          inferredVideoDurations.set(modelId, fallbackDuration);
-          body.duration = fallbackDuration;
+      if (!quoteRes.ok && (!effectiveDuration || !aspectRatio)) {
+        const fallbackDuration = !effectiveDuration ? extractSupportedDurations(quoteRes.data)[0] : undefined;
+        const fallbackAspectRatio = !aspectRatio ? extractSupportedAspectRatios(quoteRes.data)[0] : undefined;
+
+        if (fallbackDuration || fallbackAspectRatio) {
+          if (fallbackDuration) {
+            inferredVideoDurations.set(modelId, fallbackDuration);
+            body.duration = fallbackDuration;
+          }
+          if (fallbackAspectRatio) {
+            inferredVideoAspectRatios.set(modelId, fallbackAspectRatio);
+            body.aspect_ratio = fallbackAspectRatio;
+          }
           quoteRes = await requestVideoQuote(body);
         }
       }
@@ -177,8 +199,8 @@
       if (quote == null) return null;
 
       videoQuoteCache.set(cacheKey, quote);
-      if (body.duration && body.duration !== effectiveDuration) {
-        const resolvedCacheKey = `${modelId}:${resolution || 'default'}:${body.duration}:${audio ?? 'default'}`;
+      if ((body.duration && body.duration !== effectiveDuration) || (body.aspect_ratio && body.aspect_ratio !== aspectRatio)) {
+        const resolvedCacheKey = `${modelId}:${resolution || 'default'}:${body.duration || 'default'}:${body.aspect_ratio || 'default'}:${audio ?? 'default'}`;
         videoQuoteCache.set(resolvedCacheKey, quote);
       }
       return quote;
