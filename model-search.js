@@ -155,6 +155,8 @@
   const TOOLTIPS = {
     private: 'This model is private and no prompt data is stored in any capacity.',
     anonymized: 'The provider of this model maintains prompt data (though it is anonymized by Venice). For sensitive content, use a private model.',
+    tee: 'Runs in a Trusted Execution Environment (TEE) with hardware-backed isolation and attestation support.',
+    e2ee: 'Supports End-to-End Encryption (E2EE): prompts are encrypted client-side and decrypted only inside the TEE.',
     beta: 'Experimental model that may change or be removed without notice. Not recommended for production.',
     deprecated: 'This model is scheduled for removal. See the deprecations page for timeline and migration guide.',
     uncensored: 'Responds to all prompts without content-based refusals or filtering.',
@@ -295,6 +297,29 @@
   function isAnonymizedModel(model) {
     if (PRIVATE_TYPES.has(model.type)) return false;
     return model.model_spec?.privacy === 'anonymized';
+  }
+
+  function isE2EEModel(model) {
+    const caps = model.model_spec?.capabilities || {};
+    const modelId = (model.id || '').toLowerCase();
+    return caps.supportsE2EE === true || modelId.startsWith('e2ee-');
+  }
+
+  function isTEEModel(model) {
+    const caps = model.model_spec?.capabilities || {};
+    const modelId = (model.id || '').toLowerCase();
+    return caps.supportsTeeAttestation === true || modelId.startsWith('tee-') || isE2EEModel(model);
+  }
+
+  function getSecurityBadges(model) {
+    const badges = [];
+    if (isTEEModel(model)) {
+      badges.push(`<span class="vmb-privacy-badge vmb-tooltip tee" data-tooltip="${TOOLTIPS.tee}">TEE</span>`);
+    }
+    if (isE2EEModel(model)) {
+      badges.push(`<span class="vmb-privacy-badge vmb-tooltip e2ee" data-tooltip="${TOOLTIPS.e2ee}">E2EE</span>`);
+    }
+    return badges.join('');
   }
 
   function isBetaModel(model) {
@@ -1691,6 +1716,7 @@
       const privacyBadge = isAnonymizedModel(model)
         ? `<span class="vmb-privacy-badge vmb-tooltip anonymized" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>`
         : `<span class="vmb-privacy-badge vmb-tooltip private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const securityBadges = getSecurityBadges(model);
       
       const betaBadge = isBetaModel(model)
         ? `<span class="vmb-beta-badge vmb-tooltip" data-tooltip="${TOOLTIPS.beta}">Beta</span>` 
@@ -1777,7 +1803,7 @@
               </div>
               <div class="vmb-model-right">
                 ${contextStr ? `<span class="vmb-context vmb-context-desktop">${contextStr}</span>` : ''}
-                ${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${moderationBadge}${rateLimitBadge}
+                ${typeBadge}${videoTypeBadge}${privacyBadge}${securityBadges}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${moderationBadge}${rateLimitBadge}
               </div>
             </div>
             <div class="vmb-model-info">
