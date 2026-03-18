@@ -84,6 +84,7 @@
   }
 
   const videoQuoteCache = new Map();
+  const inferredVideoDurations = new Map();
 
   function getAspectRatios(constraints) {
     const ar = constraints.aspect_ratios;
@@ -91,6 +92,33 @@
     if (Array.isArray(ar)) return ar;
     if (typeof ar === 'string') return [ar];
     return [];
+  }
+
+  function extractSupportedDurations(errorData) {
+    if (!errorData) return [];
+    const matches = JSON.stringify(errorData).match(/'(\d+s)'/g) || [];
+    return [...new Set(
+      matches
+        .map(match => match.slice(1, -1))
+        .filter(value => /^\d+s$/.test(value))
+    )];
+  }
+
+  async function requestVideoQuote(body) {
+    const res = await fetch('https://api.venice.ai/api/v1/video/quote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+
+    return { ok: res.ok, data };
   }
 
   function isFixedPriceModel(modelId, model) {
@@ -112,7 +140,8 @@
   async function fetchVideoQuote(modelId, model, { resolution, duration, audio } = {}) {
     const constraints = model.model_spec?.constraints || {};
     const isImageToVideo = constraints.model_type === 'image-to-video';
-    const defaultDuration = Array.isArray(constraints.durations) ? constraints.durations[0] : undefined;
+    const inferredDuration = inferredVideoDurations.get(modelId);
+    const defaultDuration = Array.isArray(constraints.durations) ? constraints.durations[0] : inferredDuration;
     
     const effectiveDuration = duration || defaultDuration;
     const aspectRatios = getAspectRatios(constraints);
@@ -132,15 +161,27 @@
     if (typeof audio === 'boolean') body.audio = audio;
 
     try {
-      const res = await fetch('https://api.venice.ai/api/v1/video/quote', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      if (!res.ok) return null;
-      const data = await res.json();
-      videoQuoteCache.set(cacheKey, data.quote);
-      return data.quote;
+      let quoteRes = await requestVideoQuote(body);
+
+      if (!quoteRes.ok && !effectiveDuration) {
+        const fallbackDuration = extractSupportedDurations(quoteRes.data)[0];
+        if (fallbackDuration) {
+          inferredVideoDurations.set(modelId, fallbackDuration);
+          body.duration = fallbackDuration;
+          quoteRes = await requestVideoQuote(body);
+        }
+      }
+
+      if (!quoteRes.ok) return null;
+      const quote = quoteRes.data?.quote;
+      if (quote == null) return null;
+
+      videoQuoteCache.set(cacheKey, quote);
+      if (body.duration && body.duration !== effectiveDuration) {
+        const resolvedCacheKey = `${modelId}:${resolution || 'default'}:${body.duration}:${audio ?? 'default'}`;
+        videoQuoteCache.set(resolvedCacheKey, quote);
+      }
+      return quote;
     } catch {
       return null;
     }
