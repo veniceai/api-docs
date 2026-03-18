@@ -149,12 +149,14 @@
   const CAPABILITY_FILTERS = ['reasoning', 'vision', 'function', 'code'];
   const VIDEO_FILTERS = ['text-to-video', 'image-to-video'];
   const IMAGE_FILTERS = ['image-gen', 'image-upscale', 'image-edit', 'image-uncensored'];
-  const PRIVACY_FILTERS = ['private', 'anonymized'];
+  const PRIVACY_FILTERS = ['e2ee', 'tee', 'private', 'anonymized'];
 
   // Tooltip text
   const TOOLTIPS = {
-    private: 'This model is private and no prompt data is stored in any capacity.',
-    anonymized: 'The provider of this model maintains prompt data (though it is anonymized by Venice). For sensitive content, use a private model.',
+    e2ee: 'Private model with end-to-end encryption. Your prompt is encrypted in your browser and only decrypted inside a hardware-secured enclave (TEE). The response is encrypted before leaving the enclave. No prompt data is ever accessible to Venice or the infrastructure provider.',
+    tee: 'Private model running in a Trusted Execution Environment (TEE). Inference runs inside a hardware-secured enclave with cryptographic attestation. No prompt data is stored or accessible outside the enclave.',
+    private: 'Private model with zero data retention. No prompt data is stored or shared with any third party.',
+    anonymized: 'The model provider may retain prompt data, though it is anonymized by Venice. For sensitive content, use a Private, TEE, or E2EE model.',
     beta: 'Experimental model that may change or be removed without notice. Not recommended for production.',
     deprecated: 'This model is scheduled for removal. See the deprecations page for timeline and migration guide.',
     uncensored: 'Responds to all prompts without content-based refusals or filtering.',
@@ -297,6 +299,34 @@
     return model.model_spec?.privacy === 'anonymized';
   }
 
+  function isE2EEModel(model) {
+    const caps = model.model_spec?.capabilities || {};
+    const modelId = (model.id || '').toLowerCase();
+    return caps.supportsE2EE === true || modelId.startsWith('e2ee-');
+  }
+
+  function isTEEModel(model) {
+    const caps = model.model_spec?.capabilities || {};
+    const modelId = (model.id || '').toLowerCase();
+    return caps.supportsTeeAttestation === true || modelId.startsWith('tee-') || isE2EEModel(model);
+  }
+
+  function getPrivacyTag(model, variant) {
+    // variant: 'vmb' for main model browser, 'vpt' for pricing tables
+    const cls = variant === 'vpt' ? 'vpt-cap-tag' : 'vmb-privacy-badge';
+    const tipCls = variant === 'vpt' ? 'vpt-tooltip' : 'vmb-tooltip';
+    if (isE2EEModel(model)) {
+      return `<span class="${cls} ${tipCls} e2ee" data-tooltip="${TOOLTIPS.e2ee}">Private · E2EE</span>`;
+    }
+    if (isTEEModel(model)) {
+      return `<span class="${cls} ${tipCls} tee" data-tooltip="${TOOLTIPS.tee}">Private · TEE</span>`;
+    }
+    if (isAnonymizedModel(model)) {
+      return `<span class="${cls} ${tipCls} anonymized" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>`;
+    }
+    return `<span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+  }
+
   function isBetaModel(model) {
     return model.model_spec?.betaModel === true;
   }
@@ -402,9 +432,7 @@
       const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
       const upgradedTag = isUpgradedModel(model) ? '<span class="vpt-badge vpt-upgraded vpt-tooltip" data-tooltip="A newer version of this model is available with improved performance.">Upgraded</span>' : '';
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
-      const privacyTag = isAnonymizedModel(model) 
-        ? `<span class="vpt-cap-tag vpt-cap-anonymized vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
-        : `<span class="vpt-cap-tag vpt-cap-private vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const privacyTag = getPrivacyTag(model, 'vpt');
 
       let priceItems = `
         <span class="vpt-price-item"><span class="vpt-price-label">Input Price</span><span class="vpt-price-value">${inputPrice}</span></span>
@@ -458,9 +486,7 @@
       const pricing = spec.pricing || {};
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
-      const privacyTag = isAnonymizedModel(model) 
-        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
-        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const privacyTag = getPrivacyTag(model, 'vpt');
 
       return `<div class="vpt-row">
         <div class="vpt-row-top">
@@ -509,9 +535,7 @@
       const name = escapeHtml(spec.name || model.id);
       const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
-      const privacyTag = isAnonymizedModel(model) 
-        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
-        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const privacyTag = getPrivacyTag(model, 'vpt');
       const resPricing = spec.pricing?.resolutions;
       const defaultRes = spec.constraints?.defaultResolution;
       
@@ -603,9 +627,7 @@
       const spec = model.model_spec || {};
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
-      const privacyTag = isAnonymizedModel(model) 
-        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
-        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const privacyTag = getPrivacyTag(model, 'vpt');
 
       return `<div class="vpt-row">
         <div class="vpt-row-top">
@@ -634,9 +656,7 @@
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
       const price = pricing.per_audio_second?.usd ? formatPrice(pricing.per_audio_second.usd) : formatPrice(pricing.input?.usd);
-      const privacyTag = isAnonymizedModel(model) 
-        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
-        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const privacyTag = getPrivacyTag(model, 'vpt');
 
       return `<div class="vpt-row">
         <div class="vpt-row-top">
@@ -671,9 +691,7 @@
       const spec = model.model_spec || {};
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
-      const privacyTag = isAnonymizedModel(model)
-        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>`
-        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const privacyTag = getPrivacyTag(model, 'vpt');
       const durationPricing = Object.entries(spec.pricing?.durations || {})
         .sort(([a], [b]) => Number(a) - Number(b))
         .map(([duration, price]) =>
@@ -706,9 +724,7 @@
       const spec = model.model_spec || {};
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
-      const privacyTag = isAnonymizedModel(model)
-        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>`
-        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const privacyTag = getPrivacyTag(model, 'vpt');
 
       return `<div class="vpt-row">
         <div class="vpt-row-top">
@@ -735,9 +751,7 @@
       const spec = model.model_spec || {};
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
-      const privacyTag = isAnonymizedModel(model)
-        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>`
-        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const privacyTag = getPrivacyTag(model, 'vpt');
 
       return `<div class="vpt-row">
         <div class="vpt-row-top">
@@ -810,9 +824,7 @@
       const name = escapeHtml(spec.name || model.id);
       const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
-      const privacyTag = isAnonymizedModel(model) 
-        ? `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>` 
-        : `<span class="vpt-cap-tag vpt-tooltip" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const privacyTag = getPrivacyTag(model, 'vpt');
       const videoType = constraints.model_type === 'image-to-video' ? 'Image to Video' : 'Text to Video';
       const videoTypeBadge = `<span class="vpt-cap-tag">${videoType}</span>`;
       const durations = constraints.durations || [];
@@ -1341,6 +1353,8 @@
           <button class="vmb-filter" data-filter="embedding" aria-pressed="false">Embedding</button>
         </span>
         <span class="vmb-privacy-filters" role="group" aria-label="Privacy filters">
+          <button class="vmb-filter" data-filter="e2ee" aria-pressed="false">E2EE</button>
+          <button class="vmb-filter" data-filter="tee" aria-pressed="false">TEE</button>
           <button class="vmb-filter" data-filter="private" aria-pressed="false">Private</button>
           <button class="vmb-filter" data-filter="anonymized" aria-pressed="false">Anonymized</button>
         </span>
@@ -1477,9 +1491,10 @@
 
     function matchesPrivacy(model) {
       if (!activePrivacy) return true;
-      const privacy = model.model_spec?.privacy;
-      if (activePrivacy === 'private') return privacy === 'private' || PRIVATE_TYPES.has(model.type);
-      if (activePrivacy === 'anonymized') return privacy === 'anonymized';
+      if (activePrivacy === 'e2ee') return isE2EEModel(model);
+      if (activePrivacy === 'tee') return isTEEModel(model);
+      if (activePrivacy === 'private') return model.model_spec?.privacy === 'private' || PRIVATE_TYPES.has(model.type);
+      if (activePrivacy === 'anonymized') return model.model_spec?.privacy === 'anonymized';
       return true;
     }
 
@@ -1688,9 +1703,7 @@
         ? `<span class="vmb-video-type-badge ${constraints.model_type === 'text-to-video' ? 'ttv' : 'itv'}">${constraints.model_type === 'text-to-video' ? 'TEXT TO VIDEO' : 'IMAGE TO VIDEO'}</span>`
         : '';
       
-      const privacyBadge = isAnonymizedModel(model)
-        ? `<span class="vmb-privacy-badge vmb-tooltip anonymized" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>`
-        : `<span class="vmb-privacy-badge vmb-tooltip private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      const privacyBadge = getPrivacyTag(model, 'vmb');
       
       const betaBadge = isBetaModel(model)
         ? `<span class="vmb-beta-badge vmb-tooltip" data-tooltip="${TOOLTIPS.beta}">Beta</span>` 
