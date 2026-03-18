@@ -112,12 +112,13 @@
   async function fetchVideoQuote(modelId, model, { resolution, duration, audio } = {}) {
     const constraints = model.model_spec?.constraints || {};
     const isImageToVideo = constraints.model_type === 'image-to-video';
+    const defaultDuration = Array.isArray(constraints.durations) ? constraints.durations[0] : undefined;
     
-    const effectiveDuration = duration || constraints.durations?.[0] || '5s';
+    const effectiveDuration = duration || defaultDuration;
     const aspectRatios = getAspectRatios(constraints);
     const aspectRatio = aspectRatios[0];
     
-    const cacheKey = `${modelId}:${resolution || 'default'}:${effectiveDuration}:${audio ?? 'default'}`;
+    const cacheKey = `${modelId}:${resolution || 'default'}:${effectiveDuration || 'default'}:${audio ?? 'default'}`;
     if (videoQuoteCache.has(cacheKey)) {
       return videoQuoteCache.get(cacheKey);
     }
