@@ -322,7 +322,7 @@
       return `<span class="${cls} ${tipCls} tee" data-tooltip="${TOOLTIPS.tee}">Private · TEE</span>`;
     }
     if (isAnonymizedModel(model)) {
-      return `<span class="${cls} ${tipCls} anonymized" data-tooltip="${TOOLTIPS.anonymized}">Anon</span>`;
+      return `<span class="${cls} ${tipCls} anonymized" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>`;
     }
     return `<span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
   }
@@ -1356,7 +1356,7 @@
           <button class="vmb-filter" data-filter="e2ee" aria-pressed="false">E2EE</button>
           <button class="vmb-filter" data-filter="tee" aria-pressed="false">TEE</button>
           <button class="vmb-filter" data-filter="private" aria-pressed="false">Private</button>
-          <button class="vmb-filter" data-filter="anonymized" aria-pressed="false">Anon</button>
+          <button class="vmb-filter" data-filter="anonymized" aria-pressed="false">Anonymized</button>
         </span>
         <span class="vmb-capability-filters" role="group" aria-label="Capability filters">
           <button class="vmb-filter" data-filter="reasoning" aria-pressed="false">Reasoning</button>
