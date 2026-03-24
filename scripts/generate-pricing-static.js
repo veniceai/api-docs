@@ -48,6 +48,25 @@ function isAnonymizedModel(model) {
   return model.model_spec?.privacy === 'anonymized';
 }
 
+function isE2EEModel(model) {
+  const caps = model.model_spec?.capabilities || {};
+  const modelId = (model.id || '').toLowerCase();
+  return caps.supportsE2EE === true || modelId.startsWith('e2ee-');
+}
+
+function isTEEModel(model) {
+  const caps = model.model_spec?.capabilities || {};
+  const modelId = (model.id || '').toLowerCase();
+  return caps.supportsTeeAttestation === true || modelId.startsWith('tee-') || isE2EEModel(model);
+}
+
+function getPrivacyLabel(model) {
+  if (isE2EEModel(model)) return 'E2EE · Private';
+  if (isTEEModel(model)) return 'TEE · Private';
+  if (isAnonymizedModel(model)) return 'Anonymized';
+  return 'Private';
+}
+
 function isBetaModel(model) {
   return model.model_spec?.betaModel === true;
 }
@@ -77,7 +96,7 @@ function renderPricingChatTable(models) {
     const cacheWriteStr = pricing.cache_write?.usd ? formatPrice(pricing.cache_write.usd) : '-';
     const contextWindow = spec.availableContextTokens || spec.constraints?.maxContextTokens;
     const contextStr = contextWindow ? (contextWindow >= 1000 ? `${Math.round(contextWindow / 1000)}K` : contextWindow) : '-';
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
 
     let row = `| ${name} | ${modelId} | ${inputPrice} | ${outputPrice} | ${cacheReadStr} | ${cacheWriteStr} | ${contextStr} | ${privacyTag} |`;
 
@@ -105,7 +124,7 @@ function renderPricingEmbeddingTable(models) {
     const pricing = spec.pricing || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
 
     return `| ${name} | ${modelId} | ${formatPrice(pricing.input?.usd)} | ${formatPrice(pricing.output?.usd)} | ${privacyTag} |`;
   }).join('\n');
@@ -131,7 +150,7 @@ function renderPricingImageTable(models) {
     const spec = model.model_spec || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id) + (isBetaModel(model) ? ' (Beta)' : '');
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
     const resPricing = spec.pricing?.resolutions;
     
     let priceStr = '';
@@ -194,7 +213,7 @@ function renderPricingTTSTable(models) {
     const spec = model.model_spec || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
 
     return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.input?.usd)} | ${privacyTag} |`;
   }).join('\n');
@@ -214,7 +233,7 @@ function renderPricingASRTable(models) {
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
     const price = pricing.per_audio_second?.usd ? formatPrice(pricing.per_audio_second.usd) : formatPrice(pricing.input?.usd);
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
 
     return `| ${name} | ${modelId} | ${price} | ${privacyTag} |`;
   }).join('\n');
@@ -240,7 +259,7 @@ function renderPricingMusicDurationTable(models) {
     const pricing = spec.pricing || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
     const durationPricing = Object.entries(pricing.durations || {})
       .sort(([a], [b]) => Number(a) - Number(b))
       .map(([duration, price]) => `${duration}s: ${formatPrice(price?.usd)}`)
@@ -261,7 +280,7 @@ function renderPricingMusicGenerationTable(models) {
     const spec = model.model_spec || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
 
     return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.generation?.usd)} | ${privacyTag} |`;
   }).join('\n');
@@ -278,7 +297,7 @@ function renderPricingMusicPerSecondTable(models) {
     const spec = model.model_spec || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
 
     return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.per_second?.usd)} | ${privacyTag} |`;
   }).join('\n');
@@ -309,7 +328,7 @@ function renderPricingVideoTable(models) {
     const spec = model.model_spec || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id) + (isBetaModel(model) ? ' (Beta)' : '');
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
     const videoType = getVideoType(model.id);
 
     return `| ${name} | ${modelId} | ${videoType} | Variable | ${privacyTag} |`;
@@ -320,8 +339,8 @@ function renderPricingVideoTable(models) {
 
 // Render Web Search Table
 function renderPricingWebSearchTable() {
-  const header = `| Feature | Config | Per 1K Calls |\n|---|---|---|`;
-  const rows = `| Web Search | \`enable_web_search: true\` | $10.00 |\n| Web Scraping | \`enable_web_scraping: true\` | $10.00 |`;
+  const header = `| Feature | Config | Pricing |\n|---|---|---|`;
+  const rows = `| Web Search | \`enable_web_search: true\` | $10.00 per 1K requests |\n| Web Scraping | \`enable_web_scraping: true\` | $10.00 per 1K URLs |\n| X Search (xAI) | \`enable_x_search: true\` | $10.00 per 1K results |`;
   return header + '\n' + rows + '\n';
 }
 
@@ -445,7 +464,11 @@ function generatePricingMdx() {
   sections.push('</div>');
   sections.push('');
   sections.push('<Info>');
-  sections.push('Web Scraping automatically detects up to 5 URLs per request, scrapes and converts content into structured markdown, and adds the extracted text into model context. Only successfully scraped URLs are billed. These charges apply in addition to standard model token pricing.');
+  sections.push('**Web Scraping** automatically detects up to 5 URLs per request, scrapes and converts content into structured markdown, and adds the extracted text into model context. Only successfully scraped URLs are billed.');
+  sections.push('');
+  sections.push("**X Search** enables xAI's native search for supported Grok models (e.g., `grok-4-20-beta`). This searches both the web and X/Twitter for real-time information. Billed per search result returned by the model (e.g., if the model returns 10 search results, you are charged for 10 results at $0.01 each = $0.10).");
+  sections.push('');
+  sections.push('These charges apply in addition to standard model token pricing.');
   sections.push('</Info>');
   sections.push('');
   sections.push('## Payment Options');
