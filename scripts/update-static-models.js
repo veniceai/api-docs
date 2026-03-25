@@ -42,6 +42,8 @@ function cleanModel(m) {
     type: m.type,
     model_spec: {}
   };
+  // Include created timestamp for date-based sorting
+  if (m.created) clean.created = m.created;
   const spec = m.model_spec || {};
   if (spec.betaModel) clean.model_spec.betaModel = true;
   if (spec.privacy) clean.model_spec.privacy = spec.privacy;
