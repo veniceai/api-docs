@@ -84,6 +84,8 @@
   }
 
   const videoQuoteCache = new Map();
+  const inferredVideoDurations = new Map();
+  const inferredVideoAspectRatios = new Map();
 
   function getAspectRatios(constraints) {
     const ar = constraints.aspect_ratios;
@@ -91,6 +93,45 @@
     if (Array.isArray(ar)) return ar;
     if (typeof ar === 'string') return [ar];
     return [];
+  }
+
+  function extractSupportedIssueValues(errorData, field, pattern) {
+    if (!Array.isArray(errorData?.issues)) return [];
+    const matches = errorData.issues
+      .filter(issue => Array.isArray(issue.path) && issue.path[0] === field && typeof issue.expected === 'string')
+      .flatMap(issue => issue.expected.match(pattern) || []);
+
+    return [...new Set(
+      matches
+        .map(match => match.slice(1, -1))
+    )];
+  }
+
+  function extractSupportedDurations(errorData) {
+    return extractSupportedIssueValues(errorData, 'duration', /'(\d+s)'/g)
+      .filter(value => /^\d+s$/.test(value));
+  }
+
+  function extractSupportedAspectRatios(errorData) {
+    return extractSupportedIssueValues(errorData, 'aspect_ratio', /'(\d+:\d+)'/g)
+      .filter(value => /^\d+:\d+$/.test(value));
+  }
+
+  async function requestVideoQuote(body) {
+    const res = await fetch('https://api.venice.ai/api/v1/video/quote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+
+    return { ok: res.ok, data };
   }
 
   function isFixedPriceModel(modelId, model) {
@@ -121,12 +162,15 @@
 
     const constraints = model.model_spec?.constraints || {};
     const isImageToVideo = constraints.model_type === 'image-to-video';
+    const inferredDuration = inferredVideoDurations.get(modelId);
+    const inferredAspectRatio = inferredVideoAspectRatios.get(modelId);
+    const defaultDuration = Array.isArray(constraints.durations) ? constraints.durations[0] : inferredDuration;
     
-    const effectiveDuration = duration || constraints.durations?.[0] || '5s';
+    const effectiveDuration = duration || defaultDuration;
     const aspectRatios = getAspectRatios(constraints);
-    const aspectRatio = aspectRatios[0];
+    const aspectRatio = aspectRatios[0] || inferredAspectRatio;
     
-    const cacheKey = `${modelId}:${resolution || 'default'}:${effectiveDuration}:${audio ?? 'default'}`;
+    const cacheKey = `${modelId}:${resolution || 'default'}:${effectiveDuration || 'default'}:${aspectRatio || 'default'}:${audio ?? 'default'}`;
     if (videoQuoteCache.has(cacheKey)) {
       return videoQuoteCache.get(cacheKey);
     }
@@ -140,20 +184,35 @@
     if (typeof audio === 'boolean') body.audio = audio;
 
     try {
-      const res = await fetch('https://api.venice.ai/api/v1/video/quote', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      if (!res.ok) {
-        videoQuoteFailures++;
-        return null;
+      let quoteRes = await requestVideoQuote(body);
+
+      if (!quoteRes.ok && (!effectiveDuration || !aspectRatio)) {
+        const fallbackDuration = !effectiveDuration ? extractSupportedDurations(quoteRes.data)[0] : undefined;
+        const fallbackAspectRatio = !aspectRatio ? extractSupportedAspectRatios(quoteRes.data)[0] : undefined;
+
+        if (fallbackDuration || fallbackAspectRatio) {
+          if (fallbackDuration) {
+            inferredVideoDurations.set(modelId, fallbackDuration);
+            body.duration = fallbackDuration;
+          }
+          if (fallbackAspectRatio) {
+            inferredVideoAspectRatios.set(modelId, fallbackAspectRatio);
+            body.aspect_ratio = fallbackAspectRatio;
+          }
+          quoteRes = await requestVideoQuote(body);
+        }
       }
-      // Reset failures on success
-      videoQuoteFailures = 0;
-      const data = await res.json();
-      videoQuoteCache.set(cacheKey, data.quote);
-      return data.quote;
+
+      if (!quoteRes.ok) return null;
+      const quote = quoteRes.data?.quote;
+      if (quote == null) return null;
+
+      videoQuoteCache.set(cacheKey, quote);
+      if ((body.duration && body.duration !== effectiveDuration) || (body.aspect_ratio && body.aspect_ratio !== aspectRatio)) {
+        const resolvedCacheKey = `${modelId}:${resolution || 'default'}:${body.duration || 'default'}:${body.aspect_ratio || 'default'}:${audio ?? 'default'}`;
+        videoQuoteCache.set(resolvedCacheKey, quote);
+      }
+      return quote;
     } catch {
       videoQuoteFailures++;
       return null;
