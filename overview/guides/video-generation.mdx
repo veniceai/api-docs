@@ -5,7 +5,7 @@ description: Generate videos from text prompts or images using Venice's async qu
 "og:description": "Learn how to generate videos from text prompts or images using Venice's async video generation API."
 ---
 
-Video generation is async. Submit a job → get `queue_id` → poll until video is ready (1-3 minutes).
+Video generation is async. Submit a job, save `queue_id`, then poll `/video/retrieve` until the response is `video/mp4`.
 
 ## Endpoints
 
@@ -190,19 +190,33 @@ await fetch(`${BASE_URL}/video/complete`, {
 
 ## Request Parameters
 
-### Queue/Quote Request
+### Queue Request
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `model` | string | Yes | - | Model ID. Use `wan-2.5-preview-text-to-video` for text-to-video, `wan-2.5-preview-image-to-video` for image-to-video |
 | `prompt` | string | Yes | - | What to generate. Max 2500 chars |
 | `negative_prompt` | string | No | `"low resolution, error, worst quality, low quality, defects"` | What to avoid |
-| `duration` | string | No | Model default | `"5s"` or `"10s"` |
+| `duration` | string | Yes | - | `"5s"` or `"10s"` |
 | `resolution` | string | No | `"720p"` | `"480p"`, `"720p"`, or `"1080p"` |
-| `aspect_ratio` | string | No | Model default | `"16:9"`, `"9:16"`, `"1:1"`, etc. |
-| `audio` | boolean | No | `true` | Generate audio (if model supports it) |
+| `aspect_ratio` | string | Conditional | - | Model-dependent. Required for models that expose aspect-ratio options; omit for models that do not support aspect-ratio selection |
+| `audio` | boolean | Conditional | `true` (when supported) | Only valid for models with `supportsAudioConfig: true`; omit for models without audio config support |
 | `image_url` | string | Only for image-to-video | - | URL or base64 data URL of source image |
-| `audio_url` | string | No | - | URL or base64 data URL of reference audio |
+| `audio_url` | string | Conditional | - | URL or base64 data URL of reference audio for models that support audio input |
+
+Queue validation is model-specific. Check `/models?type=video` for each model's supported request fields before calling `/video/queue`.
+
+### Quote Request
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | Yes | - | Model ID to price |
+| `duration` | string | Yes | - | `"5s"` or `"10s"` |
+| `resolution` | string | No | `"720p"` | `"480p"`, `"720p"`, or `"1080p"` |
+| `aspect_ratio` | string | Conditional | - | Include when the selected model supports or requires aspect-ratio selection |
+| `audio` | boolean | Conditional | `true` (when supported) | Only valid for models with `supportsAudioConfig: true` |
+
+`/video/quote` prices only the fields above. Generation fields such as `prompt`, `negative_prompt`, `image_url`, and `audio_url` are not used for quote calculation.
 
 ### Retrieve Request
 
@@ -248,13 +262,12 @@ Or with base64:
 
 ## Price Quote
 
-Get exact cost before generating. Uses same parameters as queue:
+Get exact cost before generating. Send only pricing inputs (`model`, `duration`, and optional `resolution`, `aspect_ratio`, `audio`):
 
 **Request:**
 ```json
 {
   "model": "wan-2.5-preview-text-to-video",
-  "prompt": "A futuristic city at night",
   "duration": "10s",
   "resolution": "1080p"
 }
@@ -273,24 +286,26 @@ Quote is in USD.
 
 ## Errors
 
-| Status | Meaning | Action |
-|--------|---------|--------|
-| 400 | Invalid parameters | Check request body against schema |
-| 401 | Auth failed | Check API key |
-| 402 | Insufficient balance | Add funds |
-| 404 | Not found | Video expired, deleted, or queue_id invalid |
-| 413 | Payload too large | Reduce image/audio size |
-| 422 | Content violation | Modify prompt |
-| 503 | Model at capacity | Retry with backoff |
+| Status | Returned By | Meaning | Action |
+|--------|-------------|---------|--------|
+| 400 | `queue`, `quote`, `retrieve`, `complete` | Invalid parameters | Check request body against schema |
+| 401 | `queue`, `retrieve`, `complete` | Auth failed | Check API key |
+| 402 | `queue` | Insufficient balance | Add funds |
+| 404 | `retrieve` | Media not found (invalid, expired, or deleted) | Verify `model`/`queue_id` or re-queue |
+| 413 | `queue` | Payload too large | Reduce image/audio size |
+| 422 | `queue`, `retrieve` | Content violation | Modify prompt |
+| 500 | `queue`, `retrieve`, `complete` | Inference/processing failed | Retry with backoff; contact support if persistent |
+| 503 | `retrieve` | Model at capacity | Retry with backoff |
 
 ---
 
 ## Polling Strategy
 
-1. Poll every 5 seconds initially
-2. Check `Content-Type` header to detect completion
-3. If `execution_duration` < 50% of `average_execution_time`, safe to poll less frequently
-4. Videos expire after inactivity - don't wait hours between queue and retrieve
+1. Poll `/video/retrieve` on an interval (for example, every 5 seconds)
+2. If `Content-Type` is `application/json`, status is still `PROCESSING`; inspect `average_execution_time` and `execution_duration` (milliseconds)
+3. If `Content-Type` is `video/mp4`, save the response body as your output file
+4. Optional cleanup: set `delete_media_on_completion: true` on retrieve, or call `/video/complete` after download
+5. Handle `404` as invalid, expired, or deleted media; handle `500/503` with retries/backoff
 
 ---
 
