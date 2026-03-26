@@ -1,0 +1,361 @@
+---
+title: Prompt Caching
+description: Reduce costs and latency by caching repeated prompt content
+"og:title": "Prompt Caching | Venice API Docs"
+"og:description": "Learn how to use prompt caching to reduce costs and latency for repeated content in your API requests."
+---
+
+Prompt caching stores processed input tokens so subsequent requests with identical prefixes can reuse them instead of reprocessing. This reduces latency (up to 80% for long prompts) and costs (up to 90% discount on cached tokens).
+
+Venice handles caching automatically for supported models, but understanding how each provider implements caching helps you maximize cache hit rates and minimize costs.
+
+## How Caching Works
+
+Caching operates on **prefix matching**: the system stores processed tokens and reuses them when subsequent requests start with the same content.
+
+Consider a chatbot with a 2,000-token system prompt:
+
+<Steps>
+  <Step title="Request 1">
+    System prompt (2,000 tokens) + user message (50 tokens)
+    
+    **Processed**: 2,050 tokens · **From cache**: 0 tokens
+    
+    Prefix written to cache.
+  </Step>
+  <Step title="Request 2">
+    System prompt (2,000 tokens) + user message (80 tokens)
+    
+    **Processed**: 80 tokens · **From cache**: 2,000 tokens
+  </Step>
+  <Step title="Request 3">
+    System prompt (2,000 tokens) + user message (120 tokens)
+    
+    **Processed**: 120 tokens · **From cache**: 2,000 tokens
+  </Step>
+</Steps>
+
+**Total without caching**: 2,050 + 2,080 + 2,120 = 6,250 tokens at full price
+
+**Total with caching**: 2,050 + 80 + 120 = 2,250 tokens at full price, 4,000 tokens at discounted rate
+
+<Warning>
+Caching only works on the **prefix**. Any change to the beginning of your prompt invalidates the cache for everything that follows. Always put static content (system prompt, documents, examples) before dynamic content (user messages).
+</Warning>
+
+## Supported Models and Pricing
+
+<div id="cache-pricing-placeholder">Loading...</div>
+
+<Note>
+Claude Opus 4.5 charges a **premium rate** for cache writes (\$7.50/1M tokens vs \$6.00 for regular input). The first request populating the cache costs more, but subsequent cache hits save 90%. Other models don't charge extra for cache writes.
+</Note>
+
+## Provider-Specific Behavior
+
+Venice normalizes caching across providers. For most models, caching is automatic. Just send your requests and check the response for cache statistics. The exception is **Claude**, which requires explicit cache markers for optimal performance. 
+
+Caching behavior is ultimately controlled by each provider and may change, so check provider docs for the latest details.
+
+| Model | Provider | Min Tokens | Cache Lifetime | Write Cost | Read Discount | Explicit Markers |
+|-------|----------|------------|----------------|------------|---------------|------------------|
+| Claude Opus 4.5 | Anthropic | ~4,000 | 5 min | +25% | 90% | Required |
+| GPT-5.2 | OpenAI | 1,024 | 5-10 min | None | 90% | Not needed |
+| Gemini | Google | ~1,024 | 1 hour | None | 75-90% | Not needed |
+| Grok | xAI | ~1,024 | 5 min | None | 75-88% | Not needed |
+| DeepSeek | DeepSeek | ~1,024 | 5 min | None | 50% | Not needed |
+| MiniMax | MiniMax | ~1,024 | 5 min | None | 90% | Not needed |
+| Kimi | Moonshot | ~1,024 | 5 min | None | 50% | Not needed |
+
+<Tip>
+Venice automatically adds `cache_control` to system prompts for models that require explicit markers. You only need to add manual markers for caching content beyond the system prompt, like long documents in user messages.
+</Tip>
+
+### Claude Opus 4.5 (Anthropic)
+
+Claude requires explicit cache breakpoints. For fine-grained control beyond the system prompt, you can add additional breakpoints manually.
+
+**What you need to know:**
+
+- **Explicit markers required**: Add `cache_control: { "type": "ephemeral" }` to content blocks you want cached
+- **Up to 4 breakpoints per request**: The system uses the longest matching prefix
+- **Cache key is byte-exact**: Whitespace changes, different image encodings, or reordered tools break cache hits
+- **Cache-aware rate limits**: Cached tokens don't count against your ITPM limit, enabling higher effective throughput
+- **25% write premium**: First request costs more, but 90% savings on subsequent reads
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": [{
+        "type": "text",
+        "text": "You are a legal assistant...",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    {
+      "role": "user", 
+      "content": [{
+        "type": "text",
+        "text": "[Long contract document...]",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    { "role": "assistant", "content": "I've reviewed the contract." },
+    { "role": "user", "content": "What are the termination clauses?" }
+  ]
+}
+```
+
+Both the system prompt and document are cached. Follow-up questions reuse the cached context.
+
+### All Other Models
+
+Caching is **automatic**. No special parameters needed. Just ensure your prompts exceed ~1,024 tokens and use `prompt_cache_key` for consistent routing.
+
+## Request Parameters
+
+| Parameter | Type | Models | Description |
+|-----------|------|--------|-------------|
+| `prompt_cache_key` | string | All | Routing hint for cache affinity. Requests with the same key are more likely to hit the same server with warm cache. |
+| `cache_control` | object | Claude | Marks content blocks for caching. See Claude Opus 4.5 section. |
+
+### prompt_cache_key
+
+For multi-turn conversations or agentic workflows, use a consistent `prompt_cache_key` to improve cache hit rates:
+
+```json
+{
+  "model": "claude-opus-45",
+  "prompt_cache_key": "session-abc-123",
+  "messages": [...]
+}
+```
+
+This routes requests to servers likely to have your context already cached. Use a session ID, conversation ID, or user ID as the key.
+
+## Response Fields
+
+The response `usage` object includes cache statistics:
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 5500,
+    "completion_tokens": 200,
+    "total_tokens": 5700,
+    "prompt_tokens_details": {
+      "cached_tokens": 5000,
+      "cache_creation_input_tokens": 0
+    }
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `prompt_tokens` | Total input tokens in the request |
+| `prompt_tokens_details.cached_tokens` | Tokens served from cache (billed at discounted rate) |
+| `prompt_tokens_details.cache_creation_input_tokens` | Tokens written to cache (may incur premium on Claude) |
+
+**Billing breakdown** (using Claude Opus 4.5 as example):
+- 5000 cached tokens × \$0.60/1M = \$0.003
+- 500 uncached tokens × \$6.00/1M = \$0.003
+- Total: \$0.006 (vs \$0.033 without caching, 82% savings)
+
+## Best Practices
+
+### Structure prompts for caching
+
+Place static content at the beginning, dynamic content at the end.
+
+**Good structure**
+
+| Position | Content | Cached? |
+|----------|---------|---------|
+| 1 | System instructions | Yes |
+| 2 | Reference documents | Yes |
+| 3 | Few-shot examples | Yes |
+| 4 | User query | No |
+
+**Bad structure**
+
+| Position | Content | Cached? |
+|----------|---------|---------|
+| 1 | Current timestamp | No (invalidates everything after) |
+| 2 | System instructions | No |
+| 3 | User query | No |
+
+### Keep prefixes byte-identical
+
+Cache keys are computed from exact byte sequences. Even trivial differences break cache hits:
+
+- Different whitespace or newlines
+- Timestamps or request IDs in prompts
+- Randomized few-shot example ordering
+- Different formatting of the same content
+
+### Meet minimum token thresholds
+
+If your prompts are below the minimum (typically 1,024 tokens), caching won't activate. For small prompts, consider:
+
+- Adding more context or examples to reach the threshold
+- Bundling multiple small requests into batched prompts
+- Accepting that caching won't apply for simple queries
+
+### Use prompt_cache_key for conversations
+
+For multi-turn conversations, set a consistent `prompt_cache_key`:
+
+```json
+// Turn 1
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Turn 2
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Turn 3
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+```
+
+This improves the likelihood that all turns hit the same server with warm cache.
+
+### Monitor cache performance
+
+Track these metrics:
+- **Cache hit rate**: `cached_tokens / prompt_tokens`
+- **Cost savings**: Compare actual cost vs. uncached cost
+- **Latency reduction**: Time-to-first-token with vs. without cache hits
+
+If `cached_tokens` is consistently 0:
+1. Prompts may be below minimum token threshold
+2. Prompts may be changing between requests
+3. Requests may be hitting different servers (use `prompt_cache_key`)
+4. Cache may have expired (requests too infrequent)
+
+### Consider cache economics
+
+**Claude Opus 4.5 cache write premium**: First request costs 25% more, but 90% savings on subsequent reads.
+
+| Scenario | Cache write premium worth it? |
+|----------|-------------------------------|
+| 1 request with this prompt | No (pay 25% more, no benefit) |
+| 2+ requests with same prefix | Yes (break even at 2nd request) |
+| Rapidly changing prompts | No (constant write costs) |
+| Stable system prompt, many queries | Yes (amortized over many reads) |
+
+## Cache Lifetime
+
+Caches expire after a period of inactivity (typically 5-10 minutes). This means:
+
+| Traffic pattern | Caching benefit |
+|-----------------|-----------------|
+| Continuous requests (< 5 min gaps) | High: cache stays warm |
+| Bursty traffic (gaps > 10 min) | Limited: cache expires between bursts |
+| Sporadic requests (hours apart) | None: cache always cold |
+
+## Caching with Tools and Functions
+
+Function definitions can be cached along with system prompts:
+
+```json
+{
+  "model": "claude-opus-45",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search_database",
+        "description": "Search the product database",
+        "parameters": { ... }
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "You are a shopping assistant...",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    ...
+  ]
+}
+```
+
+The tool definitions become part of the cached prefix. If you have many tools, this can significantly reduce per-request costs.
+
+## Caching with Images and Documents
+
+For vision models, images can be included in cached content:
+
+```json
+{
+  "model": "claude-opus-45",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image_url",
+          "image_url": { "url": "data:image/png;base64,..." }
+        },
+        {
+          "type": "text",
+          "text": "This is the floor plan. I'll ask several questions about it.",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "I can see the floor plan. What would you like to know?"
+    },
+    {
+      "role": "user",
+      "content": "How many bedrooms are there?"
+    }
+  ]
+}
+```
+
+The image and initial context are cached, so follow-up questions about the same image don't re-process it.
+
+## Troubleshooting
+
+<Accordion title="cached_tokens is always 0">
+
+| Cause | Solution |
+|-------|----------|
+| Prompt too short | Ensure prompt exceeds ~1,024 tokens (4,000 for Claude) |
+| Prefix changed | Check for dynamic content at the start of your prompt |
+| First request | Expected: first request writes to cache, subsequent requests read |
+| Cache expired | Reduce time between requests to under 5 minutes |
+| Different servers | Add `prompt_cache_key` to route requests consistently |
+
+</Accordion>
+
+<Accordion title="cache_creation_input_tokens on every request">
+
+| Cause | Solution |
+|-------|----------|
+| Prompt changing | Remove timestamps, request IDs, or other dynamic content from the prefix |
+| Missing cache_control | For Claude, ensure `cache_control` marker is present on content blocks |
+| Below threshold | Prompts under minimum token count don't trigger caching |
+
+</Accordion>
+
+<Accordion title="Higher costs than expected">
+
+| Cause | Solution |
+|-------|----------|
+| Cache write premium | Claude charges 25% more for writes. Only worth it if you reuse the prompt. |
+| Low reuse | If each prompt is unique, you pay write costs without read benefits |
+| Bad prompt structure | Move dynamic content to the end so the prefix stays stable |
+
+</Accordion>
