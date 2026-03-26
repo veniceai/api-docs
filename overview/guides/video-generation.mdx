@@ -1,0 +1,312 @@
+---
+title: Video Generation
+description: Generate videos from text prompts or images using Venice's async queue system
+"og:title": "Video Generation | Venice API Docs"
+"og:description": "Learn how to generate videos from text prompts or images using Venice's async video generation API."
+---
+
+Video generation is async. Submit a job, save `queue_id`, then poll `/video/retrieve` until the response is `video/mp4`.
+
+## Endpoints
+
+| Endpoint | Purpose | Required |
+|----------|---------|----------|
+| `POST /video/quote` | Get price in USD before generating | No |
+| `POST /video/queue` | Submit generation request | Yes |
+| `POST /video/retrieve` | Poll status or download video | Yes |
+| `POST /video/complete` | Delete video from storage | No |
+
+## Step 1: Queue Generation
+
+**Request:**
+```bash
+POST https://api.venice.ai/api/v1/video/queue
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "prompt": "A gondola gliding through Venice canals at sunset",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9"
+}
+```
+
+**Response (200):**
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+Save both `model` and `queue_id` - you need them for all subsequent calls.
+
+## Step 2: Poll for Completion
+
+**Request:**
+```bash
+POST https://api.venice.ai/api/v1/video/retrieve
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+**Response depends on status:**
+
+| Content-Type | Meaning | Action |
+|--------------|---------|--------|
+| `application/json` | Still processing | Wait 5s, poll again |
+| `video/mp4` | Complete | Response body is the video file |
+
+**Processing response (200, application/json):**
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 145000,
+  "execution_duration": 53200
+}
+```
+
+Times are in milliseconds. Use `average_execution_time` to estimate remaining wait.
+
+**Complete response (200, video/mp4):**
+Response body is raw binary video data. Save to file.
+
+## Step 3: Cleanup (Optional)
+
+Either auto-delete on retrieval:
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000",
+  "delete_media_on_completion": true
+}
+```
+
+Or call `/video/complete` after saving:
+```bash
+POST https://api.venice.ai/api/v1/video/complete
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true
+}
+```
+
+---
+
+## Complete Example
+
+<CodeGroup>
+```python Python
+import os
+import time
+import requests
+
+API_KEY = os.environ.get("VENICE_API_KEY")
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+
+# Queue
+resp = requests.post(f"{BASE_URL}/video/queue", headers=HEADERS, json={
+    "model": "wan-2.5-preview-text-to-video",
+    "prompt": "A gondola gliding through Venice canals at sunset",
+    "duration": "5s",
+    "resolution": "720p",
+    "aspect_ratio": "16:9"
+})
+data = resp.json()
+model, queue_id = data["model"], data["queue_id"]
+
+# Poll
+while True:
+    resp = requests.post(f"{BASE_URL}/video/retrieve", headers=HEADERS,
+                         json={"model": model, "queue_id": queue_id})
+    if "video/mp4" in resp.headers.get("Content-Type", ""):
+        with open("output.mp4", "wb") as f:
+            f.write(resp.content)
+        break
+    time.sleep(5)
+
+# Cleanup
+requests.post(f"{BASE_URL}/video/complete", headers=HEADERS,
+              json={"model": model, "queue_id": queue_id})
+```
+
+```javascript Node.js
+const API_KEY = process.env.VENICE_API_KEY;
+const BASE_URL = "https://api.venice.ai/api/v1";
+const headers = {"Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json"};
+
+// Queue
+const queueResp = await fetch(`${BASE_URL}/video/queue`, {
+    method: "POST", headers,
+    body: JSON.stringify({
+        model: "wan-2.5-preview-text-to-video",
+        prompt: "A gondola gliding through Venice canals at sunset",
+        duration: "5s", resolution: "720p", aspect_ratio: "16:9"
+    })
+});
+const {model, queue_id} = await queueResp.json();
+
+// Poll
+while (true) {
+    const resp = await fetch(`${BASE_URL}/video/retrieve`, {
+        method: "POST", headers,
+        body: JSON.stringify({model, queue_id})
+    });
+    if (resp.headers.get("Content-Type")?.includes("video/mp4")) {
+        const fs = await import("fs");
+        fs.writeFileSync("output.mp4", Buffer.from(await resp.arrayBuffer()));
+        break;
+    }
+    await new Promise(r => setTimeout(r, 5000));
+}
+
+// Cleanup
+await fetch(`${BASE_URL}/video/complete`, {
+    method: "POST", headers,
+    body: JSON.stringify({model, queue_id})
+});
+```
+</CodeGroup>
+
+---
+
+## Request Parameters
+
+### Queue Request
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | Yes | - | Model ID. Use `wan-2.5-preview-text-to-video` for text-to-video, `wan-2.5-preview-image-to-video` for image-to-video |
+| `prompt` | string | Yes | - | What to generate. Max 2500 chars |
+| `negative_prompt` | string | No | `"low resolution, error, worst quality, low quality, defects"` | What to avoid |
+| `duration` | string | Yes | - | `"5s"` or `"10s"` |
+| `resolution` | string | No | `"720p"` | `"480p"`, `"720p"`, or `"1080p"` |
+| `aspect_ratio` | string | Conditional | - | Model-dependent. Required for models that expose aspect-ratio options; omit for models that do not support aspect-ratio selection |
+| `audio` | boolean | Conditional | `true` (when supported) | Only valid for models with `supportsAudioConfig: true`; omit for models without audio config support |
+| `image_url` | string | Only for image-to-video | - | URL or base64 data URL of source image |
+| `audio_url` | string | Conditional | - | URL or base64 data URL of reference audio for models that support audio input |
+
+Queue validation is model-specific. Check `/models?type=video` for each model's supported request fields before calling `/video/queue`.
+
+### Quote Request
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | Yes | - | Model ID to price |
+| `duration` | string | Yes | - | `"5s"` or `"10s"` |
+| `resolution` | string | No | `"720p"` | `"480p"`, `"720p"`, or `"1080p"` |
+| `aspect_ratio` | string | Conditional | - | Include when the selected model supports or requires aspect-ratio selection |
+| `audio` | boolean | Conditional | `true` (when supported) | Only valid for models with `supportsAudioConfig: true` |
+
+### Retrieve Request
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | Yes | - | From queue response |
+| `queue_id` | string | Yes | - | From queue response |
+| `delete_media_on_completion` | boolean | No | `false` | Delete video after successful retrieval |
+
+### Complete Request
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | string | Yes | From queue response |
+| `queue_id` | string | Yes | From queue response |
+
+---
+
+## Image to Video
+
+For image-to-video models, pass source image via `image_url`. The prompt describes desired motion, not the image content.
+
+```json
+{
+  "model": "wan-2.5-preview-image-to-video",
+  "prompt": "Camera slowly zooms in as leaves rustle in the wind",
+  "image_url": "https://example.com/image.jpg",
+  "duration": "5s"
+}
+```
+
+Or with base64:
+```json
+{
+  "model": "wan-2.5-preview-image-to-video",
+  "prompt": "Camera slowly zooms in as leaves rustle in the wind",
+  "image_url": "data:image/jpeg;base64,/9j/4AAQ...",
+  "duration": "5s"
+}
+```
+
+---
+
+## Price Quote
+
+Get exact cost before generating. Send only pricing inputs (`model`, `duration`, and optional `resolution`, `aspect_ratio`, `audio`):
+
+**Request:**
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "duration": "10s",
+  "resolution": "1080p"
+}
+```
+
+**Response:**
+```json
+{
+  "quote": 0.085
+}
+```
+
+Quote is in USD.
+
+---
+
+## Errors
+
+| Status | Returned By | Meaning | Action |
+|--------|-------------|---------|--------|
+| 400 | `queue`, `quote`, `retrieve`, `complete` | Invalid parameters | Check request body against schema |
+| 401 | `queue`, `retrieve`, `complete` | Auth failed | Check API key |
+| 402 | `queue` | Insufficient balance | Add funds |
+| 404 | `retrieve` | Media not found (invalid, expired, or deleted) | Verify `model`/`queue_id` or re-queue |
+| 413 | `queue` | Payload too large | Reduce image/audio size |
+| 422 | `queue`, `retrieve` | Content violation | Modify prompt |
+| 500 | `queue`, `retrieve`, `complete` | Inference/processing failed | Retry with backoff; contact support if persistent |
+| 503 | `retrieve` | Model at capacity | Retry with backoff |
+
+---
+
+## Polling Strategy
+
+1. Poll `/video/retrieve` on an interval (for example, every 5 seconds)
+2. If `Content-Type` is `application/json`, status is still `PROCESSING`; inspect `average_execution_time` and `execution_duration` (milliseconds)
+3. If `Content-Type` is `video/mp4`, save the response body as your output file
+4. Optional cleanup: set `delete_media_on_completion: true` on retrieve, or call `/video/complete` after download
+5. Handle `404` as invalid, expired, or deleted media; handle `500/503` with retries/backoff
+
+---
+
+## Available Models
+
+See [Video Models](/models/video) for current model list and pricing.
