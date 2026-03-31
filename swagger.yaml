@@ -5,14 +5,15 @@ info:
   description: The Venice.ai API.
   termsOfService: https://venice.ai/legal/tos
   title: Venice.ai API
-  version: "20260219.225039"
+  version: "20260331.162103"
 openapi: 3.0.0
 security:
   - BearerAuth: []
 servers:
   - url: https://api.venice.ai/api/v1
 tags:
-  - description: Transcribe audio using AI models.
+  - description: Generate speech/audio, transcribe audio, and manage asynchronous
+      audio generation jobs.
     name: Audio
   - description: Given a list of messages comprising a conversation, the model will
       return a response. Supports multimodal inputs including text, images,
@@ -26,6 +27,10 @@ tags:
     name: Video
   - description: List and retrieve character information for use in completions.
     name: Characters
+  - description: "Billing and usage analytics. **Beta**: This API is currently in
+      beta and may be unstable. Endpoints, request/response schemas, and
+      behavior may change without notice."
+    name: Billing
 components:
   securitySchemes:
     BearerAuth:
@@ -56,6 +61,20 @@ components:
         error:
           type: string
           description: A description of the error
+      required:
+        - error
+    ContentViolationError:
+      type: object
+      properties:
+        error:
+          type: string
+          description: A description of the error
+        suggested_prompt:
+          type: string
+          description: An optional provider-suggested replacement prompt that complies
+            with content policy.
+          example: A cinematic instrumental track inspired by stormy weather and dramatic
+            tension.
       required:
         - error
     ChatCompletionRequest:
@@ -659,20 +678,38 @@ components:
             effort:
               type: string
               enum:
+                - none
+                - minimal
                 - low
                 - medium
                 - high
+                - xhigh
+                - max
               description: Controls the reasoning effort level for supported models. Higher
                 effort means more thorough reasoning but increased token usage.
                 Defaults to the model configuration if not specified.
               example: medium
+            summary:
+              type: string
+              enum:
+                - auto
+                - concise
+                - detailed
+              description: Controls whether and how the model generates a summary of its
+                reasoning. "auto" lets the model decide, "concise" requests a
+                brief summary, "detailed" requests a thorough summary.
+              example: auto
           description: Configuration for reasoning behavior on supported models.
         reasoning_effort:
           type: string
           enum:
+            - none
+            - minimal
             - low
             - medium
             - high
+            - xhigh
+            - max
           description: OpenAI-compatible parameter to control reasoning effort level for
             supported models. Takes precedence over reasoning.effort if both are
             provided.
@@ -748,6 +785,30 @@ components:
           type: boolean
           description: This field is accepted for OpenAI compatibility but is not used by
             Venice.
+        text:
+          type: object
+          properties:
+            verbosity:
+              type: string
+              enum:
+                - low
+                - medium
+                - high
+                - auto
+              description: Controls the verbosity of the text response.
+              example: low
+          description: OpenAI-compatible text configuration parameter.
+        include:
+          type: array
+          items:
+            type: string
+          description: OpenAI-compatible parameter specifying additional data to include
+            in the response.
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          description: OpenAI-compatible metadata parameter for request tracking.
         venice_parameters:
           type: object
           properties:
@@ -768,6 +829,14 @@ components:
               description: On supported reasoning models, will disable thinking and strip the
                 <think></think> blocks from the response. Defaults to false.
               example: false
+            enable_e2ee:
+              type: boolean
+              default: true
+              description: Enable end-to-end encryption for E2EE-capable models. When true
+                (default), E2EE is used if E2EE headers are present. When false,
+                the model runs in TEE-only mode even if E2EE headers are
+                present. Only applicable to models with E2EE capability.
+              example: true
             enable_web_search:
               type: string
               enum:
@@ -809,6 +878,15 @@ components:
               default: true
               description: Whether to include the Venice supplied system prompts along side
                 specified system prompts. Defaults to true.
+            enable_x_search:
+              type: boolean
+              default: false
+              description: Enable xAI native search (web + X/Twitter) for supported models.
+                When enabled, the model performs web and X searches server-side
+                instead of Venice search augmentation. Only available on models
+                with supportsXSearch capability (e.g., grok-4-20-beta).
+                Additional per-search charges apply (~$0.01/search).
+              example: true
           description: Unique parameters to Venice's API implementation. Customize these
             to control the behavior of the model.
         parallel_tool_calls:
@@ -859,6 +937,18 @@ components:
               description: The response should be formatted as a JSON object. This is a
                 deprecated implementation and the preferred use is json_schema.
               title: json_object
+            - type: object
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - text
+              required:
+                - type
+              additionalProperties: false
+              description: The response should be returned as plain text. This is the default
+                behavior.
+              title: text
           description: Format in which the response should be returned.
         tool_choice:
           anyOf:
@@ -1050,7 +1140,9 @@ components:
       properties:
         model:
           type: string
-          description: The ID of the model to use.
+          description: The ID of the model to use. E2EE-capable models are not supported
+            on /api/v1/responses; use /api/v1/chat/completions with the required
+            E2EE headers instead.
           example: llama-3.3-70b
         input:
           anyOf:
@@ -1383,9 +1475,13 @@ components:
             effort:
               type: string
               enum:
+                - none
+                - minimal
                 - low
                 - medium
                 - high
+                - xhigh
+                - max
               description: Controls reasoning effort level for supported models.
             summary:
               type: string
@@ -1454,6 +1550,33 @@ components:
                 required:
                   - type
                 title: Web Search Tool
+              - type: object
+                properties:
+                  type:
+                    type: string
+                    enum:
+                      - x_search
+                  allowed_x_handles:
+                    type: array
+                    items:
+                      type: string
+                    maxItems: 10
+                  excluded_x_handles:
+                    type: array
+                    items:
+                      type: string
+                    maxItems: 10
+                  from_date:
+                    type: string
+                  to_date:
+                    type: string
+                  enable_image_understanding:
+                    type: boolean
+                  enable_video_understanding:
+                    type: boolean
+                required:
+                  - type
+                title: X Search Tool
               - type: object
                 properties:
                   type:
@@ -1554,6 +1677,11 @@ components:
             character_slug:
               type: string
               description: The character slug of a public Venice character.
+            enable_e2ee:
+              type: boolean
+              description: Enable end-to-end encryption for E2EE-capable models. When true
+                (default), E2EE is used if headers are present. When false,
+                TEE-only mode is used.
             enable_web_search:
               type: string
               enum:
@@ -1577,7 +1705,9 @@ components:
       required:
         - model
         - input
-      description: Request body for the Responses API endpoint.
+      description: Request body for the Responses API endpoint. E2EE-capable models
+        are not supported on /api/v1/responses; use /api/v1/chat/completions
+        with the required E2EE headers instead.
       title: Responses API Request
     ResponsesResponse:
       type: object
@@ -1813,9 +1943,7 @@ components:
           exclusiveMinimum: true
           maximum: 1280
           default: 1024
-          description: Height of the generated image. Each model has a specific height and
-            width divisor listed in the widthHeightDivisor constraint in the
-            model list endpoint.
+          description: Height of the generated image.
           example: 1024
         hide_watermark:
           type: boolean
@@ -1915,9 +2043,7 @@ components:
           exclusiveMinimum: true
           maximum: 1280
           default: 1024
-          description: Width of the generated image. Each model has a specific height and
-            width divisor listed in the widthHeightDivisor constraint in the
-            model list endpoint.
+          description: Width of the generated image.
           example: 1024
       required:
         - model
@@ -2126,6 +2252,7 @@ components:
             - 9:16
             - 2:3
             - 3:4
+            - 4:5
           description: The aspect ratio for the output image. Omit this parameter to use
             the model's default setting. Supported values vary by model - check
             GET /api/v1/models for model-specific options.
@@ -2140,11 +2267,17 @@ components:
             string, or a URL starting with http:// or https://. Image dimensions
             must be at least 65536 pixels and must not exceed 33177600 pixels.
             File size must be less than 25MB.
-        modelId:
+        model:
           type: string
           minLength: 1
           default: qwen-edit
           description: The model ID to use for image editing.
+        modelId:
+          type: string
+          minLength: 1
+          description: 'Deprecated: Use "model" instead. The model ID to use for image
+            editing.'
+          deprecated: true
         prompt:
           type: string
           minLength: 1
@@ -2355,13 +2488,39 @@ components:
           description: The text to generate audio for. The maximum length is 4096
             characters.
           example: Hello, this is a test of the text to speech system.
+        language:
+          type: string
+          enum:
+            - Auto
+            - English
+            - Chinese
+            - Spanish
+            - French
+            - German
+            - Italian
+            - Japanese
+            - Korean
+            - Portuguese
+            - Russian
+          description: The language of the input text. Only supported by Qwen 3 TTS
+            models. If not specified, the language is auto-detected.
+          example: English
         model:
           type: string
           enum:
             - tts-kokoro
+            - tts-qwen3-0-6b
+            - tts-qwen3-1-7b
           default: tts-kokoro
           description: The model ID of a Venice TTS model.
           example: tts-kokoro
+        prompt:
+          type: string
+          maxLength: 500
+          description: 'A style prompt to control the emotion and delivery of the speech.
+            Only supported by Qwen 3 TTS models. Examples: "Very happy.", "Sad
+            and slow.", "Excited and energetic."'
+          example: Very happy.
         response_format:
           type: string
           enum:
@@ -2388,6 +2547,21 @@ components:
           description: Should the content stream back sentence by sentence or be processed
             and returned as a complete audio file.
           example: true
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+          description: Sampling temperature for speech generation. Higher values produce
+            more varied output. Only supported by Qwen 3 TTS models. Default is
+            0.9.
+          example: 0.9
+        top_p:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Nucleus sampling parameter. Only supported by Qwen 3 TTS models.
+            Default is 1.0.
+          example: 1
         voice:
           type: string
           enum:
@@ -2445,8 +2619,21 @@ components:
             - ef_dora
             - em_alex
             - em_santa
+            - Vivian
+            - Serena
+            - Ono_Anna
+            - Sohee
+            - Uncle_Fu
+            - Dylan
+            - Eric
+            - Ryan
+            - Aiden
           default: af_sky
-          description: The voice to use when generating the audio.
+          description: "The voice to use when generating the audio. Voices are
+            model-specific: Kokoro voices (e.g. af_sky, af_bella, am_adam) work
+            with tts-kokoro; Qwen 3 voices (e.g. Vivian, Serena, Dylan, Eric,
+            Ryan, Aiden) work with tts-qwen3-0-6b and tts-qwen3-1-7b. Using an
+            incompatible voice returns a 400 error."
           example: af_sky
       required:
         - input
@@ -2575,6 +2762,22 @@ components:
             either a URL or a data URL.
           example:
             - data:image/png;base64,iVBORw0K...
+        elements:
+          description: For models with advanced element support (e.g., Kling O3 R2V), an
+            array of up to 4 elements defining characters or objects. Each
+            element can have frontal_image_url, reference_image_urls, and/or
+            video_url. Reference elements in the prompt as @Element1, @Element2,
+            etc.
+          example:
+            - frontal_image_url: data:image/png;base64,iVBORw0K...
+              reference_image_urls:
+                - data:image/png;base64,iVBORw0K...
+        scene_image_urls:
+          description: For models with advanced element support, an array of up to 4 scene
+            reference image URLs for style, environment, or appearance.
+            Reference in the prompt as @Image1, @Image2, etc.
+          example:
+            - data:image/png;base64,iVBORw0K...
       required:
         - model
         - prompt
@@ -2648,6 +2851,155 @@ components:
           description: If true, the video media will be deleted from storage after the
             request is completed. If false, you can use the complete endpoint to
             remove the media once you have successfully downloaded the video.
+          example: false
+      required:
+        - model
+        - queue_id
+      additionalProperties: false
+    CreateVideoTranscriptionRequestSchema:
+      type: object
+      properties:
+        url:
+          type: string
+          description: YouTube video URL to transcribe.
+          example: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+        response_format:
+          type: string
+          enum:
+            - json
+            - text
+          default: json
+          description: "The format of the transcript output, in one of these options:
+            json, text."
+          example: json
+      required:
+        - url
+      additionalProperties: false
+      description: Request to transcribe a YouTube video URL to text.
+    QueueAudioRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          description: The model to use for audio generation.
+          example: elevenlabs-music
+        prompt:
+          type: string
+          minLength: 1
+          description: The prompt describing the audio to generate. Minimum and maximum
+            prompt lengths vary by model; inspect `/models` for
+            `min_prompt_length` and `prompt_character_limit`.
+          example: A warm spoken narration introducing a product launch.
+        lyrics_prompt:
+          type: string
+          description: Optional lyrics/text for lyric-capable models. Required when
+            `/models` reports `lyrics_required=true`; unsupported when `/models`
+            reports `supports_lyrics=false`.
+          example: "Verse 1: Walking through the city lights..."
+        duration_seconds:
+          anyOf:
+            - type: integer
+              minimum: 0
+              exclusiveMinimum: true
+            - type: string
+              pattern: ^\d+$
+          description: Optional duration hint in seconds. Only supported for models that
+            expose duration metadata via `/models`. Accepts either an integer or
+            a numeric string. If omitted, the model default duration is used
+            when available.
+          example: 60
+        force_instrumental:
+          type: boolean
+          description: Optional instrumental toggle. Only supported when `/models` reports
+            `supports_force_instrumental=true`.
+          example: false
+        voice:
+          type: string
+          description: Optional voice selection for voice-enabled models. See
+            `/models?type=music` for the model's supported `voices` and
+            `default_voice`.
+          example: Aria
+        language_code:
+          type: string
+          description: Optional ISO 639-1 language code. Only supported when `/models`
+            reports `supports_language_code=true`.
+          example: en
+        speed:
+          type: number
+          minimum: 0.25
+          maximum: 4
+          description: Optional audio speed multiplier. Only supported when `/models`
+            reports `supports_speed=true`; use the model-specific `min_speed`
+            and `max_speed` values.
+          example: 1
+      required:
+        - model
+        - prompt
+      additionalProperties: false
+    QuoteAudioRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          description: The model to get a price quote for.
+          example: elevenlabs-music
+        duration_seconds:
+          anyOf:
+            - type: integer
+              minimum: 0
+              exclusiveMinimum: true
+            - type: string
+              pattern: ^\d+$
+          description: Optional duration hint in seconds. Only supported for models that
+            expose duration metadata via `/models`. Accepts either an integer or
+            a numeric string. If omitted, the model default duration is used
+            when available.
+          example: 60
+        character_count:
+          type: integer
+          minimum: 0
+          exclusiveMinimum: true
+          description: Optional character count for character-based pricing models.
+            Required when the selected model uses
+            `pricing.per_thousand_characters` in `/models`.
+          example: 100
+      required:
+        - model
+      additionalProperties: false
+    CompleteAudioRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          description: The ID of the model used for audio generation.
+          example: elevenlabs-music
+        queue_id:
+          type: string
+          description: The ID of the audio generation request. Use this to poll for status
+            and retrieve the result.
+          example: 123e4567-e89b-12d3-a456-426614174000
+      required:
+        - model
+        - queue_id
+      additionalProperties: false
+    RetrieveAudioRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          description: The ID of the model used for audio generation.
+          example: elevenlabs-music
+        queue_id:
+          type: string
+          description: The ID of the audio generation request. Use this to poll for status
+            and retrieve the result.
+          example: 123e4567-e89b-12d3-a456-426614174000
+        delete_media_on_completion:
+          type: boolean
+          default: false
+          description: If true, the audio media will be deleted from storage after the
+            request is completed. If false, you can use the complete endpoint to
+            remove the media once you have successfully downloaded the audio.
           example: false
       required:
         - model
@@ -2872,6 +3224,231 @@ components:
           page: 200
           total: 56090
           totalPages: 56090
+    BillingUsageAnalyticsRequest:
+      type: object
+      properties:
+        lookback:
+          type: string
+          pattern: ^[1-9]\d*d$
+          default: 7d
+          description: 'Lookback period for usage data. Format: number followed by "d"
+            (e.g., "7d", "30d"). Maximum: 90d'
+          example: 7d
+        startDate:
+          type: string
+          pattern: ^\d{4}-\d{2}-\d{2}$
+          description: Start date for filtering records (YYYY-MM-DD). If provided, endDate
+            is also required.
+          example: 2024-01-01
+        endDate:
+          type: string
+          pattern: ^\d{4}-\d{2}-\d{2}$
+          description: End date for filtering records (YYYY-MM-DD). If provided, startDate
+            is also required.
+          example: 2024-01-31
+    BillingUsageAnalyticsResponse:
+      type: object
+      properties:
+        lookback:
+          type: string
+          description: The lookback period used for the query. Either "Nd" format or
+            "startDate:endDate" format.
+          example: 7d
+        byDate:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                description: Date in YYYY-MM-DD format
+                example: 2024-01-15
+              USD:
+                type: number
+                description: Total USD usage for this date
+              DIEM:
+                type: number
+                description: Total DIEM usage for this date
+            required:
+              - date
+              - USD
+              - DIEM
+          description: Daily usage totals for the requested period
+        byModel:
+          type: array
+          items:
+            type: object
+            properties:
+              modelName:
+                type: string
+                description: Display name of the model
+                example: Llama 3.3 70B
+              unitType:
+                type: string
+                description: Type of units (tokens, images, chars, minutes, seconds)
+                example: tokens
+              modelType:
+                type: string
+                nullable: true
+                description: Type of model (LLM, IMAGE, TTS, ASR, VIDEO)
+                example: LLM
+              totalUsd:
+                type: number
+                description: Total USD usage for this model
+              totalDiem:
+                type: number
+                description: Total DIEM usage for this model
+              totalUnits:
+                type: number
+                description: Total units consumed for this model
+              breakdown:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                      description: Token type (e.g., "Input", "Output", "Cache Read", "Cache Write")
+                    usd:
+                      type: number
+                      description: USD amount for this breakdown
+                    diem:
+                      type: number
+                      description: DIEM amount for this breakdown
+                    units:
+                      type: number
+                      description: Number of units for this breakdown
+                  required:
+                    - type
+                    - usd
+                    - diem
+                    - units
+                description: Breakdown by token type (only present if multiple types)
+            required:
+              - modelName
+              - unitType
+              - modelType
+              - totalUsd
+              - totalDiem
+              - totalUnits
+          description: Usage breakdown by model, sorted by total spend (highest first)
+        byModelDaily:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              type: number
+          description: Daily chart data for top 8 models. Each entry has "date"
+            (timestamp) plus model names as keys.
+        topModels:
+          type: array
+          items:
+            type: string
+          description: Names of the top 8 models by usage (for chart legends)
+        byKey:
+          type: array
+          items:
+            type: object
+            properties:
+              apiKeyId:
+                type: string
+                nullable: true
+                description: API key ID, or null if usage was from web app
+              description:
+                type: string
+                description: API key description or "Web App"
+                example: My Production Key
+              totalUsd:
+                type: number
+                description: Total USD usage for this key
+              totalDiem:
+                type: number
+                description: Total DIEM usage for this key
+              totalUnits:
+                type: number
+                description: Total units consumed for this key
+            required:
+              - apiKeyId
+              - description
+              - totalUsd
+              - totalDiem
+              - totalUnits
+          description: Usage breakdown by API key, sorted by total spend (highest first)
+        byKeyDaily:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              type: number
+          description: Daily chart data for top 8 API keys. Each entry has "date"
+            (timestamp) plus key descriptions as keys.
+        topKeyNames:
+          type: array
+          items:
+            type: string
+          description: Descriptions of the top 8 API keys by usage (for chart legends)
+      required:
+        - lookback
+        - byDate
+        - byModel
+        - byModelDaily
+        - topModels
+        - byKey
+        - byKeyDaily
+        - topKeyNames
+      additionalProperties: false
+      description: Aggregated usage analytics response with breakdowns by date, model,
+        and API key
+      example:
+        lookback: 7d
+        byDate:
+          - date: 2024-01-15
+            USD: 0.5
+            DIEM: 10.25
+          - date: 2024-01-14
+            USD: 0.3
+            DIEM: 8.75
+        byModel:
+          - modelName: Llama 3.3 70B
+            unitType: tokens
+            modelType: LLM
+            totalUsd: 0.4
+            totalDiem: 12.5
+            totalUnits: 50000
+            breakdown:
+              - type: Output
+                usd: 0.3
+                diem: 10
+                units: 35000
+              - type: Input
+                usd: 0.1
+                diem: 2.5
+                units: 15000
+        byModelDaily:
+          - date: 1705276800000
+            Llama 3.3 70B: 5.5
+            Claude 3.5 Sonnet: 3.2
+        topModels:
+          - Llama 3.3 70B
+          - Claude 3.5 Sonnet
+        byKey:
+          - apiKeyId: key_abc123
+            description: Production Key
+            totalUsd: 0.8
+            totalDiem: 15
+            totalUnits: 75000
+          - apiKeyId: null
+            description: Web App
+            totalUsd: 0
+            totalDiem: 4
+            totalUnits: 25000
+        byKeyDaily:
+          - date: 1705276800000
+            Production Key: 8.5
+            Web App: 2
+        topKeyNames:
+          - Production Key
+          - Web App
     ModelResponse:
       type: object
       properties:
@@ -2891,6 +3468,12 @@ components:
               description: The context length supported by the model. Only applicable for text
                 models.
               example: 32000
+            maxCompletionTokens:
+              type: number
+              description: The maximum number of completion tokens the model can generate. Use
+                this to know the upper bound for the max_completion_tokens
+                request parameter. Only applicable for text models.
+              example: 8192
             beta:
               type: boolean
               description: Is this model restricted to beta users only? If true, only users
@@ -2947,6 +3530,11 @@ components:
                   type: boolean
                   description: Does the model support reasoning with <thinking> blocks of output.
                   example: true
+                supportsReasoningEffort:
+                  type: boolean
+                  description: Does the model support the reasoning_effort parameter to control
+                    reasoning depth (low, medium, high).
+                  example: true
                 supportsResponseSchema:
                   type: boolean
                   description: Does the LLM model support response schema? Only models that
@@ -2974,16 +3562,41 @@ components:
                   type: boolean
                   description: Does the LLM model support logprobs parameter?
                   example: true
+                supportsTeeAttestation:
+                  type: boolean
+                  description: Does the model run inside a Trusted Execution Environment (TEE)
+                    with hardware attestation? When true, use GET
+                    /tee/attestation and GET /tee/signature to cryptographically
+                    verify that inference occurred inside a genuine TEE.
+                  example: false
+                supportsE2EE:
+                  type: boolean
+                  description: Does the model support End-to-End Encryption (E2EE)? When true,
+                    clients can encrypt prompts using the TEE public key from
+                    attestation, and responses are returned encrypted. Requires
+                    supportsTeeAttestation to also be true.
+                  example: false
+                supportsXSearch:
+                  type: boolean
+                  description: Does the model support xAI's native X Search (web + X/Twitter
+                    search)? When true, you can use
+                    venice_parameters.enable_x_search to activate real-time
+                    search powered by xAI.
+                  example: false
               required:
                 - optimizedForCode
                 - quantization
                 - supportsFunctionCalling
                 - supportsReasoning
+                - supportsReasoningEffort
                 - supportsResponseSchema
                 - supportsMultipleImages
                 - supportsVision
                 - supportsWebSearch
                 - supportsLogProbs
+                - supportsTeeAttestation
+                - supportsE2EE
+                - supportsXSearch
               additionalProperties: false
               description: Text model specific capabilities.
             constraints:
@@ -3500,6 +4113,92 @@ components:
                     - inpaint
                   description: Pricing for image editing/inpainting models
                   title: Inpaint Model Pricing
+                - type: object
+                  properties:
+                    generation:
+                      type: object
+                      properties:
+                        usd:
+                          type: number
+                          description: USD cost per music generation
+                          example: 0.02
+                        diem:
+                          type: number
+                          description: Diem cost per music generation
+                          example: 0.02
+                      required:
+                        - usd
+                        - diem
+                  required:
+                    - generation
+                - type: object
+                  properties:
+                    durations:
+                      type: object
+                      additionalProperties:
+                        type: object
+                        properties:
+                          usd:
+                            type: number
+                            description: USD cost for this duration tier
+                            example: 0.87
+                          diem:
+                            type: number
+                            description: Diem cost for this duration tier
+                            example: 0.87
+                          min_seconds:
+                            type: number
+                            description: Minimum duration (inclusive) in seconds that falls into this
+                              pricing tier
+                            example: 1
+                          max_seconds:
+                            type: number
+                            description: Maximum duration (inclusive) in seconds that falls into this
+                              pricing tier
+                            example: 60
+                        required:
+                          - usd
+                          - diem
+                          - min_seconds
+                          - max_seconds
+                  required:
+                    - durations
+                - type: object
+                  properties:
+                    per_second:
+                      type: object
+                      properties:
+                        usd:
+                          type: number
+                          description: USD cost per second of generated music
+                          example: 0.005
+                        diem:
+                          type: number
+                          description: Diem cost per second of generated music
+                          example: 0.005
+                      required:
+                        - usd
+                        - diem
+                  required:
+                    - per_second
+                - type: object
+                  properties:
+                    per_thousand_characters:
+                      type: object
+                      properties:
+                        usd:
+                          type: number
+                          description: USD cost per thousand characters
+                          example: 0.01
+                        diem:
+                          type: number
+                          description: Diem cost per thousand characters
+                          example: 0.01
+                      required:
+                        - usd
+                        - diem
+                  required:
+                    - per_thousand_characters
               description: Pricing details for the model
             traits:
               type: array
@@ -3510,18 +4209,103 @@ components:
                 to avoid breakage as Venice updates and iterates on its models.
               example:
                 - default_code
+            supports_lyrics:
+              type: boolean
+              description: Whether this audio-generation model supports lyrics input.
+              example: true
+            lyrics_required:
+              type: boolean
+              description: Whether lyrics input is required for this audio-generation model.
+              example: false
+            supports_force_instrumental:
+              type: boolean
+              description: Whether this audio-generation model supports the force_instrumental
+                request parameter.
+              example: true
             voices:
               type: array
               items:
                 type: string
-              description: The voices available for this TTS model. Only applicable for TTS
-                models.
+              description: "The voices available for this model. Applicable for TTS models and
+                voice-enabled music models. Note: each model has its own set of
+                supported voices."
               example:
-                - af_alloy
-                - af_aoede
-                - af_bella
-                - af_heart
-                - af_jadzia
+                - Aiden
+                - Dylan
+                - Eric
+                - Ono_Anna
+                - Ryan
+            default_voice:
+              type: string
+              description: Default voice for voice-enabled music models.
+              example: Aria
+            supports_language_code:
+              type: boolean
+              description: Whether this music model supports an ISO 639-1 language_code
+                parameter.
+              example: true
+            supports_speed:
+              type: boolean
+              description: Whether this music model supports speed adjustment.
+              example: true
+            default_speed:
+              type: number
+              description: Default speed multiplier for this music model.
+              example: 1
+            min_speed:
+              type: number
+              description: Minimum speed multiplier for this music model.
+              example: 0.25
+            max_speed:
+              type: number
+              description: Maximum speed multiplier for this music model.
+              example: 4
+            duration_options:
+              type: array
+              items:
+                type: number
+              description: Available duration options in seconds for this music model.
+              example:
+                - 60
+                - 120
+                - 180
+                - 240
+            min_duration:
+              type: number
+              description: Minimum duration in seconds for this music model.
+              example: 60
+            max_duration:
+              type: number
+              description: Maximum duration in seconds for this music model.
+              example: 240
+            default_duration:
+              type: number
+              description: Default duration in seconds for this music model.
+              example: 60
+            supported_formats:
+              type: array
+              items:
+                type: string
+              description: Supported audio formats for this music model.
+              example:
+                - mp3
+                - wav
+            default_format:
+              type: string
+              description: Default audio format for this music model.
+              example: mp3
+            prompt_character_limit:
+              type: number
+              description: Maximum prompt character limit for this music model.
+              example: 500
+            min_prompt_length:
+              type: number
+              description: Minimum prompt length for this music model.
+              example: 1
+            lyrics_character_limit:
+              type: number
+              description: Maximum lyrics character limit for this music model.
+              example: 3000
           required:
             - privacy
         object:
@@ -3542,6 +4326,7 @@ components:
             - asr
             - embedding
             - image
+            - music
             - text
             - tts
             - upscale
@@ -3568,9 +4353,13 @@ components:
             supportsLogProbs: true
             supportsMultipleImages: false
             supportsReasoning: false
+            supportsReasoningEffort: false
             supportsResponseSchema: true
+            supportsTeeAttestation: false
+            supportsE2EE: false
             supportsVision: false
             supportsWebSearch: true
+            supportsXSearch: false
           constraints:
             temperature:
               default: 0.8
@@ -3601,7 +4390,7 @@ components:
       description: List of available models
       example:
         default: zai-org-glm-4.7
-        fastest: qwen3-4b
+        fastest: ""
     ModelCompatibilitySchema:
       type: object
       additionalProperties:
@@ -3950,6 +4739,11 @@ paths:
                   venice_parameters:
                     type: object
                     properties:
+                      enable_e2ee:
+                        type: boolean
+                        description: Did the request enable end-to-end encryption? Only applicable to
+                          E2EE-capable models.
+                        example: true
                       enable_web_search:
                         type: string
                         enum:
@@ -4070,6 +4864,7 @@ paths:
                             title: Why is the sky blue?
                             url: https://theconversation.com/why-is-the-sky-blue-246393
                     required:
+                      - enable_e2ee
                       - enable_web_search
                       - enable_web_citations
                       - enable_web_scraping
@@ -4120,6 +4915,7 @@ paths:
                     prompt_tokens_details: null
                     total_tokens: 758
                   venice_parameters:
+                    enable_e2ee: true
                     include_venice_system_prompt: true
                     include_search_results_in_stream: false
                     return_search_results_as_documents: false
@@ -4143,7 +4939,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
           content:
             application/json:
               schema:
@@ -4187,7 +4984,12 @@ paths:
 
 
         Creates a model response using the Responses API format. This is an
-        OpenAI-compatible endpoint that works with all Venice models.
+        OpenAI-compatible endpoint for Venice text models.
+
+
+        **E2EE Model Limitation** - E2EE-capable models are not supported on
+        `/api/v1/responses`. Use `/api/v1/chat/completions` with the required
+        E2EE headers instead.
 
 
         **Stateless Only** - This API is stateless. Each request is independent
@@ -4574,7 +5376,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
           content:
             application/json:
               schema:
@@ -4706,7 +5509,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
           content:
             application/json:
               schema:
@@ -4821,7 +5625,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
           content:
             application/json:
               schema:
@@ -4868,10 +5673,16 @@ paths:
                       type: string
                       enum:
                         - qwen-edit
+                        - firered-image-edit
+                        - qwen-image-2-edit
+                        - qwen-image-2-pro-edit
                         - flux-2-max-edit
                         - gpt-image-1-5-edit
+                        - grok-imagine-edit
+                        - nano-banana-2-edit
                         - nano-banana-pro-edit
                         - seedream-v4-edit
+                        - seedream-v5-lite-edit
           multipart/form-data:
             schema:
               allOf:
@@ -4882,10 +5693,16 @@ paths:
                       type: string
                       enum:
                         - qwen-edit
+                        - firered-image-edit
+                        - qwen-image-2-edit
+                        - qwen-image-2-pro-edit
                         - flux-2-max-edit
                         - gpt-image-1-5-edit
+                        - grok-imagine-edit
+                        - nano-banana-2-edit
                         - nano-banana-pro-edit
                         - seedream-v4-edit
+                        - seedream-v5-lite-edit
       summary: /api/v1/image/edit
       tags:
         - Image
@@ -4938,7 +5755,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
           content:
             application/json:
               schema:
@@ -4998,10 +5816,16 @@ paths:
                       type: string
                       enum:
                         - qwen-edit
+                        - firered-image-edit
+                        - qwen-image-2-edit
+                        - qwen-image-2-pro-edit
                         - flux-2-max-edit
                         - gpt-image-1-5-edit
+                        - grok-imagine-edit
+                        - nano-banana-2-edit
                         - nano-banana-pro-edit
                         - seedream-v4-edit
+                        - seedream-v5-lite-edit
           multipart/form-data:
             schema:
               allOf:
@@ -5012,10 +5836,16 @@ paths:
                       type: string
                       enum:
                         - qwen-edit
+                        - firered-image-edit
+                        - qwen-image-2-edit
+                        - qwen-image-2-pro-edit
                         - flux-2-max-edit
                         - gpt-image-1-5-edit
+                        - grok-imagine-edit
+                        - nano-banana-2-edit
                         - nano-banana-pro-edit
                         - seedream-v4-edit
+                        - seedream-v5-lite-edit
       summary: /api/v1/image/multi-edit
       tags:
         - Image
@@ -5058,7 +5888,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
           content:
             application/json:
               schema:
@@ -5126,7 +5957,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
           content:
             application/json:
               schema:
@@ -5158,7 +5990,7 @@ paths:
   /models:
     get:
       description: Returns a list of available models supported by the Venice.ai API
-        for both text and image inference.
+        across text, image, audio, video, and related inference types.
       operationId: listModels
       security:
         - {}
@@ -5174,6 +6006,7 @@ paths:
                   - asr
                   - embedding
                   - image
+                  - music
                   - text
                   - tts
                   - upscale
@@ -5212,6 +6045,7 @@ paths:
                           - asr
                           - embedding
                           - image
+                          - music
                           - text
                           - tts
                           - upscale
@@ -5250,6 +6084,7 @@ paths:
               - asr
               - embedding
               - image
+              - music
               - text
               - tts
               - upscale
@@ -5282,6 +6117,7 @@ paths:
                           - asr
                           - embedding
                           - image
+                          - music
                           - text
                           - tts
                           - upscale
@@ -5326,6 +6162,7 @@ paths:
               - asr
               - embedding
               - image
+              - music
               - text
               - tts
               - upscale
@@ -5358,6 +6195,7 @@ paths:
                           - asr
                           - embedding
                           - image
+                          - music
                           - text
                           - tts
                           - upscale
@@ -5419,6 +6257,7 @@ paths:
                               anyOf:
                                 - type: number
                                   minimum: 0
+                                  maximum: 9999999999
                                 - nullable: true
                                   title: "null"
                                 - nullable: true
@@ -5429,6 +6268,7 @@ paths:
                               anyOf:
                                 - type: number
                                   minimum: 0
+                                  maximum: 9999999999
                                 - nullable: true
                                   title: "null"
                                 - nullable: true
@@ -5439,6 +6279,7 @@ paths:
                               anyOf:
                                 - type: number
                                   minimum: 0
+                                  maximum: 9999999999
                                 - nullable: true
                                   title: "null"
                                 - nullable: true
@@ -5604,6 +6445,7 @@ paths:
                       anyOf:
                         - type: number
                           minimum: 0
+                          maximum: 9999999999
                         - nullable: true
                           title: "null"
                         - nullable: true
@@ -5614,6 +6456,7 @@ paths:
                       anyOf:
                         - type: number
                           minimum: 0
+                          maximum: 9999999999
                         - nullable: true
                           title: "null"
                         - nullable: true
@@ -5624,6 +6467,7 @@ paths:
                       anyOf:
                         - type: number
                           minimum: 0
+                          maximum: 9999999999
                         - nullable: true
                           title: "null"
                         - nullable: true
@@ -5690,6 +6534,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -5700,6 +6545,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -5710,6 +6556,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -5792,6 +6639,7 @@ paths:
                       anyOf:
                         - type: number
                           minimum: 0
+                          maximum: 9999999999
                         - nullable: true
                           title: "null"
                         - nullable: true
@@ -5802,6 +6650,7 @@ paths:
                       anyOf:
                         - type: number
                           minimum: 0
+                          maximum: 9999999999
                         - nullable: true
                           title: "null"
                         - nullable: true
@@ -5812,6 +6661,7 @@ paths:
                       anyOf:
                         - type: number
                           minimum: 0
+                          maximum: 9999999999
                         - nullable: true
                           title: "null"
                         - nullable: true
@@ -5878,6 +6728,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -5888,6 +6739,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -5898,6 +6750,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -6010,6 +6863,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -6020,6 +6874,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -6030,6 +6885,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -6368,6 +7224,7 @@ paths:
                       anyOf:
                         - type: number
                           minimum: 0
+                          maximum: 9999999999
                         - nullable: true
                           title: "null"
                         - nullable: true
@@ -6378,6 +7235,7 @@ paths:
                       anyOf:
                         - type: number
                           minimum: 0
+                          maximum: 9999999999
                         - nullable: true
                           title: "null"
                         - nullable: true
@@ -6388,6 +7246,7 @@ paths:
                       anyOf:
                         - type: number
                           minimum: 0
+                          maximum: 9999999999
                         - nullable: true
                           title: "null"
                         - nullable: true
@@ -6467,6 +7326,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -6477,6 +7337,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -6487,6 +7348,7 @@ paths:
                             anyOf:
                               - type: number
                                 minimum: 0
+                                maximum: 9999999999
                               - nullable: true
                                 title: "null"
                               - nullable: true
@@ -6528,7 +7390,8 @@ paths:
   /characters:
     get:
       description: This is a preview API and may change. Returns a list of characters
-        supported in the API.
+        supported in the API, with filtering by search, tags, categories, model,
+        and sort options.
       operationId: listCharacters
       summary: /api/v1/characters
       tags:
@@ -6536,13 +7399,16 @@ paths:
         - Preview
       parameters:
         - schema:
-            anyOf:
-              - type: string
-              - type: array
-                items:
-                  type: string
-            description: Filter by category names
-            example: roleplay
+            type: array
+            items:
+              type: string
+              maxLength: 100
+            maxItems: 20
+            description: Filter by category names. Repeat the parameter for multiple values.
+              Comma-separated values are also accepted.
+            example:
+              - roleplay
+              - philosophy
           required: false
           name: categories
           in: query
@@ -6588,13 +7454,16 @@ paths:
           name: limit
           in: query
         - schema:
-            anyOf:
-              - type: string
-              - type: array
-                items:
-                  type: string
-            description: Filter by model ID(s)
-            example: llama-3.3-70b
+            type: array
+            items:
+              type: string
+              maxLength: 200
+            maxItems: 20
+            description: Filter by model ID(s). Repeat the parameter for multiple values.
+              Comma-separated values are also accepted.
+            example:
+              - llama-3.3-70b
+              - venice-uncensored
           required: false
           name: modelId
           in: query
@@ -6610,19 +7479,50 @@ paths:
           in: query
         - schema:
             type: string
-            description: Search characters by name or description
+            maxLength: 200
+            description: Search characters by name, description, or tags. Hashtag search is
+              supported.
             example: assistant
           required: false
           name: search
           in: query
         - schema:
-            anyOf:
-              - type: string
-              - type: array
-                items:
-                  type: string
-            description: Filter by tag names
-            example: helpful
+            type: string
+            enum:
+              - featured
+              - highestRating
+              - highlyRated
+              - highlyRatedAndRecent
+              - imports
+              - mostRecent
+              - ratingCount
+            description: Sort results using a supported character discovery mode
+            example: imports
+          required: false
+          name: sortBy
+          in: query
+        - schema:
+            type: string
+            enum:
+              - asc
+              - desc
+            description: Sort order applied to the selected sort mode. Defaults to
+              descending when omitted.
+            example: desc
+          required: false
+          name: sortOrder
+          in: query
+        - schema:
+            type: array
+            items:
+              type: string
+              maxLength: 100
+            maxItems: 20
+            description: Filter by tag names. Repeat the parameter for multiple values.
+              Comma-separated values are also accepted.
+            example:
+              - helpful
+              - productivity
           required: false
           name: tags
           in: query
@@ -6643,6 +7543,10 @@ paths:
                           type: boolean
                           description: Whether the character is considered adult content
                           example: false
+                        author:
+                          type: string
+                          description: Short anonymized identifier derived from the character author
+                          example: k3x9q
                         createdAt:
                           type: string
                           description: Date when the character was created
@@ -6656,6 +7560,14 @@ paths:
                             "philosophical entertainer", known for interpreting
                             and popularizing Buddhist, Taoist, and Hindu
                             philosophy for a Western audience.
+                        featured:
+                          type: boolean
+                          description: Whether the character is featured in public discovery surfaces
+                          example: false
+                        id:
+                          type: string
+                          description: Unique ID of the character
+                          example: 2f460055-7595-4640-9cb6-c442c4c869b0
                         name:
                           type: string
                           description: Name of the character
@@ -6677,12 +7589,32 @@ paths:
                         stats:
                           type: object
                           properties:
+                            averageRating:
+                              type: number
+                              description: Average rating for the character
+                              example: 4.7
                             imports:
                               type: number
                               description: Number of imports for the character
                               example: 112
+                            ratingCount:
+                              type: number
+                              description: Number of ratings for the character
+                              example: 24
+                            ratingSum:
+                              type: number
+                              description: Sum of all rating values for the character
+                              example: 113
+                            userRating:
+                              type: number
+                              nullable: true
+                              description: The authenticated user rating for the character when available
                           required:
+                            - averageRating
                             - imports
+                            - ratingCount
+                            - ratingSum
+                            - userRating
                         tags:
                           type: array
                           items:
@@ -6708,8 +7640,11 @@ paths:
                           example: venice-uncensored
                       required:
                         - adult
+                        - author
                         - createdAt
                         - description
+                        - featured
+                        - id
                         - name
                         - shareUrl
                         - photoUrl
@@ -6770,6 +7705,10 @@ paths:
                         type: boolean
                         description: Whether the character is considered adult content
                         example: false
+                      author:
+                        type: string
+                        description: Short anonymized identifier derived from the character author
+                        example: k3x9q
                       createdAt:
                         type: string
                         description: Date when the character was created
@@ -6783,6 +7722,14 @@ paths:
                           "philosophical entertainer", known for interpreting
                           and popularizing Buddhist, Taoist, and Hindu
                           philosophy for a Western audience.
+                      featured:
+                        type: boolean
+                        description: Whether the character is featured in public discovery surfaces
+                        example: false
+                      id:
+                        type: string
+                        description: Unique ID of the character
+                        example: 2f460055-7595-4640-9cb6-c442c4c869b0
                       name:
                         type: string
                         description: Name of the character
@@ -6804,12 +7751,32 @@ paths:
                       stats:
                         type: object
                         properties:
+                          averageRating:
+                            type: number
+                            description: Average rating for the character
+                            example: 4.7
                           imports:
                             type: number
                             description: Number of imports for the character
                             example: 112
+                          ratingCount:
+                            type: number
+                            description: Number of ratings for the character
+                            example: 24
+                          ratingSum:
+                            type: number
+                            description: Sum of all rating values for the character
+                            example: 113
+                          userRating:
+                            type: number
+                            nullable: true
+                            description: The authenticated user rating for the character when available
                         required:
+                          - averageRating
                           - imports
+                          - ratingCount
+                          - ratingSum
+                          - userRating
                       tags:
                         type: array
                         items:
@@ -6835,8 +7802,11 @@ paths:
                         example: venice-uncensored
                     required:
                       - adult
+                      - author
                       - createdAt
                       - description
+                      - featured
+                      - id
                       - name
                       - shareUrl
                       - photoUrl
@@ -6853,6 +7823,207 @@ paths:
                 required:
                   - data
                   - object
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "404":
+          description: Character not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "500":
+          description: An unknown error occurred
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+  /characters/{slug}/reviews:
+    get:
+      description: This is a preview API and may change. Returns paginated public
+        reviews for a single character.
+      operationId: getCharacterReviews
+      summary: /api/v1/characters/{slug}/reviews
+      tags:
+        - Characters
+        - Preview
+      parameters:
+        - schema:
+            type: string
+            description: Slug of the character whose reviews should be retrieved
+            example: alan-watts
+          required: true
+          name: slug
+          in: path
+        - schema:
+            type: integer
+            minimum: 0
+            exclusiveMinimum: true
+            default: 1
+            description: Page number for pagination
+            example: 1
+          required: false
+          name: page
+          in: query
+        - schema:
+            type: integer
+            minimum: 0
+            exclusiveMinimum: true
+            maximum: 100
+            default: 20
+            description: "Number of reviews to return per page (max: 100)"
+            example: 20
+          required: false
+          name: pageSize
+          in: query
+      responses:
+        "200":
+          description: OK
+          headers:
+            x-pagination-limit:
+              schema:
+                description: Number of reviews returned per page
+                example: 20
+                type: number
+            x-pagination-page:
+              schema:
+                description: Current page number
+                example: 1
+                type: number
+            x-pagination-total:
+              schema:
+                description: Total number of visible reviews
+                example: 87
+                type: number
+            x-pagination-total-pages:
+              schema:
+                description: Total number of result pages
+                example: 5
+                type: number
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        characterId:
+                          type: string
+                          description: Unique ID of the reviewed character
+                          example: 2f460055-7595-4640-9cb6-c442c4c869b0
+                        createdAt:
+                          type: string
+                          description: Date when the review was created
+                          example: 2025-02-09T03:23:53.708Z
+                        id:
+                          type: string
+                          description: Unique ID of the review
+                          example: 1e38fb78-043f-4ce2-b3bc-966089c25467
+                        isOwner:
+                          type: boolean
+                          description: Whether the authenticated user authored this review
+                          example: false
+                        locale:
+                          type: string
+                          nullable: true
+                          description: Locale reported by the reviewer when available
+                          example: en
+                        message:
+                          type: string
+                          nullable: true
+                          description: Optional written review message
+                          example: Thoughtful, grounded, and surprisingly practical.
+                        rating:
+                          type: integer
+                          minimum: 1
+                          maximum: 5
+                          description: Star rating for the character
+                          example: 5
+                        userAvatarUrl:
+                          type: string
+                          nullable: true
+                          description: Avatar URL for the reviewer when available
+                          example: https://cdn.venice.ai/avatar.png
+                        username:
+                          type: string
+                          description: Display name chosen by the reviewer
+                          example: product_user_42
+                      required:
+                        - characterId
+                        - createdAt
+                        - id
+                        - isOwner
+                        - locale
+                        - message
+                        - rating
+                        - userAvatarUrl
+                        - username
+                  object:
+                    type: string
+                    enum:
+                      - list
+                  pagination:
+                    type: object
+                    properties:
+                      page:
+                        type: integer
+                        minimum: 0
+                        exclusiveMinimum: true
+                        description: Current page number
+                        example: 1
+                      pageSize:
+                        type: integer
+                        minimum: 0
+                        exclusiveMinimum: true
+                        description: Number of reviews requested per page
+                        example: 20
+                      total:
+                        type: integer
+                        minimum: 0
+                        description: Total number of visible reviews for the character
+                        example: 87
+                      totalPages:
+                        type: integer
+                        minimum: 0
+                        description: Total number of pages available
+                        example: 5
+                    required:
+                      - page
+                      - pageSize
+                      - total
+                      - totalPages
+                  summary:
+                    type: object
+                    properties:
+                      averageRating:
+                        type: number
+                        description: Average rating for the character
+                        example: 4.7
+                      totalReviews:
+                        type: integer
+                        minimum: 0
+                        description: Total number of reviews included in the character stats summary
+                        example: 87
+                    required:
+                      - averageRating
+                      - totalReviews
+                required:
+                  - data
+                  - object
+                  - pagination
+                  - summary
+        "400":
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailedError"
         "401":
           description: Authentication failed
           content:
@@ -6983,7 +8154,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
           content:
             application/json:
               schema:
@@ -7066,7 +8238,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
           content:
             application/json:
               schema:
@@ -7197,7 +8370,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
           content:
             application/json:
               schema:
@@ -7333,7 +8507,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
           content:
             application/json:
               schema:
@@ -7351,7 +8526,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                $ref: "#/components/schemas/ContentViolationError"
         "500":
           description: Inference processing failed
           content:
@@ -7456,6 +8631,346 @@ paths:
         "422":
           description: Your prompt violates the content policy of Venice.ai or the model
             provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentViolationError"
+        "500":
+          description: Inference processing failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "503":
+          description: The model is at capacity. Please try again later.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+  /video/transcriptions:
+    post:
+      description: Transcribes video audio from a public URL.
+      operationId: createVideoTranscription
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVideoTranscriptionRequestSchema"
+      summary: /api/v1/video/transcriptions
+      tags:
+        - Video
+        - Transcriptions
+      responses:
+        "200":
+          description: Video transcription completed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transcript:
+                    type: string
+                    description: The transcribed text from the video.
+                  lang:
+                    type: string
+                    description: Detected language code for the transcript.
+                    example: en
+                required:
+                  - transcript
+                description: Video transcription response.
+            text/plain:
+              schema:
+                type: string
+                description: The transcribed text in plain text format
+        "400":
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailedError"
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "402":
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "403":
+          description: Unauthorized access
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "500":
+          description: Inference processing failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+  /audio/complete:
+    post:
+      description: Mark an audio generation request as complete and clean up the
+        generated media from storage. Call this after you have successfully
+        downloaded the audio if you did not set delete_media_on_completion in
+        the retrieve request.
+      operationId: completeAudio
+      summary: /api/v1/audio/complete
+      tags:
+        - Audio
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteAudioRequest"
+      responses:
+        "200":
+          description: Media cleanup result. A success value of false indicates cleanup
+            did not complete and can be retried later.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    description: Indicates whether the audio cleanup was successful.
+                    example: true
+                required:
+                  - success
+        "400":
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailedError"
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "500":
+          description: Inference processing failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+  /audio/queue:
+    post:
+      description: Queue a new audio generation request.
+      operationId: queueAudio
+      summary: /api/v1/audio/queue
+      tags:
+        - Audio
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueueAudioRequest"
+      responses:
+        "200":
+          description: Audio generation request queued successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model:
+                    type: string
+                    description: The ID of the model used for audio generation.
+                    example: elevenlabs-music
+                  queue_id:
+                    type: string
+                    description: The ID of the audio generation request. Use this to poll for status
+                      and retrieve the result.
+                    example: 123e4567-e89b-12d3-a456-426614174000
+                  status:
+                    type: string
+                    enum:
+                      - QUEUED
+                    description: The status of the audio generation request.
+                    example: QUEUED
+                required:
+                  - model
+                  - queue_id
+                  - status
+                additionalProperties: false
+        "400":
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailedError"
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "402":
+          description: Insufficient USD or Diem balance to complete request. Visit
+            https://venice.ai/settings/api to add credits.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "422":
+          description: Your prompt violates the content policy of Venice.ai or the model
+            provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentViolationError"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "500":
+          description: Inference processing failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "503":
+          description: The model is at capacity. Please try again later.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+  /audio/quote:
+    post:
+      description: Get a price quote for audio generation with the specified parameters.
+      operationId: quoteAudio
+      summary: /api/v1/audio/quote
+      tags:
+        - Audio
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuoteAudioRequest"
+      responses:
+        "200":
+          description: Price quote for audio generation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quote:
+                    type: number
+                    description: The estimated price in USD for the audio generation.
+                    example: 0.75
+                required:
+                  - quote
+        "400":
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailedError"
+        "500":
+          description: Inference processing failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+  /audio/retrieve:
+    post:
+      description: Retrieve the status or result of an audio generation request. If
+        the audio is still being generated, returns processing status with
+        estimated time. If complete, returns the audio data.
+      operationId: retrieveAudio
+      summary: /api/v1/audio/retrieve
+      tags:
+        - Audio
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RetrieveAudioRequest"
+      responses:
+        "200":
+          description: Audio generation status or completed audio
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - PROCESSING
+                    description: The status of the audio generation request.
+                    example: PROCESSING
+                  average_execution_time:
+                    type: number
+                    description: The estimated execution time of the audio generation request in
+                      milliseconds (P80).
+                    example: 20000
+                  execution_duration:
+                    type: number
+                    description: The current duration of the audio generation request in
+                      milliseconds.
+                    example: 5200
+                required:
+                  - status
+                  - average_execution_time
+                  - execution_duration
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+            audio/flac:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailedError"
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "404":
+          description: Media could not be found. Request may may be invalid, expired, or
+            deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "422":
+          description: Your prompt violates the content policy of Venice.ai or the model
+            provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentViolationError"
+        "429":
+          description: Rate limit exceeded
           content:
             application/json:
               schema:
@@ -7800,3 +9315,283 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StandardError"
+  /billing/usage-analytics:
+    get:
+      description: >-
+        **Beta**: This endpoint is currently in beta and may be unstable.
+        Request/response schemas and behavior may change without notice.
+
+
+        Get aggregated usage analytics for the authenticated user with
+        breakdowns by date, model, and API key. This endpoint provides summary
+        views of your API usage, ideal for dashboards and usage monitoring. Data
+        is cached for 10 minutes.
+      operationId: getBillingUsageAnalytics
+      summary: /api/v1/billing/usage-analytics
+      tags:
+        - Billing
+      parameters:
+        - schema:
+            type: string
+            pattern: ^[1-9]\d*d$
+            default: 7d
+            description: 'Lookback period for usage data. Format: number followed by "d"
+              (e.g., "7d", "30d"). Maximum: 90d'
+            example: 7d
+          required: false
+          name: lookback
+          in: query
+        - schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+            description: Start date for filtering records (YYYY-MM-DD). If provided, endDate
+              is also required.
+            example: 2024-01-01
+          required: false
+          name: startDate
+          in: query
+        - schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-\d{2}$
+            description: End date for filtering records (YYYY-MM-DD). If provided, startDate
+              is also required.
+            example: 2024-01-31
+          required: false
+          name: endDate
+          in: query
+      responses:
+        "200":
+          description: Successful response with aggregated usage analytics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lookback:
+                    type: string
+                    description: The lookback period used for the query. Either "Nd" format or
+                      "startDate:endDate" format.
+                    example: 7d
+                  byDate:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date:
+                          type: string
+                          description: Date in YYYY-MM-DD format
+                          example: 2024-01-15
+                        USD:
+                          type: number
+                          description: Total USD usage for this date
+                        DIEM:
+                          type: number
+                          description: Total DIEM usage for this date
+                      required:
+                        - date
+                        - USD
+                        - DIEM
+                    description: Daily usage totals for the requested period
+                  byModel:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        modelName:
+                          type: string
+                          description: Display name of the model
+                          example: Llama 3.3 70B
+                        unitType:
+                          type: string
+                          description: Type of units (tokens, images, chars, minutes, seconds)
+                          example: tokens
+                        modelType:
+                          type: string
+                          nullable: true
+                          description: Type of model (LLM, IMAGE, TTS, ASR, VIDEO)
+                          example: LLM
+                        totalUsd:
+                          type: number
+                          description: Total USD usage for this model
+                        totalDiem:
+                          type: number
+                          description: Total DIEM usage for this model
+                        totalUnits:
+                          type: number
+                          description: Total units consumed for this model
+                        breakdown:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              type:
+                                type: string
+                                description: Token type (e.g., "Input", "Output", "Cache Read", "Cache Write")
+                              usd:
+                                type: number
+                                description: USD amount for this breakdown
+                              diem:
+                                type: number
+                                description: DIEM amount for this breakdown
+                              units:
+                                type: number
+                                description: Number of units for this breakdown
+                            required:
+                              - type
+                              - usd
+                              - diem
+                              - units
+                          description: Breakdown by token type (only present if multiple types)
+                      required:
+                        - modelName
+                        - unitType
+                        - modelType
+                        - totalUsd
+                        - totalDiem
+                        - totalUnits
+                    description: Usage breakdown by model, sorted by total spend (highest first)
+                  byModelDaily:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties:
+                        type: number
+                    description: Daily chart data for top 8 models. Each entry has "date"
+                      (timestamp) plus model names as keys.
+                  topModels:
+                    type: array
+                    items:
+                      type: string
+                    description: Names of the top 8 models by usage (for chart legends)
+                  byKey:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        apiKeyId:
+                          type: string
+                          nullable: true
+                          description: API key ID, or null if usage was from web app
+                        description:
+                          type: string
+                          description: API key description or "Web App"
+                          example: My Production Key
+                        totalUsd:
+                          type: number
+                          description: Total USD usage for this key
+                        totalDiem:
+                          type: number
+                          description: Total DIEM usage for this key
+                        totalUnits:
+                          type: number
+                          description: Total units consumed for this key
+                      required:
+                        - apiKeyId
+                        - description
+                        - totalUsd
+                        - totalDiem
+                        - totalUnits
+                    description: Usage breakdown by API key, sorted by total spend (highest first)
+                  byKeyDaily:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties:
+                        type: number
+                    description: Daily chart data for top 8 API keys. Each entry has "date"
+                      (timestamp) plus key descriptions as keys.
+                  topKeyNames:
+                    type: array
+                    items:
+                      type: string
+                    description: Descriptions of the top 8 API keys by usage (for chart legends)
+                required:
+                  - lookback
+                  - byDate
+                  - byModel
+                  - byModelDaily
+                  - topModels
+                  - byKey
+                  - byKeyDaily
+                  - topKeyNames
+                additionalProperties: false
+                description: Aggregated usage analytics response with breakdowns by date, model,
+                  and API key
+                example:
+                  lookback: 7d
+                  byDate:
+                    - date: 2024-01-15
+                      USD: 0.5
+                      DIEM: 10.25
+                    - date: 2024-01-14
+                      USD: 0.3
+                      DIEM: 8.75
+                  byModel:
+                    - modelName: Llama 3.3 70B
+                      unitType: tokens
+                      modelType: LLM
+                      totalUsd: 0.4
+                      totalDiem: 12.5
+                      totalUnits: 50000
+                      breakdown:
+                        - type: Output
+                          usd: 0.3
+                          diem: 10
+                          units: 35000
+                        - type: Input
+                          usd: 0.1
+                          diem: 2.5
+                          units: 15000
+                  byModelDaily:
+                    - date: 1705276800000
+                      Llama 3.3 70B: 5.5
+                      Claude 3.5 Sonnet: 3.2
+                  topModels:
+                    - Llama 3.3 70B
+                    - Claude 3.5 Sonnet
+                  byKey:
+                    - apiKeyId: key_abc123
+                      description: Production Key
+                      totalUsd: 0.8
+                      totalDiem: 15
+                      totalUnits: 75000
+                    - apiKeyId: null
+                      description: Web App
+                      totalUsd: 0
+                      totalDiem: 4
+                      totalUnits: 25000
+                  byKeyDaily:
+                    - date: 1705276800000
+                      Production Key: 8.5
+                      Web App: 2
+                  topKeyNames:
+                    - Production Key
+                    - Web App
+        "400":
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailedError"
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "500":
+          description: Inference processing failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "504":
+          description: Query timed out - try reducing the lookback period
+          content:
+            application/json:
+              schema:
+                properties:
+                  error:
+                    description: Error message indicating query timeout
+                    type: string
+                type: object

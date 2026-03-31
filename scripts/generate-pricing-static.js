@@ -48,6 +48,25 @@ function isAnonymizedModel(model) {
   return model.model_spec?.privacy === 'anonymized';
 }
 
+function isE2EEModel(model) {
+  const caps = model.model_spec?.capabilities || {};
+  const modelId = (model.id || '').toLowerCase();
+  return caps.supportsE2EE === true || modelId.startsWith('e2ee-');
+}
+
+function isTEEModel(model) {
+  const caps = model.model_spec?.capabilities || {};
+  const modelId = (model.id || '').toLowerCase();
+  return caps.supportsTeeAttestation === true || modelId.startsWith('tee-') || isE2EEModel(model);
+}
+
+function getPrivacyLabel(model) {
+  if (isE2EEModel(model)) return 'E2EE · Private';
+  if (isTEEModel(model)) return 'TEE · Private';
+  if (isAnonymizedModel(model)) return 'Anonymized';
+  return 'Private';
+}
+
 function isBetaModel(model) {
   return model.model_spec?.betaModel === true;
 }
@@ -77,7 +96,7 @@ function renderPricingChatTable(models) {
     const cacheWriteStr = pricing.cache_write?.usd ? formatPrice(pricing.cache_write.usd) : '-';
     const contextWindow = spec.availableContextTokens || spec.constraints?.maxContextTokens;
     const contextStr = contextWindow ? (contextWindow >= 1000 ? `${Math.round(contextWindow / 1000)}K` : contextWindow) : '-';
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
 
     let row = `| ${name} | ${modelId} | ${inputPrice} | ${outputPrice} | ${cacheReadStr} | ${cacheWriteStr} | ${contextStr} | ${privacyTag} |`;
 
@@ -105,7 +124,7 @@ function renderPricingEmbeddingTable(models) {
     const pricing = spec.pricing || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
 
     return `| ${name} | ${modelId} | ${formatPrice(pricing.input?.usd)} | ${formatPrice(pricing.output?.usd)} | ${privacyTag} |`;
   }).join('\n');
@@ -131,7 +150,7 @@ function renderPricingImageTable(models) {
     const spec = model.model_spec || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id) + (isBetaModel(model) ? ' (Beta)' : '');
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
     const resPricing = spec.pricing?.resolutions;
     
     let priceStr = '';
@@ -194,7 +213,7 @@ function renderPricingTTSTable(models) {
     const spec = model.model_spec || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
 
     return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.input?.usd)} | ${privacyTag} |`;
   }).join('\n');
@@ -214,9 +233,73 @@ function renderPricingASRTable(models) {
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
     const price = pricing.per_audio_second?.usd ? formatPrice(pricing.per_audio_second.usd) : formatPrice(pricing.input?.usd);
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
 
     return `| ${name} | ${modelId} | ${price} | ${privacyTag} |`;
+  }).join('\n');
+
+  return header + '\n' + rows + '\n';
+}
+
+function getPricingMusicModels(models, pricingKey) {
+  return models
+    .filter(m => m.type === 'music')
+    .filter(m => !isDeprecatedModel(m))
+    .filter(m => m.model_spec?.pricing?.[pricingKey])
+    .sort((a, b) => (a.model_spec?.name || a.id).localeCompare(b.model_spec?.name || b.id));
+}
+
+function renderPricingMusicDurationTable(models) {
+  const musicModels = getPricingMusicModels(models, 'durations');
+  if (musicModels.length === 0) return '';
+
+  const header = `| Model | ID | Duration Pricing | Privacy |\n|---|---|---|---|`;
+  const rows = musicModels.map(model => {
+    const spec = model.model_spec || {};
+    const pricing = spec.pricing || {};
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
+    const name = escapeHtml(spec.name || model.id);
+    const privacyTag = getPrivacyLabel(model);
+    const durationPricing = Object.entries(pricing.durations || {})
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([duration, price]) => `${duration}s: ${formatPrice(price?.usd)}`)
+      .join(', ');
+
+    return `| ${name} | ${modelId} | ${durationPricing} | ${privacyTag} |`;
+  }).join('\n');
+
+  return header + '\n' + rows + '\n';
+}
+
+function renderPricingMusicGenerationTable(models) {
+  const musicModels = getPricingMusicModels(models, 'generation');
+  if (musicModels.length === 0) return '';
+
+  const header = `| Model | ID | Per Generation | Privacy |\n|---|---|---|---|`;
+  const rows = musicModels.map(model => {
+    const spec = model.model_spec || {};
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
+    const name = escapeHtml(spec.name || model.id);
+    const privacyTag = getPrivacyLabel(model);
+
+    return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.generation?.usd)} | ${privacyTag} |`;
+  }).join('\n');
+
+  return header + '\n' + rows + '\n';
+}
+
+function renderPricingMusicPerSecondTable(models) {
+  const musicModels = getPricingMusicModels(models, 'per_second');
+  if (musicModels.length === 0) return '';
+
+  const header = `| Model | ID | Per Second | Privacy |\n|---|---|---|---|`;
+  const rows = musicModels.map(model => {
+    const spec = model.model_spec || {};
+    const modelId = '\`' + escapeHtml(model.id) + '\`';
+    const name = escapeHtml(spec.name || model.id);
+    const privacyTag = getPrivacyLabel(model);
+
+    return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.per_second?.usd)} | ${privacyTag} |`;
   }).join('\n');
 
   return header + '\n' + rows + '\n';
@@ -245,7 +328,7 @@ function renderPricingVideoTable(models) {
     const spec = model.model_spec || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id) + (isBetaModel(model) ? ' (Beta)' : '');
-    const privacyTag = isAnonymizedModel(model) ? 'Anonymized' : 'Private';
+    const privacyTag = getPrivacyLabel(model);
     const videoType = getVideoType(model.id);
 
     return `| ${name} | ${modelId} | ${videoType} | Variable | ${privacyTag} |`;
@@ -256,8 +339,8 @@ function renderPricingVideoTable(models) {
 
 // Render Web Search Table
 function renderPricingWebSearchTable() {
-  const header = `| Feature | Config | Per 1K Calls |\n|---|---|---|`;
-  const rows = `| Web Search | \`enable_web_search: true\` | $10.00 |\n| Web Scraping | \`enable_web_scraping: true\` | $10.00 |`;
+  const header = `| Feature | Config | Pricing |\n|---|---|---|`;
+  const rows = `| Web Search | \`enable_web_search: true\` | $10.00 per 1K requests |\n| Web Scraping | \`enable_web_scraping: true\` | $10.00 per 1K URLs |\n| X Search (xAI) | \`enable_x_search: true\` | $10.00 per 1K results |`;
   return header + '\n' + rows + '\n';
 }
 
@@ -272,6 +355,9 @@ function generatePricingMdx() {
   const editHtml = renderPricingEditTable(models);
   const ttsHtml = renderPricingTTSTable(models);
   const asrHtml = renderPricingASRTable(models);
+  const musicDurationHtml = renderPricingMusicDurationTable(models);
+  const musicGenerationHtml = renderPricingMusicGenerationTable(models);
+  const musicPerSecondHtml = renderPricingMusicPerSecondTable(models);
   const videoHtml = renderPricingVideoTable(models);
   const websearchHtml = renderPricingWebSearchTable();
 
@@ -331,6 +417,34 @@ function generatePricingMdx() {
   sections.push(asrHtml);
   sections.push('</div>');
   sections.push('');
+  sections.push('### Music');
+  sections.push('');
+  sections.push('<div id="pricing-music-placeholder">');
+  sections.push('');
+  if (musicDurationHtml) {
+    sections.push('#### Song Generation (Duration-Based)');
+    sections.push('');
+    sections.push(musicDurationHtml);
+  }
+  if (musicGenerationHtml) {
+    sections.push('#### Song Generation (Per-Generation)');
+    sections.push('');
+    sections.push(musicGenerationHtml);
+  }
+  if (musicPerSecondHtml) {
+    sections.push('#### Sound Effects (Per-Second)');
+    sections.push('');
+    sections.push(musicPerSecondHtml);
+  }
+  if (!musicDurationHtml && !musicGenerationHtml && !musicPerSecondHtml) {
+    sections.push('No music models available.');
+  }
+  sections.push('</div>');
+  sections.push('');
+  sections.push('<Info>');
+  sections.push('For exact pricing before generation, use the [Audio Quote API](/api-reference/endpoint/audio/quote). Duration-based models have fixed price tiers, while per-second models charge based on output length.');
+  sections.push('</Info>');
+  sections.push('');
   sections.push('### Video');
   sections.push('');
   sections.push('<div id="pricing-video-placeholder">');
@@ -350,7 +464,11 @@ function generatePricingMdx() {
   sections.push('</div>');
   sections.push('');
   sections.push('<Info>');
-  sections.push('Web Scraping automatically detects up to 3 URLs per message, scrapes and converts content into structured markdown, and adds the extracted text into model context. These charges apply in addition to standard model token pricing.');
+  sections.push('**Web Scraping** automatically detects up to 5 URLs per request, scrapes and converts content into structured markdown, and adds the extracted text into model context. Only successfully scraped URLs are billed.');
+  sections.push('');
+  sections.push("**X Search** enables xAI's native search for supported Grok models (e.g., `grok-4-20-beta`). This searches both the web and X/Twitter for real-time information. Billed per search result returned by the model (e.g., if the model returns 10 search results, you are charged for 10 results at $0.01 each = $0.10).");
+  sections.push('');
+  sections.push('These charges apply in addition to standard model token pricing.');
   sections.push('</Info>');
   sections.push('');
   sections.push('## Payment Options');
