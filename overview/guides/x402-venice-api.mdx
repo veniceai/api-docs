@@ -1,0 +1,498 @@
+---
+title: X402 with Venice API
+description: Put an x402 paywall in front of Venice's API so agents and apps can pay per request
+"og:title": "X402 with Venice API | Venice API Docs"
+"og:description": "Learn how to expose Venice-powered endpoints behind x402 so buyers can pay per request and your backend can call Venice securely."
+---
+
+[x402](https://docs.x402.org/introduction) lets you charge for API access using the standard HTTP `402 Payment Required` flow. Venice is a strong fit behind an x402 gateway because the Venice API is already simple to proxy: it is OpenAI-compatible, stateless, and driven by a standard bearer token.
+
+This guide shows the recommended pattern:
+
+1. A buyer or agent calls **your x402-protected endpoint**
+2. Your server returns **402 Payment Required** if no payment proof is attached
+3. The buyer retries with an x402 payment header
+4. Your server verifies payment and then calls **Venice**
+5. Your server returns the Venice response to the buyer
+
+<Info>
+This guide documents the practical integration pattern for today: **use x402 on your own proxy or application server, then forward paid requests to Venice with your Venice API key on the backend**.
+
+Venice's public API is not documented here as a native x402 resource server, so you should not expect `api.venice.ai` itself to emit x402 payment challenges.
+</Info>
+
+<CardGroup cols={3}>
+  <Card title="Pay Per Request" icon="coins">
+    Charge buyers and agents one call at a time
+  </Card>
+  <Card title="Keep Your Venice Key Server-Side" icon="key">
+    Your Venice API key stays in your backend, not in the buyer's client
+  </Card>
+  <Card title="Agent Friendly" icon="robot">
+    x402-aware agents can discover, pay for, and use your Venice-powered endpoint
+  </Card>
+</CardGroup>
+
+---
+
+## When to Use This Pattern
+
+Use x402 in front of Venice when you want to:
+
+- monetize a Venice-powered endpoint without issuing user accounts or API keys
+- let AI agents buy access programmatically
+- wrap prompt templates, system instructions, or workflow logic around Venice
+- offer a simplified or specialized paid API built on top of Venice
+
+Examples:
+
+- a paid summarization endpoint backed by `chat/completions`
+- a premium image-generation endpoint backed by `image/generate`
+- a domain-specific agent tool that uses Venice under the hood
+
+---
+
+## Architecture
+
+```text
+Buyer or Agent
+      |
+      | 1. GET/POST /your-paid-endpoint
+      v
+Your x402 Gateway
+      |
+      | 2. 402 Payment Required (if unpaid)
+      | 3. Verify payment when buyer retries
+      v
+Your Venice Proxy Logic
+      |
+      | 4. POST https://api.venice.ai/api/v1/...
+      v
+Venice API
+```
+
+The important boundary is:
+
+- **x402 handles payment between the buyer and your server**
+- **Venice handles inference between your server and Venice**
+
+That separation keeps billing clear and prevents exposing your Venice API key to clients.
+
+---
+
+## Prerequisites
+
+<CardGroup cols={2}>
+  <Card title="Venice API Key" icon="key" href="https://venice.ai/settings/api">
+    Generate a backend API key for the proxy
+  </Card>
+  <Card title="Node.js 18+" icon="node-js" href="https://nodejs.org/">
+    Required for the Express example below
+  </Card>
+  <Card title="x402-Compatible Wallet" icon="wallet">
+    Needed on the seller side to receive payments
+  </Card>
+  <Card title="x402 Buyer Wallet" icon="credit-card">
+    Needed by the buyer or agent making paid calls
+  </Card>
+</CardGroup>
+
+You will also need:
+
+- an EVM or Solana address to receive x402 payments
+- a server where you can keep `VENICE_API_KEY` secret
+- an x402 facilitator URL
+
+For testnet examples, x402 documents `https://x402.org/facilitator`. For production, switch to a mainnet facilitator supported by your deployment.
+
+---
+
+## How the Request Flow Works
+
+At a protocol level, the x402 flow looks like this:
+
+1. Client sends a request to your paid endpoint
+2. Your server responds with `402 Payment Required`
+3. The response includes a `PAYMENT-REQUIRED` header describing accepted payment options
+4. The client signs and retries with a `PAYMENT-SIGNATURE` header
+5. Your x402 middleware settles the payment
+6. Your handler calls Venice and returns the result
+7. Your server can include `PAYMENT-RESPONSE` to describe settlement outcome
+
+Venice does not need to know anything about x402 in this flow. From Venice's point of view, your proxy is just a normal backend client using:
+
+- `Authorization: Bearer <VENICE_API_KEY>`
+- `Content-Type: application/json`
+- Venice-specific request fields like `venice_parameters`
+
+---
+
+## Build an x402-Protected Venice Proxy
+
+The example below creates a paid `/summarize` endpoint:
+
+- x402 enforces payment
+- your server forwards the request to Venice chat completions
+- the buyer receives the model output after payment succeeds
+
+### 1. Install dependencies
+
+```bash
+npm install express @x402/express @x402/core @x402/evm @x402/svm
+```
+
+### 2. Set environment variables
+
+```bash
+export VENICE_API_KEY="your-venice-api-key"
+export EVM_PAY_TO_ADDRESS="0xYourEvmAddress"
+export SVM_PAY_TO_ADDRESS="YourSolanaAddress"
+```
+
+### 3. Create the server
+
+```typescript
+import express from "express";
+import { paymentMiddleware } from "@x402/express";
+import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
+import { ExactEvmScheme } from "@x402/evm/exact/server";
+import { ExactSvmScheme } from "@x402/svm/exact/server";
+
+const app = express();
+app.use(express.json());
+
+const facilitatorClient = new HTTPFacilitatorClient({
+  url: "https://x402.org/facilitator",
+});
+
+const resourceServer = new x402ResourceServer(facilitatorClient)
+  .register("eip155:84532", new ExactEvmScheme())
+  .register("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1", new ExactSvmScheme());
+
+app.use(
+  paymentMiddleware(
+    {
+      "POST /summarize": {
+        accepts: [
+          {
+            scheme: "exact",
+            price: "$0.01",
+            network: "eip155:84532",
+            payTo: process.env.EVM_PAY_TO_ADDRESS!,
+          },
+          {
+            scheme: "exact",
+            price: "$0.01",
+            network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+            payTo: process.env.SVM_PAY_TO_ADDRESS!,
+          },
+        ],
+        description: "Summarize text with Venice",
+        mimeType: "application/json",
+      },
+    },
+    resourceServer,
+  ),
+);
+
+app.post("/summarize", async (req, res) => {
+  const { text } = req.body;
+
+  const veniceResponse = await fetch(
+    "https://api.venice.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b",
+        messages: [
+          {
+            role: "system",
+            content: "Summarize the user's input in 5 bullet points.",
+          },
+          {
+            role: "user",
+            content: text,
+          },
+        ],
+        venice_parameters: {
+          include_venice_system_prompt: false,
+        },
+      }),
+    },
+  );
+
+  if (!veniceResponse.ok) {
+    const errorText = await veniceResponse.text();
+    return res.status(veniceResponse.status).send(errorText);
+  }
+
+  const data = await veniceResponse.json();
+
+  res.json({
+    model: data.model,
+    output: data.choices?.[0]?.message?.content ?? "",
+    usage: data.usage,
+  });
+});
+
+app.listen(4021, () => {
+  console.log("x402 + Venice proxy listening on http://localhost:4021");
+});
+```
+
+<Note>
+This example uses x402 testnet network identifiers:
+
+- `eip155:84532` for Base Sepolia
+- `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` for Solana Devnet
+
+When you move to production, swap in your mainnet facilitator and mainnet network IDs.
+</Note>
+
+---
+
+## What the Buyer Sees
+
+If the buyer calls your endpoint without payment, they should get an HTTP `402 Payment Required` response.
+
+Example:
+
+```bash
+curl http://localhost:4021/summarize \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Summarize Venice and x402 in one paragraph."}'
+```
+
+The response should include:
+
+- status code `402`
+- a `PAYMENT-REQUIRED` header
+- metadata describing accepted payment options
+
+After a compatible x402 client pays and retries, the same endpoint returns the normal JSON payload from your proxy.
+
+---
+
+## Buyer Example: Automatic x402 Payment + Venice-Powered Response
+
+If your users are building agents or apps, the cleanest approach is to use an x402-aware client wrapper so payment is handled automatically.
+
+### Install buyer dependencies
+
+```bash
+npm install @x402/fetch @x402/core @x402/evm viem
+```
+
+### Make a paid request
+
+```typescript
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { ExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const signer = privateKeyToAccount(process.env.EVM_PRIVATE_KEY as `0x${string}`);
+
+const client = new x402Client();
+client.register("eip155:*", new ExactEvmScheme(signer));
+
+const fetchWithPayment = wrapFetchWithPayment(fetch, client);
+
+const response = await fetchWithPayment("http://localhost:4021/summarize", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    text: "Explain why a developer would place x402 in front of the Venice API.",
+  }),
+});
+
+const data = await response.json();
+console.log(data);
+```
+
+The buyer does **not** need a Venice API key. They are paying your x402 endpoint, and your service is the one calling Venice.
+
+---
+
+## Passing Venice Features Through Your Gateway
+
+One advantage of this pattern is that you can still expose Venice-specific capabilities.
+
+For example, your server can accept a subset of user parameters and map them to Venice:
+
+- `model`
+- `temperature`
+- `max_tokens`
+- `stream`
+- `venice_parameters.enable_web_search`
+- `venice_parameters.include_venice_system_prompt`
+
+Example proxy payload:
+
+```json
+{
+  "model": "zai-org-glm-4.7",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What happened in AI today?"
+    }
+  ],
+  "venice_parameters": {
+    "enable_web_search": "auto"
+  }
+}
+```
+
+That means you can monetize:
+
+- plain chat completions
+- structured outputs
+- tool-enabled workflows
+- web-search-enabled assistants
+- image, audio, or embedding endpoints behind separate paid routes
+
+---
+
+## Streaming Considerations
+
+Streaming works, but you should decide pricing carefully.
+
+Common patterns:
+
+1. **Charge per request** and then stream the Venice response once payment is settled
+2. **Charge different fixed prices per endpoint** based on model tier
+3. **Use separate routes** for non-streaming and streaming workloads
+
+If you proxy streaming, verify:
+
+- payment settles before the response body starts streaming
+- upstream Venice errors are forwarded cleanly
+- your reverse proxy does not buffer server-sent events unexpectedly
+
+For many first implementations, it is simpler to start with non-streaming JSON responses and add streaming later.
+
+---
+
+## Security and Billing Best Practices
+
+<AccordionGroup>
+  <Accordion title="Never expose your Venice API key to buyers">
+    Keep `VENICE_API_KEY` only on the server that talks to Venice. Buyers should only interact with your x402 endpoint.
+  </Accordion>
+
+  <Accordion title="Validate and constrain forwarded parameters">
+    Do not forward arbitrary user input directly to Venice without limits. Consider allowlisting models, capping `max_tokens`, and enforcing request size limits so your Venice costs stay predictable.
+  </Accordion>
+
+  <Accordion title="Price endpoints above your expected Venice cost">
+    x402 is your monetization layer, but Venice usage is still billed to your account. Set route pricing high enough to cover model cost, failures, retries, and your margin.
+  </Accordion>
+
+  <Accordion title="Log request metadata, not sensitive payloads">
+    Track route usage, payment outcome, model choice, and latency. Be careful about storing prompt contents if your product promises privacy.
+  </Accordion>
+
+  <Accordion title="Return clean upstream errors">
+    If Venice responds with 4xx or 5xx, propagate enough information for debugging without leaking secrets. This is especially important when buyers are autonomous agents that need structured retry behavior.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Going to Mainnet
+
+Before production, update:
+
+- your facilitator URL
+- your network IDs
+- your wallet addresses
+- your route pricing
+
+Typical changes:
+
+| Item | Testnet Example | Mainnet Example |
+|---|---|---|
+| Base network | `eip155:84532` | `eip155:8453` |
+| Solana network | `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` |
+| Facilitator | `https://x402.org/facilitator` | your production facilitator |
+
+<Warning>
+Mainnet x402 payments involve real money, while Venice requests consume real API credits. Test your route logic, input validation, and pricing on testnet first.
+</Warning>
+
+---
+
+## Extending the Pattern Beyond Chat
+
+You can apply the same design to other Venice endpoints:
+
+| Paid Route | Venice Endpoint |
+|---|---|
+| `POST /premium-chat` | `/chat/completions` |
+| `POST /premium-image` | `/image/generate` |
+| `POST /premium-embeddings` | `/embeddings` |
+| `POST /premium-tts` | `/audio/speech` |
+
+This is often cleaner than exposing raw Venice responses directly, because your gateway can:
+
+- enforce product-specific prompts
+- normalize response formats
+- attach your own business logic
+- meter and monetize by endpoint
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="I get a 402 response every time">
+    Make sure the client is x402-aware and retries with a valid `PAYMENT-SIGNATURE` header. A plain HTTP client will only ever see the payment challenge.
+  </Accordion>
+
+  <Accordion title="Payment succeeds but Venice fails">
+    Check your backend logs and confirm:
+
+    - `VENICE_API_KEY` is present
+    - the Venice endpoint URL is correct
+    - the model ID exists in Venice
+    - your forwarded payload matches the Venice API schema
+  </Accordion>
+
+  <Accordion title="My buyer should not need a Venice account">
+    Correct. Buyers pay your x402 route. Only your backend needs the Venice API key.
+  </Accordion>
+
+  <Accordion title="Can I charge differently for different models?">
+    Yes. A common pattern is separate routes such as `/chat/basic`, `/chat/premium`, and `/chat/vision`, each with its own x402 price and Venice model allowlist.
+  </Accordion>
+
+  <Accordion title="Can I make my Venice-powered endpoint discoverable to agents?">
+    Yes. x402 supports service discovery metadata through compatible facilitator ecosystems. That can help agents find and pay for your endpoint programmatically.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Venice Chat Completions" icon="message" href="/api-reference/endpoint/chat/completions">
+    API reference for Venice chat requests
+  </Card>
+  <Card title="Venice Getting Started" icon="rocket" href="/overview/getting-started">
+    Quickstart for basic Venice API usage
+  </Card>
+  <Card title="x402 Introduction" icon="coins" href="https://docs.x402.org/introduction">
+    Learn the x402 payment protocol
+  </Card>
+  <Card title="x402 Seller Quickstart" icon="store" href="https://docs.x402.org/getting-started/quickstart-for-sellers">
+    Official middleware setup examples for protected routes
+  </Card>
+</CardGroup>
