@@ -28,6 +28,11 @@ By using X402, you can allow your Claw agent to pay other agents and people on y
 
 ## Using X402 with Venice
 
+### Pre-requisites
+To use X402, you'll need an EVM wallet on Base. One can easily be created through most popular wallets like Base Wallet, Metamask, Phantom, and others. The wallet will additionally need some USDC and funds for gas. If you have staked DIEM, paying via X402 will use up your available daily DIEM inference first.
+
+It is highly suggested to use a limited-purpose wallet rather than using a main treasury wallet. 
+
 ### How the process works
 
 X402 on Venice follows a short wallet-auth flow:
@@ -57,11 +62,223 @@ and charges available balance automatically
 The auth header is short-lived and should be refreshed after 10 minutes. Venice uses available DIEM-backed balance automatically, or you can top up with USDC on Base if needed.
 </Info>
 
-### Creating a compatible SIWE Payload
+### Supported endpoints
 
-All of our X402 compatible endpoints require an `X-Sign-in-With-X` header, and we take a Base64-encoded JSON body that includes a SIWE (Sign in with Ethereum) message.
+X402 wallet auth is currently supported on the following Venice endpoints:
 
-To do this programatically, you can use the short script below to do exactly that (requires the `siwe` and `ethers` npm packages):
+- `POST /api/v1/chat/completions`
+- `GET /api/v1/x402/balance/{walletAddress}`
+- `GET /api/v1/x402/transactions/{walletAddress}`
+
+The top-up flow is separate:
+
+- `POST /api/v1/x402/top-up` uses `X-402-Payment`, not `X-Sign-In-With-X`
+
+For inference, `chat/completions` is the only X402-supported mode right now. If there's other inference modes you'd like us to support with X402, please [let us  know on Featurebase!](https://featurebase.venice.ai/)
+
+
+### Happy path: auth, balance, inference, history
+
+Once you can generate the `X-Sign-In-With-X`, the usual X402 flow on Venice looks like this:
+
+<Steps>
+  <Step title="Generate the balance auth header">
+    Use the SIWE script above to create the `X-Sign-In-With-X` header for your balance request. In that script, set `uri` to the balance resource you are about to call, then use the resulting base64 string as `BALANCE_AUTH`.
+  </Step>
+
+  <Step title="Check whether the wallet can currently spend">
+    Use the balance endpoint first. This tells you the current prepaid balance and whether the wallet can consume paid Venice endpoints right now.
+
+    ```bash
+    export WALLET_ADDRESS=0xYOUR_WALLET_ADDRESS
+    export BALANCE_AUTH=YOUR_BASE64_AUTH_HEADER
+
+    curl --request GET \
+      --url "https://api.venice.ai/api/v1/x402/balance/$WALLET_ADDRESS" \
+      --header "X-Sign-In-With-X: $BALANCE_AUTH"
+    ```
+
+    Example response:
+
+    ```json
+    {
+      "success": true,
+      "data": {
+        "walletAddress": "0xyour_wallet_address",
+        "balanceUsd": 12.5,
+        "canConsume": true,
+        "minimumTopUpUsd": 5,
+        "suggestedTopUpUsd": 10,
+        "diemBalanceUsd": 5.25
+      }
+    }
+    ```
+
+    Key fields:
+
+    - `canConsume`: whether the wallet can currently use x402-backed Venice endpoints
+    - `balanceUsd`: current spendable x402 balance
+    - `minimumTopUpUsd` and `suggestedTopUpUsd`: guidance for the next top-up if the balance is low
+    - `diemBalanceUsd`: optional DIEM-backed balance available to the linked Venice account
+  </Step>
+
+  <Step title="Generate a fresh auth header for inference">
+    If `canConsume` is `true`, run the same SIWE script again with `uri` updated to the inference resource you are about to call. Use the resulting header value as `CHAT_AUTH`.
+  </Step>
+
+  <Step title="Call the paid Venice endpoint">
+    Send the newly generated inference auth header with your request:
+
+    ```bash
+    export CHAT_AUTH=YOUR_BASE64_AUTH_HEADER
+
+    curl --request POST \
+      --url https://api.venice.ai/api/v1/chat/completions \
+      --header "Content-Type: application/json" \
+      --header "X-Sign-In-With-X: $CHAT_AUTH" \
+      --data '{
+        "model": "kimi-k2-5",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello from an x402-authenticated wallet."
+          }
+        ]
+      }'
+    ```
+
+    Venice will validate the wallet auth and automatically charge available x402-backed balance for the request.
+  </Step>
+
+  <Step title="Review transaction history">
+    To inspect the wallet ledger, generate another `X-Sign-In-With-X` header with the SIWE script above, this time using the transactions resource as the `uri`. Then call the endpoint:
+
+    ```bash
+    export TX_AUTH=YOUR_BASE64_AUTH_HEADER
+
+    curl --request GET \
+      --url "https://api.venice.ai/api/v1/x402/transactions/$WALLET_ADDRESS?limit=10&offset=0" \
+      --header "X-Sign-In-With-X: $TX_AUTH"
+    ```
+
+    The transaction feed includes entries such as `TOP_UP`, `CHARGE`, and `REFUND`. Usage-backed entries may also include a `requestId` and `modelId`, which helps correlate spend with a specific Venice request.
+  </Step>
+</Steps>
+
+### Top-up walkthrough
+
+If `canConsume` is `false`, or you want to add more prepaid balance ahead of time, use the top-up endpoint. This endpoint follows the standard x402 payment pattern:
+
+<Steps>
+  <Step title="Ask Venice for payment requirements">
+    Call the top-up endpoint without an `X-402-Payment` header:
+
+    ```bash
+    curl --request POST \
+      --url https://api.venice.ai/api/v1/x402/top-up
+    ```
+
+    Venice will respond with `402 Payment Required` and tell you how to pay:
+
+    ```json
+    {
+      "error": "PAYMENT_REQUIRED",
+      "message": "Send x402 payment via X-402-Payment header",
+      "paymentInfo": {
+        "receiverWallet": "0xRECEIVER_WALLET",
+        "network": "eip155:8453",
+        "token": "USDC",
+        "tokenAddress": "0xUSDC_TOKEN_ADDRESS",
+        "minimumAmountUsd": 5,
+        "suggestedAmountUsd": 10
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Build the x402 payment payload">
+    Use the returned `paymentInfo` to create a signed x402 payment with your wallet. The resulting payload is then sent in the `X-402-Payment` header.
+
+    Venice does not expect `X-Sign-In-With-X` for this endpoint. The payment itself is the authorization for the top-up.
+    
+    If you are having trouble with this, have a look at [how to build the X402 payment header.](#creating-the-x-402-payment-header)
+  </Step>
+
+  <Step title="Retry the request with X-402-Payment">
+    Once you have a signed payment payload, send the same request again:
+
+    ```bash
+    export X402_PAYMENT=YOUR_SIGNED_X402_PAYMENT
+
+    curl --request POST \
+      --url https://api.venice.ai/api/v1/x402/top-up \
+      --header "X-402-Payment: $X402_PAYMENT"
+    ```
+
+    Example success response:
+
+    ```json
+    {
+      "success": true,
+      "data": {
+        "walletAddress": "0xyour_wallet_address",
+        "amountCredited": 10,
+        "newBalance": 22.5,
+        "paymentId": "payment_01HZY8M4W4Y6QZ8B6Q4P0V3J2K"
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Confirm the wallet can consume again">
+    After a successful top-up, generate a fresh balance header with the SIWE script and call the balance endpoint again to confirm `canConsume` is now `true`.
+  </Step>
+</Steps>
+
+<Info>
+In practice, wallet-based clients usually automate this by generating the SIWE-backed `X-Sign-In-With-X` header for the route they are about to call, checking balance, topping up only when needed, then continuing to inference. The balance and transaction endpoints are useful for making those decisions explicit in your own app or agent.
+</Info>
+
+### Prompt for Claw agents
+
+If you're a human using a Claw agent, you can send it the following message to help it try Venice's X402 flow:
+
+```plaintext
+Use the Venice API with your wallet.
+
+Auth:
+Build a SIWE message, sign it with your private key (EIP-191), then base64-encode this JSON and send it as X-Sign-In-With-X:
+{"address":"0xYOUR_ADDRESS","message":"<signed SIWE message>","signature":"0x...","timestamp":<unix ms>,"chainId":8453}
+
+Requirements:
+- domain: outerface.venice.ai
+- chain ID: 8453
+- URI: set this to the exact Venice route being called
+- expiration: 10 minutes
+
+Inference:
+Only `POST /api/v1/chat/completions` currently supports X402 for paid inference.
+
+Chat:
+POST https://api.venice.ai/api/v1/chat/completions
+Headers: Content-Type: application/json, X-Sign-In-With-X: <base64>
+Body: {"model":"kimi-k2-5","messages":[{"role":"user","content":"Hello"}]}
+
+Balance: GET https://api.venice.ai/api/v1/x402/balance/<address> (generate a fresh SIWE header using the balance URI)
+Transactions: GET https://api.venice.ai/api/v1/x402/transactions/<address> (generate a fresh SIWE header using the transactions URI)
+DIEM staked on the wallet is used automatically for payment. No DIEM = top up with USDC on Base (min $5).
+Guide: https://docs.venice.ai/overview/guides/x402-venice-api
+```
+
+<Warning>
+For safety, give the agent the private key through environment variables or a secret manager instead of pasting it directly into a prompt.
+</Warning>
+
+#### Creating a compatible SIWE Payload
+
+All of our X402 compatible endpoints require an `X-Sign-In-With-X` header, and we take a Base64-encoded JSON body that includes a SIWE (Sign in with Ethereum) message.
+
+To do this programmatically, you can use the short script below to do exactly that (requires the `siwe` and `ethers` npm packages):
 
 ```js
 import { Wallet } from 'ethers'
@@ -80,7 +297,7 @@ const siwe = new SiweMessage({
   chainId: 8453,
   nonce: generateNonce(),
   issuedAt,
-  expirationTime: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+  expirationTime: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
 })
 
 const message = siwe.prepareMessage()
@@ -100,12 +317,52 @@ const headerValue = Buffer.from(
 
 This will do the following:
 - Generate a SIWE message
-- Prepares the message
+- Prepare the message
 - Signs the message (done automatically as we have created a wallet instance via `ethers`)
-- Creates a compliant JSON body, converts it into an equivalent byte buffer and converts it into base64 
+- Create a compliant JSON body, convert it into an equivalent byte buffer, and convert it into base64
+
+The `uri` above uses the balance endpoint as an example. When authenticating a different X402 route, update the `uri` in the SIWE message to match the Venice resource you are about to call, then generate a fresh `X-Sign-In-With-X` header from that payload.
+
+### Creating the X-402-Payment Header
+To use the top-up endpoint, you'll need to create a X-402-Payment header. 
+
+This can be done with the following script, which will attempt to top up your Venice credits with 5USD worth of credits (note that this requires the `viem` and `x402` npm packages installed).
+
+First you will want to set your private key as `EVM_PRIVATE_KEY` in environment variables (can be skipped if it already exists):
+```bash
+export EVM_PRIVATE_KEY=0xyour_private_key
+```
+
+Next, run the following script in the same terminal you added your EVM private key as an environment variable:
+```bash
+export X402_PAYMENT="$(
+node --input-type=module <<'EOF'
+import { createPaymentHeader } from "x402/client";
+import { privateKeyToAccount } from "viem/accounts";
+const signer = privateKeyToAccount(process.env.EVM_PRIVATE_KEY);
+const amountUsd = 5;
+const amountBaseUnits = String(Math.round(amountUsd * 1e6));
+const header = await createPaymentHeader(signer, 2, {
+  scheme: "exact",
+  network: "base",
+  maxAmountRequired: amountBaseUnits,
+  resource: "https://api.venice.ai/api/v1/x402/top-up",
+  description: "Venice x402 top-up",
+  mimeType: "application/json",
+  payTo: "0x2670B922ef37C7Df47158725C0CC407b5382293F",
+  maxTimeoutSeconds: 300,
+  asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  extra: { name: "USD Coin", version: "2" },
+});
+process.stdout.write(header);
+EOF
+)"
+
+curl -sS -X POST "https://api.venice.ai/api/v1/x402/top-up" \
+  -H "X-402-Payment: $X402_PAYMENT"
+```
 
 ### Developers
-
 If you're a developer who wants to use X402 with Venice, we have our own [X402 Client library.](https://github.com/veniceai/x402-client)
 
 You can install it with the following one-line snippet:
@@ -126,35 +383,18 @@ const response = await venice.chat({
 })
 ```
 
-#### Prompt for Claw agents
+### Troubleshooting and error handling
 
-If you're a human using a Claw agent, you can send it the following message to help it try Venice's X402 flow:
+If a request fails, these are the first things to check:
 
-```plaintext
-Use the Venice API with your wallet.
+- `401 Authentication failed`: regenerate `X-Sign-In-With-X` using the SIWE script. Confirm the payload is valid base64 JSON, the signature matches the wallet, the chain is Base (`8453`), and the SIWE message has not expired.
+- `403 Unauthorized` on balance or transactions: the wallet recovered from `X-Sign-In-With-X` must match the `walletAddress` path parameter.
+- `402 Insufficient balance` on `chat/completions`: the wallet auth worked, but the wallet does not currently have enough spendable balance. Check `GET /x402/balance/{walletAddress}` and top up if needed.
+- `402 PAYMENT_REQUIRED` on `x402/top-up`: this is expected on the first top-up request without `X-402-Payment`. Use the returned `paymentInfo` to build the payment payload, then retry with the header.
+- `400 Invalid request` or `X402_INVALID_PAYMENT`: rebuild the request body or payment header from scratch. This usually means malformed JSON, an incorrect header value, or a payment payload that does not match the required top-up parameters.
+- `429 Rate limit exceeded`: retry with backoff, especially if your agent is polling balance or transactions repeatedly.
 
-Auth:
-Build a SIWE message, sign it with your private key (EIP-191), then base64-encode this JSON and send it as X-Sign-In-With-X:
-{"address":"0xYOUR_ADDRESS","message":"<signed SIWE message>","signature":"0x...","timestamp":<unix ms>,"chainId":8453}
-
-Requirements:
-- domain: outerface.venice.ai
-- chain ID: 8453
-- URI: https://outerface.venice.ai
-- expiration: 10 minutes
-
-Chat:
-POST https://api.venice.ai/api/v1/chat/completions
-Headers: Content-Type: application/json, X-Sign-In-With-X: <base64>
-Body: {"model":"e2ee-glm-5","messages":[{"role":"user","content":"Hello"}]}
-
-Balance: GET https://api.venice.ai/api/v1/x402/balance/<address> (same auth header)
-DIEM staked on the wallet is used automatically for payment. No DIEM = top up with USDC on Base (min $5).
-```
-
-<Warning>
-For safety, give the agent the private key through environment variables or a secret manager instead of pasting it directly into a prompt.
-</Warning>
+For auth-related issues, the most common mistake is using a SIWE `uri` that does not match the Venice route you are calling.
 
 ---
 
