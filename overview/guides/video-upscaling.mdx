@@ -1,0 +1,339 @@
+---
+title: Video Upscaling
+description: Upscale existing videos to higher resolutions using Venice's Topaz Video Upscale model
+"og:title": "Video Upscaling | Venice API Docs"
+"og:description": "Learn how to upscale videos to 720p, 1080p, or 4K using the Venice Video Upscaling API."
+---
+
+Video upscaling increases the resolution and quality of an existing video. It uses the same async queue system as [video generation](/overview/guides/video-generation) — submit a job, save `queue_id`, then poll `/video/retrieve` until the response is `video/mp4`.
+
+Unlike text-to-video or image-to-video, upscaling takes an existing video as input and produces a higher-resolution version. No prompt is needed.
+
+## How It Works
+
+1. You provide a video file via `video_url` (URL or base64 data URL)
+2. You specify a target `resolution` — this determines the upscale factor
+3. The model enhances the video and outputs it at the target resolution
+
+| Target Resolution | Upscale Factor | Use Case |
+|---|---|---|
+| `720p` | 1x | Quality enhancement without resolution increase |
+| `1080p` | 2x | Standard HD upscale (default) |
+| `4k` | 4x | Ultra-high-definition upscale |
+
+## Endpoints
+
+Video upscaling uses the same endpoints as video generation:
+
+| Endpoint | Purpose | Required |
+|----------|---------|----------|
+| `POST /video/quote` | Get price in USD before upscaling | No |
+| `POST /video/queue` | Submit upscale request | Yes |
+| `POST /video/retrieve` | Poll status or download video | Yes |
+| `POST /video/complete` | Delete video from storage | No |
+
+## Step 1: Queue Upscale
+
+**Request:**
+```bash
+POST https://api.venice.ai/api/v1/video/queue
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "topaz-video-upscale",
+  "prompt": "upscale",
+  "video_url": "https://example.com/my-video.mp4",
+  "duration": "30s",
+  "resolution": "1080p"
+}
+```
+
+**Response (200):**
+```json
+{
+  "model": "topaz-video-upscale",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+Save both `model` and `queue_id` — you need them for retrieval and cleanup.
+
+## Step 2: Poll for Completion
+
+**Request:**
+```bash
+POST https://api.venice.ai/api/v1/video/retrieve
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "topaz-video-upscale",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+**Response depends on status:**
+
+| Content-Type | Meaning | Action |
+|--------------|---------|--------|
+| `application/json` | Still processing | Wait 5s, poll again |
+| `video/mp4` | Complete | Response body is the video file |
+
+**Processing response (200, application/json):**
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 90000,
+  "execution_duration": 25000
+}
+```
+
+Times are in milliseconds. Use `average_execution_time` to estimate remaining wait.
+
+**Complete response (200, video/mp4):**
+Response body is raw binary video data. Save to file.
+
+## Step 3: Cleanup (Optional)
+
+Either auto-delete on retrieval:
+```json
+{
+  "model": "topaz-video-upscale",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000",
+  "delete_media_on_completion": true
+}
+```
+
+Or call `/video/complete` after saving:
+```bash
+POST https://api.venice.ai/api/v1/video/complete
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "topaz-video-upscale",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+---
+
+## Complete Example
+
+<CodeGroup>
+```python Python
+import os
+import time
+import requests
+
+API_KEY = os.environ.get("VENICE_API_KEY")
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+
+# Queue upscale
+resp = requests.post(f"{BASE_URL}/video/queue", headers=HEADERS, json={
+    "model": "topaz-video-upscale",
+    "prompt": "upscale",
+    "video_url": "https://example.com/my-video.mp4",
+    "duration": "30s",
+    "resolution": "4k"
+})
+data = resp.json()
+model, queue_id = data["model"], data["queue_id"]
+
+# Poll
+while True:
+    resp = requests.post(f"{BASE_URL}/video/retrieve", headers=HEADERS,
+                         json={"model": model, "queue_id": queue_id})
+    if "video/mp4" in resp.headers.get("Content-Type", ""):
+        with open("upscaled.mp4", "wb") as f:
+            f.write(resp.content)
+        break
+    time.sleep(5)
+
+# Cleanup
+requests.post(f"{BASE_URL}/video/complete", headers=HEADERS,
+              json={"model": model, "queue_id": queue_id})
+```
+
+```javascript Node.js
+const API_KEY = process.env.VENICE_API_KEY;
+const BASE_URL = "https://api.venice.ai/api/v1";
+const headers = {"Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json"};
+
+// Queue upscale
+const queueResp = await fetch(`${BASE_URL}/video/queue`, {
+    method: "POST", headers,
+    body: JSON.stringify({
+        model: "topaz-video-upscale",
+        prompt: "upscale",
+        video_url: "https://example.com/my-video.mp4",
+        duration: "30s", resolution: "4k"
+    })
+});
+const {model, queue_id} = await queueResp.json();
+
+// Poll
+while (true) {
+    const resp = await fetch(`${BASE_URL}/video/retrieve`, {
+        method: "POST", headers,
+        body: JSON.stringify({model, queue_id})
+    });
+    if (resp.headers.get("Content-Type")?.includes("video/mp4")) {
+        const fs = await import("fs");
+        fs.writeFileSync("upscaled.mp4", Buffer.from(await resp.arrayBuffer()));
+        break;
+    }
+    await new Promise(r => setTimeout(r, 5000));
+}
+
+// Cleanup
+await fetch(`${BASE_URL}/video/complete`, {
+    method: "POST", headers,
+    body: JSON.stringify({model, queue_id})
+});
+```
+
+```bash cURL
+# Queue upscale
+curl -s https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "topaz-video-upscale",
+    "prompt": "upscale",
+    "video_url": "https://example.com/my-video.mp4",
+    "duration": "30s",
+    "resolution": "4k"
+  }'
+
+# Response: {"model":"topaz-video-upscale","queue_id":"..."}
+# Use the queue_id to poll /video/retrieve (see video generation guide for full polling script)
+```
+</CodeGroup>
+
+---
+
+## Request Parameters
+
+### Queue Request
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | Yes | - | Must be `topaz-video-upscale` |
+| `prompt` | string | Yes | - | Can be any value (not used for processing) |
+| `video_url` | string | Yes | - | Video to upscale. URL or base64 data URL. Supported formats: MP4, MOV |
+| `duration` | string | Yes | - | Duration of the input video (e.g., `"30s"`). Maximum 300 seconds |
+| `resolution` | string | No | `"1080p"` | Target resolution: `"720p"`, `"1080p"`, or `"4k"` |
+| `input_fps` | number | No | - | Hint for input video frame rate. Server detects FPS automatically; this is a fallback when detection fails |
+
+<Note>
+The `duration` parameter refers to the length of your **input** video and is used for billing. It does not control the output length — the upscaled video will be the same duration as the input.
+</Note>
+
+### Quote Request
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | Yes | - | Must be `topaz-video-upscale` |
+| `duration` | string | Yes | - | Duration of the input video (e.g., `"30s"`) |
+| `resolution` | string | No | `"1080p"` | Target resolution: `"720p"`, `"1080p"`, or `"4k"` |
+
+---
+
+## Using Base64 Video Input
+
+You can also pass the video as a base64-encoded data URL:
+
+```json
+{
+  "model": "topaz-video-upscale",
+  "prompt": "upscale",
+  "video_url": "data:video/mp4;base64,AAAAFGZ0eXA...",
+  "duration": "10s",
+  "resolution": "1080p"
+}
+```
+
+Supported MIME types for data URLs: `video/mp4`, `video/quicktime` (MOV).
+
+---
+
+## Pricing
+
+Upscaling is priced per second of input video, with the rate determined by target resolution:
+
+| Target Resolution | Cost per Second |
+|---|---|
+| 720p (1x) | ~$0.0125 |
+| 1080p (2x) | ~$0.025 |
+| 4K (4x) | ~$0.10 |
+
+Videos with 60fps or higher output double the per-second cost.
+
+**Examples:**
+- 30-second video upscaled to 1080p: 30 × $0.025 = **~$0.75**
+- 30-second video upscaled to 4K: 30 × $0.10 = **~$3.00**
+- 10-second 60fps video upscaled to 1080p: 10 × $0.025 × 2 = **~$0.50**
+
+Use the [Video Quote API](/api-reference/endpoint/video/quote) for exact pricing before upscaling.
+
+---
+
+## Price Quote
+
+Get exact cost before upscaling:
+
+**Request:**
+```json
+{
+  "model": "topaz-video-upscale",
+  "duration": "30s",
+  "resolution": "4k"
+}
+```
+
+**Response:**
+```json
+{
+  "quote": 3.00
+}
+```
+
+Quote is in USD.
+
+---
+
+## Limitations
+
+| Constraint | Value |
+|---|---|
+| Maximum input duration | 300 seconds (5 minutes) |
+| Supported input formats | MP4, MOV |
+| Supported resolutions | 720p, 1080p, 4K |
+| Audio generation | Not supported |
+| Prompt processing | Not applicable (prompt is ignored) |
+
+---
+
+## Errors
+
+| Status | Meaning | Action |
+|--------|---------|--------|
+| 400 | Invalid parameters (missing `video_url`, unsupported format, duration exceeds 300s) | Check request body |
+| 401 | Auth failed | Check API key |
+| 402 | Insufficient balance | Add funds |
+| 413 | Video file too large | Reduce video size |
+| 500 | Processing failed | Retry with backoff |
+| 503 | Model at capacity | Retry with backoff |
+
+---
+
+## Available Models
+
+| Model | Description |
+|---|---|
+| `topaz-video-upscale` | Professional-grade video upscaling powered by Topaz technology |
+
+See [Video Models](/models/video) for the full video model catalog.
