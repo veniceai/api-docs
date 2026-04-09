@@ -5,7 +5,7 @@ info:
   description: The Venice.ai API.
   termsOfService: https://venice.ai/legal/tos
   title: Venice.ai API
-  version: "20260408.024702"
+  version: "20260409.054654"
 openapi: 3.0.0
 security:
   - BearerAuth: []
@@ -31,6 +31,49 @@ tags:
       beta and may be unstable. Endpoints, request/response schemas, and
       behavior may change without notice."
     name: Billing
+  - description: >-
+      Wallet-based API access using the x402 protocol. No API key required —
+      authenticate with an Ethereum wallet.
+
+
+      **How it works:**
+
+      1. **Authenticate** — Send an `X-Sign-In-With-X` header (base64-encoded
+      signed SIWE message) with any request. See the `SignInWithXAuth` security
+      scheme for the exact format.
+
+      2. **Top up** — `POST /x402/top-up` without a payment header returns
+      payment requirements. Sign a USDC transfer on Base using the x402 SDK
+      (`npm install x402`) and re-submit with the `X-402-Payment` header.
+
+      3. **Use any endpoint** — All inference endpoints (chat, image, audio,
+      video, embeddings) accept `SignInWithXAuth` as an alternative to
+      `BearerAuth`. Charges are deducted from your USDC credit balance.
+
+      4. **Monitor balance** — `GET /x402/balance/{walletAddress}` returns your
+      current balance. The `X-Balance-Remaining` response header on inference
+      calls also reports it.
+
+
+      **Quick start (5 lines):**
+
+      ```
+
+      import { VeniceClient } from '@venice-ai/x402-client'
+
+      const venice = new VeniceClient(process.env.WALLET_KEY)
+
+      await venice.topUp(10) // $10 USDC on Base
+
+      const res = await venice.chat({ model: 'llama-3.3-70b', messages: [{ role:
+      'user', content: 'Hello!' }] })
+
+      ```
+
+
+      **Payment:** USDC on Base (chain ID 8453). Minimum top-up: $5.
+      Alternatively, stake DIEM tokens for daily credits (1 DIEM = $1/day).
+    name: x402
 components:
   securitySchemes:
     BearerAuth:
@@ -38,7 +81,80 @@ components:
       scheme: bearer
       type: http
     SignInWithXAuth:
-      description: base64-encoded JSON SIWE payload message proving wallet ownership
+      description: >-
+        Wallet-based authentication using the x402 protocol (Sign-In-With-X /
+        EIP-4361 SIWE).
+
+
+        **Header format:** Base64-encoded JSON object with the following fields:
+
+        - `address` — Ethereum wallet address (checksummed)
+
+        - `message` — EIP-4361 SIWE message string (created with
+        `SiweMessage.prepareMessage()`)
+
+        - `signature` — Hex-encoded signature of the message, signed by the
+        wallet's private key
+
+        - `timestamp` — Unix timestamp in milliseconds
+
+        - `chainId` — Chain ID (use `8453` for Base)
+
+
+        **SIWE message fields:**
+
+        - `domain`: `outerface.venice.ai`
+
+        - `uri`: `https://outerface.venice.ai`
+
+        - `version`: `"1"`
+
+        - `chainId`: `8453`
+
+        - `nonce`: Random 16-character hex string
+
+        - `issuedAt` / `expirationTime`: ISO timestamps (recommended TTL: 10
+        minutes)
+
+        - `statement`: `"Sign in to Venice API"`
+
+
+        **Example (TypeScript):**
+
+        ```
+
+        import { Wallet } from 'ethers'
+
+        import { SiweMessage } from 'siwe'
+
+
+        const wallet = new Wallet(PRIVATE_KEY)
+
+        const msg = new SiweMessage({ domain: 'outerface.venice.ai', address:
+        wallet.address, statement: 'Sign in to Venice API', uri:
+        'https://outerface.venice.ai', version: '1', chainId: 8453, nonce:
+        crypto.randomUUID().replace(/-/g, '').slice(0, 16), issuedAt: new
+        Date().toISOString(), expirationTime: new Date(Date.now() +
+        600000).toISOString() })
+
+        const signature = await wallet.signMessage(msg.prepareMessage())
+
+        const header = btoa(JSON.stringify({ address: wallet.address, message:
+        msg.prepareMessage(), signature, timestamp: Date.now(), chainId: 8453
+        }))
+
+        // Set header: X-Sign-In-With-X: <header>
+
+        ```
+
+
+        **SDK:** `npm install @venice-ai/x402-client` provides `VeniceClient`
+        and `createAuthFetch` which handle this automatically.
+
+
+        **Billing:** x402 users pay from a prepaid USDC credit balance. Top up
+        via `POST /x402/top-up`. When balance is insufficient, endpoints return
+        `402` with structured top-up instructions.
       in: header
       name: X-Sign-In-With-X
       type: apiKey
@@ -82,6 +198,151 @@ components:
             tension.
       required:
         - error
+    X402InferencePaymentRequired:
+      type: object
+      properties:
+        error:
+          type: string
+          enum:
+            - Payment required
+          description: Error message indicating payment is required.
+        code:
+          type: string
+          enum:
+            - PAYMENT_REQUIRED
+          description: Machine-readable error code.
+        message:
+          type: string
+          description: Human-readable context about the payment requirement.
+          example: Insufficient x402 balance
+        suggestedTopUpUsd:
+          type: number
+          description: Suggested amount to top up in USD.
+          example: 10
+        minimumTopUpUsd:
+          type: number
+          description: Minimum allowed top-up amount in USD.
+          example: 5
+        supportedTokens:
+          type: array
+          items:
+            type: string
+          description: List of supported token symbols for payment.
+          example:
+            - USDC
+        supportedChains:
+          type: array
+          items:
+            type: string
+          description: List of supported blockchain networks.
+          example:
+            - base
+        topUpInstructions:
+          type: object
+          properties:
+            step1:
+              type: string
+              description: "First step: get payment requirements."
+              example: POST /api/v1/x402/top-up with no payment header to get payment
+                requirements
+            step2:
+              type: string
+              description: "Second step: sign the payment."
+              example: Sign a USDC transfer authorization using the x402 SDK
+                (createPaymentHeader)
+            step3:
+              type: string
+              description: "Third step: submit the payment."
+              example: POST /api/v1/x402/top-up with the signed X-402-Payment header
+            receiverWallet:
+              type: string
+              description: Venice receiver wallet address.
+              example: <RECEIVER_WALLET_ADDRESS>
+            tokenAddress:
+              type: string
+              description: USDC token contract address.
+              example: <USDC_TOKEN_ADDRESS>
+            tokenDecimals:
+              type: number
+              description: Token decimal places.
+              example: 6
+            network:
+              type: string
+              description: Target blockchain network.
+              example: eip155:8453
+            minimumAmountUsd:
+              type: number
+              description: Minimum top-up amount in USD.
+              example: 5
+          required:
+            - step1
+            - step2
+            - step3
+            - receiverWallet
+            - tokenAddress
+            - tokenDecimals
+            - network
+            - minimumAmountUsd
+          additionalProperties: false
+        siwxChallenge:
+          type: object
+          properties:
+            domain:
+              type: string
+              description: Domain for the SIWX challenge.
+              example: api.venice.ai
+            address:
+              type: string
+              description: Placeholder for wallet address.
+              example: "{{walletAddress}}"
+            uri:
+              type: string
+              description: Resource URI for the challenge.
+              example: https://api.venice.ai/api/v1/x402/top-up
+            version:
+              type: string
+              description: SIWX version.
+              example: "1"
+            chainId:
+              type: number
+              description: Chain ID for the signature.
+              example: 8453
+            nonce:
+              type: string
+              description: Unique nonce for replay protection.
+              example: "{{nonce}}"
+            issuedAt:
+              type: string
+              description: ISO timestamp when the challenge was issued.
+              example: 2026-04-09T12:00:00.000Z
+            expirationTime:
+              type: string
+              description: ISO timestamp when the challenge expires.
+              example: 2026-04-09T12:05:00.000Z
+            statement:
+              type: string
+              description: Human-readable statement for the signature.
+              example: Sign in with your wallet to access Venice x402 API
+          required:
+            - domain
+            - address
+            - uri
+            - version
+            - chainId
+            - nonce
+            - issuedAt
+            - expirationTime
+            - statement
+          additionalProperties: false
+      required:
+        - error
+        - code
+        - suggestedTopUpUsd
+        - minimumTopUpUsd
+        - supportedTokens
+        - supportedChains
+        - topUpInstructions
+        - siwxChallenge
     ChatCompletionRequest:
       type: object
       properties:
@@ -4547,11 +4808,17 @@ components:
 paths:
   /chat/completions:
     post:
-      description: Run text inference based on the supplied parameters. Supports
-        multimodal inputs including text, images (image_url), audio
-        (input_audio), and video (video_url) for compatible models. Long running
-        requests should use the streaming API by setting stream=true in your
-        request.
+      description: >-
+        Run text inference based on the supplied parameters. Supports multimodal
+        inputs including text, images (image_url), audio (input_audio), and
+        video (video_url) for compatible models. Long running requests should
+        use the streaming API by setting stream=true in your request.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: createChatCompletion
       parameters:
         - description: Supported compression encodings (gzip, br). Only applied when
@@ -4577,6 +4844,13 @@ paths:
         "200":
           description: OK
           headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
             Content-Encoding:
               description: The encoding used to compress the response
               schema:
@@ -5101,12 +5375,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -5174,7 +5482,16 @@ paths:
 
         This endpoint supports streaming via Server-Sent Events when `stream:
         true` is set.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: createResponse
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: Create a response (Alpha)
       tags:
         - Responses (Alpha)
@@ -5186,6 +5503,14 @@ paths:
       responses:
         "200":
           description: Successful response
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             application/json:
               schema:
@@ -5404,6 +5729,47 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StandardError"
+        "402":
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "429":
           description: Rate limit exceeded
           content:
@@ -5418,7 +5784,14 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /image/generate:
     post:
-      description: Generate an image based on input parameters
+      description: >-
+        Generate an image based on input parameters
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: generateImage
       parameters:
         - description: Supported compression encodings (gzip, br). Only applied when
@@ -5429,6 +5802,9 @@ paths:
           schema:
             example: gzip, br
             type: string
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/image/generate
       tags:
         - Image
@@ -5441,6 +5817,13 @@ paths:
         "200":
           description: Successfully generated image
           headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
             Content-Encoding:
               description: The encoding used to compress the response
               schema:
@@ -5542,12 +5925,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -5574,10 +5991,17 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /images/generations:
     post:
-      description: Generate an image based on input parameters using an OpenAI
-        compatible endpoint. This endpoint does not support the full feature set
-        of the Venice Image Generation endpoint, but is compatible with the
-        existing OpenAI endpoint.
+      description: >-
+        Generate an image based on input parameters using an OpenAI compatible
+        endpoint. This endpoint does not support the full feature set of the
+        Venice Image Generation endpoint, but is compatible with the existing
+        OpenAI endpoint.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: simpleGenerateImage
       parameters:
         - description: Supported compression encodings (gzip, br).
@@ -5587,6 +6011,9 @@ paths:
           schema:
             example: gzip, br
             type: string
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/image/generations
       tags:
         - Image
@@ -5599,6 +6026,13 @@ paths:
         "200":
           description: Successfully generated image
           headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
             Content-Encoding:
               description: The encoding used to compress the response
               schema:
@@ -5677,12 +6111,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -5756,10 +6224,17 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /image/upscale:
     post:
-      description: Upscale or enhance an image based on the supplied parameters. Using
-        a scale of 1 with enhance enabled will only run the enhancer. The image
+      description: >-
+        Upscale or enhance an image based on the supplied parameters. Using a
+        scale of 1 with enhance enabled will only run the enhancer. The image
         can be provided either as a multipart form-data file upload or as a
         base64-encoded string in a JSON request.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: upscaleImage
       requestBody:
         content:
@@ -5769,12 +6244,23 @@ paths:
           multipart/form-data:
             schema:
               $ref: "#/components/schemas/UpscaleImageRequest"
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/image/upscale
       tags:
         - Image
       responses:
         "200":
           description: OK
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             image/png:
               schema:
@@ -5793,12 +6279,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -5825,9 +6345,16 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /image/edit:
     post:
-      description: Edit or modify an image based on the supplied prompt. The image can
-        be provided either as a multipart form-data file upload or as a
+      description: >-
+        Edit or modify an image based on the supplied prompt. The image can be
+        provided either as a multipart form-data file upload or as a
         base64-encoded string in a JSON request.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: editImage
       requestBody:
         content:
@@ -5871,6 +6398,9 @@ paths:
                         - nano-banana-pro-edit
                         - seedream-v4-edit
                         - seedream-v5-lite-edit
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/image/edit
       tags:
         - Image
@@ -5878,6 +6408,13 @@ paths:
         "200":
           description: OK
           headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
             x-venice-is-content-violation:
               description: Indicates if the generated image does not meet Venice terms of
                 service.
@@ -5923,12 +6460,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -5955,7 +6526,7 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /image/multi-edit:
     post:
-      description: >
+      description: >-
         Edit or modify an image using up to three layered inputs (base image
         plus masks/overlays).
 
@@ -5971,6 +6542,12 @@ paths:
           - Raw base64 string: `"iVBORw0KGgoAAAANSUhEUgAA..."`
           - Data URL: `"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."`
           - HTTP/HTTPS URL: `"https://example.com/image.png"`
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: multiEditImage
       requestBody:
         content:
@@ -6014,6 +6591,9 @@ paths:
                         - nano-banana-pro-edit
                         - seedream-v4-edit
                         - seedream-v5-lite-edit
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/image/multi-edit
       tags:
         - Image
@@ -6021,6 +6601,13 @@ paths:
         "200":
           description: OK
           headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
             x-venice-is-content-violation:
               description: Indicates if the generated image does not meet Venice terms of
                 service.
@@ -6056,12 +6643,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -6088,10 +6709,17 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /image/background-remove:
     post:
-      description: Remove the background from an image using AI. The image can be
-        provided either as a multipart form-data file upload, as a
-        base64-encoded string in a JSON request, or as an image URL. Returns a
-        PNG image with transparent background.
+      description: >-
+        Remove the background from an image using AI. The image can be provided
+        either as a multipart form-data file upload, as a base64-encoded string
+        in a JSON request, or as an image URL. Returns a PNG image with
+        transparent background.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: backgroundRemoveImage
       requestBody:
         content:
@@ -6101,12 +6729,23 @@ paths:
           multipart/form-data:
             schema:
               $ref: "#/components/schemas/BackgroundRemoveImageRequest"
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/image/background-remove
       tags:
         - Image
       responses:
         "200":
           description: OK - PNG image with transparent background
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             image/png:
               schema:
@@ -6125,12 +6764,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -8212,7 +8885,14 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /embeddings:
     post:
-      description: Create embeddings for the supplied input.
+      description: >-
+        Create embeddings for the supplied input.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: createEmbedding
       parameters:
         - description: Supported compression encodings (gzip, br)
@@ -8222,6 +8902,9 @@ paths:
           schema:
             example: gzip, br
             type: string
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/embeddings
       tags:
         - Embeddings
@@ -8235,6 +8918,13 @@ paths:
         "200":
           description: OK
           headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
             Content-Encoding:
               description: The encoding used to compress the response
               schema:
@@ -8324,12 +9014,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -8356,13 +9080,23 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /audio/speech:
     post:
-      description: Converts text to speech using various voice models and formats.
+      description: >-
+        Converts text to speech using various voice models and formats.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: createSpeech
       requestBody:
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateSpeechRequestSchema"
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/audio/speech
       tags:
         - Audio
@@ -8370,6 +9104,14 @@ paths:
       responses:
         "200":
           description: Audio content generated successfully
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             audio/aac:
               schema:
@@ -8410,12 +9152,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "403":
           description: Unauthorized access
           content:
@@ -8448,13 +9224,23 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /audio/transcriptions:
     post:
-      description: Transcribes audio into the input language.
+      description: >-
+        Transcribes audio into the input language.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: createTranscription
       requestBody:
         content:
           multipart/form-data:
             schema:
               $ref: "#/components/schemas/CreateTranscriptionRequestSchema"
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/audio/transcriptions
       tags:
         - Audio
@@ -8462,6 +9248,14 @@ paths:
       responses:
         "200":
           description: Transcription completed successfully
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             application/json:
               schema:
@@ -8544,12 +9338,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "403":
           description: Unauthorized access
           content:
@@ -8591,11 +9419,21 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /video/complete:
     post:
-      description: Delete a video generation request from storage after it has been
+      description: >-
+        Delete a video generation request from storage after it has been
         successfully downloaded. Videos can be automatically deleted after
         retrieval by setting the `delete_media_on_completion` flag to true when
         calling the retrieve API.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: completeVideo
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/video/complete
       tags:
         - Video
@@ -8607,6 +9445,14 @@ paths:
       responses:
         "200":
           description: Video generation request completed successfully
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             application/json:
               schema:
@@ -8640,8 +9486,18 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /video/queue:
     post:
-      description: Queue a new video generation request.
+      description: >-
+        Queue a new video generation request.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: queueVideo
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/video/queue
       tags:
         - Video
@@ -8653,6 +9509,14 @@ paths:
       responses:
         "200":
           description: Video generation request queued successfully
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             application/json:
               schema:
@@ -8685,12 +9549,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "403":
           description: The specified model is unavailable in your region. Use of Tor,
             VPNs, proxies, or other means to circumvent this restriction is a
@@ -8760,9 +9658,19 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /video/retrieve:
     post:
-      description: Retrieve a video generation result. Returns the video file if
-        completed, or a status if the request is still processing.
+      description: >-
+        Retrieve a video generation result. Returns the video file if completed,
+        or a status if the request is still processing.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: retrieveVideo
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/video/retrieve
       tags:
         - Video
@@ -8774,6 +9682,14 @@ paths:
       responses:
         "200":
           description: Video file if completed, or processing status if still in progress
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             application/json:
               schema:
@@ -8853,13 +9769,23 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /video/transcriptions:
     post:
-      description: Transcribes video audio from a public URL.
+      description: >-
+        Transcribes video audio from a public URL.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: createVideoTranscription
       requestBody:
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateVideoTranscriptionRequestSchema"
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/video/transcriptions
       tags:
         - Video
@@ -8867,6 +9793,14 @@ paths:
       responses:
         "200":
           description: Video transcription completed successfully
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             application/json:
               schema:
@@ -8899,12 +9833,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "403":
           description: Unauthorized access
           content:
@@ -8925,11 +9893,21 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /audio/complete:
     post:
-      description: Mark an audio generation request as complete and clean up the
-        generated media from storage. Call this after you have successfully
-        downloaded the audio if you did not set delete_media_on_completion in
-        the retrieve request.
+      description: >-
+        Mark an audio generation request as complete and clean up the generated
+        media from storage. Call this after you have successfully downloaded the
+        audio if you did not set delete_media_on_completion in the retrieve
+        request.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: completeAudio
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/audio/complete
       tags:
         - Audio
@@ -8942,6 +9920,14 @@ paths:
         "200":
           description: Media cleanup result. A success value of false indicates cleanup
             did not complete and can be retried later.
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             application/json:
               schema:
@@ -8975,8 +9961,18 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /audio/queue:
     post:
-      description: Queue a new audio generation request.
+      description: >-
+        Queue a new audio generation request.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: queueAudio
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/audio/queue
       tags:
         - Audio
@@ -8988,6 +9984,14 @@ paths:
       responses:
         "200":
           description: Audio generation request queued successfully
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             application/json:
               schema:
@@ -9028,12 +10032,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/StandardError"
         "402":
-          description: Insufficient USD or Diem balance to complete request. Visit
-            https://venice.ai/settings/api to add credits.
+          description: >-
+            Insufficient balance. Response varies by authentication method:
+
+
+            **API Key users:** Standard error response with
+            `INSUFFICIENT_BALANCE` code. Top up your Venice balance at
+            venice.ai.
+
+
+            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
+            code containing:
+
+            - `topUpInstructions`: Step-by-step guide to top up via x402
+            protocol
+
+            - `siwxChallenge`: Sign-In-With-X challenge template for
+            authentication
+
+            - `supportedTokens` / `supportedChains`: Accepted payment methods
+
+
+            The `X-Payment-Required` header also contains a base64-encoded JSON
+            object with the same payment requirements for protocol-level
+            discovery.
+          headers:
+            X-Payment-Required:
+              description: Base64-encoded JSON with x402 payment requirements and SIWX
+                challenge. Present only for x402 wallet authentication. Decode
+                to get payment instructions programmatically.
+              required: false
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StandardError"
+                oneOf:
+                  - $ref: "#/components/schemas/StandardError"
+                  - $ref: "#/components/schemas/X402InferencePaymentRequired"
+                discriminator:
+                  propertyName: code
         "422":
           description: Your prompt violates the content policy of Venice.ai or the model
             provider
@@ -9099,10 +10137,20 @@ paths:
                 $ref: "#/components/schemas/StandardError"
   /audio/retrieve:
     post:
-      description: Retrieve the status or result of an audio generation request. If
-        the audio is still being generated, returns processing status with
-        estimated time. If complete, returns the audio data.
+      description: >-
+        Retrieve the status or result of an audio generation request. If the
+        audio is still being generated, returns processing status with estimated
+        time. If complete, returns the audio data.
+
+
+        **Authentication:** This endpoint accepts either a Bearer API key or an
+        `X-Sign-In-With-X` header for x402 wallet-based authentication. When
+        using x402, a `402 Payment Required` response indicates insufficient
+        balance and includes top-up instructions.
       operationId: retrieveAudio
+      security:
+        - BearerAuth: []
+        - SignInWithXAuth: []
       summary: /api/v1/audio/retrieve
       tags:
         - Audio
@@ -9114,6 +10162,14 @@ paths:
       responses:
         "200":
           description: Audio generation status or completed audio
+          headers:
+            X-Balance-Remaining:
+              description: Remaining x402 credit balance in USD after this request (only
+                present for x402 auth).
+              required: false
+              schema:
+                type: string
+                example: "4.230000"
           content:
             application/json:
               schema:
