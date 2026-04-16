@@ -37,11 +37,14 @@ Content-Type: application/json
 ```json
 {
   "model": "wan-2.5-preview-text-to-video",
-  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000",
+  "download_url": "https://private-share.venice.ai/v1/share/read/..."
 }
 ```
 
-Save both `model` and `queue_id` - you need them for all subsequent calls.
+`download_url` is optional. Some models include a pre-signed URL you will use to download the finished video instead of reading it from the retrieve response. If present, persist it alongside `queue_id` since it is only returned once.
+
+Save `model`, `queue_id`, and `download_url` (if present) for all subsequent calls.
 
 ## Step 2: Poll for Completion
 
@@ -63,6 +66,7 @@ Content-Type: application/json
 |--------------|---------|--------|
 | `application/json` | Still processing | Wait 5s, poll again |
 | `video/mp4` | Complete | Response body is the video file |
+| `application/json` with `"COMPLETED"` | Complete, video not inline | `GET` the `download_url` from the queue response |
 
 **Processing response (200, application/json):**
 ```json
@@ -77,6 +81,9 @@ Times are in milliseconds. Use `average_execution_time` to estimate remaining wa
 
 **Complete response (200, video/mp4):**
 Response body is raw binary video data. Save to file.
+
+**Complete response (200, application/json with `"COMPLETED"`):**
+For models that returned a `download_url` at queue time, retrieve always returns JSON. Fetch the video with `GET download_url`. The URL is pre-signed (no auth header needed) and valid for 24 hours.
 
 ## Step 3: Cleanup (Optional)
 
@@ -132,6 +139,7 @@ resp = requests.post(f"{BASE_URL}/video/queue", headers=HEADERS, json={
 })
 data = resp.json()
 model, queue_id = data["model"], data["queue_id"]
+download_url = data.get("download_url")
 
 # Poll
 while True:
@@ -140,6 +148,10 @@ while True:
     if "video/mp4" in resp.headers.get("Content-Type", ""):
         with open("output.mp4", "wb") as f:
             f.write(resp.content)
+        break
+    if resp.json().get("status") == "COMPLETED" and download_url:
+        with open("output.mp4", "wb") as f:
+            f.write(requests.get(download_url).content)
         break
     time.sleep(5)
 
@@ -162,7 +174,7 @@ const queueResp = await fetch(`${BASE_URL}/video/queue`, {
         duration: "5s", resolution: "720p", aspect_ratio: "16:9"
     })
 });
-const {model, queue_id} = await queueResp.json();
+const {model, queue_id, download_url} = await queueResp.json();
 
 // Poll
 while (true) {
@@ -173,6 +185,13 @@ while (true) {
     if (resp.headers.get("Content-Type")?.includes("video/mp4")) {
         const fs = await import("fs");
         fs.writeFileSync("output.mp4", Buffer.from(await resp.arrayBuffer()));
+        break;
+    }
+    const status = await resp.json();
+    if (status.status === "COMPLETED" && download_url) {
+        const fs = await import("fs");
+        const video = await fetch(download_url);
+        fs.writeFileSync("output.mp4", Buffer.from(await video.arrayBuffer()));
         break;
     }
     await new Promise(r => setTimeout(r, 5000));
@@ -289,7 +308,8 @@ Quote is in USD.
 | 400 | `queue`, `quote`, `retrieve`, `complete` | Invalid parameters | Check request body against schema |
 | 401 | `queue`, `retrieve`, `complete` | Auth failed | Check API key |
 | 402 | `queue` | Insufficient balance | Add funds |
-| 404 | `retrieve` | Media not found (invalid, expired, or deleted) | Verify `model`/`queue_id` or re-queue |
+| 404 | `retrieve`, `download_url` | Media not found (invalid, expired, or deleted) | Verify `model`/`queue_id` or re-queue |
+| 410 | `download_url` | Pre-signed URL expired (>24h) | Re-queue the generation |
 | 413 | `queue` | Payload too large | Reduce image/audio size |
 | 422 | `queue`, `retrieve` | Content violation | Modify prompt |
 | 500 | `queue`, `retrieve`, `complete` | Inference/processing failed | Retry with backoff; contact support if persistent |
@@ -300,10 +320,11 @@ Quote is in USD.
 ## Polling Strategy
 
 1. Poll `/video/retrieve` on an interval (for example, every 5 seconds)
-2. If `Content-Type` is `application/json`, status is still `PROCESSING`; inspect `average_execution_time` and `execution_duration` (milliseconds)
+2. If `Content-Type` is `application/json` and `status` is `"PROCESSING"`, wait and poll again. Use `average_execution_time` and `execution_duration` (milliseconds) to estimate remaining time
 3. If `Content-Type` is `video/mp4`, save the response body as your output file
-4. Optional cleanup: set `delete_media_on_completion: true` on retrieve, or call `/video/complete` after download
-5. Handle `404` as invalid, expired, or deleted media; handle `500/503` with retries/backoff
+4. If `Content-Type` is `application/json` and `status` is `"COMPLETED"`, `GET` the `download_url` from the queue response to fetch the video
+5. Optional cleanup: set `delete_media_on_completion: true` on retrieve, or call `/video/complete` after download
+6. Handle `404` as invalid, expired, or deleted media; handle `500/503` with retries/backoff
 
 ---
 
