@@ -1286,6 +1286,205 @@
     }).catch(() => {});
   }
 
+  // ===== TTS Voice Picker =====
+
+  const KOKORO_LANG_MAP = {
+    a: 'American English',
+    b: 'British English',
+    z: 'Chinese',
+    j: 'Japanese',
+    e: 'Spanish',
+    f: 'French',
+    h: 'Hindi',
+    i: 'Italian',
+    p: 'Portuguese (BR)'
+  };
+
+  const TTS_MODEL_BLURBS = {
+    'tts-kokoro': 'Open-weights Kokoro 82M — multilingual coverage across 10 languages.',
+    'tts-elevenlabs-turbo-v2-5': 'Curated voices from the ElevenLabs Turbo v2.5 library.',
+    'tts-minimax-speech-02-hd': 'MiniMax Speech-02 HD — voice names describe persona and style directly.',
+    'tts-inworld-1-5-max': 'Expressive English voices from Inworld AI.',
+    'tts-chatterbox-hd': 'High-fidelity English voices from Resemble AI Chatterbox HD.',
+    'tts-orpheus': 'Conversational English voices from open-source Orpheus 3B.',
+    'tts-qwen3-0-6b': 'Qwen 3 TTS, 0.6B parameter variant. Shares its catalog with the 1.7B variant.',
+    'tts-qwen3-1-7b': 'Qwen 3 TTS, 1.7B parameter variant. Higher quality than the 0.6B variant.',
+    'tts-xai-v1': "xAI TTS v1."
+  };
+
+  function kokoroVoiceMeta(voiceId) {
+    if (typeof voiceId !== 'string' || voiceId.length < 3 || voiceId[2] !== '_') return '';
+    const langKey = voiceId[0];
+    const genderKey = voiceId[1];
+    const lang = KOKORO_LANG_MAP[langKey];
+    if (!lang) return '';
+    const gender = genderKey === 'f' ? 'Female' : genderKey === 'm' ? 'Male' : '';
+    let meta = gender ? `${lang} · ${gender}` : lang;
+    if (voiceId === 'af_sky') meta += ' · default';
+    return meta;
+  }
+
+  function getTTSModels(models) {
+    return (models || [])
+      .filter(m => m.type === 'tts' && !isDeprecatedModel(m))
+      .sort((a, b) => {
+        const an = (a.model_spec?.name || a.id).toLowerCase();
+        const bn = (b.model_spec?.name || b.id).toLowerCase();
+        return an.localeCompare(bn);
+      });
+  }
+
+  function renderVoicePickerShell(ttsModels, selectedId) {
+    const options = ttsModels.map(m => {
+      const id = escapeHtml(m.id);
+      const name = escapeHtml(m.model_spec?.name || m.id);
+      const count = m.model_spec?.voices?.length || 0;
+      const sel = m.id === selectedId ? ' selected' : '';
+      return `<option value="${id}"${sel}>${name} — ${count} voice${count === 1 ? '' : 's'}</option>`;
+    }).join('');
+
+    return `
+      <div class="vtp-picker">
+        <div class="vtp-row vtp-row-controls">
+          <label class="vtp-field vtp-field-model">
+            <span class="vtp-label">Model</span>
+            <select class="vtp-model-select" aria-label="Choose a TTS model">${options}</select>
+          </label>
+          <label class="vtp-field vtp-field-search">
+            <span class="vtp-label">Search voices</span>
+            <input type="search" class="vtp-search" placeholder="e.g. af_sky" aria-label="Search voices" />
+          </label>
+        </div>
+        <div class="vtp-meta" data-target="meta"></div>
+        <div class="vtp-list-header">
+          <span class="vtp-list-title">Voices</span>
+          <span class="vtp-count" data-target="count"></span>
+        </div>
+        <div class="vtp-voice-list" data-target="list"></div>
+        <p class="vtp-hint">Click any voice to copy its ID. Use it as the <code>voice</code> field together with the matching <code>model</code> above.</p>
+      </div>
+    `;
+  }
+
+  function renderVoiceMeta(model) {
+    const id = escapeHtml(model.id);
+    const count = model.model_spec?.voices?.length || 0;
+    const price = model.model_spec?.pricing?.input?.usd;
+    const blurb = TTS_MODEL_BLURBS[model.id] || '';
+    const pills = [
+      `<span class="vtp-pill vtp-pill-id"><code>${id}</code></span>`,
+      `<span class="vtp-pill">${count} voice${count === 1 ? '' : 's'}</span>`
+    ];
+    if (typeof price === 'number') {
+      pills.push(`<span class="vtp-pill">${formatPrice(price)} / 1M chars</span>`);
+    }
+    return `
+      <div class="vtp-pills">${pills.join('')}</div>
+      ${blurb ? `<p class="vtp-blurb">${escapeHtml(blurb)}</p>` : ''}
+    `;
+  }
+
+  function renderVoiceRow(modelId, voiceId) {
+    const id = escapeHtml(voiceId);
+    const meta = modelId === 'tts-kokoro' ? kokoroVoiceMeta(voiceId) : '';
+    return `
+      <button class="vtp-voice" type="button" data-voice="${id}" title="Copy voice ID">
+        <span class="vtp-voice-id">${id}</span>
+        ${meta ? `<span class="vtp-voice-meta">${escapeHtml(meta)}</span>` : '<span class="vtp-voice-meta"></span>'}
+        <span class="vtp-voice-action" aria-hidden="true">
+          <span class="vtp-action-copy">Copy</span>
+          <span class="vtp-action-copied">Copied!</span>
+        </span>
+      </button>
+    `;
+  }
+
+  function refreshVoicePicker(rootEl, ttsModels) {
+    const select = rootEl.querySelector('.vtp-model-select');
+    const search = rootEl.querySelector('.vtp-search');
+    const meta = rootEl.querySelector('[data-target="meta"]');
+    const list = rootEl.querySelector('[data-target="list"]');
+    const count = rootEl.querySelector('[data-target="count"]');
+    if (!select || !meta || !list || !count) return;
+
+    const model = ttsModels.find(m => m.id === select.value) || ttsModels[0];
+    if (!model) return;
+
+    const allVoices = model.model_spec?.voices || [];
+    const q = (search.value || '').trim().toLowerCase();
+    const matches = q
+      ? allVoices.filter(v => v.toLowerCase().includes(q) || (model.id === 'tts-kokoro' && kokoroVoiceMeta(v).toLowerCase().includes(q)))
+      : allVoices;
+
+    meta.innerHTML = renderVoiceMeta(model);
+
+    if (matches.length === 0) {
+      list.innerHTML = '<div class="vtp-empty">No voices match your search.</div>';
+    } else {
+      list.innerHTML = matches.map(v => renderVoiceRow(model.id, v)).join('');
+    }
+
+    count.textContent = q ? `${matches.length} of ${allVoices.length}` : `${allVoices.length} total`;
+  }
+
+  function mountVoicePicker(el, models) {
+    const ttsModels = getTTSModels(models);
+    if (ttsModels.length === 0) {
+      el.innerHTML = '<p class="vtp-empty">No TTS models available.</p>';
+      return;
+    }
+
+    const preferred = ttsModels.find(m => m.id === 'tts-kokoro') || ttsModels[0];
+
+    const existingSelect = el.querySelector('.vtp-model-select');
+    const existingSearch = el.querySelector('.vtp-search');
+    const previousSelected = existingSelect ? existingSelect.value : preferred.id;
+    const previousQuery = existingSearch ? existingSearch.value : '';
+
+    const stillValid = ttsModels.some(m => m.id === previousSelected);
+    const selectedId = stillValid ? previousSelected : preferred.id;
+
+    el.innerHTML = renderVoicePickerShell(ttsModels, selectedId);
+
+    const root = el.querySelector('.vtp-picker');
+    if (!root) return;
+
+    const search = root.querySelector('.vtp-search');
+    if (search && previousQuery) search.value = previousQuery;
+
+    refreshVoicePicker(root, ttsModels);
+
+    const select = root.querySelector('.vtp-model-select');
+    if (select) {
+      select.addEventListener('change', () => refreshVoicePicker(root, ttsModels));
+    }
+    if (search) {
+      search.addEventListener('input', () => refreshVoicePicker(root, ttsModels));
+    }
+  }
+
+  async function initVoicePicker() {
+    const el = document.getElementById('tts-voice-picker-placeholder');
+    if (!el) return;
+
+    el.style.visibility = 'visible';
+    el.style.height = 'auto';
+    el.style.overflow = 'visible';
+
+    mountVoicePicker(el, STATIC_MODELS);
+
+    const cachedModels = getCachedModels();
+    if (cachedModels && cachedModels.length > 0) {
+      mountVoicePicker(el, cachedModels);
+    }
+
+    fetchModelsFromAPI().then(freshModels => {
+      if (freshModels && freshModels.length > 0) {
+        mountVoicePicker(el, freshModels);
+      }
+    }).catch(() => {});
+  }
+
   function renderPricingTables(models) {
     const chatEl = document.getElementById('pricing-chat-placeholder');
     const embeddingEl = document.getElementById('pricing-embedding-placeholder');
@@ -2089,7 +2288,8 @@
     traitsList: { initialized: false, rendered: false, promise: null },
     betaModels: { initialized: false, rendered: false, promise: null },
     cachePricing: { initialized: false, rendered: false, promise: null },
-    reasoningModels: { initialized: false, rendered: false, promise: null }
+    reasoningModels: { initialized: false, rendered: false, promise: null },
+    voicePicker: { initialized: false, rendered: false, promise: null }
   };
 
   // Global copy button handler
@@ -2097,6 +2297,17 @@
     const btn = e.target.closest('.vpt-copy-btn');
     if (!btn) return;
     await navigator.clipboard.writeText(btn.dataset.modelId).catch(() => {});
+    btn.classList.add('copied');
+    setTimeout(() => btn.classList.remove('copied'), 1500);
+  });
+
+  // Voice-row copy handler (TTS voice picker)
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.vtp-voice');
+    if (!btn) return;
+    const voiceId = btn.dataset.voice;
+    if (!voiceId) return;
+    await navigator.clipboard.writeText(voiceId).catch(() => {});
     btn.classList.add('copied');
     setTimeout(() => btn.classList.remove('copied'), 1500);
   });
@@ -2202,6 +2413,14 @@
     resetCheck: el => el.innerHTML === ''
   });
 
+  const tryInitVoicePicker = createPageInitializer({
+    name: 'voicePicker',
+    pathMatch: 'text-to-speech',
+    elementId: 'tts-voice-picker-placeholder',
+    initFn: initVoicePicker,
+    resetCheck: el => el.textContent.includes('Loading') || el.innerHTML === ''
+  });
+
   function resetAllInitializers() {
     modelsInitialized = false;
     Object.values(pageInitializers).forEach(state => {
@@ -2221,6 +2440,7 @@
     tryInitBetaModels();
     tryInitCachePricing();
     tryInitReasoningModels();
+    tryInitVoicePicker();
   }
 
   function setupObserver() {
@@ -2264,6 +2484,7 @@
     retryInit('beta-models', () => pageInitializers.betaModels.initialized, tryInitBetaModels);
     retryInit('prompt-caching', () => pageInitializers.cachePricing.initialized, tryInitCachePricing);
     retryInit('reasoning-models', () => pageInitializers.reasoningModels.initialized, tryInitReasoningModels);
+    retryInit('text-to-speech', () => pageInitializers.voicePicker.initialized, tryInitVoicePicker);
   }
   
   if (document.readyState === 'loading') {
