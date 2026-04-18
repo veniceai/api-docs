@@ -571,8 +571,7 @@
           <div class="vpt-row-right">${privacyTag}</div>
         </div>
         <div class="vpt-row-bottom">
-          <span class="vpt-price-item"><span class="vpt-price-label">Input (per 1M tokens)</span><span class="vpt-price-value">${formatPrice(pricing.input?.usd)}</span></span>
-          <span class="vpt-price-item"><span class="vpt-price-label">Output (per 1M tokens)</span><span class="vpt-price-value">${formatPrice(pricing.output?.usd)}</span></span>
+          <span class="vpt-price-item"><span class="vpt-price-label">Per 1M tokens</span><span class="vpt-price-value">${formatPrice(pricing.input?.usd)}</span></span>
         </div>
       </div>`;
     }).join('');
@@ -1915,6 +1914,8 @@
           priceStr = `${formatPrice(pricing.generation.usd)}/image`;
         } else if (model.type === 'inpaint' && pricing.inpaint) {
           priceStr = `${formatPrice(pricing.inpaint.usd)}/edit`;
+        } else if (model.type === 'embedding' && pricing.input) {
+          priceStr = `${formatPrice(pricing.input.usd)}/M tokens`;
         } else if (pricing.input && pricing.output) {
           priceStr = `${formatPrice(pricing.input.usd)}/M input <span class="vmb-pipe">|</span> ${formatPrice(pricing.output.usd)}/M output`;
           if (pricing.cache_input?.usd && pricing.cache_write?.usd) {
