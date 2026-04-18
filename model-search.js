@@ -1672,6 +1672,8 @@
           model._durations = durations;
       } else if (model.type === 'tts' && spec.voices?.length > 0) {
           contextStr = `${spec.voices.length} voices`;
+        } else if (model.type === 'embedding' && spec.embeddingDimensions) {
+          contextStr = `${spec.embeddingDimensions} dimensions`;
         }
         
       // Pricing display
