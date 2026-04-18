@@ -1301,9 +1301,9 @@
   };
 
   const TTS_MODEL_BLURBS = {
-    'tts-kokoro': 'Open-weights Kokoro 82M — multilingual coverage across 10 languages.',
+    'tts-kokoro': 'Open-weights Kokoro 82M with multilingual coverage across 10 languages.',
     'tts-elevenlabs-turbo-v2-5': 'Curated voices from the ElevenLabs Turbo v2.5 library.',
-    'tts-minimax-speech-02-hd': 'MiniMax Speech-02 HD — voice names describe persona and style directly.',
+    'tts-minimax-speech-02-hd': 'MiniMax Speech-02 HD. Voice names describe persona and style directly.',
     'tts-inworld-1-5-max': 'Expressive English voices from Inworld AI.',
     'tts-chatterbox-hd': 'High-fidelity English voices from Resemble AI Chatterbox HD.',
     'tts-orpheus': 'Conversational English voices from open-source Orpheus 3B.',
@@ -1340,7 +1340,7 @@
       const name = escapeHtml(m.model_spec?.name || m.id);
       const count = m.model_spec?.voices?.length || 0;
       const sel = m.id === selectedId ? ' selected' : '';
-      return `<option value="${id}"${sel}>${name} — ${count} voice${count === 1 ? '' : 's'}</option>`;
+      return `<option value="${id}"${sel}>${name} (${count} voice${count === 1 ? '' : 's'})</option>`;
     }).join('');
 
     return `
