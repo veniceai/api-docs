@@ -850,7 +850,6 @@ function renderBrowserShell(models, presetFilter) {
   const tableMarkdown = renderStaticTable(models, presetFilter);
 
   return `${MODEL_BROWSER_START}
-{/* This block is generated from models.json by scripts/generate-model-pages-static.js */}
 <template ${placeholderAttrs}></template>
 <template ${startAttrs}></template>
 

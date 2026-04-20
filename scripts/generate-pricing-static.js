@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Generate static pricing content for pricing.mdx from models.json.
+ * Generate static pricing content for pricing.mdx from the STATIC_MODELS
+ * snapshot in model-search.js.
  *
  * Placeholder divs are preserved so model-search.js can still enhance the
  * pricing page with fresher data at runtime.

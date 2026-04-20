@@ -2,7 +2,6 @@ const fs = require('fs');
 const path = require('path');
 
 const PROJECT_ROOT = path.join(__dirname, '..', '..');
-const MODELS_JSON_PATH = path.join(PROJECT_ROOT, 'models.json');
 const MODEL_SEARCH_PATH = path.join(PROJECT_ROOT, 'model-search.js');
 
 const API_BASE = 'https://api.venice.ai/api/v1/models';
@@ -114,17 +113,7 @@ function readStaticModelsFromModelSearch() {
 }
 
 function loadModels() {
-  if (fs.existsSync(MODELS_JSON_PATH)) {
-    return validateModels(JSON.parse(fs.readFileSync(MODELS_JSON_PATH, 'utf8')));
-  }
-
   return readStaticModelsFromModelSearch();
-}
-
-function writeModelsJson(models) {
-  const validated = validateModels(models);
-  fs.writeFileSync(MODELS_JSON_PATH, `${JSON.stringify(validated, null, 2)}\n`, 'utf8');
-  return MODELS_JSON_PATH;
 }
 
 function syncStaticModelsInModelSearch(models) {
@@ -158,7 +147,6 @@ module.exports = {
   API_BASE,
   MODEL_SEARCH_PATH,
   MODEL_TYPES,
-  MODELS_JSON_PATH,
   PROJECT_ROOT,
   dedupeModels,
   fetchAllModels,
@@ -167,6 +155,5 @@ module.exports = {
   readStaticModelsFromModelSearch,
   sortModels,
   syncStaticModelsInModelSearch,
-  validateModels,
-  writeModelsJson
+  validateModels
 };
