@@ -11,21 +11,22 @@ const path = require('path');
 
 const API_BASE = 'https://api.venice.ai/api/v1/models';
 const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video', 'music'];
+const STATIC_MODELS_REGEX = /\/\/ Static fallback data for instant pricing page load \(updated .*?\)\r?\n\s*const STATIC_MODELS = (\[[\s\S]*?\]);/;
 
 async function fetchAllModels() {
-  const results = await Promise.all(
-    MODEL_TYPES.map(async type => {
-      try {
-        const res = await fetch(`${API_BASE}?type=${type}`);
-        if (!res.ok) throw new Error(`${type}: ${res.status}`);
-        const data = await res.json();
-        return (data.data || []).map(m => ({ ...m, type }));
-      } catch (e) {
-        console.error(`Failed to fetch ${type}:`, e.message);
-        return [];
+  const results = await Promise.all(MODEL_TYPES.map(async type => {
+    try {
+      const res = await fetch(`${API_BASE}?type=${type}`);
+      if (!res.ok) {
+        throw new Error(`API returned ${res.status}`);
       }
-    })
-  );
+
+      const data = await res.json();
+      return (data.data || []).map(m => ({ ...m, type }));
+    } catch (error) {
+      throw new Error(`Failed to fetch ${type}: ${error.message}`);
+    }
+  }));
 
   const all = results.flat();
   const seen = new Set();
@@ -69,24 +70,40 @@ function sortModels(models) {
   });
 }
 
+function extractStaticModels(content) {
+  const match = content.match(STATIC_MODELS_REGEX);
+  if (!match) {
+    throw new Error('Could not find STATIC_MODELS in model-search.js');
+  }
+
+  return JSON.parse(match[1]);
+}
+
 async function main() {
+  const modelSearchPath = path.join(__dirname, '..', 'model-search.js');
+  const content = fs.readFileSync(modelSearchPath, 'utf-8');
+  const currentModels = extractStaticModels(content);
+
   console.log('Fetching models from API...');
   const models = await fetchAllModels();
   console.log(`Fetched ${models.length} models`);
 
   const cleaned = sortModels(models.map(cleanModel));
   const json = JSON.stringify(cleaned);
+  const currentJson = JSON.stringify(currentModels);
 
-  const modelSearchPath = path.join(__dirname, '..', 'model-search.js');
-  let content = fs.readFileSync(modelSearchPath, 'utf-8');
+  if (currentJson === json) {
+    console.log('STATIC_MODELS already up to date. Skipping pricing regeneration.');
+    return;
+  }
 
   const dateStr = new Date().toISOString().split('T')[0];
-  content = content.replace(
-    /\/\/ Static fallback data for instant pricing page load \(updated .*?\)\r?\n\s*const STATIC_MODELS = \[[\s\S]*?\];/,
+  const updatedContent = content.replace(
+    STATIC_MODELS_REGEX,
     `// Static fallback data for instant pricing page load (updated ${dateStr})\n  const STATIC_MODELS = ${json};`
   );
 
-  fs.writeFileSync(modelSearchPath, content, 'utf-8');
+  fs.writeFileSync(modelSearchPath, updatedContent, 'utf-8');
   console.log('Updated STATIC_MODELS in model-search.js');
 
   console.log('Regenerating pricing.mdx...');
