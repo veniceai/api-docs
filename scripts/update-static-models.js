@@ -93,17 +93,18 @@ async function main() {
   const currentJson = JSON.stringify(currentModels);
 
   if (currentJson === json) {
-    console.log('STATIC_MODELS already up to date.');
-  } else {
-    const dateStr = new Date().toISOString().split('T')[0];
-    const updatedContent = content.replace(
-      STATIC_MODELS_REGEX,
-      `// Static fallback data for instant pricing page load (updated ${dateStr})\n  const STATIC_MODELS = ${json};`
-    );
-
-    fs.writeFileSync(modelSearchPath, updatedContent, 'utf-8');
-    console.log('Updated STATIC_MODELS in model-search.js');
+    console.log('STATIC_MODELS already up to date. Skipping pricing regeneration.');
+    return;
   }
+
+  const dateStr = new Date().toISOString().split('T')[0];
+  const updatedContent = content.replace(
+    STATIC_MODELS_REGEX,
+    `// Static fallback data for instant pricing page load (updated ${dateStr})\n  const STATIC_MODELS = ${json};`
+  );
+
+  fs.writeFileSync(modelSearchPath, updatedContent, 'utf-8');
+  console.log('Updated STATIC_MODELS in model-search.js');
 
   console.log('Regenerating pricing.mdx...');
   require('./generate-pricing-static.js');

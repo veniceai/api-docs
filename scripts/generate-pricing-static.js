@@ -496,11 +496,16 @@ function generatePricingMdx() {
 // Main execution
 try {
   const output = generatePricingMdx();
-  
-  // Write directly to file to avoid encoding issues with PowerShell
   const outputPath = path.join(__dirname, '..', 'overview', 'pricing.mdx');
-  fs.writeFileSync(outputPath, output, 'utf8');
+  const existingOutput = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf8') : null;
+
+  if (existingOutput === output) {
+    console.log('Pricing page already up to date:', outputPath);
+    process.exit(0);
+  }
+
   console.log('Generated:', outputPath);
+  fs.writeFileSync(outputPath, output, 'utf8');
 } catch (error) {
   console.error('Error generating pricing.mdx:', error.message);
   process.exit(1);
