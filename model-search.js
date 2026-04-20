@@ -1712,58 +1712,41 @@
 
   // ========== MODEL BROWSER FUNCTIONS ==========
 
-  function removeStaticTableFallback(container) {
-    let startNode = container.nextSibling;
+  function getModelPagePresetFilter() {
+    const pathname = window.location.pathname.toLowerCase();
 
-    while (startNode) {
-      if (
-        startNode.nodeType === Node.ELEMENT_NODE &&
-        startNode.classList.contains('vmb-static-table-start')
-      ) {
-        break;
-      }
+    if (pathname.includes('/models/text-to-speech')) return 'tts';
+    if (pathname.includes('/models/speech-to-text')) return 'asr';
+    if (pathname.includes('/models/embeddings')) return 'embedding';
+    if (pathname.includes('/models/image')) return 'image';
+    if (pathname.includes('/models/video')) return 'video';
+    if (pathname.includes('/models/music')) return 'music';
+    if (pathname.includes('/models/text')) return 'text';
+    if (pathname.includes('/models/overview') || pathname.endsWith('/models') || pathname.endsWith('/models/')) return null;
 
-      startNode = startNode.nextSibling;
-    }
+    return null;
+  }
 
-    if (!startNode) {
-      return;
-    }
-
-    const nodesToRemove = [];
-    let currentNode = startNode;
-
-    while (currentNode) {
-      nodesToRemove.push(currentNode);
-
-      if (
-        currentNode.nodeType === Node.ELEMENT_NODE &&
-        currentNode.classList.contains('vmb-static-table-end')
-      ) {
-        nodesToRemove.forEach(node => node.remove());
-        return;
-      }
-
-      currentNode = currentNode.nextSibling;
-    }
+  function findModelFallbackTable() {
+    const main = document.querySelector('main') || document.body;
+    return main.querySelector('table');
   }
 
   async function init() {
     if (isInitializing) return;
     
-    const placeholder = document.getElementById('model-search-placeholder');
     let container = document.getElementById('venice-model-browser');
+    const fallbackTable = !container ? findModelFallbackTable() : null;
     const hasStaticShell = container &&
       container.querySelector('.vmb-toolbar') &&
       container.querySelector('.vmb-models');
-    const shouldRemoveFallbackTable = !hasStaticShell;
-    if (!placeholder && !container) {
+    if (!fallbackTable && !container) {
       setTimeout(init, 200);
       return;
     }
     
     isInitializing = true;
-    const presetFilter = (container?.dataset.filter || placeholder?.dataset.filter) || null;
+    const presetFilter = container?.dataset.filter || getModelPagePresetFilter();
     const hasCachedData = getCachedModels() !== null || STATIC_MODELS.length > 0;
 
     if (!hasStaticShell) {
@@ -1830,8 +1813,8 @@
         </div>
       `;
       
-      if (placeholder) {
-        placeholder.replaceWith(container);
+      if (fallbackTable) {
+        fallbackTable.replaceWith(container);
       }
     }
     container.dataset.vmbEnhanced = 'true';
@@ -1889,9 +1872,6 @@
 
     // Always render static data immediately for instant display
     updateModelsIfChanged(STATIC_MODELS);
-    if (shouldRemoveFallbackTable) {
-      removeStaticTableFallback(container);
-    }
 
     // Then try cache or fetch fresh data to update
     const cachedModels = getCachedModels();
@@ -2529,9 +2509,9 @@
   function tryInitModels() {
     if (modelsInitialized) return;
     if (!window.location.pathname.includes('/models')) return;
-    const placeholder = document.getElementById('model-search-placeholder');
     const container = document.getElementById('venice-model-browser');
-    if ((placeholder || container) && (!container || container.dataset.vmbEnhanced !== 'true')) {
+    const fallbackTable = !container ? findModelFallbackTable() : null;
+    if ((fallbackTable || container) && (!container || container.dataset.vmbEnhanced !== 'true')) {
       modelsInitialized = true;
       isInitializing = false;
       init();

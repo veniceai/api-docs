@@ -839,23 +839,10 @@ function renderStaticTable(models, presetFilter) {
 }
 
 function renderBrowserShell(models, presetFilter) {
-  const placeholderAttrs = [
-    'id="model-search-placeholder"',
-    presetFilter ? `data-filter="${escapeHtml(presetFilter)}"` : ''
-  ].filter(Boolean).join(' ');
-  const startAttrs = [
-    'class="vmb-static-table-start"',
-    presetFilter ? `data-filter="${escapeHtml(presetFilter)}"` : ''
-  ].filter(Boolean).join(' ');
   const tableMarkdown = renderStaticTable(models, presetFilter);
 
   return `${MODEL_BROWSER_START}
-<template ${placeholderAttrs}></template>
-<template ${startAttrs}></template>
-
 ${tableMarkdown}
-
-<template class="vmb-static-table-end"></template>
 ${MODEL_BROWSER_END}`;
 }
 
