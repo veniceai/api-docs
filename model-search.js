@@ -1613,6 +1613,42 @@
 
   // ========== MODEL BROWSER FUNCTIONS ==========
 
+  function removeStaticTableFallback(container) {
+    let startNode = container.nextSibling;
+
+    while (startNode) {
+      if (
+        startNode.nodeType === Node.ELEMENT_NODE &&
+        startNode.classList.contains('vmb-static-table-start')
+      ) {
+        break;
+      }
+
+      startNode = startNode.nextSibling;
+    }
+
+    if (!startNode) {
+      return;
+    }
+
+    const nodesToRemove = [];
+    let currentNode = startNode;
+
+    while (currentNode) {
+      nodesToRemove.push(currentNode);
+
+      if (
+        currentNode.nodeType === Node.ELEMENT_NODE &&
+        currentNode.classList.contains('vmb-static-table-end')
+      ) {
+        nodesToRemove.forEach(node => node.remove());
+        return;
+      }
+
+      currentNode = currentNode.nextSibling;
+    }
+  }
+
   async function init() {
     if (isInitializing) return;
     
@@ -1621,6 +1657,7 @@
     const hasStaticShell = container &&
       container.querySelector('.vmb-toolbar') &&
       container.querySelector('.vmb-models');
+    const shouldRemoveFallbackTable = !hasStaticShell;
     if (!placeholder && !container) {
       setTimeout(init, 200);
       return;
@@ -1750,6 +1787,9 @@
     // Always render static data immediately for instant display
     allModels = STATIC_MODELS;
     renderModels();
+    if (shouldRemoveFallbackTable) {
+      removeStaticTableFallback(container);
+    }
 
     // Then try cache or fetch fresh data to update
     const cachedModels = getCachedModels();

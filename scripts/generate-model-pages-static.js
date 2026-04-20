@@ -532,74 +532,320 @@ function getVisibilityConfig(presetFilter) {
   };
 }
 
-function renderBrowserShell(models, presetFilter) {
-  const visibility = getVisibilityConfig(presetFilter);
-  const visibleModels = sortModelsForPage(filterModelsForPage(models, presetFilter), presetFilter);
-  const countText = `${visibleModels.length} model${visibleModels.length !== 1 ? 's' : ''}`;
-  const modelsHtml = visibleModels.length > 0
-    ? visibleModels.map(renderModelCard).join('\n')
-    : '<div class="vmb-loading">No models available</div>';
+function escapeMarkdownCell(value) {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
 
-  const containerAttrs = [
-    'id="venice-model-browser"',
-    'data-static-model-browser="true"',
+  return String(value)
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function getPrivacyLabel(model) {
+  if (isE2EEModel(model)) {
+    return 'E2EE · Private';
+  }
+
+  if (isTEEModel(model)) {
+    return 'TEE · Private';
+  }
+
+  if (isAnonymizedModel(model)) {
+    return 'Anonymized';
+  }
+
+  return 'Private';
+}
+
+function getDisplayType(model) {
+  if (model.type === 'image') return 'Generation';
+  if (model.type === 'inpaint') return 'Edit';
+  if (model.type === 'upscale') return 'Upscale';
+  if (model.type === 'embedding') return 'Embedding';
+  if (model.type === 'tts') return 'Text to Speech';
+  if (model.type === 'asr') return 'Speech to Text';
+  if (model.type === 'music') return 'Music';
+  if (model.type === 'video') {
+    const modelType = model.model_spec?.constraints?.model_type;
+    if (modelType === 'text-to-video') return 'Text to Video';
+    if (modelType === 'image-to-video') return 'Image to Video';
+    return 'Video';
+  }
+
+  return 'Text';
+}
+
+function formatModelLabel(model) {
+  const spec = model.model_spec || {};
+  const labels = [];
+
+  if (isBetaModel(model)) {
+    labels.push('Beta');
+  }
+
+  if (isDeprecatedModel(model)) {
+    labels.push(`Deprecated ${formatDeprecationDate(spec.deprecation?.date)}`);
+  }
+
+  if (isUpgradedModel(model)) {
+    labels.push('Upgraded');
+  }
+
+  if (isUncensoredModel(model)) {
+    labels.push('Uncensored');
+  }
+
+  if (hasContentModeration(model.id)) {
+    labels.push('Moderated');
+  }
+
+  return labels.length > 0
+    ? `${spec.name || model.id} (${labels.join(', ')})`
+    : (spec.name || model.id);
+}
+
+function formatPriceSummary(model) {
+  const spec = model.model_spec || {};
+  const pricing = spec.pricing || {};
+
+  if (model.type === 'video') {
+    return 'Use quote API';
+  }
+
+  if (model.type === 'image' && pricing.resolutions) {
+    const values = Object.values(pricing.resolutions)
+      .map(entry => entry?.usd)
+      .filter(value => value !== null && value !== undefined);
+
+    if (values.length > 0) {
+      return `from ${formatPrice(Math.min(...values))}/image`;
+    }
+  }
+
+  if (model.type === 'image' && pricing.generation) {
+    return `${formatPrice(pricing.generation.usd)}/image`;
+  }
+
+  if (model.type === 'inpaint' && pricing.inpaint) {
+    return `${formatPrice(pricing.inpaint.usd)}/edit`;
+  }
+
+  if (model.type === 'embedding' && pricing.input) {
+    return `${formatPrice(pricing.input.usd)}/M tokens`;
+  }
+
+  if (pricing.input && pricing.output) {
+    const parts = [
+      `${formatPrice(pricing.input.usd)}/M input`,
+      `${formatPrice(pricing.output.usd)}/M output`
+    ];
+
+    if (pricing.cache_input?.usd) {
+      parts.push(`${formatPrice(pricing.cache_input.usd)}/M cache read`);
+    }
+
+    if (pricing.cache_write?.usd) {
+      parts.push(`${formatPrice(pricing.cache_write.usd)}/M cache write`);
+    }
+
+    if (pricing.extended) {
+      const ext = pricing.extended;
+      const threshold = ext.context_token_threshold >= 1000
+        ? `${Math.round(ext.context_token_threshold / 1000)}K`
+        : String(ext.context_token_threshold);
+
+      const extParts = [
+        `${formatPrice(ext.input?.usd)}/M input`,
+        `${formatPrice(ext.output?.usd)}/M output`
+      ];
+
+      if (ext.cache_input?.usd) {
+        extParts.push(`${formatPrice(ext.cache_input.usd)}/M cache read`);
+      }
+
+      if (ext.cache_write?.usd) {
+        extParts.push(`${formatPrice(ext.cache_write.usd)}/M cache write`);
+      }
+
+      parts.push(`>${threshold}: ${extParts.join(', ')}`);
+    }
+
+    return parts.join('; ');
+  }
+
+  if (pricing.input && model.type === 'tts') {
+    return `${formatPrice(pricing.input.usd)}/M chars`;
+  }
+
+  if (model.type === 'upscale' && (pricing.upscale || pricing['2x'] || pricing['4x'])) {
+    const upscalePricing = pricing.upscale || pricing;
+    const parts = [];
+
+    if (upscalePricing['2x']?.usd) parts.push(`2x ${formatPrice(upscalePricing['2x'].usd)}`);
+    if (upscalePricing['4x']?.usd) parts.push(`4x ${formatPrice(upscalePricing['4x'].usd)}`);
+
+    return parts.join('; ') || '-';
+  }
+
+  if (model.type === 'music' && pricing.durations) {
+    const durationKeys = Object.keys(pricing.durations).sort((a, b) => Number(a) - Number(b));
+
+    if (durationKeys.length > 0) {
+      const minDuration = durationKeys[0];
+      const minPrice = pricing.durations[minDuration]?.usd;
+      return `from ${formatPrice(minPrice)}/${minDuration}s`;
+    }
+  }
+
+  if (model.type === 'music' && pricing.per_second) {
+    return `${formatPrice(pricing.per_second.usd)}/sec`;
+  }
+
+  if (model.type === 'music' && pricing.generation) {
+    return `${formatPrice(pricing.generation.usd)}/audio`;
+  }
+
+  if (pricing.generation) {
+    return `${formatPrice(pricing.generation.usd)}/image`;
+  }
+
+  if (pricing.perCharacter) {
+    return `${formatPrice(pricing.perCharacter.usd * 1000000)}/M chars`;
+  }
+
+  if (pricing.per_audio_second) {
+    return `${formatPrice(pricing.per_audio_second.usd)}/sec`;
+  }
+
+  return '-';
+}
+
+function formatDetailsSummary(model, presetFilter) {
+  const spec = model.model_spec || {};
+  const pricing = spec.pricing || {};
+  const constraints = spec.constraints || {};
+  const parts = [];
+
+  if (spec.availableContextTokens) {
+    parts.push(`${formatContext(spec.availableContextTokens)} context`);
+  }
+
+  if ((presetFilter === 'text' || (!presetFilter && model.type === 'text'))) {
+    const capabilities = getCapabilities(spec.capabilities);
+    if (capabilities.length > 0) {
+      parts.push(capabilities.join(', '));
+    }
+  }
+
+  if (model.type === 'embedding' && spec.embeddingDimensions) {
+    parts.push(`${spec.embeddingDimensions} dimensions`);
+  }
+
+  if (model.type === 'tts' && spec.voices?.length > 0) {
+    parts.push(`${spec.voices.length} voices`);
+  }
+
+  if ((model.type === 'image' || model.type === 'inpaint' || model.type === 'upscale') && constraints.resolutions?.length > 0) {
+    parts.push(constraints.resolutions.join(', '));
+  }
+
+  if (model.type === 'video') {
+    if (presetFilter === 'video') {
+      parts.push(getDisplayType(model));
+    }
+
+    if (constraints.resolutions?.length > 0) {
+      parts.push(constraints.resolutions.join(', '));
+    }
+
+    if (constraints.durations?.length > 0) {
+      parts.push(constraints.durations.map(duration => `${duration}s`).join(', '));
+    }
+
+    const aspectRatios = getAspectRatios(constraints);
+    if (aspectRatios.length > 0) {
+      parts.push(aspectRatios.join(', '));
+    }
+
+    if (constraints.audio) {
+      parts.push('Audio');
+    }
+  }
+
+  if (model.type === 'music' && pricing.durations) {
+    const durationKeys = Object.keys(pricing.durations).sort((a, b) => Number(a) - Number(b));
+    if (durationKeys.length > 0) {
+      parts.push(`${durationKeys[0]}s-${durationKeys[durationKeys.length - 1]}s tiers`);
+    }
+  }
+
+  if (model.type === 'music' && constraints.durations?.length > 0) {
+    parts.push(constraints.durations.map(duration => `${duration}s`).join(', '));
+  }
+
+  return parts.length > 0 ? parts.join('; ') : '-';
+}
+
+function renderStaticTable(models, presetFilter) {
+  const visibleModels = sortModelsForPage(filterModelsForPage(models, presetFilter), presetFilter);
+  const showTypeColumn = !presetFilter || presetFilter === 'image';
+  const typeColumnLabel = presetFilter === 'image' ? 'Kind' : 'Type';
+  const headers = showTypeColumn
+    ? ['Model', 'ID', typeColumnLabel, 'Pricing', 'Details', 'Privacy']
+    : ['Model', 'ID', 'Pricing', 'Details', 'Privacy'];
+
+  if (visibleModels.length === 0) {
+    return 'No models available.';
+  }
+
+  const headerLine = `| ${headers.join(' | ')} |`;
+  const dividerLine = `| ${headers.map(() => '---').join(' | ')} |`;
+  const rows = visibleModels.map(model => {
+    const row = [
+      escapeMarkdownCell(formatModelLabel(model)),
+      `\`${escapeMarkdownCell(model.id)}\``
+    ];
+
+    if (showTypeColumn) {
+      row.push(escapeMarkdownCell(getDisplayType(model)));
+    }
+
+    row.push(
+      escapeMarkdownCell(formatPriceSummary(model)),
+      escapeMarkdownCell(formatDetailsSummary(model, presetFilter)),
+      escapeMarkdownCell(getPrivacyLabel(model))
+    );
+
+    return `| ${row.join(' | ')} |`;
+  }).join('\n');
+
+  return `${headerLine}\n${dividerLine}\n${rows}`;
+}
+
+function renderBrowserShell(models, presetFilter) {
+  const placeholderAttrs = [
+    'id="model-search-placeholder"',
     presetFilter ? `data-filter="${escapeHtml(presetFilter)}"` : ''
   ].filter(Boolean).join(' ');
+  const startAttrs = [
+    'class="vmb-static-table-start"',
+    presetFilter ? `data-filter="${escapeHtml(presetFilter)}"` : ''
+  ].filter(Boolean).join(' ');
+  const tableMarkdown = renderStaticTable(models, presetFilter);
 
   return `${MODEL_BROWSER_START}
 {/* This block is generated from models.json by scripts/generate-model-pages-static.js */}
-<div ${containerAttrs}>
-  <div class="vmb-toolbar">
-    <div class="vmb-toolbar-left">
-      <input type="text" class="vmb-search" placeholder="Search models..." aria-label="Search models" />
-    </div>
-    <div class="vmb-toolbar-right">
-      <button class="vmb-sort-toggle${presetFilter ? '' : ' active'}" aria-label="Sort by date" title="${presetFilter ? 'Sort by date' : 'Newest first (click for oldest)'}">
-        <svg class="vmb-sort-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"></path>
-        </svg>
-      </button>
-    </div>
-  </div>
-  <div class="vmb-filters" role="toolbar" aria-label="Model filters">
-    <span class="vmb-category-filters" role="group" aria-label="Category filters" ${renderVisibilityProp(visibility.category)}>
-      ${renderFilterButton('All', 'all', { active: true })}
-      ${renderFilterButton('Text', 'text')}
-      ${renderFilterButton('Image', 'image')}
-      ${renderFilterButton('Video', 'video')}
-      ${renderFilterButton('Audio', 'audio')}
-      ${renderFilterButton('Embedding', 'embedding')}
-    </span>
-    <span class="vmb-privacy-filters" role="group" aria-label="Privacy filters">
-      ${renderFilterButton('E2EE', 'e2ee')}
-      ${renderFilterButton('TEE', 'tee')}
-      ${renderFilterButton('Private', 'private')}
-      ${renderFilterButton('Anonymized', 'anonymized')}
-    </span>
-    <span class="vmb-capability-filters" role="group" aria-label="Capability filters" ${renderVisibilityProp(visibility.capability)}>
-      ${renderFilterButton('Reasoning', 'reasoning')}
-      ${renderFilterButton('Vision', 'vision')}
-      ${renderFilterButton('Function Calling', 'function', { extraClass: 'vmb-text-only' })}
-      ${renderFilterButton('Code', 'code', { extraClass: 'vmb-text-only' })}
-    </span>
-    <span class="vmb-video-filters" role="group" aria-label="Video type filters" ${renderVisibilityProp(visibility.video)}>
-      ${renderFilterButton('Text to Video', 'text-to-video')}
-      ${renderFilterButton('Image to Video', 'image-to-video')}
-    </span>
-    <span class="vmb-image-filters" role="group" aria-label="Image type filters" ${renderVisibilityProp(visibility.image)}>
-      ${renderFilterButton('Generation', 'image-gen')}
-      ${renderFilterButton('Upscale', 'image-upscale')}
-      ${renderFilterButton('Edit', 'image-edit')}
-      ${renderFilterButton('Uncensored', 'image-uncensored')}
-    </span>
-  </div>
-  <div class="vmb-results-bar">
-    <span class="vmb-count" aria-live="polite">${countText}</span>
-  </div>
-  <div class="vmb-models" role="list" aria-label="Model list">
-${modelsHtml}
-  </div>
-</div>
+<div ${placeholderAttrs} />
+<div ${startAttrs} />
+
+Interactive search, filters, copy buttons, and live quotes load after the page JavaScript initializes.
+
+${tableMarkdown}
+
+<div class="vmb-static-table-end" />
 ${MODEL_BROWSER_END}`;
 }
 
