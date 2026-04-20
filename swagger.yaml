@@ -5,7 +5,7 @@ info:
   description: The Venice.ai API.
   termsOfService: https://venice.ai/legal/tos
   title: Venice.ai API
-  version: "20260420.212204"
+  version: "20260420.224900"
   x-guidance: >-
     Venice.ai is an OpenAI-compatible inference API supporting text, image,
     audio, and video generation.
@@ -56,6 +56,9 @@ tags:
       beta and may be unstable. Endpoints, request/response schemas, and
       behavior may change without notice."
     name: Billing
+  - description: Proxy JSON-RPC requests to blockchain nodes (QuickNode-backed).
+      Billed per QuickNode credit with a 40% margin.
+    name: Crypto RPC
   - description: >-
       Wallet-based API access using the x402 protocol. No API key required —
       authenticate with an Ethereum wallet.
@@ -11649,6 +11652,410 @@ paths:
                     description: Error message indicating query timeout
                     type: string
                 type: object
+  /crypto/rpc/networks:
+    get:
+      description: >-
+        Returns the alphabetically sorted list of network slugs supported by the
+        Venice crypto RPC proxy.
+
+
+        This endpoint is **public** — no authentication required. Use it to
+        discover which `:network` values are valid for `POST
+        /api/v1/crypto/rpc/{network}`.
+      operationId: listCryptoRpcNetworks
+      security:
+        - {}
+      summary: List supported crypto RPC networks
+      tags:
+        - Crypto RPC
+      responses:
+        "200":
+          description: The list of supported network slugs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - networks
+                properties:
+                  networks:
+                    type: array
+                    items:
+                      type: string
+                    description: Sorted Venice-side network slugs.
+                    example:
+                      - arbitrum-mainnet
+                      - arbitrum-sepolia
+                      - avalanche-fuji
+                      - avalanche-mainnet
+                      - base-mainnet
+                      - base-sepolia
+                      - bsc-mainnet
+                      - bsc-testnet
+                      - ethereum-holesky
+                      - ethereum-mainnet
+                      - ethereum-sepolia
+                      - linea-mainnet
+                      - linea-sepolia
+                      - optimism-mainnet
+                      - optimism-sepolia
+                      - polygon-amoy
+                      - polygon-mainnet
+                      - starknet-mainnet
+                      - starknet-sepolia
+                      - zksync-mainnet
+                      - zksync-sepolia
+  /crypto/rpc/{network}:
+    post:
+      description: >-
+        Proxy a JSON-RPC request to a supported blockchain node and bill per
+        QuickNode credit.
+
+
+        ## Request shapes
+
+        - **Single request**: a JSON-RPC 2.0 object (`{ "jsonrpc":"2.0",
+        "method":"…", "params":[…], "id":1 }`).
+
+        - **Batch**: an array of up to 100 JSON-RPC 2.0 objects. If any item
+        references an unsupported method, the entire batch is rejected with 400
+        and the offending methods are listed.
+
+
+        ## Supported methods
+
+        Methods are classified into three pricing tiers matching QuickNode's
+        published schedule:
+
+        - **Standard (1×)**: `eth_call`, `eth_getBalance`, `eth_blockNumber`,
+        `eth_sendRawTransaction`, `eth_getLogs`, `net_version`,
+        `web3_clientVersion`, ERC-4337 bundler methods (`eth_sendUserOperation`,
+        etc.), and chain-family extensions (`zks_*`, `linea_*`, `bor_*`,
+        `starknet_*`).
+
+        - **Advanced (2×)**: `trace_*`, `debug_*`, `txpool_inspect`,
+        `txpool_status`, `arbtrace_*`.
+
+        - **Large (4×)**: `trace_replayBlockTransactions`,
+        `trace_replayTransaction`, `txpool_content`, `arbtrace_replay*`.
+
+
+        Stateful filter methods (`eth_newFilter`, `eth_getFilterChanges`,
+        `eth_uninstallFilter`, etc.) are **not supported** — they break on a
+        load-balanced HTTP proxy because filter state is pinned to a single
+        upstream backend. Use `eth_getLogs` instead.
+
+
+        WebSocket-only methods (`eth_subscribe`, `eth_unsubscribe`) return 400
+        because this proxy is HTTP-only.
+
+
+        ## Pricing
+
+        Credits consumed per call = `baseCredits[chain] × methodTier`.
+        `baseCredits` is 20 for most EVM chains (Ethereum, Base, Optimism,
+        Arbitrum, Polygon, Linea, Avalanche, BSC, Blast) and Starknet; 30 for
+        zkSync Era. The USD price per credit is `~7e-7` — a single standard EVM
+        call costs ≈ $0.000014 and a large trace-replay costs ≈ $0.000056.
+
+
+        Per-request errors at the JSON-RPC layer (HTTP 200 with an `error` field
+        in a response item) are billed at 5 credits instead of the full method
+        tier — a small concession for methods that QuickNode doesn't support on
+        a given chain or bad-parameter responses.
+
+
+        ## Rate limits
+
+        Two caps apply per caller:
+
+        - **Requests per minute**: 100 on the paid tier, 1000 on the staff tier.
+
+        - **QuickNode credits per rolling 24 hours**: 10,000,000 on the paid
+        tier, 100,000,000 on the staff tier.
+
+        When either cap is exceeded, the request returns 429 with a
+        `customMessage` identifying which cap tripped. The per-minute cap also
+        sets the `X-RateLimit-*` response headers.
+
+
+        ## Idempotency
+
+        Set the `Idempotency-Key` request header to any string matching
+        `[A-Za-z0-9_-]{1,255}` to enable safe retries. The response is cached
+        for 24 hours keyed on `(user, idempotency-key)`; replaying the same key
+        with the same body returns the cached response with
+        `Idempotent-Replayed: true`. Reusing the same key with a different body
+        returns 400 to prevent silent corruption.
+      operationId: cryptoRpcProxy
+      parameters:
+        - description: Venice-side network slug. Call `GET /api/v1/crypto/rpc/networks`
+            for the current list.
+          in: path
+          name: network
+          required: true
+          schema:
+            example: ethereum-mainnet
+            type: string
+        - description: "Optional idempotency key for safe retries. Pattern:
+            `[A-Za-z0-9_-]{1,255}`. Retrying within 24 hours with the same key +
+            same body replays the cached response with `Idempotent-Replayed:
+            true`. Same key + different body returns 400."
+          in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+            pattern: ^[A-Za-z0-9_-]{1,255}$
+            example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+      security:
+        - BearerAuth: []
+      summary: Proxy a JSON-RPC request to a supported blockchain
+      tags:
+        - Crypto RPC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required:
+                    - method
+                  properties:
+                    jsonrpc:
+                      type: string
+                      enum:
+                        - "2.0"
+                      example: "2.0"
+                    method:
+                      type: string
+                      description: JSON-RPC method name. See the "Supported methods" section of the
+                        endpoint description for the classification into
+                        1×/2×/4× pricing tiers.
+                      example: eth_chainId
+                    params:
+                      type: array
+                      items: {}
+                      description: Method parameters. Shape depends on the method; see the upstream
+                        chain documentation.
+                      example: []
+                    id:
+                      description: Caller-supplied request ID echoed back in the response. Required
+                        for batch request correlation.
+                      oneOf:
+                        - type: integer
+                        - type: string
+                      example: 1
+                - type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    required:
+                      - method
+                    properties:
+                      jsonrpc:
+                        type: string
+                        enum:
+                          - "2.0"
+                        example: "2.0"
+                      method:
+                        type: string
+                        description: JSON-RPC method name. See the "Supported methods" section of the
+                          endpoint description for the classification into
+                          1×/2×/4× pricing tiers.
+                        example: eth_chainId
+                      params:
+                        type: array
+                        items: {}
+                        description: Method parameters. Shape depends on the method; see the upstream
+                          chain documentation.
+                        example: []
+                      id:
+                        description: Caller-supplied request ID echoed back in the response. Required
+                          for batch request correlation.
+                        oneOf:
+                          - type: integer
+                          - type: string
+                        example: 1
+            examples:
+              singleRequest:
+                summary: Single JSON-RPC call
+                value:
+                  jsonrpc: "2.0"
+                  method: eth_chainId
+                  params: []
+                  id: 1
+              batchRequest:
+                summary: Batch of 2 calls
+                value:
+                  - jsonrpc: "2.0"
+                    method: eth_chainId
+                    params: []
+                    id: 1
+                  - jsonrpc: "2.0"
+                    method: eth_blockNumber
+                    params: []
+                    id: 2
+      responses:
+        "200":
+          description: JSON-RPC response forwarded from the upstream node. `Content-Type`
+            is forced to `application/json` regardless of upstream headers.
+          headers:
+            X-Venice-RPC-Credits:
+              description: QuickNode credits charged for this request. On batch requests this
+                is the sum across items, with individual RPC-level errors billed
+                at 5 credits instead of the full method tier.
+              schema:
+                type: integer
+                example: 20
+            X-Venice-RPC-Cost-USD:
+              description: Dollar cost charged to the caller for this request, to 8 decimal
+                places. Equal to `X-Venice-RPC-Credits *
+                CRYPTO_RPC_PRICE_PER_CREDIT_USD`.
+              schema:
+                type: string
+                example: "0.00001400"
+            X-Request-ID:
+              description: 32-character correlation ID generated by Venice for this request.
+                Include this in any support correspondence.
+              schema:
+                type: string
+                example: aBCdEFghIjKlMnOpQrStUvWxYz012345
+            Idempotent-Replayed:
+              description: Present and set to `"true"` when the response is being served from
+                the idempotency cache rather than freshly forwarded to the
+                upstream.
+              schema:
+                type: string
+                enum:
+                  - "true"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      jsonrpc:
+                        type: string
+                        example: "2.0"
+                      id:
+                        oneOf:
+                          - type: integer
+                          - type: string
+                      result:
+                        description: Method-dependent result. Present on success.
+                      error:
+                        type: object
+                        description: JSON-RPC error object. Present on per-request failure (HTTP status
+                          is still 200 in that case).
+                        properties:
+                          code:
+                            type: integer
+                            example: -32602
+                          message:
+                            type: string
+                            example: invalid params
+                          data: {}
+                  - type: array
+                    items:
+                      type: object
+                      properties:
+                        jsonrpc:
+                          type: string
+                          example: "2.0"
+                        id:
+                          oneOf:
+                            - type: integer
+                            - type: string
+                        result:
+                          description: Method-dependent result. Present on success.
+                        error:
+                          type: object
+                          description: JSON-RPC error object. Present on per-request failure (HTTP status
+                            is still 200 in that case).
+                          properties:
+                            code:
+                              type: integer
+                              example: -32602
+                            message:
+                              type: string
+                              example: invalid params
+                            data: {}
+              examples:
+                singleSuccess:
+                  summary: Single-call success
+                  value:
+                    jsonrpc: "2.0"
+                    id: 1
+                    result: "0x1"
+                batchMixed:
+                  summary: Batch with one RPC-level error
+                  value:
+                    - jsonrpc: "2.0"
+                      id: 1
+                      result: "0x1"
+                    - jsonrpc: "2.0"
+                      id: 2
+                      error:
+                        code: -32602
+                        message: invalid params
+        "400":
+          description: "Invalid request. Examples: unsupported network, empty body, batch
+            > 100, WebSocket-only method, unmapped method, cross-family
+            EVM-on-Starknet call, or `Idempotency-Key` reuse with a different
+            body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailedError"
+        "401":
+          description: Missing or invalid API key. The `/crypto/rpc/networks` listing is
+            public, but this proxy endpoint requires authentication.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "402":
+          description: "Insufficient billable balance for the estimated request cost (only
+            returned in production when the caller's tier `isCharged: true`)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "429":
+          description: Rate limit tripped. Either the per-minute request cap, the per-day
+            credit cap, or a concurrent-call collision on the per-user mutex.
+            The `customMessage` identifies which.
+          headers:
+            X-RateLimit-Limit:
+              description: "Per-minute request cap for the caller's tier (paid: 100, staff:
+                1000). Set only when the rate limit is tripped."
+              schema:
+                type: integer
+                example: 100
+            X-RateLimit-Remaining:
+              description: Requests remaining in the current 60-second window. Set only on
+                rate-limit responses.
+              schema:
+                type: integer
+                example: 0
+            X-RateLimit-Reset:
+              description: Unix timestamp (seconds) when the current rate-limit window resets.
+              schema:
+                type: integer
+                example: 1704067260
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "500":
+          description: Either the upstream fetch failed (network error / timeout) or the
+            service is misconfigured (missing `QUICKNODE_API_KEY`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
   /x402/balance/{walletAddress}:
     get:
       description: Get the x402 credit balance for a wallet address. Requires
