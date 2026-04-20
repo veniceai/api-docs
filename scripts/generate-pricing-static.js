@@ -1,40 +1,25 @@
 #!/usr/bin/env node
 /**
- * Generate static pricing content for pricing.mdx
- * 
- * This script reads STATIC_MODELS from model-search.js and generates
- * markdown tables for pricing data, ensuring agent-friendly plain text format.
- * 
- * Placeholder divs are preserved so model-search.js can detect the pricing
- * page and replace static content with live API data at runtime.
- * 
+ * Generate static pricing content for pricing.mdx from models.json.
+ *
+ * Placeholder divs are preserved so model-search.js can still enhance the
+ * pricing page with fresher data at runtime.
+ *
  * Usage: node scripts/generate-pricing-static.js
  * Output: Writes directly to overview/pricing.mdx
  */
 
 const fs = require('fs');
 const path = require('path');
-
-// Read model-search.js and extract STATIC_MODELS
-function extractStaticModels() {
-  const modelSearchPath = path.join(__dirname, '..', 'model-search.js');
-  const content = fs.readFileSync(modelSearchPath, 'utf-8');
-  
-  // Find STATIC_MODELS array using regex
-  const match = content.match(/const STATIC_MODELS = (\[[\s\S]*?\]);/);
-  if (!match) {
-    throw new Error('Could not find STATIC_MODELS in model-search.js');
-  }
-  
-  // Parse the JSON array
-  return JSON.parse(match[1]);
-}
+const { loadModels } = require('./lib/model-catalog');
 
 // Helper functions (same logic as model-search.js)
+const DOLLAR_ENTITY = '&#36;';
+
 function formatPrice(price) {
   if (price === null || price === undefined) return '-';
-  if (price < 0.01 && price > 0) return '$' + price.toFixed(4);
-  return '$' + price.toFixed(2);
+  if (price < 0.01 && price > 0) return DOLLAR_ENTITY + price.toFixed(4);
+  return DOLLAR_ENTITY + price.toFixed(2);
 }
 
 function escapeHtml(str) {
@@ -340,14 +325,12 @@ function renderPricingVideoTable(models) {
 // Render Web Search Table
 function renderPricingWebSearchTable() {
   const header = `| Feature | Config | Pricing |\n|---|---|---|`;
-  const rows = `| Web Search | \`enable_web_search: true\` | $10.00 per 1K requests |\n| Web Scraping | \`enable_web_scraping: true\` | $10.00 per 1K URLs |\n| X Search (xAI) | \`enable_x_search: true\` | $10.00 per 1K results |`;
+  const rows = `| Web Search | \`enable_web_search: true\` | ${DOLLAR_ENTITY}10.00 per 1K requests |\n| Web Scraping | \`enable_web_scraping: true\` | ${DOLLAR_ENTITY}10.00 per 1K URLs |\n| X Search (xAI) | \`enable_x_search: true\` | ${DOLLAR_ENTITY}10.00 per 1K results |`;
   return header + '\n' + rows + '\n';
 }
 
 // Generate the complete pricing.mdx content
-function generatePricingMdx() {
-  const models = extractStaticModels();
-  
+function generatePricingMdx(models = loadModels()) {
   const chatHtml = renderPricingChatTable(models);
   const embeddingHtml = renderPricingEmbeddingTable(models);
   const imageHtml = renderPricingImageTable(models);
@@ -368,7 +351,7 @@ function generatePricingMdx() {
   sections.push('"og:description": "Learn about pricing for Venice\'s API."');
   sections.push('---');
   sections.push('');
-  sections.push('Prices per 1M tokens unless noted. All prices in USD. 1 Diem = $1/day of compute.');
+  sections.push(`Prices per 1M tokens unless noted. All prices in USD. 1 Diem = ${DOLLAR_ENTITY}1/day of compute.`);
   sections.push('');
   sections.push('## Text Models');
   sections.push('');
@@ -466,7 +449,7 @@ function generatePricingMdx() {
   sections.push('<Info>');
   sections.push('**Web Scraping** automatically detects up to 5 URLs per request, scrapes and converts content into structured markdown, and adds the extracted text into model context. Only successfully scraped URLs are billed.');
   sections.push('');
-  sections.push("**X Search** enables xAI's native search for supported Grok models (e.g., `grok-4-20-beta`). This searches both the web and X/Twitter for real-time information. Billed per search result returned by the model (e.g., if the model returns 10 search results, you are charged for 10 results at $0.01 each = $0.10).");
+  sections.push(`**X Search** enables xAI's native search for supported Grok models (e.g., \`grok-4-20-beta\`). This searches both the web and X/Twitter for real-time information. Billed per search result returned by the model (e.g., if the model returns 10 search results, you are charged for 10 results at ${DOLLAR_ENTITY}0.01 each = ${DOLLAR_ENTITY}0.10).`);
   sections.push('');
   sections.push('These charges apply in addition to standard model token pricing.');
   sections.push('</Info>');
@@ -481,27 +464,39 @@ function generatePricingMdx() {
   sections.push('    Buy API credits with cryptocurrency. Same rates as USD.');
   sections.push('  </Card>');
   sections.push('  <Card title="Stake DIEM" icon="coins" href="https://venice.ai/token">');
-  sections.push('    Each Diem = $1/day of credits that refresh daily.');
+  sections.push(`    Each Diem = ${DOLLAR_ENTITY}1/day of credits that refresh daily.`);
   sections.push('  </Card>');
   sections.push('</CardGroup>');
   sections.push('');
   sections.push('### Pro Users');
   sections.push('');
-  sections.push('Pro subscribers receive a one-time $10 API credit when upgrading to Pro. Use it to test and build small apps.');
+  sections.push(`Pro subscribers receive a one-time ${DOLLAR_ENTITY}10 API credit when upgrading to Pro. Use it to test and build small apps.`);
   sections.push('');
 
   return sections.join('\n');
 }
 
-// Main execution
-try {
-  const output = generatePricingMdx();
-  
+function writePricingMdx(models = loadModels()) {
+  const output = generatePricingMdx(models);
+
   // Write directly to file to avoid encoding issues with PowerShell
   const outputPath = path.join(__dirname, '..', 'overview', 'pricing.mdx');
   fs.writeFileSync(outputPath, output, 'utf8');
   console.log('Generated:', outputPath);
-} catch (error) {
-  console.error('Error generating pricing.mdx:', error.message);
-  process.exit(1);
+
+  return outputPath;
 }
+
+if (require.main === module) {
+  try {
+    writePricingMdx();
+  } catch (error) {
+    console.error('Error generating pricing.mdx:', error.message);
+    process.exit(1);
+  }
+}
+
+module.exports = {
+  generatePricingMdx,
+  writePricingMdx
+};
