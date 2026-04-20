@@ -14,12 +14,12 @@ const path = require('path');
 const { loadModels } = require('./lib/model-catalog');
 
 // Helper functions (same logic as model-search.js)
-const DOLLAR_ENTITY = '&#36;';
+const MARKDOWN_DOLLAR = '\\$';
 
 function formatPrice(price) {
   if (price === null || price === undefined) return '-';
-  if (price < 0.01 && price > 0) return DOLLAR_ENTITY + price.toFixed(4);
-  return DOLLAR_ENTITY + price.toFixed(2);
+  if (price < 0.01 && price > 0) return MARKDOWN_DOLLAR + price.toFixed(4);
+  return MARKDOWN_DOLLAR + price.toFixed(2);
 }
 
 function escapeHtml(str) {
@@ -325,7 +325,7 @@ function renderPricingVideoTable(models) {
 // Render Web Search Table
 function renderPricingWebSearchTable() {
   const header = `| Feature | Config | Pricing |\n|---|---|---|`;
-  const rows = `| Web Search | \`enable_web_search: true\` | ${DOLLAR_ENTITY}10.00 per 1K requests |\n| Web Scraping | \`enable_web_scraping: true\` | ${DOLLAR_ENTITY}10.00 per 1K URLs |\n| X Search (xAI) | \`enable_x_search: true\` | ${DOLLAR_ENTITY}10.00 per 1K results |`;
+  const rows = `| Web Search | \`enable_web_search: true\` | ${MARKDOWN_DOLLAR}10.00 per 1K requests |\n| Web Scraping | \`enable_web_scraping: true\` | ${MARKDOWN_DOLLAR}10.00 per 1K URLs |\n| X Search (xAI) | \`enable_x_search: true\` | ${MARKDOWN_DOLLAR}10.00 per 1K results |`;
   return header + '\n' + rows + '\n';
 }
 
@@ -351,7 +351,7 @@ function generatePricingMdx(models = loadModels()) {
   sections.push('"og:description": "Learn about pricing for Venice\'s API."');
   sections.push('---');
   sections.push('');
-  sections.push(`Prices per 1M tokens unless noted. All prices in USD. 1 Diem = ${DOLLAR_ENTITY}1/day of compute.`);
+  sections.push(`Prices per 1M tokens unless noted. All prices in USD. 1 Diem = ${MARKDOWN_DOLLAR}1/day of compute.`);
   sections.push('');
   sections.push('## Text Models');
   sections.push('');
@@ -449,7 +449,7 @@ function generatePricingMdx(models = loadModels()) {
   sections.push('<Info>');
   sections.push('**Web Scraping** automatically detects up to 5 URLs per request, scrapes and converts content into structured markdown, and adds the extracted text into model context. Only successfully scraped URLs are billed.');
   sections.push('');
-  sections.push(`**X Search** enables xAI's native search for supported Grok models (e.g., \`grok-4-20-beta\`). This searches both the web and X/Twitter for real-time information. Billed per search result returned by the model (e.g., if the model returns 10 search results, you are charged for 10 results at ${DOLLAR_ENTITY}0.01 each = ${DOLLAR_ENTITY}0.10).`);
+  sections.push(`**X Search** enables xAI's native search for supported Grok models (e.g., \`grok-4-20-beta\`). This searches both the web and X/Twitter for real-time information. Billed per search result returned by the model (e.g., if the model returns 10 search results, you are charged for 10 results at ${MARKDOWN_DOLLAR}0.01 each = ${MARKDOWN_DOLLAR}0.10).`);
   sections.push('');
   sections.push('These charges apply in addition to standard model token pricing.');
   sections.push('</Info>');
@@ -464,13 +464,13 @@ function generatePricingMdx(models = loadModels()) {
   sections.push('    Buy API credits with cryptocurrency. Same rates as USD.');
   sections.push('  </Card>');
   sections.push('  <Card title="Stake DIEM" icon="coins" href="https://venice.ai/token">');
-  sections.push(`    Each Diem = ${DOLLAR_ENTITY}1/day of credits that refresh daily.`);
+  sections.push(`    Each Diem = ${MARKDOWN_DOLLAR}1/day of credits that refresh daily.`);
   sections.push('  </Card>');
   sections.push('</CardGroup>');
   sections.push('');
   sections.push('### Pro Users');
   sections.push('');
-  sections.push(`Pro subscribers receive a one-time ${DOLLAR_ENTITY}10 API credit when upgrading to Pro. Use it to test and build small apps.`);
+  sections.push(`Pro subscribers receive a one-time ${MARKDOWN_DOLLAR}10 API credit when upgrading to Pro. Use it to test and build small apps.`);
   sections.push('');
 
   return sections.join('\n');

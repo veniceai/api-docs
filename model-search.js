@@ -426,17 +426,87 @@
   }
 
   // Cache helpers
+  let staticModelLookup = null;
+
+  function getStaticModelLookup() {
+    if (!staticModelLookup) {
+      staticModelLookup = new Map(STATIC_MODELS.map(model => [model.id, model]));
+    }
+
+    return staticModelLookup;
+  }
+
   function normalizeModels(models) {
     if (!Array.isArray(models)) return [];
     return models
       .map(model => {
         if (!model || !model.id) return null;
         if (model.type) return model;
-        const fallback = STATIC_MODELS.find(staticModel => staticModel.id === model.id);
+        const fallback = getStaticModelLookup().get(model.id);
         if (!fallback?.type) return null;
         return { ...model, type: fallback.type };
       })
       .filter(Boolean);
+  }
+
+  function mergeWithStaticModels(models) {
+    const primaryModels = normalizeModels(models);
+    if (primaryModels.length === 0) {
+      return STATIC_MODELS;
+    }
+
+    const seen = new Set(primaryModels.map(model => model.id));
+    const merged = primaryModels.slice();
+
+    STATIC_MODELS.forEach(model => {
+      if (!seen.has(model.id)) {
+        merged.push(model);
+      }
+    });
+
+    return merged;
+  }
+
+  const dataSignatureCache = new WeakMap();
+
+  function getDataSignature(value) {
+    if (value === null || value === undefined) {
+      return String(value);
+    }
+
+    if (typeof value !== 'object') {
+      return String(value);
+    }
+
+    const cached = dataSignatureCache.get(value);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    let signature = '';
+    try {
+      signature = JSON.stringify(value);
+    } catch {
+      signature = '';
+    }
+
+    dataSignatureCache.set(value, signature);
+    return signature;
+  }
+
+  function createSignatureGuard(applyUpdate) {
+    let lastSignature = null;
+
+    return value => {
+      const nextSignature = getDataSignature(value);
+      if (nextSignature === lastSignature) {
+        return false;
+      }
+
+      lastSignature = nextSignature;
+      applyUpdate(value);
+      return true;
+    };
   }
 
   function getCachedModels() {
@@ -454,10 +524,18 @@
         sessionStorage.removeItem(CACHE_KEY);
         return null;
       }
-      if (!Array.isArray(data) || normalized.length !== data.length || normalized.some((model, index) => model.type !== data[index]?.type)) {
-        setCachedModels(normalized);
+      const merged = mergeWithStaticModels(normalized);
+      const needsCacheRefresh =
+        !Array.isArray(data) ||
+        normalized.length !== data.length ||
+        normalized.some((model, index) => model.type !== data[index]?.type) ||
+        merged.length !== data.length;
+
+      if (needsCacheRefresh) {
+        setCachedModels(merged);
       }
-      return normalized;
+
+      return merged;
     } catch {
       return null;
     }
@@ -467,8 +545,9 @@
     try {
       const normalized = normalizeModels(models);
       if (normalized.length === 0) return;
+      const merged = mergeWithStaticModels(normalized);
       sessionStorage.setItem(CACHE_KEY, JSON.stringify({
-        data: normalized,
+        data: merged,
         timestamp: Date.now()
       }));
     } catch {
@@ -498,8 +577,9 @@
       return true;
     }));
 
-    setCachedModels(models);
-    return models;
+    const merged = mergeWithStaticModels(models);
+    setCachedModels(merged);
+    return merged;
   }
 
   // ========== PRICING TABLE FUNCTIONS ==========
@@ -1060,19 +1140,22 @@
   async function initCachePricing() {
     const el = document.getElementById('cache-pricing-placeholder');
     if (!el) return;
+    const renderIfChanged = createSignatureGuard(models => {
+      el.innerHTML = renderCachePricingContent(models);
+    });
 
     // Always render static data immediately for instant display
-    el.innerHTML = renderCachePricingContent(STATIC_MODELS);
+    renderIfChanged(STATIC_MODELS);
 
     // Then try cache or fetch fresh data to update
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
-      el.innerHTML = renderCachePricingContent(cachedModels);
+      renderIfChanged(cachedModels);
     }
     // Fetch fresh data in background and update
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
-        el.innerHTML = renderCachePricingContent(freshModels);
+        renderIfChanged(freshModels);
       }
     }).catch(() => {});
   }
@@ -1086,21 +1169,22 @@
   async function initDeprecations() {
     const el = document.getElementById('deprecation-tracker-placeholder');
     if (!el) return;
+    const renderIfChanged = createSignatureGuard(models => {
+      el.innerHTML = renderDeprecationTable(models);
+      ensurePlaceholderVisible(el);
+    });
 
-    el.innerHTML = renderDeprecationTable(STATIC_MODELS);
-    ensurePlaceholderVisible(el);
+    renderIfChanged(STATIC_MODELS);
 
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
-      el.innerHTML = renderDeprecationTable(cachedModels);
-      ensurePlaceholderVisible(el);
+      renderIfChanged(cachedModels);
     }
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
         const el = document.getElementById('deprecation-tracker-placeholder');
         if (el) {
-          el.innerHTML = renderDeprecationTable(freshModels);
-          ensurePlaceholderVisible(el);
+          renderIfChanged(freshModels);
         }
       }
     }).catch(() => {});
@@ -1202,18 +1286,21 @@
   async function initTraitsList() {
     const el = document.getElementById('traits-list-placeholder');
     if (!el) return;
+    const renderIfChanged = createSignatureGuard(traits => {
+      el.innerHTML = renderTraitsList(traits);
+      ensurePlaceholderVisible(el);
+    });
 
-    el.innerHTML = renderTraitsList(getStaticTraits());
-    ensurePlaceholderVisible(el);
+    renderIfChanged(getStaticTraits());
 
     const cachedTraits = getCachedTraits();
     if (cachedTraits) {
-      el.innerHTML = renderTraitsList(cachedTraits);
+      renderIfChanged(cachedTraits);
     }
 
     const freshTraits = await fetchTraitsFromAPI();
     if (freshTraits) {
-      el.innerHTML = renderTraitsList(freshTraits);
+      renderIfChanged(freshTraits);
     }
   }
 
@@ -1254,19 +1341,22 @@
   async function initBetaModels() {
     const el = document.getElementById('beta-models-placeholder');
     if (!el) return;
+    const renderIfChanged = createSignatureGuard(models => {
+      el.innerHTML = renderBetaModelsTable(models);
+    });
 
     // Always render static data immediately for instant display
-    el.innerHTML = renderBetaModelsTable(STATIC_MODELS);
+    renderIfChanged(STATIC_MODELS);
 
     // Then try cache or fetch fresh data to update
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
-      el.innerHTML = renderBetaModelsTable(cachedModels);
+      renderIfChanged(cachedModels);
     }
     // Fetch fresh data in background and update
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
-        el.innerHTML = renderBetaModelsTable(freshModels);
+        renderIfChanged(freshModels);
       }
     }).catch(() => {});
   }
@@ -1298,16 +1388,19 @@
   async function initReasoningModels() {
     const el = document.getElementById('reasoning-models-placeholder');
     if (!el) return;
+    const renderIfChanged = createSignatureGuard(models => {
+      el.innerHTML = renderReasoningModelsTable(models);
+    });
 
-    el.innerHTML = renderReasoningModelsTable(STATIC_MODELS);
+    renderIfChanged(STATIC_MODELS);
 
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
-      el.innerHTML = renderReasoningModelsTable(cachedModels);
+      renderIfChanged(cachedModels);
     }
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
-        el.innerHTML = renderReasoningModelsTable(freshModels);
+        renderIfChanged(freshModels);
       }
     }).catch(() => {});
   }
@@ -1492,21 +1585,24 @@
   async function initVoicePicker() {
     const el = document.getElementById('tts-voice-picker-placeholder');
     if (!el) return;
+    const mountIfChanged = createSignatureGuard(models => {
+      mountVoicePicker(el, models);
+    });
 
     el.style.visibility = 'visible';
     el.style.height = 'auto';
     el.style.overflow = 'visible';
 
-    mountVoicePicker(el, STATIC_MODELS);
+    mountIfChanged(STATIC_MODELS);
 
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
-      mountVoicePicker(el, cachedModels);
+      mountIfChanged(cachedModels);
     }
 
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels && freshModels.length > 0) {
-        mountVoicePicker(el, freshModels);
+        mountIfChanged(freshModels);
       }
     }).catch(() => {});
   }
@@ -1594,19 +1690,22 @@
     const musicEl = document.getElementById('pricing-music-placeholder');
     
     if (!chatEl && !embeddingEl && !imageEl && !audioEl && !musicEl) return;
+    const renderIfChanged = createSignatureGuard(models => {
+      renderPricingTables(models);
+    });
 
     // Immediately render dynamic version from cache or STATIC_MODELS (instant, adds JS interactivity)
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
-      renderPricingTables(cachedModels);
+      renderIfChanged(cachedModels);
     } else {
-      renderPricingTables(STATIC_MODELS);
+      renderIfChanged(STATIC_MODELS);
     }
     
     // Fetch fresh data in background and update when ready
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
-        renderPricingTables(freshModels);
+        renderIfChanged(freshModels);
       }
     }).catch(() => {});
   }
@@ -1773,6 +1872,10 @@
     let activeVideoType = null;
     let activeImageType = null;
     let activePrivacy = null;
+    const updateModelsIfChanged = createSignatureGuard(models => {
+      allModels = models;
+      renderModels();
+    });
     // On overview page (no preset filter), default to newest first
     let activeSort = presetFilter ? 'default' : 'newest';
     
@@ -1785,8 +1888,7 @@
     }
 
     // Always render static data immediately for instant display
-    allModels = STATIC_MODELS;
-    renderModels();
+    updateModelsIfChanged(STATIC_MODELS);
     if (shouldRemoveFallbackTable) {
       removeStaticTableFallback(container);
     }
@@ -1794,14 +1896,12 @@
     // Then try cache or fetch fresh data to update
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
-      allModels = cachedModels;
-      renderModels();
+      updateModelsIfChanged(cachedModels);
     }
     // Fetch fresh data in background and update
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
-        allModels = freshModels;
-        renderModels();
+        updateModelsIfChanged(freshModels);
       }
     }).catch(() => {});
 

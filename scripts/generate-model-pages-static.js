@@ -107,6 +107,7 @@ function escapeHtml(value) {
 }
 
 const DOLLAR_ENTITY = '&#36;';
+const MARKDOWN_DOLLAR = '\\$';
 
 function formatPrice(price, unit = '') {
   if (price === null || price === undefined) {
@@ -118,6 +119,18 @@ function formatPrice(price, unit = '') {
   }
 
   return `${DOLLAR_ENTITY}${price.toFixed(2)}${unit}`;
+}
+
+function formatMarkdownPrice(price, unit = '') {
+  if (price === null || price === undefined) {
+    return '-';
+  }
+
+  if (price < 0.01 && price > 0) {
+    return `${MARKDOWN_DOLLAR}${price.toFixed(4)}${unit}`;
+  }
+
+  return `${MARKDOWN_DOLLAR}${price.toFixed(2)}${unit}`;
 }
 
 function formatContext(tokens) {
@@ -621,34 +634,34 @@ function formatPriceSummary(model) {
       .filter(value => value !== null && value !== undefined);
 
     if (values.length > 0) {
-      return `from ${formatPrice(Math.min(...values))}/image`;
+      return `from ${formatMarkdownPrice(Math.min(...values))}/image`;
     }
   }
 
   if (model.type === 'image' && pricing.generation) {
-    return `${formatPrice(pricing.generation.usd)}/image`;
+    return `${formatMarkdownPrice(pricing.generation.usd)}/image`;
   }
 
   if (model.type === 'inpaint' && pricing.inpaint) {
-    return `${formatPrice(pricing.inpaint.usd)}/edit`;
+    return `${formatMarkdownPrice(pricing.inpaint.usd)}/edit`;
   }
 
   if (model.type === 'embedding' && pricing.input) {
-    return `${formatPrice(pricing.input.usd)}/M tokens`;
+    return `${formatMarkdownPrice(pricing.input.usd)}/M tokens`;
   }
 
   if (pricing.input && pricing.output) {
     const parts = [
-      `${formatPrice(pricing.input.usd)}/M input`,
-      `${formatPrice(pricing.output.usd)}/M output`
+      `${formatMarkdownPrice(pricing.input.usd)}/M input`,
+      `${formatMarkdownPrice(pricing.output.usd)}/M output`
     ];
 
     if (pricing.cache_input?.usd) {
-      parts.push(`${formatPrice(pricing.cache_input.usd)}/M cache read`);
+      parts.push(`${formatMarkdownPrice(pricing.cache_input.usd)}/M cache read`);
     }
 
     if (pricing.cache_write?.usd) {
-      parts.push(`${formatPrice(pricing.cache_write.usd)}/M cache write`);
+      parts.push(`${formatMarkdownPrice(pricing.cache_write.usd)}/M cache write`);
     }
 
     if (pricing.extended) {
@@ -658,16 +671,16 @@ function formatPriceSummary(model) {
         : String(ext.context_token_threshold);
 
       const extParts = [
-        `${formatPrice(ext.input?.usd)}/M input`,
-        `${formatPrice(ext.output?.usd)}/M output`
+        `${formatMarkdownPrice(ext.input?.usd)}/M input`,
+        `${formatMarkdownPrice(ext.output?.usd)}/M output`
       ];
 
       if (ext.cache_input?.usd) {
-        extParts.push(`${formatPrice(ext.cache_input.usd)}/M cache read`);
+        extParts.push(`${formatMarkdownPrice(ext.cache_input.usd)}/M cache read`);
       }
 
       if (ext.cache_write?.usd) {
-        extParts.push(`${formatPrice(ext.cache_write.usd)}/M cache write`);
+        extParts.push(`${formatMarkdownPrice(ext.cache_write.usd)}/M cache write`);
       }
 
       parts.push(`>${threshold}: ${extParts.join(', ')}`);
@@ -677,15 +690,15 @@ function formatPriceSummary(model) {
   }
 
   if (pricing.input && model.type === 'tts') {
-    return `${formatPrice(pricing.input.usd)}/M chars`;
+    return `${formatMarkdownPrice(pricing.input.usd)}/M chars`;
   }
 
   if (model.type === 'upscale' && (pricing.upscale || pricing['2x'] || pricing['4x'])) {
     const upscalePricing = pricing.upscale || pricing;
     const parts = [];
 
-    if (upscalePricing['2x']?.usd) parts.push(`2x ${formatPrice(upscalePricing['2x'].usd)}`);
-    if (upscalePricing['4x']?.usd) parts.push(`4x ${formatPrice(upscalePricing['4x'].usd)}`);
+    if (upscalePricing['2x']?.usd) parts.push(`2x ${formatMarkdownPrice(upscalePricing['2x'].usd)}`);
+    if (upscalePricing['4x']?.usd) parts.push(`4x ${formatMarkdownPrice(upscalePricing['4x'].usd)}`);
 
     return parts.join('; ') || '-';
   }
@@ -696,28 +709,28 @@ function formatPriceSummary(model) {
     if (durationKeys.length > 0) {
       const minDuration = durationKeys[0];
       const minPrice = pricing.durations[minDuration]?.usd;
-      return `from ${formatPrice(minPrice)}/${minDuration}s`;
+      return `from ${formatMarkdownPrice(minPrice)}/${minDuration}s`;
     }
   }
 
   if (model.type === 'music' && pricing.per_second) {
-    return `${formatPrice(pricing.per_second.usd)}/sec`;
+    return `${formatMarkdownPrice(pricing.per_second.usd)}/sec`;
   }
 
   if (model.type === 'music' && pricing.generation) {
-    return `${formatPrice(pricing.generation.usd)}/audio`;
+    return `${formatMarkdownPrice(pricing.generation.usd)}/audio`;
   }
 
   if (pricing.generation) {
-    return `${formatPrice(pricing.generation.usd)}/image`;
+    return `${formatMarkdownPrice(pricing.generation.usd)}/image`;
   }
 
   if (pricing.perCharacter) {
-    return `${formatPrice(pricing.perCharacter.usd * 1000000)}/M chars`;
+    return `${formatMarkdownPrice(pricing.perCharacter.usd * 1000000)}/M chars`;
   }
 
   if (pricing.per_audio_second) {
-    return `${formatPrice(pricing.per_audio_second.usd)}/sec`;
+    return `${formatMarkdownPrice(pricing.per_audio_second.usd)}/sec`;
   }
 
   return '-';
@@ -838,14 +851,12 @@ function renderBrowserShell(models, presetFilter) {
 
   return `${MODEL_BROWSER_START}
 {/* This block is generated from models.json by scripts/generate-model-pages-static.js */}
-<div ${placeholderAttrs} />
-<div ${startAttrs} />
-
-Interactive search, filters, copy buttons, and live quotes load after the page JavaScript initializes.
+<template ${placeholderAttrs}></template>
+<template ${startAttrs}></template>
 
 ${tableMarkdown}
 
-<div class="vmb-static-table-end" />
+<template class="vmb-static-table-end"></template>
 ${MODEL_BROWSER_END}`;
 }
 
