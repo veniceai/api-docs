@@ -142,21 +142,76 @@ curl https://api.venice.ai/api/v1/crypto/rpc/base-mainnet \
   }'
 ```
 
-### Send a signed transaction
+### Send a signed transaction (full lifecycle)
 
-Sign client-side with your agent's wallet, then relay the raw hex through Venice. Venice never holds your private keys.
+Venice never holds your private keys. The agent gathers tx parameters via RPC reads, signs locally with a library like [viem](https://viem.sh) or [ethers](https://docs.ethers.org), then relays the raw hex through Venice.
 
-```bash
-curl https://api.venice.ai/api/v1/crypto/rpc/base-mainnet \
-  -H "Authorization: Bearer $VENICE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "eth_sendRawTransaction",
-    "params": ["0xSignedRawTxHex"],
-    "id": 1
-  }'
-```
+<Steps>
+  <Step title="Get the next nonce">
+    ```bash
+    curl https://api.venice.ai/api/v1/crypto/rpc/base-mainnet \
+      -H "Authorization: Bearer $VENICE_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","method":"eth_getTransactionCount","params":["0xAgentWallet","pending"],"id":1}'
+    ```
+    Use `"pending"` so back-to-back sends don't collide.
+  </Step>
+  <Step title="Get gas price">
+    ```bash
+    curl https://api.venice.ai/api/v1/crypto/rpc/base-mainnet \
+      -H "Authorization: Bearer $VENICE_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","method":"eth_gasPrice","params":[],"id":1}'
+    ```
+    For EIP-1559 chains, prefer `eth_feeHistory` to compute `maxFeePerGas` and `maxPriorityFeePerGas`.
+  </Step>
+  <Step title="Estimate gas">
+    ```bash
+    curl https://api.venice.ai/api/v1/crypto/rpc/base-mainnet \
+      -H "Authorization: Bearer $VENICE_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","method":"eth_estimateGas","params":[{"from":"0xAgentWallet","to":"0xRecipient","value":"0x0","data":"0x..."}],"id":1}'
+    ```
+  </Step>
+  <Step title="Sign locally">
+    ```typescript
+    import { privateKeyToAccount } from 'viem/accounts'
+    import { base } from 'viem/chains'
+
+    const account = privateKeyToAccount(process.env.AGENT_PRIVATE_KEY)
+
+    const signed = await account.signTransaction({
+      chainId: base.id,
+      nonce,                  // from step 1
+      gas,                    // from step 3
+      maxFeePerGas,           // from step 2 (or fee history)
+      maxPriorityFeePerGas,
+      to: '0xRecipient',
+      value: 0n,
+      data: '0x...',
+    })
+    ```
+  </Step>
+  <Step title="Submit through Venice">
+    ```bash
+    curl https://api.venice.ai/api/v1/crypto/rpc/base-mainnet \
+      -H "Authorization: Bearer $VENICE_API_KEY" \
+      -H "Idempotency-Key: agent-tx-<id>" \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["0xSignedHex"],"id":1}'
+    ```
+    Always set `Idempotency-Key` on relays so a network blip can't double-broadcast.
+  </Step>
+  <Step title="Poll for receipt">
+    ```bash
+    curl https://api.venice.ai/api/v1/crypto/rpc/base-mainnet \
+      -H "Authorization: Bearer $VENICE_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","method":"eth_getTransactionReceipt","params":["0xTxHash"],"id":1}'
+    ```
+    Poll every few seconds until `result` is non-null. Check `result.status` (`"0x1"` = success).
+  </Step>
+</Steps>
 
 <Note>
 Every `eth_sendRawTransaction` call is logged server-side with the tx hash, network, request ID, and calling user ID. The signed payload itself is not retained. This audit trail exists so compromised keys used for illicit relays can be traced back to the responsible account.
@@ -281,6 +336,20 @@ Always trust the `X-Venice-RPC-Cost-USD` response header for the authoritative c
 | Staff | 1,000 |
 
 When exceeded, the endpoint returns `429` with standard `X-RateLimit-*` response headers.
+
+## Error handling
+
+Common HTTP responses your agent should handle:
+
+| Status | Meaning | What to do |
+|---|---|---|
+| `400` | Unsupported or unmapped JSON-RPC method, or malformed batch | Verify the method against the [allowlist](/api-reference/endpoint/crypto/rpc). The error body names the offending method. |
+| `400` | Replay of an `Idempotency-Key` with a different body | Use a fresh key for distinct requests. |
+| `402` | No auth header at all (the x402 payment-required response includes `authOptions` showing both auth paths), or out of credits with a valid auth header | If no auth: attach `Authorization` or `X-Sign-In-With-X`. If insufficient credits: top up via DIEM, USD, or `POST /x402/top-up`. |
+| `429` | Rate limit hit (100 req/min standard, 1,000 req/min staff) | Honor `X-RateLimit-Reset` and back off. Batch up to 100 calls per request to amortize the limit. |
+| `5xx` | Upstream RPC node hiccup | Retry with the same `Idempotency-Key` to avoid double-charging. |
+
+Per-item batch errors (e.g. invalid params on one of N calls) come back inside a `200 OK` response with a JSON-RPC `error` field on the offending item. Those items are billed at a flat 5 credits each.
 
 ## Not supported
 
