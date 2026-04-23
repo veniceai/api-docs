@@ -14,8 +14,8 @@ Venice gives your agent both inference (230+ models) and blockchain access (10 E
   <Card title="11 chains supported" icon="link">
     Ethereum, Base, Arbitrum, Optimism, Polygon, Linea, Avalanche, BSC, Blast, zkSync Era, and Starknet (mainnet plus testnets).
   </Card>
-  <Card title="Pay-as-you-go in USD or crypto" icon="coins">
-    Top up with USD, crypto, or stake VVV for daily DIEM credits.
+  <Card title="Stake VVV for headless funding" icon="coins">
+    Stake VVV on Base to earn daily DIEM, the only fully headless funding path for a minted API key. USD and crypto top-ups are also available through the dashboard.
   </Card>
   <Card title="Keyless auth via x402" icon="wallet">
     Agents can authenticate with a wallet signature and pay in USDC on Base.
@@ -29,7 +29,7 @@ Venice gives your agent both inference (230+ models) and blockchain access (10 E
 | **Inference** | 230+ text, image, video, audio, and embedding models through one OpenAI-compatible endpoint |
 | **Crypto RPC** | JSON-RPC 2.0 proxy to 10 EVM chains plus Starknet (mainnet and testnets) |
 | **Authentication** | Standard API key or x402 wallet auth (no Venice account required) |
-| **Funding** | USD, crypto top-ups, or autonomous VVV staking for daily DIEM credits |
+| **Funding** | Autonomous: VVV staking for daily DIEM. Browser: USD or crypto top-ups via the dashboard |
 | **Batching** | Up to 100 JSON-RPC calls per request, multi-chain in parallel |
 | **Idempotency** | Safe retries with `Idempotency-Key` header |
 
@@ -122,25 +122,32 @@ curl https://api.venice.ai/api/v1/crypto/rpc/base-mainnet \
 
 ### Read ERC-20 token balance
 
-Call the `balanceOf(address)` selector with `eth_call`. The example below reads VVV balance for an address on Base.
+Call the `balanceOf(address)` selector with `eth_call`. The `data` field is the 4-byte selector (`0x70a08231`) followed by the wallet address left-padded to 32 bytes. Easiest to let a library encode it:
 
-```bash
-curl https://api.venice.ai/api/v1/crypto/rpc/base-mainnet \
-  -H "Authorization: Bearer $VENICE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "eth_call",
-    "params": [
-      {
-        "to": "0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf",
-        "data": "0x70a08231000000000000000000000000YourWalletAddressWithout0x"
-      },
-      "latest"
-    ],
-    "id": 1
-  }'
+```typescript
+import { encodeFunctionData, parseAbi } from 'viem'
+
+const data = encodeFunctionData({
+  abi: parseAbi(['function balanceOf(address) view returns (uint256)']),
+  args: ['0xWalletAddress'],
+})
+
+const response = await fetch('https://api.venice.ai/api/v1/crypto/rpc/base-mainnet', {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    method: 'eth_call',
+    params: [{ to: '0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf', data }, 'latest'],
+    id: 1,
+  }),
+})
 ```
+
+The contract address above is VVV on Base. Swap it for any ERC-20 contract.
 
 ### Send a signed transaction (full lifecycle)
 
@@ -184,8 +191,8 @@ Venice never holds your private keys. The agent gathers tx parameters via RPC re
       chainId: base.id,
       nonce,                  // from step 1
       gas,                    // from step 3
-      maxFeePerGas,           // from step 2 (or fee history)
-      maxPriorityFeePerGas,
+      maxFeePerGas,           // from step 2 (fee history)
+      maxPriorityFeePerGas,   // from step 2 (fee history)
       to: '0xRecipient',
       value: 0n,
       data: '0x...',
@@ -253,33 +260,36 @@ curl https://api.venice.ai/api/v1/crypto/rpc/base-mainnet \
 
 This is critical for transaction relays where a network blip could otherwise cause your agent to broadcast the same tx twice.
 
-## Funding your agent
+## Funding the agent's API key
 
-Agents need credits to call Venice. Three ways to fund them:
+Once the agent has a Venice API key, it needs spendable balance on the underlying account before paid endpoints will accept the key. There are two ways to put balance there:
 
-| Path | How it works | When to use |
+| Path | Autonomous? | How it works |
 |---|---|---|
-| **USD or crypto top-up** | Buy credits with credit card or crypto at [venice.ai/settings/api](https://venice.ai/settings/api). Credits never expire. | Simplest for human-supervised agents. |
-| **DIEM staking** | Stake VVV in the [Venice Staking Smart Contract](https://basescan.org/address/0x321b7ff75154472b18edb199033ff4d116f340ff#code) to earn daily DIEM. Each DIEM = $1/day of compute that refreshes daily. | Long-running agents with predictable daily usage. |
-| **x402 wallet** | Agent's wallet pays per request in USDC on Base. No Venice account needed. | Fully autonomous or short-lived agents. |
+| **DIEM from VVV staking** | Yes | Stake VVV in the [Venice Staking Smart Contract](https://basescan.org/address/0x321b7ff75154472B18EDb199033fF4D116F340Ff#code) on Base. The wallet's daily DIEM allocation is proportional to its share of the staking pool. The account needs at least 0.1 DIEM accrued before any DIEM is spendable. DIEM refreshes at 00:00 UTC. To grow daily spend, stake more VVV. |
+| **USD or crypto top-up via the dashboard** | No (browser) | Sign into [venice.ai](https://venice.ai) with the same wallet (Sign-In-With-Ethereum), then add credits in Settings, API. Both Stripe (card) and Coinbase (crypto) live behind that page and require a browser. Credits never expire. |
+
+For an agent that runs unattended, **DIEM via VVV staking is the only fully headless funding path for a minted API key today**. If the agent's daily spend exceeds its DIEM allocation, the realistic options are: stake more VVV, or have an operator sign in and top up in USD or crypto.
 
 ### Autonomous VVV staking and key generation
 
 A truly autonomous agent can manage its own VVV wallet on Base, stake it, and mint its own Venice API key with no human in the loop. The full flow:
 
 <Steps>
-  <Step title="Acquire VVV">
-    Send VVV to the agent's wallet, or have the agent swap on a DEX like [Aerodrome](https://aerodrome.finance) or [Uniswap](https://app.uniswap.org).
+  <Step title="Acquire VVV and ETH for gas">
+    Send VVV to the agent's wallet (or have the agent swap on [Aerodrome](https://aerodrome.finance) or [Uniswap](https://app.uniswap.org)), plus a small amount of ETH on Base for the two staking transactions.
   </Step>
   <Step title="Stake VVV">
-    Approve and stake VVV in the Venice staking contract. The wallet receives sVVV.
+    `approve` the staking contract on the VVV token, then `stake(amount)` on `0x321b7ff75154472B18EDb199033fF4D116F340Ff`. The wallet's sVVV balance updates atomically with the stake.
   </Step>
   <Step title="Mint an API key">
-    Sign a validation token with the staking wallet and POST it to `/api/v1/api_keys/generate_web3_key`. Venice returns a fresh API key tied to the staked balance.
+    `GET /api/v1/api_keys/generate_web3_key` returns a JWT that expires 15 minutes after issuance. Sign the raw token with the staking wallet, then `POST` the address, signature, and token back. Venice returns an API key bound to the user account derived from that wallet.
   </Step>
 </Steps>
 
-See [Autonomous Agent API Key Creation](/overview/guides/generating-api-key-agent) for the complete walkthrough with code.
+Minting only requires a non-zero sVVV balance, so 1 staked VVV is enough to receive a key. **Spending** with the key is a separate question, governed by the funding table above.
+
+See [Autonomous Agent API Key Creation](/overview/guides/generating-api-key-agent) for the complete walkthrough with code and the full error reference.
 
 ## x402 wallet auth in 30 seconds
 
@@ -345,7 +355,7 @@ Common HTTP responses your agent should handle:
 |---|---|---|
 | `400` | Unsupported or unmapped JSON-RPC method, or malformed batch | Verify the method against the [allowlist](/api-reference/endpoint/crypto/rpc). The error body names the offending method. |
 | `400` | Replay of an `Idempotency-Key` with a different body | Use a fresh key for distinct requests. |
-| `402` | No auth header at all (the x402 payment-required response includes `authOptions` showing both auth paths), or out of credits with a valid auth header | If no auth: attach `Authorization` or `X-Sign-In-With-X`. If insufficient credits: top up via DIEM, USD, or `POST /x402/top-up`. |
+| `402` | No auth header at all (response body includes `authOptions` listing both supported auth paths), or out of credits with a valid auth header | If no auth: attach `Authorization: Bearer ...` or the x402 `X-Sign-In-With-X` header. If out of credits: with a Bearer key, fund the account (DIEM, USD, or dashboard top-up); with x402 auth, call `POST /api/v1/x402/top-up` directly. |
 | `429` | Rate limit hit (100 req/min standard, 1,000 req/min staff) | Honor `X-RateLimit-Reset` and back off. Batch up to 100 calls per request to amortize the limit. |
 | `5xx` | Upstream RPC node hiccup | Retry with the same `Idempotency-Key` to avoid double-charging. |
 
