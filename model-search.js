@@ -224,6 +224,14 @@
   const VIDEO_FILTERS = ['text-to-video', 'image-to-video'];
   const IMAGE_FILTERS = ['image-gen', 'image-upscale', 'image-edit', 'image-uncensored'];
   const PRIVACY_FILTERS = ['e2ee', 'tee', 'private', 'anonymized'];
+  const MODEL_SEARCH_ALIASES = {
+    gpt4: ['gpt-4', 'gpt 4', 'openai gpt-4'],
+    gpt4o: ['gpt-4o', 'gpt 4o', 'openai gpt-4o'],
+    llama: ['meta-llama', 'meta llama'],
+    sonnet: ['claude-sonnet', 'claude sonnet'],
+    opus: ['claude-opus', 'claude opus']
+  };
+  const modelSearchIndexCache = new WeakMap();
 
   // Tooltip text
   const TOOLTIPS = {
@@ -357,6 +365,319 @@
   function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function normalizeSearchText(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[-_./]+/g, ' ')
+      .replace(/[^a-z0-9\s]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function compactSearchText(value) {
+    return normalizeSearchText(value).replace(/\s+/g, '');
+  }
+
+  function searchTokens(value) {
+    const normalized = normalizeSearchText(value);
+    return normalized ? normalized.split(' ').filter(Boolean) : [];
+  }
+
+  function addUniqueSearchTerm(list, seen, value, source) {
+    const text = normalizeSearchText(value);
+    if (!text) return;
+    const key = `${source}:${text}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    list.push({ text, compact: compactSearchText(text), source });
+  }
+
+  function getAliasTerms(value) {
+    const compact = compactSearchText(value);
+    return MODEL_SEARCH_ALIASES[compact] || [];
+  }
+
+  function buildSearchQuery(rawQuery) {
+    const normalized = normalizeSearchText(rawQuery);
+    const tokens = searchTokens(rawQuery);
+    if (!normalized) {
+      return null;
+    }
+
+    const termSeen = new Set();
+    const terms = [];
+    addUniqueSearchTerm(terms, termSeen, normalized, 'query');
+
+    const aliasTerms = getAliasTerms(normalized);
+    aliasTerms.forEach(alias => addUniqueSearchTerm(terms, termSeen, alias, 'alias'));
+
+    const aliasExpandedTokens = [];
+    tokens.forEach(token => {
+      const tokenAliases = getAliasTerms(token);
+      if (tokenAliases.length > 0) {
+        aliasExpandedTokens.push(searchTokens(tokenAliases[0]));
+        tokenAliases.forEach(alias => addUniqueSearchTerm(terms, termSeen, alias, 'alias'));
+      } else {
+        aliasExpandedTokens.push([token]);
+      }
+    });
+    if (aliasExpandedTokens.length > 0) {
+      addUniqueSearchTerm(terms, termSeen, aliasExpandedTokens.flat().join(' '), 'alias');
+    }
+
+    const highlightSeen = new Set();
+    const highlightTerms = [];
+    [...tokens, normalized, ...terms.map(term => term.text)].forEach(term => {
+      searchTokens(term).forEach(token => {
+        const compact = compactSearchText(token);
+        if (compact && !highlightSeen.has(compact)) {
+          highlightSeen.add(compact);
+          highlightTerms.push(token);
+        }
+      });
+      const compact = compactSearchText(term);
+      if (compact && compact.length > 2 && !highlightSeen.has(compact)) {
+        highlightSeen.add(compact);
+        highlightTerms.push(term);
+      }
+    });
+
+    return {
+      normalized,
+      compact: compactSearchText(normalized),
+      tokens,
+      terms,
+      highlightTerms
+    };
+  }
+
+  function buildModelSearchEntry(model) {
+    const spec = model.model_spec || {};
+    const caps = getCapabilities(spec.capabilities);
+    const fields = [
+      spec.name,
+      model.id,
+      model.type,
+      spec.privacy,
+      ...(spec.traits || []),
+      ...caps,
+      spec.constraints?.model_type
+    ].filter(Boolean);
+
+    const primary = [spec.name, model.id].filter(Boolean).join(' ');
+    const text = fields.join(' ');
+    const normalized = normalizeSearchText(text);
+    const tokens = [...new Set(searchTokens(text))];
+
+    return {
+      name: normalizeSearchText(spec.name || model.id),
+      nameCompact: compactSearchText(spec.name || model.id),
+      id: normalizeSearchText(model.id),
+      idCompact: compactSearchText(model.id),
+      primary: normalizeSearchText(primary),
+      primaryCompact: compactSearchText(primary),
+      normalized,
+      compact: compactSearchText(text),
+      tokens
+    };
+  }
+
+  function getModelSearchEntry(model) {
+    let entry = modelSearchIndexCache.get(model);
+    if (!entry) {
+      entry = buildModelSearchEntry(model);
+      modelSearchIndexCache.set(model, entry);
+    }
+    return entry;
+  }
+
+  function editDistanceWithin(a, b, maxDistance) {
+    if (Math.abs(a.length - b.length) > maxDistance) return maxDistance + 1;
+    if (a === b) return 0;
+
+    let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const current = [i];
+      let rowMin = current[0];
+      for (let j = 1; j <= b.length; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        const value = Math.min(
+          previous[j] + 1,
+          current[j - 1] + 1,
+          previous[j - 1] + cost
+        );
+        current[j] = value;
+        rowMin = Math.min(rowMin, value);
+      }
+      if (rowMin > maxDistance) return maxDistance + 1;
+      previous = current;
+    }
+    return previous[b.length];
+  }
+
+  function fuzzyMaxDistance(token) {
+    if (token.length <= 3) return 0;
+    if (token.length <= 4) return 1;
+    if (token.length <= 7) return 2;
+    return 3;
+  }
+
+  function scoreTokenAgainstEntry(token, entry) {
+    if (!token) return { score: 0, direct: true };
+    if (entry.tokens.includes(token)) return { score: 0, direct: true };
+
+    let best = Infinity;
+    let direct = false;
+    for (const candidate of entry.tokens) {
+      if (candidate.startsWith(token)) {
+        best = Math.min(best, 0.12);
+        direct = true;
+      } else if (candidate.includes(token)) {
+        best = Math.min(best, 0.25);
+        direct = true;
+      }
+
+      const maxDistance = fuzzyMaxDistance(token);
+      if (maxDistance > 0) {
+        const distance = editDistanceWithin(token, candidate, maxDistance);
+        if (distance <= maxDistance) {
+          best = Math.min(best, 0.55 + distance / Math.max(token.length, candidate.length));
+        }
+      }
+    }
+
+    return Number.isFinite(best) ? { score: best, direct } : null;
+  }
+
+  function scoreModelSearch(model, query) {
+    if (!query) {
+      return { matched: true, rank: 0, score: 0, direct: true };
+    }
+
+    const entry = getModelSearchEntry(model);
+    let best = null;
+    const consider = score => {
+      if (!best || score.rank < best.rank || (score.rank === best.rank && score.score < best.score)) {
+        best = score;
+      }
+    };
+
+    query.terms.forEach(term => {
+      const isAlias = term.source === 'alias';
+      const rankOffset = isAlias ? 1 : 0;
+
+      if (
+        entry.name === term.text ||
+        entry.id === term.text ||
+        entry.nameCompact === term.compact ||
+        entry.idCompact === term.compact
+      ) {
+        consider({ matched: true, rank: rankOffset, score: 0, direct: true });
+      }
+
+      if (
+        (term.text.length > 1 && (entry.primary.includes(term.text) || entry.normalized.includes(term.text))) ||
+        (term.compact.length > 1 && (entry.primaryCompact.includes(term.compact) || entry.compact.includes(term.compact)))
+      ) {
+        const indexes = [
+          entry.primary.indexOf(term.text),
+          entry.normalized.indexOf(term.text),
+          entry.primaryCompact.indexOf(term.compact),
+          entry.compact.indexOf(term.compact)
+        ].filter(index => index >= 0);
+        const firstIndex = indexes.length > 0 ? Math.min(...indexes) : 0;
+        const lengthPenalty = Math.min(entry.primary.length || entry.normalized.length, 200) / 10000;
+        consider({ matched: true, rank: 2 + rankOffset, score: firstIndex / 1000 + lengthPenalty, direct: true });
+      }
+    });
+
+    const tokenScores = query.tokens.map(token => scoreTokenAgainstEntry(token, entry));
+    if (tokenScores.length > 0 && tokenScores.every(Boolean)) {
+      const total = tokenScores.reduce((sum, item) => sum + item.score, 0);
+      const allDirect = tokenScores.every(item => item.direct);
+      consider({ matched: true, rank: allDirect ? 3 : 4, score: total, direct: allDirect });
+    }
+
+    return best || { matched: false, rank: Infinity, score: Infinity, direct: false };
+  }
+
+  function buildCompactCharMap(text) {
+    const chars = [];
+    const map = [];
+    String(text || '').split('').forEach((char, index) => {
+      const lower = char.toLowerCase();
+      if (/[a-z0-9]/.test(lower)) {
+        chars.push(lower);
+        map.push(index);
+      }
+    });
+    return { compact: chars.join(''), map };
+  }
+
+  function addHighlightRange(ranges, start, end) {
+    if (start < end) ranges.push({ start, end });
+  }
+
+  function findSearchHighlightRanges(text, query) {
+    if (!query || !query.highlightTerms?.length) return [];
+    const { compact, map } = buildCompactCharMap(text);
+    if (!compact) return [];
+
+    const ranges = [];
+    const terms = [...query.highlightTerms]
+      .map(term => compactSearchText(term))
+      .filter(term => term.length > 1)
+      .sort((a, b) => b.length - a.length);
+
+    terms.forEach(term => {
+      let index = compact.indexOf(term);
+      while (index !== -1) {
+        addHighlightRange(ranges, map[index], map[index + term.length - 1] + 1);
+        index = compact.indexOf(term, index + 1);
+      }
+
+      const maxDistance = fuzzyMaxDistance(term);
+      if (maxDistance > 0 && term.length >= 4) {
+        for (let length = Math.max(2, term.length - maxDistance); length <= term.length + maxDistance; length++) {
+          for (let i = 0; i <= compact.length - length; i++) {
+            const candidate = compact.slice(i, i + length);
+            if (editDistanceWithin(term, candidate, maxDistance) <= maxDistance) {
+              addHighlightRange(ranges, map[i], map[i + length - 1] + 1);
+            }
+          }
+        }
+      }
+    });
+
+    return ranges
+      .sort((a, b) => a.start - b.start || b.end - a.end)
+      .reduce((merged, range) => {
+        const last = merged[merged.length - 1];
+        if (!last || range.start > last.end) {
+          merged.push({ ...range });
+        } else {
+          last.end = Math.max(last.end, range.end);
+        }
+        return merged;
+      }, []);
+  }
+
+  function highlightSearchText(text, query) {
+    const raw = String(text || '');
+    const ranges = findSearchHighlightRanges(raw, query);
+    if (ranges.length === 0) return escapeHtml(raw);
+
+    let html = '';
+    let cursor = 0;
+    ranges.forEach(range => {
+      html += escapeHtml(raw.slice(cursor, range.start));
+      html += `<mark class="vmb-search-highlight">${escapeHtml(raw.slice(range.start, range.end))}</mark>`;
+      cursor = range.end;
+    });
+    html += escapeHtml(raw.slice(cursor));
+    return html;
   }
 
   function isUncensoredModel(model) {
@@ -1802,37 +2123,45 @@
     }
 
     function renderModels() {
-      const query = searchInput.value.toLowerCase().trim();
+      const query = buildSearchQuery(searchInput.value);
       
       const filtered = allModels.filter(model => {
-        const spec = model.model_spec || {};
-        const name = (spec.name || model.id || '').toLowerCase();
-        const modelId = (model.id || '').toLowerCase();
-        const caps = getCapabilities(spec.capabilities);
-        
-        const matchesSearch = !query || 
-          name.includes(query) || 
-          modelId.includes(query) ||
-          caps.some(c => c.toLowerCase().includes(query));
-        
-        return matchesSearch && 
-               matchesCategory(model) && 
-               matchesCapability(model) && 
-               matchesVideoType(model) && 
+        return matchesCategory(model) &&
+               matchesCapability(model) &&
+               matchesVideoType(model) &&
                matchesImageType(model) &&
                matchesPrivacy(model);
       });
 
-      const sorted = sortModels(filtered);
+      let sorted = sortModels(filtered);
+      let showingClosestMatches = false;
 
-      countDisplay.textContent = sorted.length + ' model' + (sorted.length !== 1 ? 's' : '');
+      if (query) {
+        const scored = filtered
+          .map((model, index) => ({ model, index, search: scoreModelSearch(model, query) }))
+          .filter(item => item.search.matched)
+          .sort((a, b) =>
+            a.search.rank - b.search.rank ||
+            a.search.score - b.search.score ||
+            a.index - b.index
+          );
+        const strongScored = scored.filter(item => item.search.direct && item.search.rank <= 2);
+        const directScored = scored.filter(item => item.search.direct);
+        const visibleScored = strongScored.length > 0 ? strongScored : (directScored.length > 0 ? directScored : scored);
+
+        showingClosestMatches = scored.length > 0 && directScored.length === 0;
+        sorted = visibleScored.map(item => item.model);
+      }
+
+      const countLabel = sorted.length + ' model' + (sorted.length !== 1 ? 's' : '');
+      countDisplay.textContent = showingClosestMatches ? `${countLabel} closest match${sorted.length !== 1 ? 'es' : ''}` : countLabel;
 
       if (sorted.length === 0) {
-        modelsContainer.innerHTML = '<div class="vmb-loading">No models match your filters</div>';
+        modelsContainer.innerHTML = `<div class="vmb-loading">${query ? 'No close model matches' : 'No models match your filters'}</div>`;
         return;
       }
 
-      modelsContainer.innerHTML = sorted.map(model => renderModelCard(model)).join('');
+      modelsContainer.innerHTML = sorted.map(model => renderModelCard(model, query)).join('');
 
       // Fetch video prices after render
       sorted.filter(m => m.type === 'video').forEach(model => {
@@ -1846,7 +2175,7 @@
       });
     }
 
-    function renderModelCard(model) {
+    function renderModelCard(model, searchQuery) {
         const spec = model.model_spec || {};
       const caps = getCapabilities(spec.capabilities);
         const pricing = spec.pricing || model.pricing || {};
@@ -1961,8 +2290,11 @@
           priceStr = `${formatPrice(pricing.per_audio_second.usd)}/sec`;
         }
         
-        const modelName = escapeHtml(spec.name || model.id);
-        const modelId = escapeHtml(model.id);
+        const modelNameRaw = spec.name || model.id;
+        const modelIdRaw = model.id;
+        const modelName = highlightSearchText(modelNameRaw, searchQuery);
+        const modelId = escapeHtml(modelIdRaw);
+        const modelIdDisplay = highlightSearchText(modelIdRaw, searchQuery);
       
       // Release date for NEW badge
       const dateInfo = formatAddedDate(model.created);
@@ -2047,7 +2379,7 @@
       
       // Left side: model-id and pricing (or video controls)
       const leftParts = [
-        `<span class="vmb-model-id"><span class="vmb-id-text">${modelId}</span>${idCopyBtn}</span>`,
+        `<span class="vmb-model-id"><span class="vmb-id-text">${modelIdDisplay}</span>${idCopyBtn}</span>`,
         model.type === 'video' && videoControlsHtml 
           ? `<span class="vmb-video-controls">${videoControlsHtml}</span>` 
           : (priceStr ? `<span class="vmb-pricing">${priceStr}</span>` : ''),
