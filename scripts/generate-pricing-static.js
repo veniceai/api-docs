@@ -154,7 +154,9 @@ function renderPricingImageTable(models) {
     const resPricing = spec.pricing?.resolutions;
     
     let priceStr = '';
-    if (resPricing) {
+    if (model.id === 'gpt-image-2') {
+      priceStr = 'Dynamic: quality + resolution + prompt length';
+    } else if (resPricing) {
       const resKeys = Object.keys(resPricing);
       priceStr = resKeys.map(res => `${res}: ${formatPrice(resPricing[res]?.usd)}`).join(', ');
     } else {
@@ -195,9 +197,11 @@ function renderPricingEditTable(models) {
     const spec = model.model_spec || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
-    const editPrice = spec.pricing?.inpaint?.usd ?? 0.04;
+    const editPrice = model.id === 'gpt-image-2-edit'
+      ? 'Dynamic: quality + resolution + prompt length + input images'
+      : formatPrice(spec.pricing?.inpaint?.usd ?? 0.04);
 
-    return `| ${name} | ${modelId} | ${formatPrice(editPrice)} |`;
+    return `| ${name} | ${modelId} | ${editPrice} |`;
   }).join('\n');
 
   return header + '\n' + rows + '\n';
@@ -391,6 +395,10 @@ function generatePricingMdx() {
   sections.push('## Media Models');
   sections.push('');
   sections.push('### Image Generation');
+  sections.push('');
+  sections.push('<Info>');
+  sections.push('`gpt-image-2` and `gpt-image-2-edit` use token-aware dynamic pricing. Price depends on `quality`, `resolution`, estimated prompt tokens (`ceil(prompt characters / 3.2)`), and for edit or multi-edit requests, billable input images. The Models API exposes the exact formula fields under `model_spec.pricing.gpt_image_tokens`.');
+  sections.push('</Info>');
   sections.push('');
   sections.push('<div id="pricing-image-placeholder">');
   sections.push('');

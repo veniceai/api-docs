@@ -590,6 +590,18 @@
     return `<span class="vpt-res-group"><select class="vpt-res-select" data-model="${modelId}">${options}</select><span class="vpt-price-value vpt-res-price" data-model="${modelId}">${formatPrice(defaultPrice)}</span></span>`;
   }
 
+  function getGptImage2PricingLine(model) {
+    if (model.id === 'gpt-image-2') {
+      return '<div class="vpt-extended-line vpt-tooltip" data-tooltip="GPT Image 2 pricing depends on quality, resolution, and estimated prompt tokens. See model_spec.pricing.gpt_image_tokens in the Models API for exact formula fields.">Dynamic: quality + resolution + prompt length</div>';
+    }
+
+    if (model.id === 'gpt-image-2-edit') {
+      return '<div class="vpt-extended-line vpt-tooltip" data-tooltip="GPT Image 2 Edit pricing depends on quality, resolution, estimated prompt tokens, and billable input images. The first input image is included; additional input images add image-input token cost.">Dynamic: quality + resolution + prompt length + input images</div>';
+    }
+
+    return '';
+  }
+
   function renderPricingImageTable(models) {
     const imageModels = models.filter(m => m.type === 'image').filter(m => !isDeprecatedModel(m))
       .sort((a, b) => {
@@ -611,9 +623,12 @@
       const privacyTag = getPrivacyTag(model, 'vpt');
       const resPricing = spec.pricing?.resolutions;
       const defaultRes = spec.constraints?.defaultResolution;
+      const gptImage2PricingLine = getGptImage2PricingLine(model);
       
       let priceItems = '';
-      if (resPricing) {
+      if (model.id === 'gpt-image-2') {
+        priceItems = '<span class="vpt-price-item"><span class="vpt-price-label">Pricing</span><span class="vpt-price-value">Dynamic</span></span>';
+      } else if (resPricing) {
         // Show each resolution price separately
         const resKeys = Object.keys(resPricing);
         priceItems = resKeys.map(res => 
@@ -634,6 +649,7 @@
         <div class="vpt-row-bottom">
           ${priceItems}
         </div>
+        ${gptImage2PricingLine}
       </div>`;
     }).join('');
 
@@ -672,8 +688,12 @@
       const spec = model.model_spec || {};
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
-      const editPrice = spec.pricing?.inpaint?.usd ?? spec.pricing?.generation?.usd ?? 0.04;
+      const editPrice = model.id === 'gpt-image-2-edit' ? null : (spec.pricing?.inpaint?.usd ?? spec.pricing?.generation?.usd ?? 0.04);
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
+      const gptImage2PricingLine = getGptImage2PricingLine(model);
+      const priceItems = model.id === 'gpt-image-2-edit'
+        ? '<span class="vpt-price-item"><span class="vpt-price-label">Pricing</span><span class="vpt-price-value">Dynamic</span></span>'
+        : `<span class="vpt-price-item"><span class="vpt-price-label">Per Edit</span><span class="vpt-price-value">${formatPrice(editPrice)}</span></span>`;
 
       return `<div class="vpt-row">
         <div class="vpt-row-top">
@@ -684,8 +704,9 @@
           <div class="vpt-row-right">${moderationTag}</div>
         </div>
         <div class="vpt-row-bottom">
-          <span class="vpt-price-item"><span class="vpt-price-label">Per Edit</span><span class="vpt-price-value">${formatPrice(editPrice)}</span></span>
+          ${priceItems}
         </div>
+        ${gptImage2PricingLine}
       </div>`;
     }).join('');
 
