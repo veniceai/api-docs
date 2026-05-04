@@ -221,6 +221,11 @@
 
   // Filter categories
   const CAPABILITY_FILTERS = ['reasoning', 'vision', 'function', 'code'];
+
+  function categoryAllowsCapabilityFilters(category) {
+    return category === 'all' || category === 'text';
+  }
+
   const VIDEO_FILTERS = ['text-to-video', 'image-to-video'];
   const IMAGE_FILTERS = ['image-gen', 'image-upscale', 'image-edit', 'image-uncensored'];
   const PRIVACY_FILTERS = ['e2ee', 'tee', 'private', 'anonymized'];
@@ -1953,7 +1958,7 @@
         </span>
         <span class="vmb-capability-filters" role="group" aria-label="Capability filters">
           <button class="vmb-filter" data-filter="reasoning" aria-pressed="false">Reasoning</button>
-          <button class="vmb-filter" data-filter="vision" aria-pressed="false">Vision</button>
+          <button class="vmb-filter" data-filter="vision" aria-pressed="false" title="Chat models that accept image input">Vision</button>
           <button class="vmb-filter vmb-text-only" data-filter="function" aria-pressed="false">Function Calling</button>
           <button class="vmb-filter vmb-text-only" data-filter="code" aria-pressed="false">Code</button>
         </span>
@@ -2002,7 +2007,7 @@
       if (videoFilters) videoFilters.style.display = config.video ? 'contents' : 'none';
       imageFilters.style.display = config.image ? 'contents' : 'none';
     } else {
-      capabilityFilters.style.display = 'none';
+      capabilityFilters.style.display = 'contents';
       if (videoFilters) videoFilters.style.display = 'none';
       imageFilters.style.display = 'none';
     }
@@ -2015,7 +2020,38 @@
     let activePrivacy = null;
     // On overview page (no preset filter), default to newest first
     let activeSort = presetFilter ? 'default' : 'newest';
-    
+
+    function updateAriaPressed(btn, isActive) {
+      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    }
+
+    function syncCapabilityFilterControls() {
+      const allow = categoryAllowsCapabilityFilters(activeFilter);
+      if (!allow && activeCapability) {
+        activeCapability = null;
+        capabilityFilters.querySelectorAll('.vmb-filter').forEach(b => {
+          b.classList.remove('active');
+          updateAriaPressed(b, false);
+        });
+      }
+      capabilityFilters.querySelectorAll('.vmb-filter').forEach(b => {
+        b.disabled = !allow;
+        b.setAttribute('aria-disabled', allow ? 'false' : 'true');
+        if (!allow) {
+          b.title = 'Available when viewing All or Text models';
+        } else {
+          const f = b.dataset.filter;
+          if (f === 'vision') {
+            b.title = 'Chat models that accept image input';
+          } else {
+            b.removeAttribute('title');
+          }
+        }
+      });
+    }
+
+    syncCapabilityFilterControls();
+
     const sortToggle = container.querySelector('.vmb-sort-toggle');
     
     // Set initial sort toggle UI state for overview page
@@ -2411,10 +2447,6 @@
         `;
     }
 
-    function updateAriaPressed(btn, isActive) {
-      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-    }
-
     // Event: Search input with debounce
     let searchTimeout;
     searchInput.addEventListener('input', () => {
@@ -2474,6 +2506,19 @@
             activeCapability = filter;
             btn.classList.add('active');
             updateAriaPressed(btn, true);
+
+            if (!presetFilter) {
+              activeFilter = 'text';
+              categoryFilters.querySelectorAll('.vmb-filter').forEach(b => {
+                b.classList.remove('active');
+                updateAriaPressed(b, false);
+              });
+              const textCategoryBtn = categoryFilters.querySelector('[data-filter="text"]');
+              if (textCategoryBtn) {
+                textCategoryBtn.classList.add('active');
+                updateAriaPressed(textCategoryBtn, true);
+              }
+            }
           }
         } else if (isVideoType && videoFilters) {
           if (activeVideoType === filter) {
@@ -2518,6 +2563,7 @@
           btn.classList.add('active');
           updateAriaPressed(btn, true);
         }
+        syncCapabilityFilterControls();
         renderModels();
       });
     });
