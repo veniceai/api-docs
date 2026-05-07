@@ -11,7 +11,7 @@ import { AuthorByline } from "/snippets/authorByline.jsx";
 
 Research agents are useful when you want more than a single search result or a quick model answer. A good research agent can turn a broad topic into search queries, collect sources, extract the important evidence, follow up on gaps, and write a cited briefing that you can inspect afterward.
 
-In this tutorial, we'll build a private research agent using Python and the Venice API. By the end, you'll have a CLI that can research a topic, scrape public pages into Markdown, summarize source chunks, run follow-up research passes, and generate a cited report with optional local JSONL artifacts.
+In this tutorial, we'll build a private research agent using Python and the Venice API. By the end, you'll have a CLI that can research a topic, scrape public pages into Markdown, summarize source chunks, run gap-aware follow-up research passes, and generate a cited report with optional local JSONL artifacts.
 
 Interested in the full code implementation? Check out [the GitHub repo.](https://github.com/joshua-mo-143/venice-research-agent-demo)
 
@@ -31,10 +31,12 @@ The reference implementation is a small Python project with a few clear parts:
 | Venice client | Calls chat completions, streaming chat completions, and `POST /augment/scrape` |
 | Search layer | Searches DuckDuckGo by default, with optional arXiv paper discovery |
 | Data models | Tracks source URLs, canonical URLs, chunks, evidence, notes, errors, and reports |
-| Research agent | Plans searches, reads sources, extracts evidence, generates follow-up queries, and writes the final report |
-| Artifact writer | Stores auditable JSONL records for queries, results, fetches, chunks, source notes, errors, and reports |
+| Research agent | Plans searches, reads sources, extracts evidence, analyzes gaps, generates follow-up queries, and writes the final report |
+| Artifact writer | Stores auditable JSONL records for queries, research gaps, results, fetches, chunks, source notes, report drafts, errors, and reports |
 
 The flow looks like this:
+
+![Private research agent pipeline](/images/guides/private-research-agent/research-pipeline.svg)
 
 1. Ask Venice to generate diverse search queries for the topic.
 2. Search the web with one or more providers.
@@ -43,10 +45,10 @@ The flow looks like this:
 5. Split long pages into chunks.
 6. Ask Venice to extract evidence from each chunk.
 7. Ask Venice to turn chunk evidence into source notes.
-8. Generate follow-up queries that fill gaps or verify important claims.
-9. Ask Venice to synthesize the final report with citations.
+8. Identify research gaps and source-balance issues before generating follow-up queries.
+9. Ask Venice to synthesize the final report with footnote-style citations.
 
-This is "private" in the practical sense that the agent keeps the orchestration, source notes, artifacts, and final reports on your machine. Venice handles the model calls and scraping through its API, and retains zero data on your requests. The default reference implementation still sends search queries to DuckDuckGo or arXiv, so treat provider choice as part of your privacy design.
+This is "private" in the practical sense that the agent keeps the orchestration, source notes, artifacts, and final reports on your machine. Venice handles the model calls and scraping through its API. The default reference implementation still sends search queries to DuckDuckGo or arXiv, so treat provider choice as part of your privacy design.
 
 ## Setting Up the Project
 
@@ -78,10 +80,10 @@ Create a `.env` file for local development:
 
 ```bash
 VENICE_API_KEY=your_venice_api_key_here
-VENICE_MODEL=zai-org-glm-5
+VENICE_MODEL=openai-gpt-55
 ```
 
-We use `VENICE_MODEL` so you can change the model without editing code. `zai-org-glm-5` is a good general-purpose default, but you can swap it for another chat model available to your Venice account.
+We use `VENICE_MODEL` so you can change the model without editing code. The reference implementation currently defaults to `openai-gpt-55`, but you can swap it for another chat model available to your Venice account.
 
 ## Creating the Data Models
 
@@ -289,7 +291,7 @@ import httpx
 from .models import ScrapeResult
 
 DEFAULT_BASE_URL = "https://api.venice.ai/api/v1"
-DEFAULT_MODEL = "zai-org-glm-5"
+DEFAULT_MODEL = "openai-gpt-55"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
@@ -743,7 +745,7 @@ ProgressCallback = Callable[[str], None]
 DEFAULT_ITERATIONS = 3
 DEFAULT_QUERY_COUNT = 6
 DEFAULT_RESULTS_PER_QUERY = 4
-DEFAULT_MAX_SOURCES = 25
+DEFAULT_MAX_SOURCES = 40
 DEFAULT_MAX_CHUNKS_PER_SOURCE = 6
 ```
 
@@ -818,13 +820,30 @@ The `run()` method coordinates the research passes:
                 seen_source_keys,
                 seen_content_hashes,
                 notes,
+                iteration,
             )
 
             if iteration < iterations:
-                queries = self._follow_up_queries(topic, notes, query_count)
+                gaps, queries = self._gap_follow_up_queries(topic, notes, query_count)
+                self.artifacts.write(
+                    "research_gaps",
+                    {
+                        "topic": topic,
+                        "after_iteration": iteration,
+                        "source_balance": _source_cluster_counts(notes),
+                        "gaps": gaps,
+                        "queries": queries,
+                    },
+                )
                 self.artifacts.write(
                     "queries",
-                    {"stage": "follow_up", "topic": topic, "iteration": iteration + 1, "queries": queries},
+                    {
+                        "stage": "follow_up",
+                        "topic": topic,
+                        "iteration": iteration + 1,
+                        "gap_count": len(gaps),
+                        "queries": queries,
+                    },
                 )
 
         report = self._write_report(topic, notes)
@@ -867,11 +886,69 @@ The first model call turns the topic into search queries:
         return self._query_list(prompt, count, fallback=[topic])
 ```
 
-After each research pass, the agent asks Venice to look at the current source notes and create better follow-up queries:
+After each research pass, the updated agent does a more deliberate gap-analysis step. It looks at the current notes, counts source clusters by domain, asks Venice what coverage is missing, writes those gaps to artifacts, and then uses the resulting queries for the next pass.
+
+![Gap analysis loop](/images/guides/private-research-agent/gap-analysis-loop.svg)
+
+Start by tracking source balance:
+
+```python
+from urllib.parse import urlparse
+
+
+def _source_cluster_counts(notes: list[SourceNote]) -> list[dict[str, object]]:
+    total = len(notes)
+    if total == 0:
+        return []
+
+    clusters: dict[str, list[str]] = {}
+    for note in notes:
+        cluster = _source_cluster(note)
+        clusters.setdefault(cluster, []).append(note.source_id)
+
+    return [
+        {
+            "cluster": cluster,
+            "source_count": len(source_ids),
+            "source_share": round(len(source_ids) / total, 3),
+            "source_ids": source_ids,
+        }
+        for cluster, source_ids in sorted(
+            clusters.items(), key=lambda item: (-len(item[1]), item[0])
+        )
+    ]
+
+
+def _source_cluster(note: SourceNote) -> str:
+    url = note.canonical_url or note.final_url or note.url
+    host = urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host or "unknown"
+
+
+def _source_balance_digest(notes: list[SourceNote], limit: int = 8) -> str:
+    clusters = _source_cluster_counts(notes)
+    if not clusters:
+        return "No source clusters yet."
+
+    total = len(notes)
+    lines = [
+        f"- {cluster['cluster']}: {cluster['source_count']}/{total} sources "
+        f"({cluster['source_share']:.0%}); IDs: {', '.join(cluster['source_ids'])}"
+        for cluster in clusters[:limit]
+    ]
+    return "\n".join(lines)
+```
+
+This gives the agent a simple way to notice source-cluster capture. If every source is coming from one company, one framework, or one domain, follow-up queries should deliberately broaden the source set instead of collecting more of the same.
+
+Now use that balance information when creating follow-up searches:
 
 ```python
     def _follow_up_queries(self, topic: str, notes: list[SourceNote], count: int) -> list[str]:
         digest = _source_digest(notes, max_chars=9000)
+        source_balance = _source_balance_digest(notes)
         prompt = dedent(
             f"""
             We are researching: {topic}
@@ -879,13 +956,70 @@ After each research pass, the agent asks Venice to look at the current source no
             Current notes:
             {digest}
 
+            Source balance:
+            {source_balance}
+
             Create {count} follow-up web search queries that fill gaps, verify important claims,
             find primary evidence, and look for dissenting evidence.
+            If one source domain, vendor, framework, product, or perspective is overrepresented,
+            deliberately broaden beyond it unless the topic explicitly asks for that focus.
             Return JSON only in this shape: {{"queries": ["..."]}}
             """
         ).strip()
         return self._query_list(prompt, count, fallback=[topic])
 ```
+
+The newer reference implementation wraps this in `_gap_follow_up_queries()`, which asks Venice to return both gap records and queries:
+
+```python
+    def _gap_follow_up_queries(
+        self, topic: str, notes: list[SourceNote], count: int
+    ) -> tuple[list[dict[str, str]], list[str]]:
+        if not notes:
+            return [], [topic]
+
+        digest = _source_digest(notes, max_chars=12000)
+        source_balance = _source_balance_digest(notes)
+        prompt = dedent(
+            f"""
+            Identify coverage gaps before the next research pass.
+
+            Research topic:
+            {topic}
+
+            Current source notes:
+            {digest}
+
+            Source balance:
+            {source_balance}
+
+            Find important missing coverage that would improve a deep research report.
+            Look specifically for primary sources, technical concepts, dissenting views,
+            overrepresented source clusters, and claims that need verification.
+
+            Return JSON only in this shape:
+            {{"gaps": [{{"missing": "...", "why_it_matters": "...", "query": "..."}}],
+              "queries": ["targeted web search query"]}}
+            """
+        ).strip()
+        response = self.venice.chat(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            max_tokens=900,
+        )
+
+        data = json.loads(response)
+        gaps = _clean_gap_records(data.get("gaps"))
+        queries = _clean_string_list(data.get("queries"))
+        if not queries:
+            queries = [gap["query"] for gap in gaps if gap.get("query")]
+        return gaps, queries[:count]
+```
+
+When `--artifacts` is enabled, these records are written to `research_gaps.jsonl`. That gives you a useful audit trail for why the agent searched for a particular second-pass query.
 
 The parser should be forgiving. If the model returns malformed JSON, the agent falls back to the original topic:
 
@@ -928,6 +1062,7 @@ Now we collect source notes. The agent searches each query, fetches each result 
         seen_source_keys: set[str],
         seen_content_hashes: set[str],
         notes: list[SourceNote],
+        iteration: int,
     ) -> None:
         for query in queries:
             if self.max_sources is not None and len(notes) >= self.max_sources:
@@ -939,6 +1074,11 @@ Now we collect source notes. The agent searches each query, fetches each result 
             except Exception as exc:
                 self._record_error("search", exc, query=query)
                 continue
+
+            self.artifacts.write(
+                "search_results",
+                {"iteration": iteration, "query": query, "results": results},
+            )
 
             for result in results:
                 if self.max_sources is not None and len(notes) >= self.max_sources:
@@ -1133,16 +1273,18 @@ Once the agent has source notes, it can write the report. Start with a single-pa
             Source notes:
             {_source_digest(notes, max_chars=45000)}
 
-            Write a detailed Markdown research briefing.
+            Write a detailed source-backed Markdown research survey.
 
             Requirements:
             - Start with a precise H1 title.
             - Open with "## Overview".
             - Use topic-specific sections.
-            - Cite factual claims with source markers like [S1] and [S2].
+            - Use footnote-style citation markers like [^1] and [^2].
+            - Do not cite with internal source IDs like [S1] in the report body.
             - Do not include uncited factual claims.
+            - Avoid source-cluster capture from one vendor, domain, framework, or viewpoint.
             - Include uncertainty, contradictions, and missing context where relevant.
-            - End with "## Sources" and list every source used.
+            - End with "## References" as a numbered list ordered by first citation.
             """
         ).strip()
 
@@ -1158,7 +1300,7 @@ Once the agent has source notes, it can write the report. Start with a single-pa
 
 The reference implementation goes further for deep reports: it asks Venice for an outline, drafts each report section separately, then asks a final editor pass to assemble the finished report and convert internal source IDs into footnote-style citations.
 
-That staged approach is useful when you want long-form research output because one giant prompt often compresses too much. The tradeoff is latency and cost, since the agent makes more model calls.
+That staged approach is useful when you want long-form research output because one giant prompt often compresses too much. The updated prompts also push the report toward a broad, source-backed survey instead of a thin decision guide. If the source base is skewed toward one cluster, the editor prompt tells Venice to acknowledge that skew and avoid presenting it as representative of the whole field.
 
 Add the digest helpers:
 
@@ -1180,9 +1322,11 @@ def _source_digest(notes: list[SourceNote], max_chars: int) -> str:
             [
                 f"[{note.source_id}] {note.title}",
                 f"URL: {note.final_url or note.url}",
+                f"Canonical URL: {note.canonical_url}",
                 f"Found via: {note.query}",
                 f"Provider/rank: {note.provider}/{note.rank}",
                 f"Retrieved: {note.retrieved_at}",
+                f"Content hash: {note.content_hash}",
                 f"Note: {note.summary}",
                 f"Chunk evidence: {_chunk_digest(note.chunks, max_chars=1000)}",
             ]
@@ -1239,6 +1383,7 @@ from research_agent.agent import (
     DEFAULT_MAX_CHUNKS_PER_SOURCE,
     DEFAULT_MAX_SOURCES,
     DEFAULT_QUERY_COUNT,
+    DEFAULT_REPORT_STYLE,
     DEFAULT_RESULTS_PER_QUERY,
     ResearchAgent,
 )
@@ -1252,7 +1397,7 @@ def parse_args() -> argparse.Namespace:
         description="Run a minimal deep research agent powered by Venice AI.",
     )
     parser.add_argument("topic", nargs="+", help="Research topic, wrapped in quotes for best results.")
-    parser.add_argument("--model", help="Venice model name. Defaults to VENICE_MODEL or zai-org-glm-5.")
+    parser.add_argument("--model", help="Venice model name. Defaults to VENICE_MODEL or openai-gpt-55.")
     parser.add_argument("--iterations", type=int, default=DEFAULT_ITERATIONS)
     parser.add_argument("--queries", type=int, default=DEFAULT_QUERY_COUNT)
     parser.add_argument("--results", type=int, default=DEFAULT_RESULTS_PER_QUERY)
@@ -1262,6 +1407,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-sources", type=int, default=DEFAULT_MAX_SOURCES)
     parser.add_argument("--chunk-chars", type=int, default=3000)
     parser.add_argument("--max-chunks-per-source", type=int, default=DEFAULT_MAX_CHUNKS_PER_SOURCE)
+    parser.add_argument(
+        "--report-style",
+        choices=["brief", "standard", "deep"],
+        default=DEFAULT_REPORT_STYLE,
+        help=f"Final report depth. Default: {DEFAULT_REPORT_STYLE}.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Hide progress messages.")
     return parser.parse_args()
 ```
@@ -1277,6 +1428,7 @@ The CLI exposes the knobs you'll actually tune during research:
 | `--max-sources` | Maximum usable sources to collect |
 | `--chunk-chars` | Approximate chunk size before source evidence extraction |
 | `--max-chunks-per-source` | Number of chunks summarized per source |
+| `--report-style` | Final report depth: `brief`, `standard`, or `deep` |
 | `--artifacts` | Directory for JSONL audit records |
 | `--output` | Path for the final Markdown report |
 
@@ -1305,6 +1457,7 @@ def main() -> int:
                 progress=progress,
                 max_sources=args.max_sources,
                 max_chunks_per_source=args.max_chunks_per_source,
+                report_style=args.report_style,
             )
             report = agent.run(
                 topic,
@@ -1365,6 +1518,14 @@ uv run python main.py "agentic coding research" \
   --max-sources 12
 ```
 
+Choose the final report style:
+
+```bash
+uv run python main.py "AI agents in software engineering" --report-style deep
+```
+
+Use `brief` for a concise source-backed briefing, `standard` for a fuller survey, and `deep` for the staged outline/section/editor workflow.
+
 Save auditable artifacts:
 
 ```bash
@@ -1378,6 +1539,7 @@ When artifacts are enabled, you'll see files like:
 ```text
 runs/privacy/
   queries.jsonl
+  research_gaps.jsonl
   search_results.jsonl
   fetches.jsonl
   source_chunks.jsonl
@@ -1385,14 +1547,19 @@ runs/privacy/
   source_notes.jsonl
   dedupe.jsonl
   errors.jsonl
+  report_outline.jsonl
+  report_sections.jsonl
+  report_editor.jsonl
   reports.jsonl
 ```
 
-These files are useful when you want to understand how the agent reached a conclusion. For example, `source_notes.jsonl` shows the summarized source evidence, while `errors.jsonl` shows pages that failed during search, scraping, or summarization.
+These files are useful when you want to understand how the agent reached a conclusion. For example, `source_notes.jsonl` shows the summarized source evidence, `research_gaps.jsonl` shows why follow-up searches were generated, and `errors.jsonl` shows pages that failed during search, scraping, or summarization.
 
 ## Privacy and Reliability Notes
 
 A research agent touches several systems, so it helps to be precise about what goes where:
+
+![Private research agent data boundaries](/images/guides/private-research-agent/data-boundaries.svg)
 
 | Layer | What sees the data |
 | --- | --- |
@@ -1453,6 +1620,12 @@ class FakeWeb:
 ```
 
 Fakes make agent tests much faster and less flaky. You can verify the orchestration logic without relying on live search results, network conditions, or model output.
+
+## Benchmarking
+
+Many AI providers now have their own deep research workflows, so the reference repo includes a simple benchmark against Perplexity's Deep Research tool. Both agents were asked to write a report on AI agent framework architecture, then the generated reports were checked into [the GitHub repo](https://github.com/joshua-mo-143/venice-research-agent-demo/tree/main/reports).
+
+This is not meant to be a formal benchmark. It is a practical way to inspect report structure, source coverage, citation quality, and whether the agent over-focuses on one source cluster. That is also why the updated implementation tracks `research_gaps.jsonl` and source balance before follow-up searches.
 
 ## Extending This Example
 
