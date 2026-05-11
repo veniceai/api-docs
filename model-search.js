@@ -1285,6 +1285,18 @@
     return 'expired'; // More than 30 days past deprecation date
   }
 
+  function shouldShowInDeprecationTracker(removalDate) {
+    if (!removalDate) return false;
+    const status = getDeprecationStatus(removalDate);
+    if (status === 'deprecated') return true;
+    if (status !== 'retiring') return false;
+    const now = new Date();
+    const depDate = new Date(removalDate);
+    const thirtyDaysFromNow = new Date(now);
+    thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+    return depDate <= thirtyDaysFromNow;
+  }
+
   function renderDeprecationTableLoading() {
     return `<table class="vpt-table vpt-deprecation-table"><thead><tr>
       <th>Model</th><th>Model ID</th><th>Removal Date</th><th>Status</th>
@@ -1295,11 +1307,7 @@
 
   function renderDeprecationTable(models) {
     const deprecatingModels = models
-      .filter(m => {
-        const removal = getModelRemovalDate(m);
-        const status = getDeprecationStatus(removal);
-        return status === 'retiring' || status === 'deprecated';
-      })
+      .filter(m => shouldShowInDeprecationTracker(getModelRemovalDate(m)))
       .sort((a, b) => new Date(getModelRemovalDate(a) || 0) - new Date(getModelRemovalDate(b) || 0));
 
     if (deprecatingModels.length === 0) {
