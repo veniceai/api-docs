@@ -732,7 +732,14 @@
   }
 
   function isDeprecatedModel(model) {
-    return model.model_spec?.deprecation?.date != null;
+    const dep = model.model_spec?.deprecation;
+    return dep != null && (dep.date != null || dep.removesAt != null);
+  }
+
+  function getModelRemovalDate(model) {
+    const dep = model.model_spec?.deprecation;
+    if (!dep) return null;
+    return dep.removesAt || dep.date || null;
   }
 
   // Models that have been superseded by a newer version
@@ -1278,13 +1285,22 @@
     return 'expired'; // More than 30 days past deprecation date
   }
 
+  function renderDeprecationTableLoading() {
+    return `<table class="vpt-table vpt-deprecation-table"><thead><tr>
+      <th>Model</th><th>Model ID</th><th>Removal Date</th><th>Status</th>
+    </tr></thead><tbody>
+      <tr><td colspan="4" style="text-align: center; opacity: 0.6; padding: 24px;">Loading deprecation data from the <a href="/api-reference/endpoint/models/list">models API</a>…</td></tr>
+    </tbody></table>`;
+  }
+
   function renderDeprecationTable(models) {
     const deprecatingModels = models
       .filter(m => {
-        const status = getDeprecationStatus(m.model_spec?.deprecation?.date);
+        const removal = getModelRemovalDate(m);
+        const status = getDeprecationStatus(removal);
         return status === 'retiring' || status === 'deprecated';
       })
-      .sort((a, b) => new Date(a.model_spec?.deprecation?.date || 0) - new Date(b.model_spec?.deprecation?.date || 0));
+      .sort((a, b) => new Date(getModelRemovalDate(a) || 0) - new Date(getModelRemovalDate(b) || 0));
 
     if (deprecatingModels.length === 0) {
       return `<table class="vpt-table vpt-deprecation-table"><thead><tr>
@@ -1295,7 +1311,7 @@
     }
 
     const rows = deprecatingModels.map(model => {
-      const depDate = model.model_spec?.deprecation?.date;
+      const depDate = getModelRemovalDate(model);
       const status = getDeprecationStatus(depDate);
       const isRetiring = status === 'retiring';
       const name = escapeHtml(model.model_spec?.name || model.id);
@@ -1386,23 +1402,18 @@
     const el = document.getElementById('deprecation-tracker-placeholder');
     if (!el) return;
 
-    el.innerHTML = renderDeprecationTable(STATIC_MODELS);
+    el.innerHTML = renderDeprecationTableLoading();
     ensurePlaceholderVisible(el);
 
-    const cachedModels = getCachedModels();
-    if (cachedModels && cachedModels.length > 0) {
-      el.innerHTML = renderDeprecationTable(cachedModels);
-      ensurePlaceholderVisible(el);
+    let models = await fetchModelsFromAPI();
+    if (!models.length) {
+      models = getCachedModels() || [];
     }
-    fetchModelsFromAPI().then(freshModels => {
-      if (freshModels.length > 0) {
-        const el = document.getElementById('deprecation-tracker-placeholder');
-        if (el) {
-          el.innerHTML = renderDeprecationTable(freshModels);
-          ensurePlaceholderVisible(el);
-        }
-      }
-    }).catch(() => {});
+    if (!models.length) {
+      models = STATIC_MODELS;
+    }
+    el.innerHTML = renderDeprecationTable(models);
+    ensurePlaceholderVisible(el);
   }
 
   // Traits list for deprecations page
@@ -1572,7 +1583,7 @@
 
   function renderReasoningModelsTable(models) {
     const reasoning = models
-      .filter(m => m.type === 'text' && m.model_spec?.capabilities?.supportsReasoning && !m.model_spec?.deprecation)
+      .filter(m => m.type === 'text' && m.model_spec?.capabilities?.supportsReasoning && !isDeprecatedModel(m))
       .sort((a, b) => (a.model_spec?.name || a.id).localeCompare(b.model_spec?.name || b.id));
 
     const tableHead = '<table class="vpt-table"><thead><tr><th>Model</th><th>Model ID</th></tr></thead>';
@@ -2356,7 +2367,7 @@
         : '';
       
       const deprecatedBadge = isDeprecatedModel(model)
-        ? `<span class="vmb-deprecated-badge vmb-tooltip" data-tooltip="Scheduled for removal on ${formatDeprecationDate(model.model_spec?.deprecation?.date)}. See the deprecations page for details.">Deprecated</span>` 
+        ? `<span class="vmb-deprecated-badge vmb-tooltip" data-tooltip="Scheduled for removal on ${formatDeprecationDate(getModelRemovalDate(model))}. See the deprecations page for details.">Deprecated</span>` 
         : '';
       
       const uncensoredBadge = isUncensoredModel(model)
@@ -2757,7 +2768,7 @@
     pathMatch: 'deprecation',
     elementId: 'deprecation-tracker-placeholder',
     initFn: initDeprecations,
-    resetCheck: el => el.innerHTML === ''
+    resetCheck: el => el.textContent.includes('Loading') || el.innerHTML === ''
   });
 
   const tryInitTraitsList = createPageInitializer({
