@@ -1,0 +1,481 @@
+---
+title: "Seedance 2.0"
+description: "BytePlus Dreamina Seedance 2.0 — Venice's flagship multimodal video model. Text / image / reference-to-video on one endpoint, with four workflows (Reference, Edit, Extend, Stitch) inferred from prompt shape."
+'og:title': "Seedance 2.0 Guide | Venice API Docs"
+'og:description': "Generate, edit, extend and stitch videos with BytePlus Dreamina Seedance 2.0 via the Venice API. Workflow patterns, multimodal limits, pricing, and worked examples."
+---
+
+Seedance 2.0 is BytePlus's flagship Dreamina video model, exposed on Venice as a family of three variants for text-, image-, and reference-driven video generation. The **reference-to-video** variant is unusually powerful: a single endpoint and a single model ID handle **four distinct workflows** (Reference, Edit, Extend, Stitch) — the workflow is inferred from the **shape of your prompt**.
+
+This guide walks through the variants, the four workflows with verbatim canonical prompts, the multimodal input limits, pricing, and complete `curl` examples.
+
+<Warning>
+**Real human faces are not supported as direct inputs.** Seedance 2.0 rejects reference images and reference videos that contain identifiable human faces. See [Real human face policy](#real-human-face-policy) below for details.
+</Warning>
+
+## Variants
+
+| Model ID | Variant | Output resolutions | Notes |
+|---|---|---|---|
+| `seedance-2-0-text-to-video` | T2V | 480p / 720p / 1080p | Text prompt only |
+| `seedance-2-0-image-to-video` | I2V | 480p / 720p / 1080p | First-frame (and optionally last-frame) image grounding |
+| `seedance-2-0-reference-to-video` | R2V | 480p / 720p / 1080p | Up to 9 ref images + 3 ref videos + 3 ref audios. Powers Reference / Edit / Extend / Stitch |
+| `seedance-2-0-fast-text-to-video` | Fast T2V | 480p / 720p | Cheaper tier |
+| `seedance-2-0-fast-image-to-video` | Fast I2V | 480p / 720p | Cheaper tier |
+| `seedance-2-0-fast-reference-to-video` | Fast R2V | 480p / 720p | Cheaper tier, same workflow set |
+
+All variants are async. Submit via `POST /api/v1/video/queue`, then poll `POST /api/v1/video/retrieve` until the response body is `video/mp4`. See [Video Generation](/guides/media/video-generation) for the general queue flow.
+
+## The "one model, four workflows" model
+
+The reference-to-video variant (`seedance-2-0-reference-to-video` and its Fast sibling) is the same BytePlus model serving four different tasks. **BytePlus infers the task from the prompt prefix and the shape of your `content[]` inputs.** There is no `task` or `workflow` field — the prompt syntax is the routing.
+
+| Workflow | What it does | Prompt prefix | Inputs |
+|---|---|---|---|
+| **Reference** | Generate a new video using uploaded assets as donors for subject / motion / style / audio | `Refer to ... in <Image\|Video\|Audio N> to generate ...` | Text + ≥1 reference (0-9 images, 0-3 videos, 0-3 audios) |
+| **Edit** | Modify a single input video while preserving the rest | `Strictly edit <Video 1>, changing its ...` | 1 input video + text (images/audio optional grounding) |
+| **Extend** | Forward / backward extension of one clip | `Extend <Video 1>, generate ...` | 1 input video + text |
+| **Stitch** | Stitch 2-3 clips with auto-generated transitions | `<Video 1> + <transition description> + followed by <Video 2> + ...` | 2-3 input videos + text |
+
+The **prompt syntax is canonical and case-sensitive**: angle brackets, capital first letter, single space before the number. `<Video 1>` ✅. `video1`, `Video1`, `[Video 1]`, `@Video1` will not route reliably.
+
+---
+
+## Workflow patterns
+
+### Reference workflow
+
+Use the reference assets as **donors** — subject, scene, motion, style, or audio tone — to generate a brand-new video.
+
+**Canonical prompt patterns** (from BytePlus's Prompt Guide §2.4):
+
+```
+Refer to <Subject N> in <Image N> to generate ...
+Refer to the [action | camera scene | style | sound effect] in <Video N> to generate ...
+Refer to the [tone | timbre] in <Audio N> to generate ...
+```
+
+**Examples**:
+
+- `Refer to <Subject 1> in <Image 1> to generate a 5-second clip of the same character riding a horse through snow.`
+- `Refer to the camera scene in <Video 1> to generate a similar establishing shot of a futuristic city at dawn.`
+- `Refer to the timbre in <Audio 1> to generate a narrator describing the unfolding scene.`
+
+### Edit workflow
+
+Modify a single input video. **Anything not explicitly named in the prompt is preserved.** Use this when you want a localized change (subject swap, weather/color change, element add/remove) rather than a wholly new video.
+
+**Canonical prompt pattern** (from BytePlus's Prompt Guide §2.5.1):
+
+```
+Strictly edit <Video 1>, changing its [original feature] to [new feature] ...
+```
+
+**Sub-patterns for finer control**:
+
+```
+Add Elements:
+  At [timestamp / timing] and [spatial location] of <Video 1>, add [description of intended element].
+
+Remove Elements:
+  Remove [element to be deleted] from <Video 1>, keeping the rest of the video content unchanged.
+
+Modify Elements:
+  Replace [description of element to be changed] in <Video 1> with [description of intended element].
+```
+
+**Examples**:
+
+- `Strictly edit <Video 1>, changing its weather from sunny to a heavy rainstorm.`
+- `Add snacks such as fried chicken and pizza to the countertop in <Video 1>.`
+- `Remove the red car from <Video 1>, keeping the rest of the video content unchanged.`
+- `Replace the perfume featured in <Video 1> with the face cream from <Image 1>, with all original motions and camera work preserved.`
+
+The last example combines Edit with an image reference — perfectly legal, the model uses `<Image 1>` as a visual donor for the replacement.
+
+### Extend workflow
+
+Continue a single clip forward or backward in time. **By default Seedance returns only the new content** — not the original input concatenated with the extension. This is BytePlus's documented design choice for transition continuity; if you want the input clip preserved alongside the extension, say so explicitly:
+
+```
+Extend <Video 1>, generate [description of extended content]
+Extend <Video 1> backward, [description of extended content]
+Extend <Video 1>, start with <Video 1>, then [description of extended content]      ← preserves input at start
+Extend <Video 1> backward, [description], and then end with <Video 1>               ← preserves input at end
+```
+
+BytePlus's transition note (from Prompt Guide §2.5.2):
+
+> *"The model will automatically extract the transition frames for seamless blending. The original segments of the input video will not be re-generated, ensuring perfect continuity."*
+
+**Examples**:
+
+- `Extend <Video 1>, generate a dramatic chase scene through narrow alleys at dusk.`
+- `Extend <Video 1> backward, the same character walking toward the camera before the original shot begins.`
+- `Extend <Video 1>, start with <Video 1>, then the camera pulls back to reveal a vast landscape.`
+
+### Stitch workflow (Track Completion)
+
+Connect 2-3 input clips with AI-generated transitions. Total combined input duration must be ≤ 15 s.
+
+**Canonical prompt pattern** (from BytePlus's Prompt Guide §2.5.3):
+
+```
+<Video 1> + [transition description] + followed by <Video 2> [+ [transition description] + followed by <Video 3>]
+```
+
+**Examples**:
+
+- `<Video 1> + a smooth seamless cut + followed by <Video 2>`
+- `<Video 1>. The moment a leaf falls to the ground, it sets off a special effect of golden particles. A gust of wind blows by, leading into <Video 2>.`
+- `<Video 1> + a wisp of smoke transforms into a flock of birds + followed by <Video 2> + a slow dolly-in + followed by <Video 3>`
+
+The model auto-trims connecting segments at the join points for continuity.
+
+---
+
+## Universal prompt formula
+
+Across all four workflows, BytePlus's authoring guidance (Prompt Guide §1.1) is:
+
+```
+Subject + Motion + Environment (Optional)
+       + Camera Movement / Cut (Optional)
+       + Aesthetic Description (Optional)
+       + Audio (Optional)
+```
+
+- **Subject + Motion**: the logical foundation — define "Who" is performing "What action"
+- **Environment + Aesthetics**: spatial background, lighting, visual style
+- **Camera**: explicit shot type or movement
+- **Audio**: ambient sound effects for immersive output
+
+Layering this on top of a workflow prefix (e.g., `Strictly edit <Video 1>, changing its <subject + motion + environment + ...>`) produces the highest-quality outputs.
+
+---
+
+## Multimodal input limits
+
+These are BytePlus's hard limits; requests outside them are rejected at the model layer (typically as a generic 400). Venice enforces most of them at the schema and pre-charge layers, but a few (image-side aspect ratio, FPS, total-pixel-count on videos) pass through.
+
+### Images
+
+| Constraint | Value |
+|---|---|
+| Input methods | URL, Base64 data URL, or asset ID |
+| Formats | `.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`, `.gif`, `.heic`, `.heif` |
+| Aspect ratio (W / H) | exclusive `(0.4, 2.5)` |
+| Width / height per side | exclusive `(300, 6000)` px |
+| Per-image size | ≤ 30 MB |
+| Image count: I2V first-frame | 1 |
+| Image count: I2V first + last frame | 2 |
+| **Image count: R2V (V2 / Fast)** | **1 – 9** |
+
+<Note>
+Avoid Base64 for large images. Base64 inflates payload by ~33% and pushes against BytePlus's 64 MB total request body cap quickly.
+</Note>
+
+### Videos
+
+| Constraint | Value |
+|---|---|
+| Input methods | **URL or asset ID only** (Base64 not accepted) |
+| Formats | `.mp4`, `.mov` |
+| Video codecs | H.264 / AVC, H.265 / HEVC |
+| Audio codecs (in container) | AAC, MP3 |
+| **Duration per clip** | `[2, 15]` s (inclusive) |
+| **Max clip count** | 3 (R2V / Stitch / Extend) |
+| **Total combined duration** | ≤ 15 s across all clips |
+| Aspect ratio (W / H) | `[0.4, 2.5]` |
+| Width / height per side | `[300, 6000]` px |
+| Total pixel count | `[640 × 640, 2206 × 946]` |
+| **Per-clip size** | ≤ 50 MB |
+| Frame rate (FPS) | `[24, 60]` |
+
+### Audio
+
+| Constraint | Value |
+|---|---|
+| Input methods | URL, Base64, or asset ID |
+| Formats | `.wav`, `.mp3` |
+| **Duration per clip** | `[2, 15]` s |
+| **Max clip count** | 3 |
+| **Total combined duration** | ≤ 15 s |
+| **Per-clip size** | ≤ 15 MB |
+
+### Request body cap
+
+Venice's queue endpoint accepts JSON bodies up to **35 MB**. Inline data URLs for large videos can push past this — for multi-clip Stitch in particular, prefer URLs over inline base64. (Image inputs almost never trigger this.)
+
+---
+
+## Real human face policy
+
+Verbatim from BytePlus (public doc 2298881):
+
+> *"Seedance 2.0 series models do not support direct upload of reference images or videos containing real human faces. A series of solutions are provided to make it easier for creatives to use portraits."*
+
+In practice, requests with identifiable real human faces in `reference_image_urls` or `reference_video_urls` will be rejected by BytePlus's content-moderation layer. For Venice web UI users, the [face-asset orchestrator](https://venice.ai/video) handles the proper consent / library workflow transparently. **For API consumers, this orchestrator is not yet exposed** — do not pass identifiable human faces as references via the API. Use stylized characters, animals, products, scenes, or AI-generated subjects instead.
+
+---
+
+## Pricing
+
+The authoritative pricing oracle is the live quote endpoint:
+
+```bash
+POST https://api.venice.ai/api/v1/video/quote
+```
+
+**Always call `/video/quote` before submitting — never bake in numbers that may drift.**
+
+### Formula
+
+```
+tokens = (referenceVideoTotalDuration + outputVideoDuration) × outputWidth × outputHeight × outputFps / 1024
+priceUSD = tokens × ratePerMTokens / 1_000_000 × 1.25
+```
+
+The 1.25× factor is Venice's margin over the BytePlus base rate.
+
+### Rate tiers
+
+Seedance switches to a cheaper "input with video" rate when **any** reference video is included (T2V/I2V at `refDuration=0` use the higher no-ref rate):
+
+| Variant | Output resolution | Rate without video | Rate with video |
+|---|---|---|---|
+| Seedance 2.0 | 480p / 720p | $7.0 / M tokens | $4.3 / M tokens |
+| Seedance 2.0 | 1080p | $7.7 / M tokens | $4.7 / M tokens |
+| Seedance 2.0 Fast | 480p / 720p | $5.6 / M tokens | $3.3 / M tokens |
+
+### Floor rule
+
+A short reference video at high resolution would otherwise compute *less* than the same job with no references. To prevent that, the final price is floored at the no-reference baseline:
+
+```
+finalPrice = max(rateWithVideo × totalTokens, rateNoVideo × outputOnlyTokens)
+```
+
+### Reference-video field on the quote request
+
+When you have reference video(s), pass the sum of their durations as `reference_video_total_duration`:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/quote \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "duration": "5s",
+    "resolution": "1080p",
+    "aspect_ratio": "16:9",
+    "reference_video_total_duration": 5
+  }'
+```
+
+The quote uses this to apply the with-video rate and the floor. Without it, the quote falls back to the no-video tier.
+
+### Sample prices (5 s output, 16:9, includes Venice 1.25× margin)
+
+| Variant | Output res | 0 s ref | 5 s ref | 15 s ref (max) |
+|---|---|---|---|---|
+| Seedance 2.0 R2V | 480p | $0.44 | $0.54 | $1.08 |
+| Seedance 2.0 R2V | 720p | $0.95 | $1.16 | $2.32 |
+| Seedance 2.0 R2V | 1080p | $2.34 | $2.86 | $5.71 |
+| Seedance 2.0 Fast R2V | 480p | $0.35 | $0.41 | $0.83 |
+| Seedance 2.0 Fast R2V | 720p | $0.76 | $0.89 | $1.78 |
+
+Numbers as of 2026-05; they may drift. Treat `/video/quote` as the source of truth.
+
+---
+
+## Complete examples
+
+All examples assume `VENICE_API_KEY` is set in the environment.
+
+### Text-to-video
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-text-to-video",
+    "prompt": "A golden retriever frolicking through a sunlit meadow at sunset, slow camera dolly-in, shallow depth of field, warm cinematic lighting.",
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Image-to-video (first frame)
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-image-to-video",
+    "prompt": "The lighthouse keeper turns toward the storm, lantern raised, waves crashing against the rocks.",
+    "image_url": "https://example.com/lighthouse.jpg",
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "720p"
+  }'
+```
+
+### Reference workflow — subject + audio donor
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "prompt": "Refer to <Subject 1> in <Image 1> to generate a 5-second clip of the same character walking through a neon-lit Tokyo street at night. Refer to the timbre in <Audio 1> for a soft female voiceover describing the scene.",
+    "reference_image_urls": ["https://example.com/character.png"],
+    "reference_audio_urls": ["https://example.com/voice-sample.mp3"],
+    "duration": "5s",
+    "aspect_ratio": "9:16",
+    "resolution": "1080p"
+  }'
+```
+
+### Edit workflow
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "prompt": "Strictly edit <Video 1>, changing its weather from sunny to a heavy rainstorm, with all original motions and camera work preserved.",
+    "reference_video_urls": ["https://example.com/sunny-scene.mp4"],
+    "reference_video_total_duration": 5,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Edit workflow with image grounding
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "prompt": "Replace the perfume featured in <Video 1> with the face cream from <Image 1>, with all original motions and camera work preserved.",
+    "reference_video_urls": ["https://example.com/perfume-ad.mp4"],
+    "reference_image_urls": ["https://example.com/face-cream.png"],
+    "reference_video_total_duration": 4,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Extend forward
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "prompt": "Extend <Video 1>, generate a dramatic chase scene through narrow alleys at dusk, with neon signs flickering and rain on the pavement.",
+    "reference_video_urls": ["https://example.com/alley-intro.mp4"],
+    "reference_video_total_duration": 4,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Stitch (3 clips)
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "prompt": "<Video 1> + a wisp of smoke transforms into a flock of birds + followed by <Video 2> + a slow dolly-in + followed by <Video 3>",
+    "reference_video_urls": [
+      "https://example.com/clip-1.mp4",
+      "https://example.com/clip-2.mp4",
+      "https://example.com/clip-3.mp4"
+    ],
+    "reference_video_total_duration": 12,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Polling for completion
+
+After every queue submission, save the returned `queue_id` and poll `/video/retrieve` until the response body is `video/mp4`:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+  }' \
+  -o output.mp4
+```
+
+The response is JSON (`{ "status": "queued" | "running" | "failed", ... }`) until the job completes, at which point the response body switches to `video/mp4` bytes. See [Video Generation](/guides/media/video-generation) for the full polling pattern.
+
+---
+
+## Troubleshooting
+
+### `At least one reference is required for this model`
+
+Reference-to-video submissions must include at least one of `reference_image_urls`, `reference_video_urls`, `reference_audio_urls`, or `typed_references`. Pure text-only generation isn't a valid R2V workflow — use `seedance-2-0-text-to-video` instead.
+
+### `reference_video_urls must have at most 3 videos`
+
+BytePlus caps reference videos at 3. If you need more clips, run a Stitch first (3 → 1), then use the output as a reference for a follow-up.
+
+### `Per clip must be 2–15s` / aggregate `> 15s`
+
+Per-clip duration is `[2, 15]` seconds **inclusive**; the sum across all reference videos is also capped at 15 seconds. Trim clips client-side before submission.
+
+### Prompt routes to the wrong workflow
+
+Workflow is inferred from prompt syntax. Common misroutings:
+
+- Wanting to **Extend** but writing `Refer to ...` → model treats your video as a *donor*, not a canvas to continue
+- Wanting to **Stitch** but writing `Refer to ...` → model picks one as the donor, ignores the others
+- Wanting to **Edit** but writing `Generate a video based on <Video 1>` → ambiguous; model may default to Reference
+
+Use the canonical prefixes verbatim: `Strictly edit <Video 1>, ...`, `Extend <Video 1>, ...`, `<Video 1> + ... + followed by <Video 2>`.
+
+### Real-human-face rejection
+
+If you see a generic 400 or a content-moderation error and your reference media includes a recognisable real human face, that's the cause. Replace with stylized characters, products, animals, or AI-generated subjects.
+
+### Aspect ratio or pixel count out of range on a video
+
+Common when uploading vertical phone video to an R2V flow that maxes at `2206 × 946`. Re-encode or crop the input clip so each side is in `[300, 6000]` px and the total pixel count fits in `[640×640, 2206×946]`.
+
+### Unexpectedly high charge
+
+If you included a reference video and didn't pass `reference_video_total_duration` to `/video/quote`, the quote returned the **no-reference** rate but the queue submission still billed at the **with-video** rate (after BytePlus detected the video). Always pass `reference_video_total_duration` when reference videos are present so the quote and the bill line up.
+
+---
+
+## References
+
+- BytePlus public doc 2291680: [Dreamina Seedance 2.0 series tutorial](https://www.byteplus.com/en/learn)
+- BytePlus public doc 2298881: Video generation tutorial (multimodal input limits)
+- Venice video queue endpoint: [`POST /api/v1/video/queue`](/api-reference/endpoint/video/queue)
+- Venice quote endpoint: [`POST /api/v1/video/quote`](/api-reference/endpoint/video/quote)
+- Companion guide: [Reference to Video](/guides/media/reference-to-video) (covers Kling O3 + Grok Imagine R2V)
+- Companion guide: [Video Generation](/guides/media/video-generation) (queue / polling overview)
