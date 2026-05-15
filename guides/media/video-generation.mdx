@@ -64,25 +64,27 @@ Save `model`, `queue_id`, and `download_url` (if present) for all subsequent cal
 
 ### Private download links
 
-For private models, `download_url` is how you fetch the finished file. Treat it as a **one-time delivery link**, not permanent hosting or a CDN URL. A small number of `GET` retries are allowed so clients can finish a download if the connection drops partway through—**not** so the same link can be fetched many times, shared across users, or embedded as a long-lived media URL. Using the link that way can produce `429` or `410` responses that look confusing if you expected unlimited reuse.
+For private models, `download_url` is how you fetch the finished file once the job is complete. The link is **short-lived and single-purpose**: it is there to deliver the MP4 to you, not to serve as a long-term or widely shared URL.
 
-Downloads are **bound to a single client IP** with only a little slack for normal situations (for example you retried after toggling a VPN or switching networks). Requests from many different IPs against the same link are not allowed.
+If a download is interrupted, you can **retry the same `GET` a few times** from the same environment until the file finishes. Those retries are for recovering from network blips—not for polling the same link indefinitely, sharing it across many clients, or embedding it like a permanent media URL. Patterns like that often show up as **`429`** or **`410`**, which can be surprising if you expected the link to behave like regular file hosting.
+
+For reliability, **`GET` requests should originate from one client network**. There is some flexibility if your IP changes once (for example you disconnect a VPN and try again), but wide variation in source IPs usually will not work.
 
 The URL stays valid for up to **24 hours**, or until the object is removed.
 
-<Warning>
-Do not use `download_url` as a way to host or redistribute the video. Persist the bytes to your own storage if you need a stable or public URL.
-</Warning>
+<Note>
+If you need a stable URL, public playback, or repeated access over time, save the file to **your own storage** first and serve it from there.
+</Note>
 
 **Privacy: revoke the link with `DELETE`**
 
-After you have successfully downloaded the file (or if you abandon the download and want the link gone), call **`DELETE`** on the same `download_url`. No Venice API key is required on that request. We recommend this whenever you care about privacy: many proxies and middleboxes outside Venice log full URLs, so revoking the pre-signed link as soon as you are done is the most reliable way to limit exposure.
+When you are done fetching the file—or if you decide not to keep it—you can call **`DELETE`** on the same `download_url`. No Venice API key is required on that request. This is optional but **recommended when privacy matters**, because some proxies and middleboxes outside Venice keep logs of full URLs, and deleting the link is the simplest way to narrow the window where the pre-signed URL exists.
 
 ```bash
 curl -X DELETE "$DOWNLOAD_URL"
 ```
 
-**Flow:** poll `/video/retrieve` until `COMPLETED` → `GET` the `download_url` (retry sparingly if the transfer is interrupted) → copy the file where you need it → `DELETE` the `download_url` → optionally call `/video/complete` if you still use queue-based cleanup.
+**Flow:** poll `/video/retrieve` until `COMPLETED` → `GET` the `download_url` (retry lightly if the transfer drops) → save the file where you need it → `DELETE` the `download_url` if you want the link invalidated → optionally call `/video/complete` if you still use queue-based cleanup.
 
 ## Step 2: Poll for Completion
 
@@ -121,7 +123,7 @@ Times are in milliseconds. Use `average_execution_time` to estimate remaining wa
 Response body is raw binary video data. Save to file.
 
 **Complete response (200, application/json with `"COMPLETED"`):**
-For models that returned a `download_url` at queue time, retrieve always returns JSON. Fetch the video with `GET download_url` (no auth header). See [Private download links](#private-download-links) for one-time use, IP limits, and revoking the URL with `DELETE`.
+For models that returned a `download_url` at queue time, retrieve always returns JSON. Fetch the video with `GET download_url` (no auth header). See [Private download links](#private-download-links) for how these URLs work, retries, and optional `DELETE`.
 
 ## Step 3: Cleanup (Optional)
 
@@ -347,8 +349,8 @@ Quote is in USD.
 | 401 | `queue`, `retrieve`, `complete` | Auth failed | Check API key |
 | 402 | `queue` | Insufficient balance | Add funds |
 | 404 | `retrieve`, `download_url` | Media not found (invalid, expired, or deleted) | Verify `model`/`queue_id` or re-queue |
-| 410 | `download_url` | Pre-signed URL expired, already consumed, or revoked (for example after `DELETE`) | Re-queue if you still need the asset; do not treat the link as reusable hosting |
-| 429 | `download_url` | Too many attempts or abuse of a one-time link | Download once (with limited retries for interrupted transfers), then `DELETE` the URL; persist the file to your own storage if you need repeat access |
+| 410 | `download_url` | Pre-signed URL expired, fully used, or revoked (for example after `DELETE`) | Start a new generation if you need another file; each link is intentionally short-lived |
+| 429 | `download_url` | Rate limited—often from many retries or repeated fetches of the same link | Finish the download (a few retries are fine if the connection drops), save a local copy, and use `DELETE` if you want to clear the link; keep ongoing access on your own storage |
 | 413 | `queue` | Payload too large | Reduce image/audio size |
 | 422 | `queue`, `retrieve` | Content violation | Modify prompt |
 | 500 | `queue`, `retrieve`, `complete` | Inference/processing failed | Retry with backoff; contact support if persistent |
@@ -362,7 +364,7 @@ Quote is in USD.
 2. If `Content-Type` is `application/json` and `status` is `"PROCESSING"`, wait and poll again. Use `average_execution_time` and `execution_duration` (milliseconds) to estimate remaining time
 3. If `Content-Type` is `video/mp4`, save the response body as your output file
 4. If `Content-Type` is `application/json` and `status` is `"COMPLETED"`, `GET` the `download_url` from the queue response to fetch the video (see [Private download links](#private-download-links))
-5. If you used `download_url`, call `DELETE` on that URL after a successful download (or to discard the link) for best privacy; then optionally set `delete_media_on_completion: true` on retrieve or call `/video/complete` for queue-based cleanup
+5. If you used `download_url`, consider `DELETE` on that URL when you are done to narrow how long the pre-signed URL exists; then optionally set `delete_media_on_completion: true` on retrieve or call `/video/complete` for queue-based cleanup
 6. Handle `404` as invalid, expired, or deleted media; handle `500/503` with retries/backoff
 
 ---
