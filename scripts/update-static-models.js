@@ -47,6 +47,7 @@ function cleanModel(m) {
   if (m.created) clean.created = m.created;
   const spec = m.model_spec || {};
   if (spec.betaModel) clean.model_spec.betaModel = true;
+  if (spec.legacy) clean.model_spec.legacy = true;
   if (spec.privacy) clean.model_spec.privacy = spec.privacy;
   if (spec.availableContextTokens) clean.model_spec.availableContextTokens = spec.availableContextTokens;
   if (spec.pricing) clean.model_spec.pricing = spec.pricing;

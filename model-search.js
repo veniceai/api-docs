@@ -246,6 +246,7 @@
     anonymized: 'The model provider may retain prompt data, though it is anonymized by Venice. For sensitive content, use a Private, TEE, or E2EE model.',
     beta: 'Experimental model that may change or be removed without notice. Not recommended for production.',
     deprecated: 'This model is scheduled for removal. See the deprecations page for timeline and migration guide.',
+    legacy: 'Legacy model retained for API/B2B compatibility. No longer surfaced in the Venice app; pricing and rate limits remain supported.',
     uncensored: 'Responds to all prompts without content-based refusals or filtering.',
     upgraded: 'A newer version of this model is available with improved performance.',
     content_moderation: 'This model applies upstream content moderation. Requests blocked by the provider\u2019s filters are still billed at the full rate.'
@@ -731,6 +732,10 @@
     return model.model_spec?.betaModel === true;
   }
 
+  function isLegacyModel(model) {
+    return model.model_spec?.legacy === true;
+  }
+
   function isDeprecatedModel(model) {
     const dep = model.model_spec?.deprecation;
     return dep != null && (dep.date != null || dep.removesAt != null);
@@ -926,6 +931,10 @@
   function renderPricingImageTable(models) {
     const imageModels = models.filter(m => m.type === 'image').filter(m => !isDeprecatedModel(m))
       .sort((a, b) => {
+        // Push legacy (API-only) models to the very bottom, then beta below regulars.
+        const aLegacy = isLegacyModel(a) ? 1 : 0;
+        const bLegacy = isLegacyModel(b) ? 1 : 0;
+        if (aLegacy !== bLegacy) return aLegacy - bLegacy;
         const aBeta = isBetaModel(a) ? 1 : 0;
         const bBeta = isBetaModel(b) ? 1 : 0;
         if (aBeta !== bBeta) return aBeta - bBeta;
@@ -940,6 +949,7 @@
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
       const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
+      const legacyTag = isLegacyModel(model) ? `<span class="vpt-badge vpt-legacy vpt-tooltip" data-tooltip="${TOOLTIPS.legacy}">Legacy</span>` : '';
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
       const privacyTag = getPrivacyTag(model, 'vpt');
       const resPricing = spec.pricing?.resolutions;
@@ -956,10 +966,10 @@
         priceItems = `<span class="vpt-price-item"><span class="vpt-price-label">Per Image</span><span class="vpt-price-value">${formatPrice(spec.pricing?.generation?.usd)}</span></span>`;
       }
 
-      return `<div class="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}">
+      return `<div class="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}${isLegacyModel(model) ? ' vpt-legacy-row' : ''}">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>${betaTag}
+            <span class="vpt-model-name">${name}</span>${betaTag}${legacyTag}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${moderationTag}${privacyTag}</div>
@@ -2377,6 +2387,10 @@
       const deprecatedBadge = isDeprecatedModel(model)
         ? `<span class="vmb-deprecated-badge vmb-tooltip" data-tooltip="Scheduled for removal on ${formatDeprecationDate(getModelRemovalDate(model))}. See the deprecations page for details.">Deprecated</span>` 
         : '';
+
+      const legacyBadge = isLegacyModel(model)
+        ? `<span class="vmb-legacy-badge vmb-tooltip" data-tooltip="${TOOLTIPS.legacy}">Legacy</span>`
+        : '';
       
       const uncensoredBadge = isUncensoredModel(model)
         ? `<span class="vmb-uncensored-badge vmb-tooltip" data-tooltip="${TOOLTIPS.uncensored}">Uncensored</span>` 
@@ -2455,7 +2469,7 @@
               </div>
               <div class="vmb-model-right">
                 ${contextStr ? `<span class="vmb-context vmb-context-desktop">${contextStr}</span>` : ''}
-                ${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${moderationBadge}${rateLimitBadge}
+                ${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${legacyBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${moderationBadge}${rateLimitBadge}
               </div>
             </div>
             <div class="vmb-model-info">
