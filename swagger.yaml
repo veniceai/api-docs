@@ -5,7 +5,7 @@ info:
   description: The Venice.ai API.
   termsOfService: https://venice.ai/legal/tos
   title: Venice.ai API
-  version: "20260525.225317"
+  version: "20260526.005904"
   x-guidance: >-
     Venice.ai is an OpenAI-compatible inference API supporting text, image,
     audio, and video generation.
@@ -15,14 +15,16 @@ info:
 
     - API Key: Use Bearer token in Authorization header
 
-    - x402 Wallet: Use USDC credits via Ethereum wallet (no account required)
+    - x402 Wallet: Use USDC credits via EVM or Solana wallet (no account
+    required)
 
 
     **For x402 wallet access:**
 
     1. POST /x402/top-up without headers to get payment requirements
 
-    2. Sign a USDC payment using the x402 SDK
+    2. Choose one of the returned Base or Solana payment options and sign a USDC
+    payment using the x402 SDK
 
     3. POST /x402/top-up with X-402-Payment header to add credits
 
@@ -60,18 +62,20 @@ tags:
     name: Crypto RPC
   - description: >-
       Wallet-based API access using the x402 protocol. No API key required —
-      authenticate with an Ethereum wallet.
+      authenticate with an EVM or Solana wallet.
 
 
       **How it works:**
 
       1. **Authenticate** — Send an `X-Sign-In-With-X` header (base64-encoded
-      signed SIWE message) with any request. See the `siwx` security scheme for
-      the exact format.
+      signed SIWX payload) with any request. EVM wallets sign an EIP-4361 SIWE
+      message; Solana wallets sign the Solana SIWX message with Ed25519. See the
+      `siwx` security scheme for the exact format.
 
-      2. **Top up** — `POST /x402/top-up` without a payment header returns
-      payment requirements. Sign a USDC transfer on Base using the x402 SDK
-      (`npm install x402`) and re-submit with the `X-402-Payment` header.
+      2. **Top up** — `POST /x402/top-up` without a payment header returns an
+      `accepts` array with Base and Solana USDC payment options. Choose one
+      entry, sign it using the x402 SDK (`npm install x402`), and re-submit with
+      the `X-402-Payment` header.
 
       3. **Use any endpoint** — All inference endpoints (chat, image, audio,
       video, embeddings) accept `siwx` as an alternative to `BearerAuth`.
@@ -90,7 +94,7 @@ tags:
 
       const venice = new VeniceClient(process.env.WALLET_KEY)
 
-      await venice.topUp(10) // $10 USDC on Base
+      await venice.topUp(10) // $10 USDC on a supported x402 rail
 
       const res = await venice.chat({ model: 'zai-org-glm-5-1', messages: [{
       role: 'user', content: 'Hello!' }] })
@@ -98,8 +102,9 @@ tags:
       ```
 
 
-      **Payment:** USDC on Base (chain ID 8453). Minimum top-up: $5.
-      Alternatively, stake DIEM tokens for daily credits (1 DIEM = $1/day).
+      **Payment:** USDC on Base (chain ID 8453) or Solana mainnet. Minimum
+      top-up: $5. Alternatively, stake DIEM tokens for daily credits (1 DIEM =
+      $1/day).
     name: x402
 components:
   securitySchemes:
@@ -109,26 +114,31 @@ components:
       type: http
     siwx:
       description: >-
-        Wallet-based authentication using the x402 protocol (Sign-In-With-X /
-        EIP-4361 SIWE).
+        Wallet-based authentication using the x402 protocol (Sign-In-With-X).
+        Supports EVM SIWE signatures on Base and Ed25519 signatures on Solana
+        mainnet.
 
 
         **Header format:** Base64-encoded JSON object with the following fields:
 
-        - `address` — Ethereum wallet address (checksummed)
+        - `address` — EVM or Solana wallet address
 
-        - `message` — EIP-4361 SIWE message string (created with
-        `SiweMessage.prepareMessage()`)
+        - `message` — Signed SIWX message. EVM wallets use EIP-4361 SIWE; Solana
+        wallets use the Solana SIWX message format.
 
-        - `signature` — Hex-encoded signature of the message, signed by the
-        wallet's private key
+        - `signature` — Signature of the message, signed by the wallet's private
+        key. EVM signatures are hex; Solana signatures may be base58 or base64.
 
         - `timestamp` — Unix timestamp in milliseconds
 
-        - `chainId` — Chain ID (use `8453` for Base)
+        - `chainId` — Chain identity. Use `8453`, `"8453"`, or `"eip155:8453"`
+        for Base; use `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"` for Solana.
+
+        - `type` — Optional signature type. Use `"ed25519"` for Solana. Omitted
+        means EVM/EIP-191 for backward compatibility.
 
 
-        **SIWE message fields:**
+        **EVM SIWE message fields:**
 
         - `domain`: `outerface.venice.ai`
 
@@ -173,6 +183,14 @@ components:
         // Set header: X-Sign-In-With-X: <header>
 
         ```
+
+
+        **Solana message fields:** The signed message starts with `<domain>
+        wants you to sign in with your Solana account:`, followed by the wallet
+        address and the standard `URI`, `Version`, `Chain ID`, `Nonce`, `Issued
+        At`, and optional `Expiration Time` fields. Use `type: "ed25519"` and
+        `chainId: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"` in the encoded JSON
+        payload.
 
 
         **SDK:** `npm install @venice-ai/x402-client` provides `VeniceClient`
@@ -242,150 +260,330 @@ components:
         - code
         - error
     X402InferencePaymentRequired:
-      type: object
-      properties:
-        error:
-          type: string
-          enum:
-            - Payment required
-          description: Error message indicating payment is required.
-        code:
-          type: string
-          enum:
-            - PAYMENT_REQUIRED
-          description: Machine-readable error code.
-        message:
-          type: string
-          description: Human-readable context about the payment requirement.
-          example: Insufficient x402 balance
-        suggestedTopUpUsd:
-          type: number
-          description: Suggested amount to top up in USD.
-          example: 10
-        minimumTopUpUsd:
-          type: number
-          description: Minimum allowed top-up amount in USD.
-          example: 5
-        supportedTokens:
-          type: array
-          items:
-            type: string
-          description: List of supported token symbols for payment.
-          example:
-            - USDC
-        supportedChains:
-          type: array
-          items:
-            type: string
-          description: List of supported blockchain networks.
-          example:
-            - base
-        topUpInstructions:
-          type: object
+      anyOf:
+        - type: object
           properties:
-            step1:
-              type: string
-              description: "First step: get payment requirements."
-              example: POST /api/v1/x402/top-up with no payment header to get payment
-                requirements
-            step2:
-              type: string
-              description: "Second step: sign the payment."
-              example: Sign a USDC transfer authorization using the x402 SDK
-                (createPaymentHeader)
-            step3:
-              type: string
-              description: "Third step: submit the payment."
-              example: POST /api/v1/x402/top-up with the signed X-402-Payment header
-            receiverWallet:
-              type: string
-              description: Venice receiver wallet address.
-              example: <RECEIVER_WALLET_ADDRESS>
-            tokenAddress:
-              type: string
-              description: USDC token contract address.
-              example: <USDC_TOKEN_ADDRESS>
-            tokenDecimals:
+            x402Version:
               type: number
-              description: Token decimal places.
-              example: 6
-            network:
+              description: x402 protocol version.
+              example: 2
+            error:
               type: string
-              description: Target blockchain network.
-              example: eip155:8453
-            minimumAmountUsd:
+              description: Human-readable payment requirement message.
+              example: Payment required
+            resource:
+              type: object
+              properties:
+                url:
+                  type: string
+                  description: Protected resource URL.
+                  example: https://api.venice.ai/api/v1/chat/completions
+                description:
+                  type: string
+                  description: Human-readable resource description.
+                  example: Venice API
+                mimeType:
+                  type: string
+                  description: Resource MIME type.
+                  example: application/json
+              required:
+                - url
+                - description
+                - mimeType
+              additionalProperties: false
+            accepts:
+              type: array
+              items:
+                type: object
+                properties:
+                  scheme:
+                    type: string
+                    enum:
+                      - exact
+                    description: x402 payment scheme.
+                    example: exact
+                  network:
+                    type: string
+                    description: Payment network for this requirement.
+                    example: solana
+                  asset:
+                    type: string
+                    description: USDC token address or mint for the selected network.
+                    example: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+                  amount:
+                    type: string
+                    description: Required payment amount in base units (USDC has 6 decimals).
+                    example: "10000000"
+                  payTo:
+                    type: string
+                    description: Receiver wallet address for the selected network.
+                    example: 8qUL23aSj7mDWdoLMXGHFvnVCT9wd7jXcysiekroADEL
+                  maxTimeoutSeconds:
+                    type: number
+                    description: Maximum time allowed for payment settlement.
+                    example: 300
+                  extra:
+                    type: object
+                    properties: {}
+                    description: Network-specific x402 metadata. Solana requirements include a
+                      feePayer.
+                    example:
+                      name: USD Coin
+                      version: "2"
+                      feePayer: BFK9TLC3edb13K6v4YyH3DwPb5DSUpkWvb7XnqCL9b4F
+                required:
+                  - scheme
+                  - network
+                  - asset
+                  - amount
+                  - payTo
+                  - maxTimeoutSeconds
+                  - extra
+                additionalProperties: false
+              description: Protocol payment requirements. Clients should choose one entry,
+                such as Base or Solana, and sign exactly that requirement.
+            authOptions:
+              type: object
+              properties:
+                apiKey:
+                  type: object
+                  properties:
+                    header:
+                      type: string
+                      description: API key authentication header format.
+                      example: "Authorization: Bearer YOUR_API_KEY"
+                    getKey:
+                      type: string
+                      description: Where to create or manage API keys.
+                      example: https://venice.ai/settings/api
+                    docs:
+                      type: string
+                      description: API key documentation URL.
+                      example: https://docs.venice.ai/api-reference
+                  required:
+                    - header
+                    - getKey
+                    - docs
+                  additionalProperties: false
+                x402Wallet:
+                  type: object
+                  properties:
+                    header:
+                      type: string
+                      description: Header used for Sign-In-With-X wallet authentication.
+                      example: X-Sign-In-With-X
+                    topUp:
+                      type: string
+                      description: Endpoint used to discover and submit x402 top-up payments.
+                      example: POST /api/v1/x402/top-up
+                    docs:
+                      type: string
+                      description: x402 top-up API documentation URL.
+                      example: https://docs.venice.ai/api-reference/endpoint/x402/top-up
+                  required:
+                    - header
+                    - topUp
+                    - docs
+                  additionalProperties: false
+              required:
+                - apiKey
+                - x402Wallet
+              additionalProperties: false
+          required:
+            - x402Version
+            - resource
+            - accepts
+            - authOptions
+          additionalProperties: false
+          description: Returned when an inference request has no API key or wallet
+            authentication. The JSON body includes x402 discovery requirements
+            and authentication options.
+        - type: object
+          properties:
+            error:
+              type: string
+              enum:
+                - Payment required
+              description: Error message indicating payment is required.
+            code:
+              type: string
+              enum:
+                - PAYMENT_REQUIRED
+              description: Machine-readable error code.
+            reason:
+              type: string
+              enum:
+                - insufficient_balance
+              description: Reason the x402-authenticated request could not proceed.
+            message:
+              type: string
+              description: Human-readable context about the payment requirement.
+              example: Insufficient x402 balance
+            currentBalanceUsd:
               type: number
-              description: Minimum top-up amount in USD.
+              description: Current x402 credit balance for the wallet.
+              example: 0.01
+            minimumBalanceUsd:
+              type: number
+              description: Minimum x402 credit balance required before the request can run.
+              example: 0.1
+            description:
+              type: string
+              description: Protected resource description.
+              example: Venice API
+            suggestedTopUpUsd:
+              type: number
+              description: Suggested amount to top up in USD.
+              example: 10
+            minimumTopUpUsd:
+              type: number
+              description: Minimum allowed top-up amount in USD.
               example: 5
+            supportedTokens:
+              type: array
+              items:
+                type: string
+              description: List of supported token symbols for payment.
+              example:
+                - USDC
+            supportedChains:
+              type: array
+              items:
+                type: string
+              description: List of supported top-up rails.
+              example:
+                - base
+                - solana
+            topUpInstructions:
+              type: object
+              properties:
+                step1:
+                  type: string
+                  description: "First step: get payment requirements."
+                  example: POST /api/v1/x402/top-up with no payment header to get payment
+                    requirements
+                step2:
+                  type: string
+                  description: "Second step: sign the payment."
+                  example: Choose a payment option from accepts and sign a USDC transfer
+                    authorization using the x402 SDK (createPaymentHeader)
+                step3:
+                  type: string
+                  description: "Third step: submit the payment."
+                  example: POST /api/v1/x402/top-up with the signed X-402-Payment header
+                receiverWallet:
+                  type: string
+                  description: Legacy Base receiver wallet address. Prefer the selected accepts
+                    entry from /x402/top-up for network-specific payTo values.
+                  example: <RECEIVER_WALLET_ADDRESS>
+                tokenAddress:
+                  type: string
+                  description: Legacy Base USDC token address. Prefer the selected accepts entry
+                    from /x402/top-up for network-specific assets.
+                  example: <USDC_TOKEN_ADDRESS>
+                tokenDecimals:
+                  type: number
+                  description: Token decimal places.
+                  example: 6
+                network:
+                  type: string
+                  description: Legacy Base target network. Prefer the selected accepts entry from
+                    /x402/top-up for network-specific values.
+                  example: eip155:8453
+                minimumAmountUsd:
+                  type: number
+                  description: Minimum top-up amount in USD.
+                  example: 5
+              required:
+                - step1
+                - step2
+                - step3
+                - receiverWallet
+                - tokenAddress
+                - tokenDecimals
+                - network
+                - minimumAmountUsd
+              additionalProperties: false
+            siwxChallenge:
+              type: object
+              properties:
+                info:
+                  type: object
+                  properties:
+                    domain:
+                      type: string
+                      description: Domain for the SIWX challenge.
+                      example: api.venice.ai
+                    uri:
+                      type: string
+                      description: Resource URI for the challenge.
+                      example: https://api.venice.ai/api/v1/chat/completions
+                    version:
+                      type: string
+                      description: SIWX version.
+                      example: "1"
+                    nonce:
+                      type: string
+                      description: Unique nonce for replay protection.
+                      example: "{{nonce}}"
+                    issuedAt:
+                      type: string
+                      description: ISO timestamp when the challenge was issued.
+                      example: 2026-04-09T12:00:00.000Z
+                    expirationTime:
+                      type: string
+                      description: ISO timestamp when the challenge expires.
+                      example: 2026-04-09T12:05:00.000Z
+                    statement:
+                      type: string
+                      description: Human-readable statement for the signature.
+                      example: Sign in to Venice AI
+                  required:
+                    - domain
+                    - uri
+                    - version
+                    - nonce
+                    - issuedAt
+                    - expirationTime
+                    - statement
+                  additionalProperties: false
+                supportedChains:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      chainId:
+                        type: string
+                        description: Supported chain identity.
+                        example: solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp
+                      type:
+                        type: string
+                        enum:
+                          - eip191
+                          - eip1271
+                          - ed25519
+                        description: Signature type accepted for this chain.
+                        example: ed25519
+                    required:
+                      - chainId
+                      - type
+                    additionalProperties: false
+                  description: Supported SIWX chains and signature types.
+              required:
+                - info
+                - supportedChains
+              additionalProperties: false
           required:
-            - step1
-            - step2
-            - step3
-            - receiverWallet
-            - tokenAddress
-            - tokenDecimals
-            - network
-            - minimumAmountUsd
+            - error
+            - code
+            - reason
+            - suggestedTopUpUsd
+            - minimumTopUpUsd
+            - supportedTokens
+            - supportedChains
+            - topUpInstructions
+            - siwxChallenge
           additionalProperties: false
-        siwxChallenge:
-          type: object
-          properties:
-            domain:
-              type: string
-              description: Domain for the SIWX challenge.
-              example: api.venice.ai
-            address:
-              type: string
-              description: Placeholder for wallet address.
-              example: "{{walletAddress}}"
-            uri:
-              type: string
-              description: Resource URI for the challenge.
-              example: https://api.venice.ai/api/v1/x402/top-up
-            version:
-              type: string
-              description: SIWX version.
-              example: "1"
-            chainId:
-              type: number
-              description: Chain ID for the signature.
-              example: 8453
-            nonce:
-              type: string
-              description: Unique nonce for replay protection.
-              example: "{{nonce}}"
-            issuedAt:
-              type: string
-              description: ISO timestamp when the challenge was issued.
-              example: 2026-04-09T12:00:00.000Z
-            expirationTime:
-              type: string
-              description: ISO timestamp when the challenge expires.
-              example: 2026-04-09T12:05:00.000Z
-            statement:
-              type: string
-              description: Human-readable statement for the signature.
-              example: Sign in with your wallet to access Venice x402 API
-          required:
-            - domain
-            - address
-            - uri
-            - version
-            - chainId
-            - nonce
-            - issuedAt
-            - expirationTime
-            - statement
-          additionalProperties: false
-      required:
-        - error
-        - code
-        - suggestedTopUpUsd
-        - minimumTopUpUsd
-        - supportedTokens
-        - supportedChains
-        - topUpInstructions
-        - siwxChallenge
     ChatCompletionRequest:
       type: object
       properties:
@@ -6365,7 +6563,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -6373,26 +6572,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -6402,8 +6605,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -6728,7 +6929,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -6736,26 +6938,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -6765,8 +6971,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "429":
           description: Rate limit exceeded
           content:
@@ -6945,7 +7149,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -6953,26 +7158,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -6982,8 +7191,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -7153,7 +7360,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -7161,26 +7369,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -7190,8 +7402,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -7329,7 +7539,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -7337,26 +7548,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -7366,8 +7581,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -7550,7 +7763,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -7558,26 +7772,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -7587,8 +7805,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -7776,7 +7992,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -7784,26 +8001,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -7813,8 +8034,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -7905,7 +8124,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -7913,26 +8133,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -7942,8 +8166,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -10298,7 +10520,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -10306,26 +10529,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -10335,8 +10562,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "415":
           description: Invalid request content-type
           content:
@@ -10452,7 +10677,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -10460,26 +10686,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -10489,8 +10719,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "403":
           description: Unauthorized access
           content:
@@ -10646,7 +10874,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -10654,26 +10883,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -10683,8 +10916,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "403":
           description: Unauthorized access
           content:
@@ -10834,7 +11065,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -10842,26 +11074,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -10871,8 +11107,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "403":
           description: Unauthorized access
           content:
@@ -10981,7 +11215,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -10989,26 +11224,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -11018,8 +11257,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "500":
           description: Inference processing failed
           content:
@@ -11107,7 +11344,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -11115,26 +11353,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -11144,8 +11386,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "403":
           description: The specified model is unavailable in your region. Use of Tor,
             VPNs, proxies, or other means to circumvent this restriction is a
@@ -11301,7 +11541,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -11309,26 +11550,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -11338,8 +11583,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "403":
           description: The specified model is unavailable in your region. Use of Tor,
             VPNs, proxies, or other means to circumvent this restriction is a
@@ -11449,7 +11692,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -11457,26 +11701,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -11486,8 +11734,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "403":
           description: Unauthorized access
           content:
@@ -11604,7 +11850,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -11612,26 +11859,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -11641,8 +11892,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "403":
           description: Unauthorized access
           content:
@@ -11733,7 +11982,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -11741,26 +11991,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -11770,8 +12024,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "500":
           description: Inference processing failed
           content:
@@ -11860,7 +12112,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -11868,26 +12121,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -11897,8 +12154,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "422":
           description: Your prompt violates the content policy of Venice.ai or the model
             provider
@@ -12058,7 +12313,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -12066,26 +12322,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -12095,8 +12355,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "404":
           description: Media could not be found. Request may may be invalid, expired, or
             deleted.
@@ -13132,9 +13390,9 @@ paths:
             instructions and payment requirements per the x402 v2 spec.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -13144,8 +13402,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "429":
           description: Rate limit tripped. Either the per-minute request cap, the per-day
             credit cap, or a concurrent-call collision on the per-user mutex.
@@ -13182,10 +13438,11 @@ paths:
   /x402/balance/{walletAddress}:
     get:
       description: Get the x402 credit balance for a wallet address. Requires
-        Sign-in-with-x authentication (via SIWE) for the same wallet.
+        Sign-in-with-x authentication for the same EVM or Solana wallet.
       operationId: getX402Balance
       parameters:
-        - description: base64-encoded JSON SIWE payload message proving wallet ownership
+        - description: base64-encoded JSON SIWX payload proving EVM or Solana wallet
+            ownership
           in: header
           name: X-Sign-In-With-X
           required: true
@@ -13293,12 +13550,14 @@ paths:
         the header is missing, the endpoint returns payment requirements.
 
 
-        This is the primary x402 payment endpoint. All inference endpoints
-        (chat, image, audio, video) consume from the credit balance you
-        establish here.
+        This is the primary x402 payment endpoint. It currently returns Base and
+        Solana USDC payment options in the `accepts` array. All inference
+        endpoints (chat, image, audio, video) consume from the credit balance
+        you establish here.
       operationId: topUpX402Balance
       parameters:
-        - description: Signed x402 payment payload used to top up the wallet balance.
+        - description: Signed x402 payment payload used to top up the wallet balance on a
+            supported rail such as Base or Solana.
           in: header
           name: X-402-Payment
           required: false
@@ -13419,12 +13678,13 @@ paths:
                           example: 2
                         network:
                           type: string
-                          description: Network in EIP-155 CAIP-2 format.
-                          example: eip155:8453
+                          description: Payment network. Base uses CAIP-2 EIP-155 format; Solana uses the
+                            x402 Solana network alias.
+                          example: solana
                         asset:
                           type: string
-                          description: Token contract address.
-                          example: <USDC_TOKEN_ADDRESS>
+                          description: USDC token address or mint for the selected network.
+                          example: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
                         amount:
                           type: string
                           description: Minimum payment amount in base units (USDC has 6 decimals).
@@ -13432,7 +13692,15 @@ paths:
                         payTo:
                           type: string
                           description: Receiver wallet address.
-                          example: <RECEIVER_WALLET_ADDRESS>
+                          example: 8qUL23aSj7mDWdoLMXGHFvnVCT9wd7jXcysiekroADEL
+                        extra:
+                          type: object
+                          properties: {}
+                          description: Network-specific x402 metadata. Solana accepts include a feePayer.
+                          example:
+                            name: USD Coin
+                            version: "2"
+                            feePayer: BFK9TLC3edb13K6v4YyH3DwPb5DSUpkWvb7XnqCL9b4F
                       required:
                         - protocol
                         - version
@@ -13480,10 +13748,12 @@ paths:
   /x402/transactions/{walletAddress}:
     get:
       description: Get paginated x402 transaction history for a wallet address.
-        Requires Sign-in-with-x authentication for the same wallet.
+        Requires Sign-in-with-x authentication for the same EVM or Solana
+        wallet.
       operationId: getX402Transactions
       parameters:
-        - description: base64-encoded JSON SIWE payload message proving wallet ownership
+        - description: base64-encoded JSON SIWX payload proving EVM or Solana wallet
+            ownership
           in: header
           name: X-Sign-In-With-X
           required: true
@@ -13709,7 +13979,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -13717,26 +13988,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -13746,8 +14021,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "403":
           description: Unauthorized access
           content:
@@ -13837,7 +14110,8 @@ paths:
                 $ref: "#/components/schemas/StandardError"
         "402":
           description: >-
-            Insufficient balance. Response varies by authentication method:
+            Payment or balance required. Response varies by authentication
+            state:
 
 
             **API Key users:** Standard error response with
@@ -13845,26 +14119,30 @@ paths:
             venice.ai.
 
 
-            **x402 wallet users:** Structured response with `PAYMENT_REQUIRED`
-            code containing:
+            **Unauthenticated x402 discovery:** Structured x402 response with
+            `x402Version`, `resource`, `accepts`, and `authOptions`. The
+            `accepts` array advertises Base and Solana payment requirements.
+
+
+            **Authenticated x402 wallet users with insufficient credit:**
+            Structured response with `PAYMENT_REQUIRED` code containing:
 
             - `topUpInstructions`: Step-by-step guide to top up via x402
             protocol
 
-            - `siwxChallenge`: Sign-In-With-X challenge template for
-            authentication
-
             - `supportedTokens` / `supportedChains`: Accepted payment methods
 
+            - `siwxChallenge`: Fresh Sign-In-With-X challenge metadata
 
-            The `PAYMENT-REQUIRED` header also contains a base64-encoded JSON
-            object with the same payment requirements for protocol-level
-            discovery (x402 v2 spec).
+
+            The `PAYMENT-REQUIRED` header also contains a base64-encoded x402
+            protocol object with the payment requirements for programmatic
+            discovery.
           headers:
             PAYMENT-REQUIRED:
-              description: Base64-encoded JSON with x402 payment requirements and SIWX
-                challenge. Present only for x402 wallet authentication. Decode
-                to get payment instructions programmatically.
+              description: Base64-encoded JSON with x402 payment requirements. Present on x402
+                middleware 402 responses. Decode to choose and sign one accepted
+                payment requirement programmatically.
               required: false
               schema:
                 type: string
@@ -13874,8 +14152,6 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StandardError"
                   - $ref: "#/components/schemas/X402InferencePaymentRequired"
-                discriminator:
-                  propertyName: code
         "403":
           description: Unauthorized access
           content:
