@@ -1297,14 +1297,6 @@
     return depDate <= thirtyDaysFromNow;
   }
 
-  function renderDeprecationTableLoading() {
-    return `<table class="vpt-table vpt-deprecation-table"><thead><tr>
-      <th>Model</th><th>Model ID</th><th>Removal Date</th><th>Status</th>
-    </tr></thead><tbody>
-      <tr><td colspan="4" style="text-align: center; opacity: 0.6; padding: 24px;">Loading deprecation data from the <a href="/api-reference/endpoint/models/list">models API</a>…</td></tr>
-    </tbody></table>`;
-  }
-
   function renderDeprecationTable(models) {
     const deprecatingModels = models
       .filter(m => shouldShowInDeprecationTracker(getModelRemovalDate(m)))
@@ -1410,18 +1402,17 @@
     const el = document.getElementById('deprecation-tracker-placeholder');
     if (!el) return;
 
-    el.innerHTML = renderDeprecationTableLoading();
+    const cachedModels = getCachedModels();
+    const initialModels = cachedModels && cachedModels.length > 0 ? cachedModels : STATIC_MODELS;
+    el.innerHTML = renderDeprecationTable(initialModels);
     ensurePlaceholderVisible(el);
 
-    let models = await fetchModelsFromAPI();
-    if (!models.length) {
-      models = getCachedModels() || [];
-    }
-    if (!models.length) {
-      models = STATIC_MODELS;
-    }
-    el.innerHTML = renderDeprecationTable(models);
-    ensurePlaceholderVisible(el);
+    fetchModelsFromAPI().then(freshModels => {
+      if (freshModels.length > 0 && document.body.contains(el)) {
+        el.innerHTML = renderDeprecationTable(freshModels);
+        ensurePlaceholderVisible(el);
+      }
+    }).catch(() => {});
   }
 
   // Traits list for deprecations page
@@ -2776,7 +2767,7 @@
     pathMatch: 'deprecation',
     elementId: 'deprecation-tracker-placeholder',
     initFn: initDeprecations,
-    resetCheck: el => el.textContent.includes('Loading') || el.innerHTML === ''
+    resetCheck: el => el.innerHTML === ''
   });
 
   const tryInitTraitsList = createPageInitializer({
