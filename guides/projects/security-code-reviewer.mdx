@@ -7,7 +7,7 @@ slug: security-code-reviewer-venice
 ---
 import { AuthorByline } from "/snippets/authorByline.jsx";
 
-<AuthorByline name="Joshua Mo" date="20 May 2026"/>
+<AuthorByline name="Joshua Mo" date="2 June 2026"/>
 
 Most static security tools find bugs in isolation. They scan one file, list the issues, and move on. The problem is that the most damaging vulnerabilities in modern codebases are rarely a single bug. They're a chain: a hardcoded signing key plus a missing authorization check plus a SQL injection that, on their own, all look manageable. Together they're an account-takeover path.
 
@@ -104,6 +104,9 @@ src/venice_security_reviewer/
 prompts/
   scanner.md
   chainer.md
+tests/
+  test_models.py
+  test_cross_file_chain.py
 ```
 
 ## Setting Up the Venice Client
@@ -141,7 +144,7 @@ class VeniceConfig:
         api_key = os.getenv("VENICE_API_KEY")
         if not api_key:
             raise VeniceConfigError(
-                "VENICE_API_KEY is not set. Copy .env.example to .env and add your key, "
+                "VENICE_API_KEY is not set. Add it to your .env file, "
                 "or export VENICE_API_KEY in your shell."
             )
         return cls(
@@ -1215,10 +1218,178 @@ Add the script entry point to `pyproject.toml`:
 
 ```toml
 [project.scripts]
-venice-security-reviewer = "venice_security_reviewer.cli:main"
+venice-security-reviewer = "venice_security_reviewer.cli:app"
 ```
 
 That's the whole pipeline wired up.
+
+## Testing the Guardrails
+
+We've leaned hard on one idea throughout this build: the deterministic guardrails are what separate a useful security tool from a confidently wrong one. That claim is only worth making if we can prove the guardrails actually hold, so the most valuable tests in this project don't call Venice at all. They lock down the Pydantic boundary and the prompt-assembly plumbing, which means they run offline, in milliseconds, with no API key and no token cost.
+
+Add the dev dependencies first:
+
+```bash
+uv add --dev "pytest>=8.3" "ruff>=0.7" "mypy>=1.13"
+```
+
+The first thing worth testing is the model boundary itself. These tests assert that malformed findings and chains are rejected at construction time, before they can ever reach a report. Create `tests/test_models.py`:
+
+```python
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from venice_security_reviewer.models import (
+    Chain,
+    Evidence,
+    Finding,
+    validate_chain_references,
+)
+
+
+def _finding(fid: str) -> Finding:
+    return Finding(
+        id=fid,
+        title="t",
+        severity="medium",
+        description="d",
+        evidence=Evidence(file=Path("a.py"), start_line=1, end_line=2, snippet="x"),
+    )
+
+
+def test_evidence_rejects_inverted_line_range() -> None:
+    with pytest.raises(ValidationError):
+        Evidence(file=Path("a.py"), start_line=10, end_line=5, snippet="x")
+
+
+def test_finding_id_pattern_enforced() -> None:
+    with pytest.raises(ValidationError):
+        Finding(
+            id="not-an-id",
+            title="t",
+            severity="medium",
+            description="d",
+            evidence=Evidence(file=Path("a.py"), start_line=1, end_line=2, snippet="x"),
+        )
+
+
+def test_chain_requires_two_findings() -> None:
+    with pytest.raises(ValidationError):
+        Chain(
+            id="C-001",
+            findings=["F-001"],
+            narrative="n",
+            severity="high",
+            files_involved=[Path("a.py")],
+        )
+```
+
+Each of these mirrors a constraint we put on the models earlier: an inverted line range, an ID that doesn't match the `F-###` pattern, and a "chain" of a single finding. If any of them ever stops raising, a whole class of hallucination has quietly become possible again.
+
+The most important test covers the cross-reference validator, since that's the function that actually drops invented chains:
+
+```python
+def test_validate_chain_references_drops_unknown_ids() -> None:
+    findings = [_finding("F-001"), _finding("F-002")]
+    good = Chain(
+        id="C-001",
+        findings=["F-001", "F-002"],
+        narrative="n",
+        severity="critical",
+        files_involved=[Path("a.py")],
+    )
+    bad = Chain(
+        id="C-002",
+        findings=["F-001", "F-999"],
+        narrative="n",
+        severity="critical",
+        files_involved=[Path("a.py")],
+    )
+    valid, dropped = validate_chain_references([good, bad], findings)
+    assert [c.id for c in valid] == ["C-001"]
+    assert [c.id for c in dropped] == ["C-002"]
+```
+
+`F-999` was never produced by the Scanner, so the chain that references it lands in `dropped` and never reaches the report. The companion test in the reference repo, `test_validate_chain_references_drops_unknown_files`, does the same for a chain that claims a file none of its findings came from.
+
+The second thing worth testing is the plumbing that feeds the Chainer. It's easy to refactor the prompt assembly and silently stop passing cross-file context, at which point the Chainer would keep working but quietly get worse. This test builds a two-module fixture, renders the prompt, and asserts the cross-file information is actually present, again without a Venice round-trip. Create `tests/test_cross_file_chain.py`:
+
+```python
+from __future__ import annotations
+
+from pathlib import Path
+
+from venice_security_reviewer.chainer import (
+    _findings_to_input_json,
+    _load_prompt_template,
+    _render_repo_map,
+)
+from venice_security_reviewer.models import Evidence, Finding
+from venice_security_reviewer.repo_map import build_repo_map
+
+
+def _write(root: Path, rel: str, content: str) -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def test_chainer_prompt_carries_cross_file_context(tmp_path: Path) -> None:
+    _write(tmp_path, "validators.py", "def is_safe_url(url: str) -> bool:\n    return True")
+    _write(
+        tmp_path,
+        "fetcher.py",
+        "from .validators import is_safe_url\n\ndef fetch(url: str) -> bytes:\n    return b''",
+    )
+
+    rmap = build_repo_map(tmp_path)
+    findings = [
+        Finding(
+            id="F-001",
+            title="Validator returns True unconditionally",
+            severity="low",
+            description="The validator always returns True.",
+            evidence=Evidence(
+                file=Path("validators.py"), start_line=1, end_line=2, snippet="..."
+            ),
+        ),
+        Finding(
+            id="F-002",
+            title="Fetcher trusts a stub validator",
+            severity="low",
+            description="The fetcher gates network access on is_safe_url.",
+            evidence=Evidence(
+                file=Path("fetcher.py"), start_line=1, end_line=1, snippet="..."
+            ),
+        ),
+    ]
+
+    template = _load_prompt_template("chainer.md")
+    prompt = template.replace(
+        "{findings_json}", _findings_to_input_json(findings)
+    ).replace("{repo_map}", _render_repo_map(rmap, findings))
+
+    assert "{findings_json}" not in prompt and "{repo_map}" not in prompt
+    assert "F-001" in prompt and "F-002" in prompt
+    assert "validators.py" in prompt and "fetcher.py" in prompt
+    assert "is_safe_url" in prompt
+```
+
+If this test passes, the Chainer is being handed a prompt that contains both findings, both file paths, and the import edge between them. Whether the *model* uses that information well is a separate, out-of-band evaluation; this test only guards the plumbing that gets the information into the prompt in the first place.
+
+Run the whole suite, plus the linter and type checker, with:
+
+```bash
+uv run pytest          # offline tests, no live Venice calls
+uv run ruff check .
+uv run mypy src/
+```
+
+Because none of these tests touch the network, they're safe to run on every commit and in CI without burning tokens or needing a Venice key. The reference repo also includes `tests/test_scanner_parse.py`, `tests/test_chainer_parse.py`, and `tests/test_repo_map.py`, which cover JSON parsing edge cases (malformed entries getting dropped rather than crashing the run) and the AST repo map builder.
 
 ## Running the Project
 
