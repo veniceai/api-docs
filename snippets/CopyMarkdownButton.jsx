@@ -1,7 +1,7 @@
 export const CopyMarkdownButton = (props = {}) => {
   const {
     className = "",
-    label = "Copy to Markdown",
+    label = "Copy article to Markdown",
     sourcePath,
   } = props;
   const statusText = {
