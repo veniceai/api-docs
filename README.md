@@ -46,6 +46,24 @@ The documentation will be available at `http://localhost:3000`.
 - Place images and assets in the corresponding directories
 - Reference the OpenAPI specification in `swagger.yaml` for API details
 
+### Copy Markdown Button
+
+Use the shared snippet when you want a page-level control that copies the current page's Mintlify Markdown export:
+
+```mdx
+import { CopyMarkdownButton } from "/snippets/CopyMarkdownButton.jsx";
+
+<CopyMarkdownButton />
+```
+
+By default, the button fetches the current page URL with a `.md` extension. If a page needs to copy a different Markdown export, pass `sourcePath`:
+
+```mdx
+<CopyMarkdownButton sourcePath="/guides/overview.md" label="Copy guide Markdown" />
+```
+
+Mintlify's local preview does not serve `.md` exports, and browsers cannot copy from the deployed docs during local testing unless the deployed site allows cross-origin reads. In local preview, the button displays `Unavailable locally`; test the full copy flow on deployed docs.
+
 ## 📖 Documentation Features
 
 - 🎨 Clean, modern UI with customizable theming
