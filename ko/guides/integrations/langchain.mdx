@@ -1,0 +1,254 @@
+---
+title: "LangChain 통합"
+description: "체인, 에이전트, RAG 파이프라인에 Venice AI를 사용하세요"
+"og:title": "LangChain Integration | Venice API Docs"
+"og:description": "Venice AI의 프라이빗, 비검열 모델로 구동되는 LangChain 애플리케이션을 빌드하세요"
+---
+
+Venice AI는 OpenAI SDK와 완전히 호환되므로 [LangChain](https://python.langchain.com/)과 매끄럽게 동작합니다. Venice의 프라이버시 우선 인프라로 체인, 에이전트, RAG 파이프라인을 구축하세요.
+
+## 설정
+
+```bash
+pip install langchain langchain-openai openai
+```
+
+## Chat 모델
+
+Venice의 base URL과 함께 `ChatOpenAI`를 사용하세요:
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    model="venice-uncensored-1-2",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    temperature=0.7,
+)
+
+response = llm.invoke("Explain privacy-preserving AI in 2 sentences.")
+print(response.content)
+```
+
+## 스트리밍
+
+```python
+for chunk in llm.stream("Write a haiku about decentralization."):
+    print(chunk.content, end="", flush=True)
+```
+
+## 임베딩(Embeddings)
+
+```python
+from langchain_openai import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-bge-m3",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    check_embedding_ctx_length=False,  # Venice에서는 필요
+)
+
+vectors = embeddings.embed_documents([
+    "Venice AI provides private inference.",
+    "No data is retained after processing.",
+])
+print(f"Embedding dimension: {len(vectors[0])}")
+```
+
+## 체인(Chains)
+
+### Prompt 템플릿이 있는 단순 체인
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a {role}. Answer concisely."),
+    ("user", "{question}"),
+])
+
+chain = prompt | llm
+response = chain.invoke({"role": "privacy expert", "question": "Why does zero data retention matter?"})
+print(response.content)
+```
+
+### 순차 체인
+
+```python
+from langchain_core.output_parsers import StrOutputParser
+
+# 체인 1: 주제 요약 생성
+summarizer = ChatPromptTemplate.from_messages([
+    ("user", "Summarize this topic in 3 bullet points: {topic}")
+]) | llm | StrOutputParser()
+
+# 체인 2: 요약으로부터 질문 생성
+questioner = ChatPromptTemplate.from_messages([
+    ("user", "Based on this summary, generate 3 thought-provoking questions:\n{summary}")
+]) | llm | StrOutputParser()
+
+# 구성
+summary = summarizer.invoke({"topic": "decentralized AI inference"})
+questions = questioner.invoke({"summary": summary})
+print(questions)
+```
+
+## RAG 파이프라인
+
+Venice로 검색 기반 생성(RAG) 파이프라인을 만드세요:
+
+```python
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+
+# Venice 모델 초기화
+llm = ChatOpenAI(
+    model="zai-org-glm-5-1",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+)
+
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-bge-m3",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    check_embedding_ctx_length=False,
+)
+
+# 문서 로딩 및 분할
+documents = [
+    "Venice AI provides private, uncensored AI inference with zero data retention.",
+    "The Venice API is OpenAI-compatible, supporting chat completions, images, audio, video, and embeddings.",
+    "Venice supports function calling, structured outputs, web search, and reasoning models.",
+    "Privacy levels include Private (zero retention) and Anonymized (third-party processed).",
+]
+
+# 벡터 스토어 생성
+vectorstore = FAISS.from_texts(documents, embeddings)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+
+# RAG prompt
+rag_prompt = ChatPromptTemplate.from_messages([
+    ("system", "Answer the question based only on the following context:\n\n{context}"),
+    ("user", "{question}"),
+])
+
+# RAG 체인
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+rag_chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | rag_prompt
+    | llm
+    | StrOutputParser()
+)
+
+answer = rag_chain.invoke("What privacy levels does Venice offer?")
+print(answer)
+```
+
+## 에이전트를 통한 함수 호출
+
+```python
+from langchain_core.tools import tool
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_core.prompts import ChatPromptTemplate
+
+# 함수 호출이 가능한 모델 사용
+llm = ChatOpenAI(
+    model="zai-org-glm-5-1",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+)
+
+@tool
+def get_venice_model_price(model_id: str) -> str:
+    """Get the pricing for a Venice AI model."""
+    prices = {
+        "venice-uncensored-1-2": "Input: $0.20/1M, Output: $0.90/1M",
+        "zai-org-glm-5-1": "Input: $1.75/1M, Output: $5.50/1M",
+        "qwen3-5-9b": "Input: $0.10/1M, Output: $0.15/1M",
+    }
+    return prices.get(model_id, f"Model {model_id} not found in price list.")
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You help users find the right Venice AI model. Use tools when needed."),
+    ("placeholder", "{chat_history}"),
+    ("user", "{input}"),
+    ("placeholder", "{agent_scratchpad}"),
+])
+
+agent = create_tool_calling_agent(llm, [get_venice_model_price], prompt)
+executor = AgentExecutor(agent=agent, tools=[get_venice_model_price], verbose=True)
+
+result = executor.invoke({"input": "What's the cheapest Venice text model?", "chat_history": []})
+print(result["output"])
+```
+
+## 구조화된 출력
+
+```python
+from pydantic import BaseModel, Field
+
+class MovieReview(BaseModel):
+    title: str = Field(description="Movie title")
+    rating: float = Field(description="Rating out of 10")
+    summary: str = Field(description="One-sentence summary")
+
+structured_llm = llm.with_structured_output(MovieReview)
+review = structured_llm.invoke("Review the movie Inception")
+print(f"{review.title}: {review.rating}/10 — {review.summary}")
+```
+
+## 웹 검색 통합
+
+`venice_parameters`를 통해 Venice의 내장 웹 검색을 사용하세요:
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm_with_search = ChatOpenAI(
+    model="venice-uncensored",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    extra_body={
+        "venice_parameters": {
+            "enable_web_search": "auto"
+        }
+    }
+)
+
+response = llm_with_search.invoke("What are the latest developments in AI this week?")
+print(response.content)
+```
+
+또는 요청별로 전달하세요:
+
+```python
+response = llm.invoke(
+    "What are the latest developments in AI this week?",
+    extra_body={"venice_parameters": {"enable_web_search": "auto"}}
+)
+```
+
+## LangChain에 권장되는 모델
+
+| Use Case | Model | Why |
+|----------|-------|-----|
+| 일반 체인 | `venice-uncensored` | 빠르고, 저렴하고, 비검열 |
+| 복잡한 추론 | `zai-org-glm-5-1` | 최고의 프라이빗 플래그십 모델 |
+| 함수 호출 | `zai-org-glm-5-1` | 신뢰성 있는 도구 사용 |
+| 비전 + 텍스트 | `qwen3-vl-235b-a22b` | 고급 비전 이해 |
+| 코드 생성 | `qwen3-coder-480b-a35b-instruct` | 코드에 최적화 |
+| 임베딩(RAG) | `text-embedding-bge-m3` | 프라이빗 임베딩 |
+| 예산 / 대량 | `qwen3-5-9b` | 100만 input 토큰당 $0.10 |
+
+<Card title="모든 모델 보기" icon="database" href="/models/overview">
+  가격과 기능과 함께 모든 Venice 모델을 둘러보세요
+</Card>

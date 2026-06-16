@@ -1,0 +1,372 @@
+---
+title: Mise en cache des prompts
+description: Réduisez les coûts et la latence en mettant en cache le contenu de prompt répété
+"og:title": "Mise en cache des prompts | Venice API Docs"
+"og:description": "Découvrez comment utiliser la mise en cache des prompts pour réduire les coûts et la latence du contenu répété dans vos requêtes API."
+---
+
+La mise en cache des prompts stocke les tokens d'entrée déjà traités afin que les requêtes suivantes ayant des préfixes identiques puissent les réutiliser au lieu de les retraiter. Cela réduit la latence (jusqu'à 80 % pour les longs prompts) et les coûts (jusqu'à 90 % de remise sur les tokens mis en cache).
+
+Venice gère la mise en cache automatiquement pour les modèles pris en charge, mais comprendre comment chaque fournisseur implémente la mise en cache vous aide à maximiser les taux de succès du cache et à minimiser les coûts.
+
+## Fonctionnement du cache
+
+La mise en cache fonctionne par **correspondance de préfixe** : le système stocke les tokens traités et les réutilise lorsque les requêtes suivantes commencent par le même contenu.
+
+Prenons l'exemple d'un chatbot avec un prompt système de 2 000 tokens :
+
+<Steps>
+  <Step title="Requête 1">
+    Prompt système (2 000 tokens) + message utilisateur (50 tokens)
+    
+    **Traités** : 2 050 tokens · **Depuis le cache** : 0 tokens
+    
+    Préfixe écrit dans le cache.
+  </Step>
+  <Step title="Requête 2">
+    Prompt système (2 000 tokens) + message utilisateur (80 tokens)
+    
+    **Traités** : 80 tokens · **Depuis le cache** : 2 000 tokens
+  </Step>
+  <Step title="Requête 3">
+    Prompt système (2 000 tokens) + message utilisateur (120 tokens)
+    
+    **Traités** : 120 tokens · **Depuis le cache** : 2 000 tokens
+  </Step>
+</Steps>
+
+**Total sans mise en cache** : 2 050 + 2 080 + 2 120 = 6 250 tokens au tarif plein
+
+**Total avec mise en cache** : 2 050 + 80 + 120 = 2 250 tokens au tarif plein, 4 000 tokens au tarif réduit
+
+<Warning>
+La mise en cache ne fonctionne que sur le **préfixe**. Tout changement au début de votre prompt invalide le cache pour tout ce qui suit. Placez toujours le contenu statique (prompt système, documents, exemples) avant le contenu dynamique (messages utilisateur).
+</Warning>
+
+## Modèles pris en charge et tarification
+
+<div id="cache-pricing-placeholder">Loading...</div>
+
+<Note>
+Claude Opus 4.5 facture un **tarif premium** pour les écritures en cache (\$7,50/1M tokens contre \$6,00 pour l'entrée régulière). La première requête qui remplit le cache coûte plus cher, mais les accès au cache suivants permettent d'économiser 90 %. Les autres modèles ne facturent pas d'extra pour les écritures en cache.
+</Note>
+
+## Comportement spécifique aux fournisseurs
+
+Venice normalise la mise en cache entre les fournisseurs. Pour la plupart des modèles, la mise en cache est automatique. Envoyez simplement vos requêtes et consultez la réponse pour les statistiques de cache. **Claude** nécessite des marqueurs de cache explicites au niveau du protocole, mais Venice les ajoute automatiquement pour les prompts système et l'historique de conversation.
+
+Le comportement du cache est en définitive contrôlé par chaque fournisseur et peut changer ; consultez la documentation du fournisseur pour les derniers détails.
+
+| Modèle | Fournisseur | Tokens min | Durée de vie du cache | Coût d'écriture | Remise en lecture | Marqueurs explicites |
+|-------|----------|------------|----------------|------------|---------------|------------------|
+| Claude Opus 4.5 | Anthropic | ~4 000 | 5 min | +25 % | 90 % | Obligatoires |
+| GPT-5.2 | OpenAI | 1 024 | 5-10 min | Aucun | 90 % | Non nécessaires |
+| Gemini | Google | ~1 024 | 1 heure | Aucun | 75-90 % | Non nécessaires |
+| Grok | xAI | ~1 024 | 5 min | Aucun | 75-88 % | Non nécessaires |
+| DeepSeek | DeepSeek | ~1 024 | 5 min | Aucun | 50 % | Non nécessaires |
+| MiniMax | MiniMax | ~1 024 | 5 min | Aucun | 90 % | Non nécessaires |
+| Kimi | Moonshot | ~1 024 | 5 min | Aucun | 50 % | Non nécessaires |
+
+### Claude Opus 4.5 (Anthropic)
+
+Claude nécessite des points de rupture de cache explicites au niveau du protocole. Venice les gère automatiquement :
+
+- Les **prompts système** sont mis en cache automatiquement
+- L'**historique de conversation** est mis en cache en plaçant un point de rupture sur l'avant-dernier message utilisateur
+
+Cela signifie que votre historique de conversation est lu depuis le cache, et seul le dernier tour est traité comme nouvelle entrée :
+
+| Tour | Tokens du prompt | Lecture du cache | Écriture du cache | Économies |
+|------|---------------|------------|-------------|---------|
+| 1 | 10 979 | 0 | 10 938 | Première écriture |
+| 2 | 11 031 | 10 938 | 31 | 99,7 % mis en cache |
+| 3 | 11 062 | 10 969 | 52 | 99,5 % mis en cache |
+
+**Détails supplémentaires :**
+
+- **Jusqu'à 4 points de rupture par requête** : le système utilise le plus long préfixe correspondant
+- **La clé de cache est exacte octet par octet** : les changements d'espaces, les encodages d'images différents, ou les outils réorganisés cassent les correspondances du cache
+- **Limites de débit conscientes du cache** : les tokens mis en cache ne comptent pas dans votre limite ITPM, permettant un débit effectif plus élevé
+- **Prime d'écriture de 25 %** : la première requête coûte plus cher, mais 90 % d'économies sur les lectures suivantes
+
+#### Contrôle manuel du cache
+
+Pour des cas particuliers comme la mise en cache d'un grand document au premier tour, vous pouvez ajouter des points de rupture explicites :
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": [{
+        "type": "text",
+        "text": "You are a legal assistant...",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    {
+      "role": "user", 
+      "content": [{
+        "type": "text",
+        "text": "[Long contract document...]",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    { "role": "assistant", "content": "I've reviewed the contract." },
+    { "role": "user", "content": "What are the termination clauses?" }
+  ]
+}
+```
+
+Cela garantit que le prompt système et le document sont mis en cache dès la première requête. Pour les conversations classiques, vous n'avez pas besoin de marqueurs manuels.
+
+### Tous les autres modèles
+
+La mise en cache est **automatique**. Aucun paramètre spécial requis. Assurez-vous simplement que vos prompts dépassent ~1 024 tokens et utilisez `prompt_cache_key` pour un routage cohérent.
+
+## Paramètres de requête
+
+| Paramètre | Type | Modèles | Description |
+|-----------|------|--------|-------------|
+| `prompt_cache_key` | string | Tous | Indice de routage pour l'affinité de cache. Les requêtes avec la même clé sont plus susceptibles d'atteindre le même serveur avec un cache chaud. |
+| `cache_control` | object | Claude | Marque les blocs de contenu pour la mise en cache. Voir la section Claude Opus 4.5. |
+
+### prompt_cache_key
+
+Pour les conversations ou les workflows d'agents, utilisez un `prompt_cache_key` cohérent pour améliorer les taux de succès du cache :
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "prompt_cache_key": "session-abc-123",
+  "messages": [...]
+}
+```
+
+Cela achemine les requêtes vers des serveurs susceptibles d'avoir déjà votre contexte en cache. Utilisez un ID de session, un ID de conversation ou un ID utilisateur comme clé.
+
+## Champs de réponse
+
+L'objet `usage` de la réponse inclut les statistiques de cache :
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 5500,
+    "completion_tokens": 200,
+    "total_tokens": 5700,
+    "prompt_tokens_details": {
+      "cached_tokens": 5000,
+      "cache_creation_input_tokens": 0
+    }
+  }
+}
+```
+
+| Champ | Description |
+|-------|-------------|
+| `prompt_tokens` | Total des tokens d'entrée dans la requête |
+| `prompt_tokens_details.cached_tokens` | Tokens servis depuis le cache (facturés au tarif réduit) |
+| `prompt_tokens_details.cache_creation_input_tokens` | Tokens écrits dans le cache (peuvent entraîner un surcoût sur Claude) |
+
+**Détail de la facturation** (en prenant Claude Opus 4.5 comme exemple) :
+- 5 000 tokens en cache × \$0,60/1M = \$0,003
+- 500 tokens hors cache × \$6,00/1M = \$0,003
+- Total : \$0,006 (contre \$0,033 sans cache, 82 % d'économies)
+
+## Bonnes pratiques
+
+### Structurez les prompts pour la mise en cache
+
+Placez le contenu statique au début, le contenu dynamique à la fin.
+
+**Bonne structure**
+
+| Position | Contenu | Mis en cache ? |
+|----------|---------|---------|
+| 1 | Instructions système | Oui |
+| 2 | Documents de référence | Oui |
+| 3 | Exemples few-shot | Oui |
+| 4 | Requête utilisateur | Non |
+
+**Mauvaise structure**
+
+| Position | Contenu | Mis en cache ? |
+|----------|---------|---------|
+| 1 | Horodatage courant | Non (invalide tout ce qui suit) |
+| 2 | Instructions système | Non |
+| 3 | Requête utilisateur | Non |
+
+### Conservez des préfixes identiques octet par octet
+
+Les clés de cache sont calculées à partir de séquences d'octets exactes. Même des différences triviales cassent les correspondances de cache :
+
+- Espaces ou retours à la ligne différents
+- Horodatages ou IDs de requête dans les prompts
+- Ordre randomisé des exemples few-shot
+- Mise en forme différente du même contenu
+
+### Atteignez les seuils minimums de tokens
+
+Si vos prompts sont en dessous du minimum (généralement 1 024 tokens), la mise en cache ne s'activera pas. Pour les petits prompts, envisagez :
+
+- D'ajouter plus de contexte ou d'exemples pour atteindre le seuil
+- De regrouper plusieurs petites requêtes en prompts batchés
+- D'accepter que la mise en cache ne s'applique pas aux requêtes simples
+
+### Utilisez prompt_cache_key pour les conversations
+
+Pour les conversations continues, définissez un `prompt_cache_key` cohérent :
+
+```json
+// Turn 1
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Turn 2
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Turn 3
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+```
+
+Cela améliore la probabilité que tous les tours atteignent le même serveur avec un cache chaud.
+
+### Surveillez les performances du cache
+
+Suivez ces métriques :
+- **Taux de succès du cache** : `cached_tokens / prompt_tokens`
+- **Économies de coûts** : comparez le coût réel au coût sans cache
+- **Réduction de latence** : temps jusqu'au premier token avec vs sans succès du cache
+
+Si `cached_tokens` est constamment à 0 :
+1. Les prompts peuvent être en dessous du seuil minimum de tokens
+2. Les prompts peuvent changer entre les requêtes
+3. Les requêtes peuvent atteindre des serveurs différents (utilisez `prompt_cache_key`)
+4. Le cache peut avoir expiré (requêtes trop peu fréquentes)
+
+### Tenez compte de l'économie du cache
+
+**Prime d'écriture du cache de Claude Opus 4.5** : la première requête coûte 25 % de plus, mais 90 % d'économies sur les lectures suivantes.
+
+| Scénario | La prime d'écriture du cache en vaut-elle la peine ? |
+|----------|-------------------------------|
+| 1 requête avec ce prompt | Non (payer 25 % de plus, aucun bénéfice) |
+| 2+ requêtes avec le même préfixe | Oui (rentabilité atteinte à la 2e requête) |
+| Prompts changeant rapidement | Non (coûts d'écriture constants) |
+| Prompt système stable, nombreuses requêtes | Oui (amorti sur de nombreuses lectures) |
+
+## Durée de vie du cache
+
+Les caches expirent après une période d'inactivité (généralement 5 à 10 minutes). Cela signifie :
+
+| Modèle de trafic | Bénéfice du cache |
+|-----------------|-----------------|
+| Requêtes continues (< 5 min entre elles) | Élevé : le cache reste chaud |
+| Trafic en rafales (intervalles > 10 min) | Limité : le cache expire entre les rafales |
+| Requêtes sporadiques (à des heures d'intervalle) | Aucun : le cache est toujours froid |
+
+## Mise en cache avec outils et fonctions
+
+Les définitions de fonctions peuvent être mises en cache avec les prompts système :
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search_database",
+        "description": "Search the product database",
+        "parameters": { ... }
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "You are a shopping assistant...",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    ...
+  ]
+}
+```
+
+Les définitions d'outils font partie du préfixe mis en cache. Si vous avez de nombreux outils, cela peut réduire considérablement les coûts par requête.
+
+## Mise en cache avec images et documents
+
+Pour les modèles de vision, les images peuvent être incluses dans le contenu mis en cache :
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image_url",
+          "image_url": { "url": "data:image/png;base64,..." }
+        },
+        {
+          "type": "text",
+          "text": "This is the floor plan. I'll ask several questions about it.",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "I can see the floor plan. What would you like to know?"
+    },
+    {
+      "role": "user",
+      "content": "How many bedrooms are there?"
+    }
+  ]
+}
+```
+
+L'image et le contexte initial sont mis en cache, de sorte que les questions de suivi sur la même image ne nécessitent pas de retraitement.
+
+## Dépannage
+
+<Accordion title="cached_tokens est toujours à 0">
+
+| Cause | Solution |
+|-------|----------|
+| Prompt trop court | Assurez-vous que le prompt dépasse ~1 024 tokens (4 000 pour Claude) |
+| Préfixe modifié | Vérifiez la présence de contenu dynamique au début de votre prompt |
+| Première requête | Comportement attendu : la première requête écrit dans le cache, les suivantes lisent |
+| Cache expiré | Réduisez le temps entre les requêtes à moins de 5 minutes |
+| Serveurs différents | Ajoutez `prompt_cache_key` pour acheminer les requêtes de manière cohérente |
+
+</Accordion>
+
+<Accordion title="cache_creation_input_tokens sur chaque requête">
+
+| Cause | Solution |
+|-------|----------|
+| Prompt changeant | Supprimez les horodatages, IDs de requête, ou autre contenu dynamique du préfixe |
+| cache_control manquant | Pour Claude, assurez-vous que le marqueur `cache_control` est présent sur les blocs de contenu |
+| Sous le seuil | Les prompts en dessous du nombre minimum de tokens ne déclenchent pas la mise en cache |
+| Message utilisateur unique | Attendu pour le premier tour. Le cache grandit avec l'historique de conversation. |
+
+</Accordion>
+
+<Accordion title="Coûts plus élevés que prévu">
+
+| Cause | Solution |
+|-------|----------|
+| Prime d'écriture du cache | Claude facture 25 % de plus pour les écritures. Cela n'en vaut la peine que si vous réutilisez le prompt. |
+| Faible réutilisation | Si chaque prompt est unique, vous payez les coûts d'écriture sans bénéficier des lectures |
+| Mauvaise structure de prompt | Déplacez le contenu dynamique à la fin pour que le préfixe reste stable |
+
+</Accordion>
