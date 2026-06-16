@@ -1,0 +1,175 @@
+---
+title: '加密 RPC'
+openapi: 'POST /crypto/rpc/{network}'
+"og:title": "加密 RPC | Venice API 文档"
+"og:description": "将 JSON-RPC 请求代理到受支持的区块链节点。按 credit 付费，无需单独注册 RPC 提供商。"
+---
+
+将 JSON-RPC 2.0 请求（单条或批量）转发到受支持的区块链节点。同时支持 API 密钥和 x402 钱包认证。按 credit 计费，以 Venice 余额结算 —— 一个凭证、一张账单，覆盖下面所有链。
+
+## 认证
+
+此端点支持两种认证方式：
+
+- **API 密钥**：通过 `Authorization: Bearer <key>` 头部进行标准 Bearer token 认证。
+- **x402 钱包**：使用 Base 或 Solana 上钱包的 USDC credit 进行按用量付费。无需 Venice 账户。设置方法见 [x402 指南](/zh/guides/integrations/x402-venice-api)。
+
+两种方式共享相同的速率限制和计费（Venice credits）。
+
+## 支持的网络
+
+请参阅 [`GET /crypto/rpc/networks`](/zh/api-reference/endpoint/crypto/networks) 获取实时、权威的列表。当前覆盖范围：
+
+| 系列 | Mainnet | 测试网 |
+|---|---|---|
+| Ethereum | `ethereum-mainnet` | `ethereum-sepolia`、`ethereum-holesky` |
+| Polygon | `polygon-mainnet` | `polygon-amoy` |
+| Arbitrum | `arbitrum-mainnet` | `arbitrum-sepolia` |
+| Optimism | `optimism-mainnet` | `optimism-sepolia` |
+| Base | `base-mainnet` | `base-sepolia` |
+| Linea | `linea-mainnet` | `linea-sepolia` |
+| Avalanche C-Chain | `avalanche-mainnet` | `avalanche-fuji` |
+| BNB Smart Chain | `bsc-mainnet` | `bsc-testnet` |
+| Blast | `blast-mainnet` | `blast-sepolia` |
+| zkSync Era | `zksync-mainnet` | `zksync-sepolia` |
+| Starknet | `starknet-mainnet` | `starknet-sepolia` |
+
+## 请求结构
+
+### 单条请求
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "eth_chainId",
+  "params": [],
+  "id": 1
+}
+```
+
+### 批量请求
+
+最多 **100** 个 JSON-RPC 2.0 对象组成的数组。每个条目独立校验；如果任一方法不受支持，整个批次将以 `400` 被拒绝，错误消息中会列出所有不合法的方法名。
+
+```json
+[
+  { "jsonrpc": "2.0", "method": "eth_chainId", "params": [], "id": 1 },
+  { "jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 2 }
+]
+```
+
+## 支持的方法和定价层级
+
+方法被分为三个 credit 层级。每次调用消耗的 credit = `baseCredits[chain] × methodTier`。
+
+| 层级 | 倍率 | 示例方法 |
+|---|---|---|
+| **Standard** | 1× | `eth_call`、`eth_getBalance`、`eth_blockNumber`、`eth_sendRawTransaction`、`eth_getLogs`、`eth_getTransactionReceipt`、`eth_estimateGas`、`net_version`、`web3_clientVersion`、ERC-4337 bundler 方法（`eth_sendUserOperation`、`eth_estimateUserOperationGas` 等）、链系列扩展方法（`zks_*`、`linea_*`、`bor_*`、`starknet_*`） |
+| **Advanced** | 2× | `trace_block`、`trace_call`、`trace_transaction`、`debug_traceCall`、`debug_traceTransaction`、`debug_traceBlockByHash`、`txpool_inspect`、`txpool_status`、`arbtrace_*` |
+| **Large** | 4× | `trace_replayBlockTransactions`、`trace_replayTransaction`、`txpool_content`、`arbtrace_replayTransaction`、`arbtrace_replayBlockTransactions` |
+
+### 各链的基础 credit
+
+| baseCredits | 链 |
+|---|---|
+| **20** | Ethereum + 上述所有 EVM L2（Base、Optimism、Arbitrum、Polygon、Linea、Avalanche、BSC、Blast）以及 Starknet |
+| **30** | zkSync Era |
+
+### 成本示例
+
+按 Venice 每 credit `~$6.25 × 10⁻⁷`：
+
+| 调用 | Credits | 美元成本 |
+|---|---|---|
+| Ethereum 上的 `eth_call`（20 × 1×） | 20 | $0.0000125 |
+| Ethereum 上的 `trace_transaction`（20 × 2×） | 40 | $0.0000250 |
+| Ethereum 上的 `trace_replayTransaction`（20 × 4×） | 80 | $0.0000500 |
+| zkSync 上的 `eth_call`（30 × 1×） | 30 | $0.0000188 |
+
+### 不支持
+
+- **仅 WebSocket 的方法**（`eth_subscribe`、`eth_unsubscribe`）—— 该代理仅支持 HTTP。请改用轮询，或升级到直连 WebSocket 提供商。
+- **有状态的过滤方法**（`eth_newFilter`、`eth_getFilterChanges`、`eth_getFilterLogs`、`eth_uninstallFilter`、`eth_newBlockFilter`、`eth_newPendingTransactionFilter`）—— 过滤器状态被固定在单一上游后端，会在负载均衡的 HTTP 代理上悄然失效。请改用无状态的 `eth_getLogs`。
+- **矿工 / 持有密钥的方法**（`eth_sign`、`eth_accounts`、`eth_mining`、`eth_hashrate`、`eth_getWork`、`eth_submitWork`）—— 托管提供商端点不持有用户私钥，因此这些方法总是出错。请在客户端签名交易，并通过 `eth_sendRawTransaction` 提交。
+- **未映射的方法** —— 任何未明确在允许列表中的方法都会返回 `400`。如需添加，请联系支持团队。
+
+## 批量请求的逐条计费
+
+即便 HTTP 响应为 `200`，单个批量条目仍可能带有 JSON-RPC `error` 字段（例如参数错误，或目标链不支持该方法）。Venice 对这些条目按 **每条 5 credit** 收费，而不是按完整方法层级 —— 对常规的"摸索 API"错误给予一定优惠。
+
+```json
+// 批量请求：
+[
+  { "jsonrpc": "2.0", "method": "eth_chainId",   "params": [],         "id": 1 },
+  { "jsonrpc": "2.0", "method": "eth_getBalance","params": ["bad"],    "id": 2 }
+]
+
+// 响应（HTTP 200，X-Venice-RPC-Credits: 25）：
+[
+  { "jsonrpc": "2.0", "id": 1, "result": "0x1" },
+  { "jsonrpc": "2.0", "id": 2, "error": { "code": -32602, "message": "invalid params" } }
+]
+```
+
+第一个条目（成功）计费 20 credit，第二个（RPC 层级错误）计费 5，合计 `= 25`。
+
+## 速率限制
+
+每个已认证调用者的每分钟请求上限：
+
+| 等级 | 每分钟请求数 |
+|---|---|
+| Standard | 100 |
+| Staff | 1,000 |
+
+当超过上限时，端点会返回 `429`，并带有 `customMessage` 以及标准的 `X-RateLimit-*` 响应头。
+
+## 幂等性
+
+将 `Idempotency-Key` 请求头设置为匹配 `[A-Za-z0-9_-]{1,255}` 的任意字符串，可启用安全重试。响应会以 `(user, idempotency-key)` 为键缓存 24 小时：
+
+- 使用**相同 key 和相同请求体**重放时，会返回缓存响应，并附带 `Idempotent-Replayed: true` 响应头。上游不会被调用，也不会扣除新的 credit。
+- 使用**相同 key 但不同请求体**重放时，会返回 `400`，以防止悄无声息的状态损坏。请为不同请求选择新的 key。
+
+## 响应头
+
+| 头部 | 说明 |
+|---|---|
+| `X-Venice-RPC-Credits` | 该请求收取的 credit 数。批量请求时为各条目之和。 |
+| `X-Venice-RPC-Cost-USD` | 精确到小数点后 8 位的美元成本。等于 `X-Venice-RPC-Credits × 每 credit 单价`。 |
+| `X-Request-ID` | 32 字符的关联 ID。请在任何支持往来中携带此 ID。 |
+| `Idempotent-Replayed` | 当响应来自幂等性缓存时，其值为 `"true"`。 |
+| `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` | 仅在 429 响应中设置。 |
+
+## 交易中继的取证日志
+
+对 `eth_sendRawTransaction` 的每次调用都会在服务端被记录，内容包括交易哈希（原始字节的 keccak256）、网络 slug、请求 ID 以及调用方用户 ID。我们**不**保留签名负载本身 —— 哈希可从链上回执还原。该审计链路的作用是：如果客户的 API 密钥遭到泄露并被用来通过我们的基础设施中继非法交易，我们能够将链上活动关联回责任账户。
+
+## 示例
+
+```bash
+curl https://api.venice.ai/api/v1/crypto/rpc/ethereum-mainnet \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_chainId",
+    "params": [],
+    "id": 1
+  }'
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "result": "0x1" }
+```
+
+响应头：`X-Venice-RPC-Credits: 20`、`X-Venice-RPC-Cost-USD: 0.00001250`、`X-Request-ID: <nanoid>`。
+
+## Postman 集合
+
+我们的公开工作区中提供了一份可直接导入的 Postman 集合，包含 27 个示例请求（发现、Standard/Advanced/Large 调用、多链、批量、幂等性、错误场景）：
+
+**[Venice Crypto RPC — Postman Collection](https://www.postman.com/veniceai/workspace/venice-ai-workspace/folder/38652128-2cf5a817-41cd-438b-ad37-5d07c3f13005?action=share&creator=48156591&active-environment=38652128-ef110f4e-d3e1-43b5-8029-4d6877e62041)**
+
+将 `apiKey` 集合变量设为你的 Venice API 密钥，即可立即开始发送请求。
+

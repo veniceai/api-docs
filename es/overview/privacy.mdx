@@ -1,0 +1,116 @@
+---
+title: Privacidad
+description: "Cómo Venice gestiona los prompts, las respuestas, los metadatos, TEE y las solicitudes de modelo cifradas de extremo a extremo."
+"og:title": "Privacidad | Venice API Docs"
+"og:description": "Comprende los modos de privacidad de Venice: anonimizado, privado, TEE y E2EE."
+---
+
+Uno de los principios rectores de Venice es la privacidad del usuario. La arquitectura de la plataforma fluye desde este principio filosófico, y cada componente está diseñado con este objetivo en mente.
+
+> La única manera de conseguir una privacidad razonable para el usuario es no recopilar esta información en primer lugar. Esto es más difícil de lograr desde una perspectiva de ingeniería, pero creemos que es el enfoque correcto.
+
+La API de Venice replica la misma arquitectura de privacidad de backend que la plataforma Venice: las solicitudes pasan por el proxy de Venice a través de conexiones cifradas, Venice no almacena ni registra el contenido de prompts ni respuestas en la inferencia normal, y cada modelo seleccionado añade uno de los cuatro modos de privacidad en la capa de runtime: Anónimo, Privado, TEE o E2EE.
+
+![Arquitectura de privacidad de Venice AI](/images/privacy-architecture.png "Arquitectura de privacidad de Venice AI")
+
+## Arquitectura de privacidad
+
+El proxy de Venice es la base común para cada modo de privacidad. Las solicitudes pasan por Venice sobre HTTPS/TLS y se reenvían sin que Venice almacene contenido de prompts o respuestas. El modo de privacidad del modelo seleccionado determina qué ocurre a continuación en la capa de proveedor o de runtime del modelo.
+
+Venice presenta la privacidad de los modelos en cuatro modos. Se construyen sobre la misma base de proxy y añaden protecciones progresivamente más fuertes, desde ocultar la identidad al proveedor hasta cifrar los prompts de extremo a extremo dentro de un enclave verificado.
+
+<div className="venice-privacy-level-label">Protección de privacidad creciente</div>
+
+<div className="venice-privacy-mode-grid">
+  <div className="venice-privacy-mode-card venice-privacy-mode-anonymous">
+    <div className="venice-privacy-mode-header">
+      <span className="venice-privacy-mode-name">Anónimo</span>
+    </div>
+    <h3>Identidad oculta al proveedor</h3>
+    <p>Venice hace proxy de la solicitud sin enviar tu identidad de Venice al proveedor del modelo. El contenido del prompt sigue siendo visible para ese proveedor.</p>
+  </div>
+
+  <div className="venice-privacy-mode-card venice-privacy-mode-private">
+    <div className="venice-privacy-mode-header">
+      <span className="venice-privacy-mode-name">Privado</span>
+    </div>
+    <h3>Cero retención de datos, garantizada por contrato</h3>
+    <p>El contenido del prompt y la respuesta se procesa solo para la inferencia y no se conserva tras completarse la solicitud.</p>
+  </div>
+
+  <div className="venice-privacy-mode-card venice-privacy-mode-tee">
+    <div className="venice-privacy-mode-header">
+      <span className="venice-privacy-mode-name">TEE</span>
+    </div>
+    <h3>Inferencia aislada por hardware</h3>
+    <p>Los modelos compatibles se ejecutan dentro de un Trusted Execution Environment con soporte de atestación remota.</p>
+  </div>
+
+  <div className="venice-privacy-mode-card venice-privacy-mode-e2ee">
+    <div className="venice-privacy-mode-header">
+      <span className="venice-privacy-mode-name">E2EE</span>
+    </div>
+    <h3>Cifrado de extremo a extremo hacia un TEE verificado</h3>
+    <p>Tu cliente cifra el prompt antes de enviarlo. Venice reenvía el texto cifrado, y solo el TEE verificado lo descifra.</p>
+  </div>
+</div>
+
+El endpoint `/models` te indica el nivel de privacidad de cada modelo. Los modelos marcados como `anonymized` son modelos Anónimos, y los marcados como `private` son modelos Privados. TEE y E2EE se muestran por separado en las capacidades del modelo, como `supportsTeeAttestation` y `supportsE2EE`.
+
+<Info>
+Para detalles de implementación, consulta la [guía de modelos TEE y E2EE](/es/guides/features/tee-e2ee-models).
+</Info>
+
+## TEE y E2EE
+
+Los modelos TEE y E2EE añaden controles criptográficos y respaldados por hardware sobre el enfoque por defecto de Venice de no retención de contenido.
+
+<CardGroup cols={2}>
+  <Card title="Usa TEE cuando" icon="shield-halved">
+    Quieres que el modelo se ejecute dentro de un enclave de hardware atestado, pero tu cliente puede enviar prompts en texto plano a través de la solicitud API normal.
+  </Card>
+  <Card title="Usa E2EE cuando" icon="lock">
+    Quieres que los prompts se cifren antes de salir de tu cliente y se descifren solo dentro de un TEE verificado.
+  </Card>
+</CardGroup>
+
+El flujo de E2EE usa `/chat/completions` con modelos compatibles con E2EE. Tu cliente debe obtener la atestación, verificar el nonce y la evidencia del enclave, cifrar los mensajes `user` y `system`, enviar las cabeceras `X-Venice-TEE-*`, hacer streaming de la respuesta y verificar/descifrar el contenido de la respuesta.
+
+E2EE también deshabilita las funciones que necesitan texto plano fuera del enclave, como búsqueda web, memoria, resúmenes, algunos flujos de herramientas y otro procesamiento del lado del servidor.
+
+## Elegir un modelo
+
+Usa `/models` para ver qué protecciones de privacidad admite cada modelo antes de enviar una solicitud.
+
+Cada modelo tiene dos campos relevantes:
+
+- `model_spec.privacy` te indica el modo de privacidad base del modelo:
+  - `anonymized`: Venice oculta tu identidad al proveedor, pero el proveedor aún puede ver el prompt.
+  - `private`: Venice enruta la solicitud a través de infraestructura de cero retención de datos.
+- `model_spec.capabilities` te indica si el modelo admite protecciones más fuertes:
+  - `supportsTeeAttestation`: el modelo puede ejecutarse dentro de un Trusted Execution Environment verificable.
+  - `supportsE2EE`: el modelo puede aceptar prompts cifrados por el cliente que solo se descifran dentro del TEE.
+
+E2EE es un flujo dirigido por el cliente. Tu aplicación debe cifrar la solicitud, verificar la atestación y verificar/descifrar la respuesta. Consulta la [guía de modelos TEE y E2EE](/es/guides/features/tee-e2ee-models).
+
+<CodeGroup>
+```bash cURL
+curl https://api.venice.ai/api/v1/models \
+  -H "Authorization: Bearer $API_KEY_VENICE" | \
+  jq '.data[] | {
+    id,
+    privacy: .model_spec.privacy,
+    tee: .model_spec.capabilities.supportsTeeAttestation,
+    e2ee: .model_spec.capabilities.supportsE2EE
+  }'
+```
+</CodeGroup>
+
+Una regla simple: elige `private` para cero retención de datos, elige `tee: true` para aislamiento respaldado por hardware, y elige `e2ee: true` cuando necesites cifrar los prompts antes de que salgan de tu cliente.
+
+## Metadatos operativos
+
+Venice puede procesar los metadatos necesarios para autenticación, facturación, prevención de abusos, fiabilidad, analíticas y soporte. Según cómo uses el producto, esto puede incluir identificadores de cuenta o cartera, identificadores de API key, marcas de tiempo de solicitudes, modelo seleccionado, recuentos de tokens, importes facturados, estado de los límites de uso, IDs de solicitud, dirección IP, información del navegador o dispositivo y registros de eventos del producto.
+
+Estos metadatos se usan para operar la API y son independientes del contenido de prompts y respuestas. Los registros de facturación y uso recogen detalles como modelo, endpoint, recuentos de tokens, marcas de tiempo e identificadores de cuenta; no requieren almacenar el prompt ni la finalización.
+

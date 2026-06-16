@@ -1,0 +1,174 @@
+---
+title: 'RPC crypto'
+openapi: 'POST /crypto/rpc/{network}'
+"og:title": "RPC crypto | Documentation Venice API"
+"og:description": "Proxy une requête JSON-RPC vers un nœud blockchain pris en charge. Paiement à la consommation par crédit, sans inscription distincte chez un fournisseur RPC."
+---
+
+Transférez une requête JSON-RPC 2.0 (unique ou en lot) vers un nœud blockchain pris en charge. Prend en charge à la fois l'authentification par clé API et par portefeuille x402. La facturation est par crédit et libellée dans votre solde Venice — un seul justificatif, une seule facture, pour chaque chaîne ci-dessous.
+
+## Authentification
+
+Cet endpoint prend en charge deux méthodes d'authentification :
+
+- **Clé API** : Authentification standard par token Bearer via l'en-tête `Authorization: Bearer <key>`.
+- **Portefeuille x402** : Paiement à l'usage avec des crédits USDC depuis un portefeuille sur Base ou Solana. Aucun compte Venice requis. Consultez le [guide x402](/fr/guides/integrations/x402-venice-api) pour la configuration.
+
+Les deux méthodes partagent les mêmes limites de débit et la même facturation (crédits Venice).
+
+## Réseaux pris en charge
+
+Consultez [`GET /crypto/rpc/networks`](/fr/api-reference/endpoint/crypto/networks) pour la liste vivante et faisant autorité. Couverture actuelle :
+
+| Famille | Mainnet | Testnets |
+|---|---|---|
+| Ethereum | `ethereum-mainnet` | `ethereum-sepolia`, `ethereum-holesky` |
+| Polygon | `polygon-mainnet` | `polygon-amoy` |
+| Arbitrum | `arbitrum-mainnet` | `arbitrum-sepolia` |
+| Optimism | `optimism-mainnet` | `optimism-sepolia` |
+| Base | `base-mainnet` | `base-sepolia` |
+| Linea | `linea-mainnet` | `linea-sepolia` |
+| Avalanche C-Chain | `avalanche-mainnet` | `avalanche-fuji` |
+| BNB Smart Chain | `bsc-mainnet` | `bsc-testnet` |
+| Blast | `blast-mainnet` | `blast-sepolia` |
+| zkSync Era | `zksync-mainnet` | `zksync-sepolia` |
+| Starknet | `starknet-mainnet` | `starknet-sepolia` |
+
+## Formes de requête
+
+### Requête unique
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "eth_chainId",
+  "params": [],
+  "id": 1
+}
+```
+
+### Requête en lot
+
+Un tableau d'au maximum **100** objets JSON-RPC 2.0. Chaque élément est validé indépendamment ; si une méthode n'est pas prise en charge, le lot entier est rejeté avec `400` et chaque nom de méthode incriminé est listé dans le message d'erreur.
+
+```json
+[
+  { "jsonrpc": "2.0", "method": "eth_chainId", "params": [], "id": 1 },
+  { "jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 2 }
+]
+```
+
+## Méthodes prises en charge et paliers tarifaires
+
+Les méthodes sont classées en trois paliers de crédits. Crédits consommés par appel = `baseCredits[chain] × methodTier`.
+
+| Palier | Multiplicateur | Exemples de méthodes |
+|---|---|---|
+| **Standard** | 1× | `eth_call`, `eth_getBalance`, `eth_blockNumber`, `eth_sendRawTransaction`, `eth_getLogs`, `eth_getTransactionReceipt`, `eth_estimateGas`, `net_version`, `web3_clientVersion`, méthodes bundler ERC-4337 (`eth_sendUserOperation`, `eth_estimateUserOperationGas`, etc.), extensions de famille de chaînes (`zks_*`, `linea_*`, `bor_*`, `starknet_*`) |
+| **Advanced** | 2× | `trace_block`, `trace_call`, `trace_transaction`, `debug_traceCall`, `debug_traceTransaction`, `debug_traceBlockByHash`, `txpool_inspect`, `txpool_status`, `arbtrace_*` |
+| **Large** | 4× | `trace_replayBlockTransactions`, `trace_replayTransaction`, `txpool_content`, `arbtrace_replayTransaction`, `arbtrace_replayBlockTransactions` |
+
+### Crédits de base par chaîne
+
+| baseCredits | Chaînes |
+|---|---|
+| **20** | Ethereum + tous les L2 EVM ci-dessus (Base, Optimism, Arbitrum, Polygon, Linea, Avalanche, BSC, Blast) et Starknet |
+| **30** | zkSync Era |
+
+### Exemples de coût
+
+Au tarif Venice de `~6,25 × 10⁻⁷ $` par crédit :
+
+| Appel | Crédits | Coût USD |
+|---|---|---|
+| `eth_call` sur Ethereum (20 × 1×) | 20 | 0,0000125 $ |
+| `trace_transaction` sur Ethereum (20 × 2×) | 40 | 0,0000250 $ |
+| `trace_replayTransaction` sur Ethereum (20 × 4×) | 80 | 0,0000500 $ |
+| `eth_call` sur zkSync (30 × 1×) | 30 | 0,0000188 $ |
+
+### Non pris en charge
+
+- **Méthodes WebSocket uniquement** (`eth_subscribe`, `eth_unsubscribe`) — ce proxy est uniquement HTTP. Pratiquez plutôt le polling, ou passez à un fournisseur WebSocket direct.
+- **Méthodes de filtre avec état** (`eth_newFilter`, `eth_getFilterChanges`, `eth_getFilterLogs`, `eth_uninstallFilter`, `eth_newBlockFilter`, `eth_newPendingTransactionFilter`) — l'état des filtres est lié à un seul backend en amont et se casse silencieusement sur un proxy HTTP à répartition de charge. Utilisez plutôt `eth_getLogs` (sans état).
+- **Méthodes de minage / détenant des clés** (`eth_sign`, `eth_accounts`, `eth_mining`, `eth_hashrate`, `eth_getWork`, `eth_submitWork`) — les endpoints des fournisseurs hébergés ne détiennent pas les clés privées des utilisateurs, ces méthodes renvoient donc toujours une erreur. Signez les transactions côté client et soumettez-les via `eth_sendRawTransaction`.
+- **Méthodes non mappées** — tout ce qui n'est pas explicitement autorisé renvoie `400`. Contactez le support pour demander des ajouts.
+
+## Facturation par élément en lot
+
+Même lorsque la réponse HTTP est `200`, des éléments individuels du lot peuvent revenir avec un champ JSON-RPC `error` (par exemple, une erreur de paramètres invalides ou une méthode non prise en charge sur la chaîne cible). Venice facture ces éléments à **5 crédits chacun** plutôt qu'au palier complet de la méthode — une petite concession pour les erreurs normales d'"exploration de l'API".
+
+```json
+// Requête en lot :
+[
+  { "jsonrpc": "2.0", "method": "eth_chainId",   "params": [],         "id": 1 },
+  { "jsonrpc": "2.0", "method": "eth_getBalance","params": ["bad"],    "id": 2 }
+]
+
+// Réponse (HTTP 200, X-Venice-RPC-Credits: 25) :
+[
+  { "jsonrpc": "2.0", "id": 1, "result": "0x1" },
+  { "jsonrpc": "2.0", "id": 2, "error": { "code": -32602, "message": "invalid params" } }
+]
+```
+
+Le premier élément (succès) facture 20 crédits, le second (erreur de niveau RPC) facture 5, somme `= 25`.
+
+## Limites de débit
+
+Plafond de requêtes par minute par appelant authentifié :
+
+| Palier | Requêtes/minute |
+|---|---|
+| Standard | 100 |
+| Staff | 1 000 |
+
+Lorsque le plafond est dépassé, l'endpoint renvoie `429` avec un `customMessage` et les en-têtes de réponse standards `X-RateLimit-*`.
+
+## Idempotence
+
+Définissez l'en-tête de requête `Idempotency-Key` sur n'importe quelle chaîne correspondant à `[A-Za-z0-9_-]{1,255}` pour activer les nouvelles tentatives sûres. La réponse est mise en cache pendant 24 heures, indexée sur `(user, idempotency-key)` :
+
+- Rejouer la **même clé avec le même corps** renvoie la réponse mise en cache et un en-tête de réponse `Idempotent-Replayed: true`. L'upstream n'est pas sollicité et aucun nouveau crédit n'est facturé.
+- Rejouer la **même clé avec un corps différent** renvoie `400` pour éviter une corruption d'état silencieuse. Choisissez une nouvelle clé pour des requêtes distinctes.
+
+## En-têtes de réponse
+
+| En-tête | Description |
+|---|---|
+| `X-Venice-RPC-Credits` | Crédits facturés pour cette requête. Sur les requêtes en lot, il s'agit de la somme entre les éléments. |
+| `X-Venice-RPC-Cost-USD` | Coût en dollars à 8 décimales. Égal à `X-Venice-RPC-Credits × prix par crédit`. |
+| `X-Request-ID` | Identifiant de corrélation de 32 caractères. À inclure dans toute correspondance avec le support. |
+| `Idempotent-Replayed` | Présent avec la valeur `"true"` lorsque la réponse provient du cache d'idempotence. |
+| `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` | Définis uniquement sur les réponses 429. |
+
+## Journalisation forensique pour les relais de transactions
+
+Chaque appel à `eth_sendRawTransaction` est journalisé côté serveur avec le hash de la transaction (keccak256 des octets bruts), le slug du réseau, l'identifiant de requête et l'identifiant utilisateur appelant. Nous ne conservons **pas** la charge utile signée elle-même — le hash est récupérable depuis le reçu on-chain. Cette piste d'audit existe afin que, si la clé API d'un client est compromise et utilisée pour relayer des transactions illicites via notre infrastructure, nous puissions corréler l'activité on-chain au compte responsable.
+
+## Exemple
+
+```bash
+curl https://api.venice.ai/api/v1/crypto/rpc/ethereum-mainnet \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_chainId",
+    "params": [],
+    "id": 1
+  }'
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "result": "0x1" }
+```
+
+En-têtes de réponse : `X-Venice-RPC-Credits: 20`, `X-Venice-RPC-Cost-USD: 0.00001250`, `X-Request-ID: <nanoid>`.
+
+## Collection Postman
+
+Une collection Postman prête à importer avec 27 exemples de requêtes (découverte, appels standard/avancés/large, multi-chaîne, batching, idempotence, cas d'erreur) est disponible dans notre espace de travail public :
+
+**[Venice Crypto RPC — Collection Postman](https://www.postman.com/veniceai/workspace/venice-ai-workspace/folder/38652128-2cf5a817-41cd-438b-ad37-5d07c3f13005?action=share&creator=48156591&active-environment=38652128-ef110f4e-d3e1-43b5-8029-4d6877e62041)**
+
+Définissez la variable de collection `apiKey` sur votre clé API Venice et commencez à envoyer des requêtes immédiatement.

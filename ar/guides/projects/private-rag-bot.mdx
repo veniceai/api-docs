@@ -1,0 +1,468 @@
+---
+title: "بناء بوت RAG خاص"
+slug: private-rag-bot-venice-qdrant-reranking
+"og:title": "بناء بوت RAG خاص باستخدام Venice وQdrant وإعادة الترتيب"
+"og:description": "دليل عملي لبناء بوت RAG خاص حديث باستخدام embeddings Venice وبحث متّجه Qdrant وإعادة ترتيب FastEmbed وإكمالات دردشة Venice."
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="29 April 2026"/>
+
+التوليد المعزَّز بالاسترجاع، أو RAG، أحد أكثر الأنماط فائدة لبناء تطبيقات الذكاء الاصطناعي التي تحتاج إلى الإجابة من مستنداتك. بدلًا من سؤال النموذج للاعتماد على الذاكرة وحدها، تسترجع أولًا مادة مصدرية ذات صلة، وترسل ذلك السياق إلى النموذج، وتطلب منه الإجابة مع استشهادات.
+
+في هذا الدرس، سنبني بوت RAG خاص باستخدام Python وVenice للـ embeddings وإكمالات الدردشة، وQdrant للبحث المتّجه، وFastEmbed لإعادة الترتيب محليًا. وفي النهاية، سيكون لديك القطع الأساسية لمساعد مستندات محلي يستطيع استيعاب ملفاتك، واسترجاع المقاطع ذات الصلة، وإعادة ترتيبها، والإجابة مع استشهادات.
+
+![بوت RAG قيد التشغيل](/images/guides/private-rag-bot/screenshot.png)
+
+قبل المتابعة: إذا أردت تشغيل الكود في هذه المقالة، ستحتاج إلى مفتاح Venice API. صدّره كمتغيّر بيئة:
+
+```bash
+export VENICE_API_KEY=<my-key>
+```
+
+هل تهتم بالتنفيذ الكامل للكود؟ راجع [مستودع GitHub.](https://github.com/joshua-mo-143/venice-rag-bot-demo)
+
+## كيف يعمل بوت RAG حديث
+
+خط RAG الجيد أكثر من "ضع المستندات في قاعدة بيانات متّجهة." التدفّق الأساسي يبدو كالتالي:
+
+| الخطوة | ما يحدث |
+| --- | --- |
+| التحميل | قراءة ملفات Markdown أو نص أو reStructuredText محلية |
+| التقسيم | تقسيم المستندات الطويلة إلى أقسام متداخلة |
+| التضمين | استخدام embeddings Venice لتحويل المقاطع إلى متّجهات |
+| التخزين | حفظ المتّجهات والبيانات الوصفية للمصدر في Qdrant |
+| الاسترجاع | تضمين سؤال المستخدم وتشغيل بحث متّجه |
+| إعادة الترتيب | استخدام cross-encoder لإعادة تقييم أفضل المرشحين |
+| الإجابة | إرسال أفضل سياق إلى نموذج دردشة Venice مع تعليمات الاستشهاد |
+
+خطوة إعادة الترتيب هي الترقية التي تجعل هذا أكثر فائدة من عرض RAG أساسي. البحث المتّجه سريع وجيد في العثور على مقاطع متشابهة دلاليًا، لكن قد يُعيد فقرات مجاورة للموضوع بدلًا من أن تكون مفيدة مباشرة. يقرأ cross-encoder السؤال وكل مقطع مرشح معًا، ثم يُقيّم مدى تلبية ذلك المقطع للسؤال فعلًا.
+
+## تثبيت الاعتماديات
+
+سنستخدم OpenAI Python SDK لأن Venice يكشف API متوافقة مع OpenAI. وسنستخدم أيضًا عميل Python لـ Qdrant مع دعم FastEmbed:
+
+```bash
+pip install "openai>=1.0.0" "qdrant-client[fastembed]>=1.14.1"
+```
+
+إذا فضّلت الاحتفاظ بالاعتماديات في ملف، أنشئ `requirements.txt` بنفس الحزم:
+
+```text
+openai>=1.0.0
+qdrant-client[fastembed]>=1.14.1
+```
+
+## اختيار النماذج
+
+أنشئ ملفًا اسمه `rag_bot.py`، ثم ابدأ بإضافة الاستيرادات والهياكل البيانية وعنوان URL للـ API وأسماء النماذج:
+
+```python
+import os
+import textwrap
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+from fastembed.rerank.cross_encoder import TextCrossEncoder
+from openai import OpenAI
+from qdrant_client import QdrantClient, models
+
+VENICE_BASE_URL = "https://api.venice.ai/api/v1"
+CHAT_MODEL = "kimi-k2-6"
+EMBEDDING_MODEL = "text-embedding-bge-m3"
+RERANKER_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
+COLLECTION_NAME = "private_rag_bot"
+
+
+@dataclass
+class SourceDocument:
+    content: str
+    metadata: dict
+
+
+@dataclass
+class RankedChunk:
+    content: str
+    metadata: dict
+    vector_score: float
+    rerank_score: float
+```
+
+اسم نموذج التضمين متوافق عمدًا مع OpenAI. يربط Venice أسماء نماذج تضمين متوافقة بنماذج تضمين مستضافة لدى Venice، لذا فإن كود OpenAI SDK الحالي عادةً يمكن نقله بتغيير `base_url` ومفتاح API.
+
+يمكنك عرض نماذج Venice المتاحة عبر:
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=embedding" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+ولنماذج الدردشة:
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=text" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+## إنشاء عميلي Venice وQdrant
+
+أنشئ عميل Venice واحدًا متوافقًا مع OpenAI للـ embeddings وإكمالات الدردشة معًا:
+
+```python
+venice = OpenAI(
+    api_key=os.environ["VENICE_API_KEY"],
+    base_url=VENICE_BASE_URL,
+)
+```
+
+لـ Qdrant، لديك ثلاثة أوضاع مفيدة:
+
+| الوضع | متى تستخدمه |
+| --- | --- |
+| `QdrantClient(":memory:")` | عروض محلية سريعة واختبارات |
+| `QdrantClient(path="./qdrant_data")` | تخزين محلي دائم |
+| `QdrantClient(url=..., api_key=...)` | عنقود Qdrant بعيد أو مُدار |
+
+لبوت محلي خاص، ابدأ بمسار Qdrant محلي على القرص:
+
+```python
+qdrant = QdrantClient(path="./qdrant_data")
+```
+
+هناك عدة طرق للتعامل مع النشر في الإنتاج. لكن إن استخدمت نشر Qdrant بعيدًا، تذكّر أن مقاطع مستنداتك وبياناتها الوصفية ستُخزَّن هناك. يستطيع Venice إبقاء طبقة الاستدلال خاصة، لكن عليك اختيار نشر Qdrant المناسب لبياناتك.
+
+## تحميل وتقسيم المستندات
+
+في هذا الدرس، سنسمح للبوت باستيعاب ملفات أو مجلدات محلية. ابدأ بملفات `.md` و`.rst` و`.txt`:
+
+```python
+TEXT_EXTENSIONS = {".md", ".rst", ".txt"}
+
+def expand_paths(paths: list[Path]) -> list[Path]:
+    files = []
+    for path in paths:
+        if path.is_dir():
+            files.extend(
+                sorted(
+                    file_path
+                    for file_path in path.rglob("*")
+                    if file_path.is_file()
+                    and file_path.suffix.lower() in TEXT_EXTENSIONS
+                )
+            )
+        elif path.is_file():
+            files.append(path)
+        else:
+            raise FileNotFoundError(f"Document path does not exist: {path}")
+    return files
+```
+
+بعد تحميل الملفات، نحتاج إلى تقسيم النص بـ "chunking" — تقسيمه إلى مقاطع. قد تُقسّم استراتيجية ساذجة المقاطع بالتساوي. لكن في معظم الحالات قد يضيع المعلومات عند حدود دلالية معيّنة مما قد يُقلّل فعالية نظام RAG لديك.
+
+استراتيجية التقسيم التي سنستخدمها تفضّل حدود الفقرة أو الجملة كي يحصل النموذج على سياق متماسك:
+
+```python
+def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
+    clean_text = textwrap.dedent(text).strip()
+    if not clean_text:
+        return []
+    if len(clean_text) <= chunk_size:
+        return [clean_text]
+
+    chunks = []
+    start = 0
+    while start < len(clean_text):
+        end = min(start + chunk_size, len(clean_text))
+
+        if end < len(clean_text):
+            paragraph_break = clean_text.rfind("\n\n", start, end)
+            sentence_break = clean_text.rfind(". ", start, end)
+            split_at = max(paragraph_break, sentence_break)
+            if split_at > start + chunk_size // 2:
+                end = split_at + 1
+
+        chunk = clean_text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        if end >= len(clean_text):
+            break
+
+        start = max(end - chunk_overlap, start + 1)
+
+    return chunks
+```
+
+حجم مقطع ابتدائي `1000` حرف مع تداخل `150` حرفًا هو افتراضي جيد لمستندات Markdown ونصوص مختلطة. المقاطع الأصغر قد تُحسّن الدقة. والمقاطع الأكبر قد تحافظ على مزيد من السياق. الإعداد الصحيح غالبًا ما يعتمد على نوع المستندات التي تخزنها.
+
+## تضمين المستندات بـ Venice
+
+بمجرد أن يكون لدينا مقاطع، نُضمّنها في دفعات:
+
+```python
+def embed(texts: list[str]) -> list[list[float]]:
+    embeddings = []
+    for start in range(0, len(texts), 32):
+        batch = texts[start : start + 32]
+        response = venice.embeddings.create(
+            model="text-embedding-bge-m3",
+            input=batch,
+        )
+        embeddings.extend(
+            item.embedding
+            for item in sorted(response.data, key=lambda item: item.index)
+        )
+    return embeddings
+```
+
+التجميع مهم. تضمين مقطع واحد في كل مرة بسيط، لكنه يضيف زمن استجابة يمكن تجنّبه. أبقِ حجم الدفعة قابلًا للتهيئة لتتمكن من ضبط الإنتاجية حسب حملك.
+
+## تخزين المتّجهات في Qdrant
+
+قبل إدراج النقاط، أنشئ مجموعة Qdrant بحجم متّجه صحيح. أسهل طريقة لمعرفة حجم المتّجه هي تضمين الدفعة الأولى ثم استخدام `len(embeddings[0])`.
+
+```python
+qdrant.create_collection(
+    collection_name=COLLECTION_NAME,
+    vectors_config=models.VectorParams(
+        size=len(embeddings[0]),
+        distance=models.Distance.COSINE,
+    ),
+)
+```
+
+تخزّن كل نقطة المتّجه وبيانات وصفية (payload). تتضمن الـ payload النص الأصلي ومسار المصدر بحيث تستطيع الإجابة الاستشهاد بمكان السياق:
+
+```python
+points.append(
+    models.PointStruct(
+        id=chunk_id,
+        vector=embedding,
+        payload={
+            "text": chunk.content,
+            "source": source,
+            "chunk_index": chunk_index,
+        },
+    )
+)
+
+qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
+```
+
+استخدم UUIDs حتمية مشتقة من `source` و`chunk_index` والمحتوى. هذا يجعل الاستيعاب المتكرر مكتنزًا (idempotent) للمقاطع غير المتغيّرة.
+
+## استرجاع المقاطع المرشحة
+
+عند وقت السؤال، يُضمّن البوت سؤال المستخدم ويسأل Qdrant عن أعلى المطابقات المتّجهة:
+
+```python
+query_vector = embed([question])[0]
+hits = qdrant.query_points(
+    collection_name=COLLECTION_NAME,
+    query=query_vector,
+    with_payload=True,
+    limit=8,
+).points
+```
+
+الـ `limit` هنا هو عدد المرشحين. عادةً يجب أن يكون أعلى من عدد المقاطع التي تخطط لإرسالها إلى النموذج لأن الخطوة التالية ستُعيد ترتيبها. افتراضي جيد هو استرجاع `8` مرشحين وإرسال أفضل `4` إلى نموذج الدردشة.
+
+## إعادة الترتيب بـ FastEmbed
+
+الآن نضيف الجزء الذي يجعل الاسترجاع يشعر بأنه أذكى بكثير.
+
+```python
+from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+reranker = TextCrossEncoder(model_name="Xenova/ms-marco-MiniLM-L-6-v2")
+
+candidate_texts = [str((hit.payload or {}).get("text", "")) for hit in hits]
+rerank_scores = list(reranker.rerank(question, candidate_texts))
+reranked = sorted(
+    zip(hits, rerank_scores),
+    key=lambda hit_and_score: hit_and_score[1],
+    reverse=True,
+)
+```
+
+الفرق المهم بين بحث التضمين وإعادة الترتيب بـ cross-encoder هو كيفية حدوث التقييم.
+
+يقارن بحث التضمين متّجهًا واحدًا للسؤال مقابل متّجه واحد لكل مقطع. وهو سريع وقابل للتوسع. أما cross-encoder فيُقيّم السؤال والمقطع معًا. وهو أبطأ، لكنه يستطيع الحكم على الصلة بشكل مباشر أكثر.
+
+لهذا فإن النمط المعتاد هو:
+
+1. استرجاع مجموعة مرشحين أكبر ببحث متّجه.
+2. إعادة ترتيب هؤلاء المرشحين فقط محليًا.
+3. إرسال أعلى المقاطع إلى نموذج اللغة.
+
+نقطة بداية جيدة هي `candidate_k=8` و`top_k=4`. زِد `candidate_k` إذا كان المصدر الصحيح غالبًا قريبًا لكنه لا يصل إلى السياق النهائي.
+
+## الإجابة بإكمالات دردشة Venice
+
+بمجرد اختيار السياق، نسّقه بأرقام مصادر:
+
+```python
+def format_context(chunks: list[RankedChunk]) -> str:
+    if not chunks:
+        return "No relevant context was retrieved."
+
+    context_parts = []
+    for index, chunk in enumerate(chunks, start=1):
+        source = chunk.metadata.get("source", "unknown")
+        context_parts.append(
+            f"[{index}] Source: {source} | "
+            f"Vector score: {chunk.vector_score:.4f} | "
+            f"Rerank score: {chunk.rerank_score:.4f}\n"
+            f"{chunk.content}"
+        )
+    return "\n\n---\n\n".join(context_parts)
+```
+
+ثم أرسل السياق إلى نموذج دردشة Venice:
+
+```python
+response = venice.chat.completions.create(
+    model="kimi-k2-6",
+    temperature=0.2,
+    messages=[
+        {
+            "role": "system",
+            "content": (
+                "You are a helpful RAG assistant. Answer using only the supplied "
+                "context. If the context does not answer the question, say that "
+                "you do not have enough information."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Retrieved context:\n{context}\n\n"
+                f"Question: {question}\n\n"
+                "Answer with citations like [1] when the context supports the answer:"
+            ),
+        },
+    ],
+)
+```
+
+لاحظ موجّه النظام: يُخبَر البوت بأن يُجيب فقط من السياق المُقدَّم. هذا حاجز أمان بسيط لكنه مهم. لا ينبغي لمساعد RAG أن يُجيب بثقة من معرفة النموذج العامة عندما لا تدعم المستندات المسترجعة الإجابة.
+
+## تشغيل البوت
+
+بعد تجميع القطع في سكربت، احفظه باسم `rag_bot.py`. يمكن أن يستخدم التشغيل الأول البسيط بضع مستندات نموذجية مدمجة لتتمكن من التحقق من الخط قبل استيعاب ملفاتك:
+
+```bash
+python rag_bot.py \
+  --question "What does reranking improve in a RAG pipeline?"
+```
+
+لاستيعاب مستنداتك:
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --question "What does this project do?"
+```
+
+للاحتفاظ بمجموعة Qdrant محلية على القرص وبدء دردشة تفاعلية:
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --qdrant-path ./qdrant_data \
+  --chat
+```
+
+يطبع السكربت الإجابة، ثم يطبع المصادر مع درجات المتّجه وإعادة الترتيب:
+
+```text
+Answer
+============================================================
+Reranking improves retrieval quality by rescoring the top
+vector-search candidates with a cross-encoder model [1].
+
+Sources
+============================================================
+1. sample-docs (vector=0.8123, rerank=0.7342)
+```
+
+إذا أردت فحص النص الفعلي المُمرَّر إلى النموذج، أضف:
+
+```bash
+--show-context
+```
+
+## خيارات CLI مفيدة
+
+اكشف مفاتيح الاسترجاع الرئيسية كخيارات CLI لتتمكن من ضبط البوت دون تحرير الكود:
+
+| الخيار | الافتراضي | ما يتحكم به |
+| --- | --- | --- |
+| `--candidate-k` | `8` | عدد نتائج البحث المتّجه لإعادة ترتيبها |
+| `--top-k` | `4` | عدد المقاطع المُعاد ترتيبها المُرسلة إلى نموذج الدردشة |
+| `--chunk-size` | `1000` | أقصى حجم مقطع قبل التداخل |
+| `--chunk-overlap` | `150` | الأحرف المتكررة بين المقاطع المجاورة |
+| `--embedding-batch-size` | `32` | عدد المقاطع لكل طلب embeddings Venice |
+| `--qdrant-path` | غير مضبوط | مسار تخزين Qdrant محلي دائم |
+| `--qdrant-url` | غير مضبوط | رابط Qdrant بعيد |
+| `--skip-ingest` | `false` | استعلام مجموعة موجودة دون إعادة تحميل المستندات |
+| `--recreate-collection` | `false` | حذف وإعادة بناء مجموعة Qdrant |
+
+للتطوير المحلي المتكرر، التدفّق الشائع هو:
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --qdrant-path ./qdrant_data \
+  --recreate-collection \
+  --question "Summarize the most important setup steps."
+```
+
+ثم اطرح أسئلة متابعة دون إعادة الاستيعاب:
+
+```bash
+python rag_bot.py \
+  --qdrant-path ./qdrant_data \
+  --skip-ingest \
+  --question "Which file explains deployment?"
+```
+
+## ملاحظات الخصوصية
+
+لإعداد RAG خاص، فكّر في كل طبقة بشكل منفصل:
+
+| الطبقة | اعتبار الخصوصية |
+| --- | --- |
+| embeddings Venice | تُرسَل مقاطع المستندات إلى Venice لإنشاء متّجهات |
+| دردشة Venice | يُرسَل السياق المسترجَع إلى Venice للإجابة عن السؤال |
+| Qdrant محلي | تبقى المتّجهات والـ payloads على جهازك |
+| Qdrant بعيد | تُخزَّن المتّجهات والـ payloads حيثما يعمل خادم Qdrant |
+| FastEmbed re-ranker | يجري إعادة الترتيب محليًا بعد توفّر النموذج |
+
+أكثر افتراضي خصوصية لهذا الدرس هو Venice للاستدلال، وQdrant محلي على القرص، وإعادة ترتيب FastEmbed محلية. يمنحك هذا بوت RAG عمليًا دون إرسال payloads قاعدة بياناتك المتّجهة إلى مخزن متّجهات طرف ثالث.
+
+## أخطاء شائعة للتعامل معها مسبقًا
+
+| العَرَض | ما يعنيه عادةً | ما العمل |
+| --- | --- | --- |
+| `Set VENICE_API_KEY before running this example.` | متغيّر البيئة مفقود | صدّر `VENICE_API_KEY` قبل تشغيل السكربت |
+| `Document path does not exist` | مسار مُمرَّر إلى `--docs` خاطئ | تحقق من مسار الملف أو المجلد |
+| نتائج استرجاع فارغة | لم يُستوعَب أي شيء، أو يجري الاستعلام عن مجموعة خاطئة | أزل `--skip-ingest` أو تحقق من `--collection` و`--qdrant-path` |
+| خطأ حجم متّجه Qdrant | أُنشئت المجموعة بنموذج تضمين مختلف | أعد إنشاء المجموعة بعد تغيير نماذج التضمين |
+| إعادة ترتيب أولى بطيئة | قد يكون FastEmbed يقوم بتنزيل أو تهيئة الـ cross-encoder | دع التشغيل الأول ينتهي، ثم ستكون التشغيلات اللاحقة أسرع |
+
+إذا غيّرت نماذج التضمين، أعد إنشاء مجموعة Qdrant. يمكن أن تنتج نماذج تضمين مختلفة متّجهات بأبعاد مختلفة، ومجموعات Qdrant تتوقع حجم متّجه ثابت.
+
+## إلى أين بعد ذلك
+
+بمجرد تشغيل الأساس، فإن التحسينات الأكثر تأثيرًا عادةً هي:
+
+- إضافة محمّلات مستندات خاصة لـ PDF وHTML والتذاكر وصفحات wiki الداخلية.
+- تخزين بيانات وصفية أغنى مثل العناوين والترويسات والتواريخ والمالكين وعناوين URL.
+- ضبط `candidate_k` و`top_k` وحجم المقطع والتداخل على أسئلة حقيقية.
+- إضافة أسئلة تقييم لتتمكن من قياس جودة الاسترجاع قبل وبعد التغييرات.
+- بثّ إكمال دردشة Venice النهائي لتجربة دردشة تفاعلية أفضل.
+
+من السهل عرض أنظمة RAG ومن السهل بشكل مفاجئ جعلها متواضعة. نمط البحث المتّجه مع إعادة الترتيب أساس قوي لأنه يحافظ على سرعة الاسترجاع مع منح البوت فرصة أفضل لإرسال السياق الصحيح إلى نموذج اللغة.

@@ -1,0 +1,168 @@
+---
+title: Creación autónoma de API keys por agentes
+'og:title': "API key autónoma para agentes | Venice API Docs"
+'og:description': Cómo un agente autónomo de IA puede acuñar su propia API key de Venice firmando un token emitido por Venice con una cartera que tenga VVV en staking en Base.
+---
+
+Un agente de IA que controla una cartera en Base puede acuñar su propia API key de Venice sin intervención humana. El agente adquiere VVV, hace staking, firma un token de validación de corta vida emitido por Venice y reenvía el token firmado para recibir una API key nueva ligada a la cartera con staking.
+
+Esta guía recorre el flujo completo de extremo a extremo y cubre las opciones de financiación para pagar realmente la inferencia una vez acuñada la clave.
+
+## Requisitos previos
+
+* Una cartera EVM en Base controlada por el agente (clave privada en una variable de entorno o gestor de secretos).
+* Una pequeña cantidad de ETH en Base para el gas (el staking son dos transacciones: `approve` y luego `stake`).
+* Cualquier cantidad de VVV distinta de cero para hacer staking. El endpoint de acuñación solo requiere que la cartera tenga un saldo de sVVV no nulo, así que 1 VVV es suficiente para acuñar una clave. Consulta [Pagar la inferencia](#paying-for-inference) para saber lo que necesitas para llamar realmente a los endpoints de pago.
+
+<Tip>
+  Usa una cartera de agente dedicada en lugar de una cartera de tesorería. La clave privada de la cartera firma cada solicitud de token de Venice, por lo que su radio de impacto debe ser pequeño.
+</Tip>
+
+## Pasos
+
+<Steps>
+  <Step title="Adquiere VVV">
+    Envía VVV a la cartera del agente, o haz que el agente lo intercambie en un DEX como [Aerodrome](https://aerodrome.finance/swap?from=eth\&to=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf\&chain0=8453\&chain1=8453) o [Uniswap](https://app.uniswap.org/swap?chain=base\&inputCurrency=NATIVE\&outputCurrency=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf).
+
+    Contrato del token VVV en Base: `0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf`
+  </Step>
+
+  <Step title="Haz staking de VVV con Venice">
+    Haz staking de los VVV en el [smart contract de staking de Venice](https://basescan.org/address/0x321b7ff75154472b18edb199033ff4d116f340ff#code) en `0x321b7ff75154472B18EDb199033fF4D116F340Ff`. Son dos transacciones:
+
+    1. `approve(spender, amount)` en el token VVV, donde `spender` es el contrato de staking.
+    2. `stake(amount)` en el contrato de staking.
+
+    <Frame as="div">
+      <img src="/images/guides/SC-Stake.png" alt="Staking en smart contract" />
+    </Frame>
+
+    Cuando se confirme la segunda transacción, el saldo de VVV de la cartera disminuirá y su saldo de sVVV aumentará en la misma cantidad. El endpoint de acuñación lee el saldo de sVVV para confirmar que la cartera tiene staking.
+  </Step>
+
+  <Step title="Solicita un token de validación">
+    Llama a `GET /api/v1/api_keys/generate_web3_key` para obtener un token de corta vida firmado por Venice. El endpoint no está autenticado.
+
+    ```bash
+    curl --request GET \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+    ```
+
+    La respuesta contiene un campo `token`. El token expira 15 minutos después de su emisión, así que fírmalo y envíalo bastante antes.
+  </Step>
+
+  <Step title="Firma el token con la cartera con staking">
+    Firma la cadena de token en bruto con la cartera que tiene los VVV en staking. Esto es un `personal_sign` estándar sobre los bytes del token. Tanto `ethers.Wallet.signMessage(token)` como `account.signMessage({ message: token })` de `viem` producen la firma correcta.
+  </Step>
+
+  <Step title="Acuña la API key">
+    Envía un `POST` con la dirección, la firma y el token al mismo endpoint, junto con el tipo de clave que quieras.
+
+    ```bash
+    curl --request POST \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "address": "<wallet address>",
+        "signature": "<signed token>",
+        "token": "<unsigned token>",
+        "apiKeyType": "INFERENCE",
+        "description": "Agent key minted on <date>"
+      }'
+    ```
+
+    Campos obligatorios: `address`, `signature`, `token`, `apiKeyType` (`INFERENCE` o `ADMIN`).
+
+    Campos opcionales: `description`, `expiresAt`, `consumptionLimit` (limita el gasto total en esta clave, expresado en `usd`, `vcu` o `diem`).
+
+    En caso de éxito, la respuesta contiene la cadena `apiKey` acuñada. Guárdala en el almacén de secretos del agente y úsala como un Bearer token normal (`Authorization: Bearer <key>`).
+  </Step>
+</Steps>
+
+## Ejemplo de extremo a extremo
+
+El ejemplo de abajo usa una cartera real desde una variable de entorno en lugar de una generada aleatoriamente. Una cartera aleatoria no tiene VVV en staking y la acuñación se rechazará con el error `Wallet has no staked VVV on Base`.
+
+```typescript
+import { ethers } from "ethers"
+
+const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
+const address = wallet.address
+
+const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
+const { data: { token } } = await tokenResponse.json()
+
+const signature = await wallet.signMessage(token)
+
+const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    address,
+    signature,
+    token,
+    apiKeyType: "INFERENCE",
+    description: "Agent key",
+  }),
+})
+
+const result = await mintResponse.json()
+if (!mintResponse.ok) {
+  throw new Error(`Mint failed: ${result.error}`)
+}
+
+console.log("Minted key:", result.data.apiKey)
+```
+
+## Referencia de errores
+
+El endpoint devuelve mensajes de error específicos y accionables. Mapéalos en el agente para que pueda decidir si reintentar, solicitar un nuevo token o detenerse.
+
+| Estado | El mensaje de error contiene | Significado | Qué hacer |
+| --- | --- | --- | --- |
+| `400` | `Invalid wallet address` | El campo `address` no es una dirección EVM válida. | Corrige la dirección y reenvía. |
+| `400` | `JWT has expired` | El token de validación expiró antes de firmarlo y enviarlo. | Solicita un nuevo token, fírmalo y envíalo inmediatamente. |
+| `400` | `JWT signature is invalid` | El token no fue firmado por Venice (probablemente manipulado o fabricado). | Usa siempre un token fresco del endpoint `GET`. |
+| `400` | `JWT claims are invalid` | El emisor o audiencia del token no coincide con lo esperado por Venice. | Usa el token sin modificar devuelto por el endpoint `GET`. |
+| `400` | `JWT is malformed` | El `token` enviado no es un JWT. | Asegúrate de enviar exactamente la cadena `token` devuelta por el endpoint `GET`. |
+| `400` | `Wallet signature does not match` | La `signature` no coincide con la `address` para el `token` dado. | Firma los bytes en bruto del token con la cartera que posee `address`. |
+| `400` | `Could not verify wallet signature` | La llamada RPC para verificar la firma falló (transitorio). | Reintenta con backoff. |
+| `400` | `Wallet has no staked VVV on Base` | La cartera tiene saldo cero de sVVV. | Haz staking de VVV primero y reintenta. |
+
+## Pagar la inferencia
+
+Acuñar una clave y poder llamar con ella a endpoints de pago son dos cosas separadas. Una clave recién acuñada autentica correctamente pero no puede llamar a endpoints de pago (como `/chat/completions`) hasta que la cuenta de la cartera tenga un saldo disponible.
+
+La clave acuñada puede gastar desde la cuenta de usuario en este orden de prioridad: DIEM, después créditos agrupados y, por último, USD.
+
+| Fuente de financiación | ¿Autónoma? | Cómo |
+| --- | --- | --- |
+| **DIEM por staking de VVV** | Sí | La asignación diaria de DIEM de la cartera es proporcional a su participación en el pool de staking. La cuenta necesita al menos 0,1 DIEM en staking para que cualquier DIEM sea gastable. Importes mayores en staking generan proporcionalmente más DIEM diario, refrescado cada epoch (00:00 UTC). |
+| **USD vía Stripe** | No (navegador) | Inicia sesión en venice.ai con la misma cartera (Sign-In-With-Ethereum). El panel encuentra el registro de usuario existente. Añade créditos en Settings, API. |
+| **Suscripción cripto de Coinbase** | No (navegador) | Misma sesión con cartera y luego suscríbete a través del panel. El flujo redirige a Coinbase Commerce para el pago real, por lo que no puede ejecutarse desde un script. |
+| **Onramp de Coinbase** | No (navegador) | Misma sesión con cartera y luego usa el widget de onramp en el panel. Alojado en la UI de Coinbase. |
+
+Si el agente necesita una vía de financiación totalmente cripto-nativa y sin interfaz, las opciones más limpias son:
+
+1. **Hacer más staking de VVV** para que la asignación diaria de DIEM cubra el gasto del agente. La clave acuñada recoge esto automáticamente.
+2. **Usar el [flujo de cartera x402](/es/guides/integrations/x402-venice-api) en lugar de la API key.** Con x402 el agente firma un mensaje Sign-In-With-X por solicitud, recarga directamente con USDC en Base o Solana mediante `POST /api/v1/x402/top-up` y paga por solicitud. El saldo USDC de x402 está ligado a la cartera, no al usuario, por lo que no aparece como saldo para el Bearer key acuñado, pero sí permite a la misma cartera pagar la inferencia de forma programática.
+
+## Recursos relacionados
+
+<CardGroup cols={2}>
+  <Card title="Cripto y agentes" icon="link" href="/es/guides/integrations/crypto-rpc-agents">
+    Usa Venice como proveedor de modelos y como capa RPC de blockchain para agentes autónomos.
+  </Card>
+
+  <Card title="Autenticación con cartera x402" icon="wallet" href="/es/guides/integrations/x402-venice-api">
+    Paga por solicitud con USDC en Base o Solana, sin necesidad de API key.
+  </Card>
+
+  <Card title="Endpoint Generate Web3 API Key" icon="code" href="/es/api-reference/endpoint/api_keys/generate_web3_key/post">
+    Referencia del endpoint de acuñación.
+  </Card>
+
+  <Card title="Guía estándar de API key" icon="key" href="/es/guides/getting-started/generating-api-key">
+    Para usuarios que prefieran acuñar una clave desde el panel.
+  </Card>
+</CardGroup>

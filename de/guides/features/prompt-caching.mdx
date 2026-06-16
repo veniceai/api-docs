@@ -1,0 +1,372 @@
+---
+title: Prompt-Caching
+description: Kosten und Latenz durch Caching wiederkehrender Prompt-Inhalte reduzieren
+"og:title": "Prompt-Caching | Venice API Docs"
+"og:description": "Lernen Sie, wie Sie mit Prompt-Caching Kosten und Latenz für wiederkehrende Inhalte in Ihren API-Anfragen reduzieren."
+---
+
+Prompt-Caching speichert verarbeitete Input-Tokens, sodass nachfolgende Anfragen mit identischen Präfixen sie wiederverwenden können, statt sie erneut zu verarbeiten. Dadurch sinken Latenz (bis zu 80 % bei langen Prompts) und Kosten (bis zu 90 % Rabatt auf gecachte Tokens).
+
+Venice handhabt das Caching für unterstützte Modelle automatisch — wenn Sie verstehen, wie jeder Anbieter Caching implementiert, können Sie die Cache-Trefferrate maximieren und Kosten minimieren.
+
+## So funktioniert Caching
+
+Caching basiert auf **Präfix-Matching**: Das System speichert verarbeitete Tokens und nutzt sie erneut, wenn nachfolgende Anfragen mit demselben Inhalt beginnen.
+
+Ein Chatbot mit einem 2.000-Token-System-Prompt:
+
+<Steps>
+  <Step title="Anfrage 1">
+    System-Prompt (2.000 Tokens) + Nutzernachricht (50 Tokens)
+    
+    **Verarbeitet**: 2.050 Tokens · **Aus Cache**: 0 Tokens
+    
+    Präfix wird in den Cache geschrieben.
+  </Step>
+  <Step title="Anfrage 2">
+    System-Prompt (2.000 Tokens) + Nutzernachricht (80 Tokens)
+    
+    **Verarbeitet**: 80 Tokens · **Aus Cache**: 2.000 Tokens
+  </Step>
+  <Step title="Anfrage 3">
+    System-Prompt (2.000 Tokens) + Nutzernachricht (120 Tokens)
+    
+    **Verarbeitet**: 120 Tokens · **Aus Cache**: 2.000 Tokens
+  </Step>
+</Steps>
+
+**Gesamt ohne Caching**: 2.050 + 2.080 + 2.120 = 6.250 Tokens zum vollen Preis
+
+**Gesamt mit Caching**: 2.050 + 80 + 120 = 2.250 Tokens zum vollen Preis, 4.000 Tokens zum rabattierten Tarif
+
+<Warning>
+Caching funktioniert nur auf dem **Präfix**. Jede Änderung am Anfang Ihres Prompts entwertet den Cache für alles, was danach folgt. Setzen Sie statische Inhalte (System-Prompt, Dokumente, Beispiele) immer vor dynamische Inhalte (Nutzernachrichten).
+</Warning>
+
+## Unterstützte Modelle und Preise
+
+<div id="cache-pricing-placeholder">Lädt...</div>
+
+<Note>
+Claude Opus 4.5 berechnet einen **Aufschlag** für Cache-Writes (7,50 $/1M Tokens vs. 6,00 $ für regulären Input). Die erste Anfrage, die den Cache füllt, kostet mehr, doch nachfolgende Cache-Treffer sparen 90 %. Andere Modelle berechnen keinen Aufschlag für Cache-Writes.
+</Note>
+
+## Anbieterspezifisches Verhalten
+
+Venice normalisiert das Caching über Anbieter hinweg. Für die meisten Modelle erfolgt das Caching automatisch. Senden Sie einfach Ihre Anfragen und prüfen Sie die Antwort auf Cache-Statistiken. **Claude** erfordert auf Protokollebene explizite Cache-Marker, doch Venice fügt diese automatisch für System-Prompts und Gesprächsverlauf hinzu.
+
+Das Caching-Verhalten wird letztlich von jedem Anbieter kontrolliert und kann sich ändern — prüfen Sie die Anbieter-Dokumentation für die aktuellsten Details.
+
+| Modell | Anbieter | Min. Tokens | Cache-Lebensdauer | Write-Kosten | Read-Rabatt | Explizite Marker |
+|-------|----------|------------|----------------|------------|---------------|------------------|
+| Claude Opus 4.5 | Anthropic | ~4.000 | 5 Min. | +25 % | 90 % | Erforderlich |
+| GPT-5.2 | OpenAI | 1.024 | 5–10 Min. | Keine | 90 % | Nicht nötig |
+| Gemini | Google | ~1.024 | 1 Stunde | Keine | 75–90 % | Nicht nötig |
+| Grok | xAI | ~1.024 | 5 Min. | Keine | 75–88 % | Nicht nötig |
+| DeepSeek | DeepSeek | ~1.024 | 5 Min. | Keine | 50 % | Nicht nötig |
+| MiniMax | MiniMax | ~1.024 | 5 Min. | Keine | 90 % | Nicht nötig |
+| Kimi | Moonshot | ~1.024 | 5 Min. | Keine | 50 % | Nicht nötig |
+
+### Claude Opus 4.5 (Anthropic)
+
+Claude erfordert auf Protokollebene explizite Cache-Breakpoints. Venice handhabt dies automatisch:
+
+- **System-Prompts** werden automatisch gecacht
+- **Gesprächsverlauf** wird gecacht, indem ein Breakpoint auf die vorletzte Nutzernachricht gesetzt wird
+
+Dadurch wird Ihr Gesprächsverlauf aus dem Cache gelesen, und nur die letzte Runde wird als neuer Input verarbeitet:
+
+| Runde | Prompt-Tokens | Cache-Read | Cache-Write | Ersparnis |
+|------|---------------|------------|-------------|---------|
+| 1 | 10.979 | 0 | 10.938 | Erstes Schreiben |
+| 2 | 11.031 | 10.938 | 31 | 99,7 % gecacht |
+| 3 | 11.062 | 10.969 | 52 | 99,5 % gecacht |
+
+**Weitere Details:**
+
+- **Bis zu 4 Breakpoints pro Anfrage**: Das System nutzt den längsten passenden Präfix
+- **Cache-Key ist byte-exakt**: Whitespace-Änderungen, andere Bild-Kodierungen oder umgeordnete Tools brechen Cache-Treffer
+- **Cache-bewusste Rate Limits**: Gecachte Tokens zählen nicht zum ITPM-Limit, was höheren effektiven Durchsatz ermöglicht
+- **25 % Write-Aufschlag**: Die erste Anfrage kostet mehr, doch 90 % Ersparnis bei nachfolgenden Reads
+
+#### Manuelle Cache-Steuerung
+
+Für Sonderfälle wie das Caching eines großen Dokuments in der ersten Runde können Sie explizite Breakpoints hinzufügen:
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": [{
+        "type": "text",
+        "text": "You are a legal assistant...",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    {
+      "role": "user", 
+      "content": [{
+        "type": "text",
+        "text": "[Long contract document...]",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    { "role": "assistant", "content": "I've reviewed the contract." },
+    { "role": "user", "content": "What are the termination clauses?" }
+  ]
+}
+```
+
+Damit sind sowohl System-Prompt als auch Dokument ab der ersten Anfrage gecacht. Für typische Gespräche benötigen Sie keine manuellen Marker.
+
+### Alle anderen Modelle
+
+Das Caching ist **automatisch**. Keine speziellen Parameter nötig. Stellen Sie nur sicher, dass Ihre Prompts ca. 1.024 Tokens überschreiten, und verwenden Sie `prompt_cache_key` für konsistentes Routing.
+
+## Request-Parameter
+
+| Parameter | Typ | Modelle | Beschreibung |
+|-----------|------|--------|-------------|
+| `prompt_cache_key` | string | Alle | Routing-Hinweis für Cache-Affinität. Anfragen mit demselben Schlüssel landen mit höherer Wahrscheinlichkeit auf demselben Server mit warmem Cache. |
+| `cache_control` | object | Claude | Markiert Content-Blöcke fürs Caching. Siehe Abschnitt Claude Opus 4.5. |
+
+### prompt_cache_key
+
+Für Gespräche oder agentische Workflows verwenden Sie einen konsistenten `prompt_cache_key`, um die Cache-Trefferrate zu verbessern:
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "prompt_cache_key": "session-abc-123",
+  "messages": [...]
+}
+```
+
+Damit werden Anfragen an Server geleitet, die Ihren Kontext wahrscheinlich bereits gecacht haben. Verwenden Sie eine Session-ID, Conversation-ID oder User-ID als Schlüssel.
+
+## Antwortfelder
+
+Das `usage`-Objekt der Antwort enthält Cache-Statistiken:
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 5500,
+    "completion_tokens": 200,
+    "total_tokens": 5700,
+    "prompt_tokens_details": {
+      "cached_tokens": 5000,
+      "cache_creation_input_tokens": 0
+    }
+  }
+}
+```
+
+| Feld | Beschreibung |
+|-------|-------------|
+| `prompt_tokens` | Gesamtanzahl der Input-Tokens im Request |
+| `prompt_tokens_details.cached_tokens` | Aus dem Cache bediente Tokens (zum rabattierten Tarif abgerechnet) |
+| `prompt_tokens_details.cache_creation_input_tokens` | In den Cache geschriebene Tokens (kann bei Claude einen Aufschlag verursachen) |
+
+**Abrechnungsaufschlüsselung** (am Beispiel von Claude Opus 4.5):
+- 5.000 gecachte Tokens × 0,60 $/1M = 0,003 $
+- 500 nicht gecachte Tokens × 6,00 $/1M = 0,003 $
+- Gesamt: 0,006 $ (vs. 0,033 $ ohne Caching, 82 % Ersparnis)
+
+## Best Practices
+
+### Prompts für das Caching strukturieren
+
+Statische Inhalte zuerst, dynamische Inhalte zuletzt.
+
+**Gute Struktur**
+
+| Position | Inhalt | Gecacht? |
+|----------|---------|---------|
+| 1 | System-Anweisungen | Ja |
+| 2 | Referenzdokumente | Ja |
+| 3 | Few-Shot-Beispiele | Ja |
+| 4 | Nutzerfrage | Nein |
+
+**Schlechte Struktur**
+
+| Position | Inhalt | Gecacht? |
+|----------|---------|---------|
+| 1 | Aktueller Zeitstempel | Nein (invalidiert alles danach) |
+| 2 | System-Anweisungen | Nein |
+| 3 | Nutzerfrage | Nein |
+
+### Präfixe byte-identisch halten
+
+Cache-Keys werden aus exakten Byte-Sequenzen berechnet. Selbst triviale Unterschiede brechen Cache-Treffer:
+
+- Unterschiedliche Whitespaces oder Zeilenumbrüche
+- Zeitstempel oder Request-IDs in Prompts
+- Zufällige Reihenfolge der Few-Shot-Beispiele
+- Andere Formatierungen desselben Inhalts
+
+### Mindest-Token-Schwellen einhalten
+
+Liegen Ihre Prompts unter dem Minimum (typisch 1.024 Tokens), wird Caching nicht aktiv. Bei kleinen Prompts erwägen Sie:
+
+- Zusätzlichen Kontext oder Beispiele, um die Schwelle zu erreichen
+- Mehrere kleine Anfragen zu Batch-Prompts bündeln
+- Akzeptieren, dass Caching für einfache Anfragen nicht greift
+
+### prompt_cache_key für Gespräche verwenden
+
+Für laufende Gespräche einen konsistenten `prompt_cache_key` setzen:
+
+```json
+// Runde 1
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Runde 2
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Runde 3
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+```
+
+Damit steigt die Wahrscheinlichkeit, dass alle Runden auf denselben Server mit warmem Cache treffen.
+
+### Cache-Performance überwachen
+
+Diese Metriken verfolgen:
+- **Cache-Trefferrate**: `cached_tokens / prompt_tokens`
+- **Kostenersparnis**: Tatsächliche Kosten vs. ungecachte Kosten vergleichen
+- **Latenzreduktion**: Time-to-First-Token mit vs. ohne Cache-Treffer
+
+Wenn `cached_tokens` durchgehend 0 ist:
+1. Prompts liegen evtl. unter dem Mindest-Token-Schwellwert
+2. Prompts ändern sich zwischen den Anfragen
+3. Anfragen treffen unterschiedliche Server (verwenden Sie `prompt_cache_key`)
+4. Cache ist abgelaufen (Anfragen zu selten)
+
+### Cache-Ökonomie bedenken
+
+**Claude Opus 4.5 Cache-Write-Aufschlag**: Die erste Anfrage kostet 25 % mehr, doch 90 % Ersparnis bei nachfolgenden Reads.
+
+| Szenario | Cache-Write-Aufschlag sinnvoll? |
+|----------|-------------------------------|
+| 1 Anfrage mit diesem Prompt | Nein (25 % Aufschlag, kein Nutzen) |
+| 2+ Anfragen mit demselben Präfix | Ja (Break-even ab 2. Anfrage) |
+| Schnell wechselnde Prompts | Nein (ständige Write-Kosten) |
+| Stabiler System-Prompt, viele Anfragen | Ja (amortisiert über viele Reads) |
+
+## Cache-Lebensdauer
+
+Caches verfallen nach einer Periode der Inaktivität (typisch 5–10 Minuten). Das bedeutet:
+
+| Traffic-Muster | Caching-Nutzen |
+|-----------------|-----------------|
+| Kontinuierliche Anfragen (< 5 Min. Pause) | Hoch: Cache bleibt warm |
+| Burst-Traffic (Pausen > 10 Min.) | Begrenzt: Cache verfällt zwischen Bursts |
+| Sporadische Anfragen (Stunden auseinander) | Keiner: Cache immer kalt |
+
+## Caching mit Tools und Funktionen
+
+Funktionsdefinitionen können zusammen mit System-Prompts gecacht werden:
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search_database",
+        "description": "Search the product database",
+        "parameters": { ... }
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "You are a shopping assistant...",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    ...
+  ]
+}
+```
+
+Die Tool-Definitionen werden Teil des gecachten Präfixes. Bei vielen Tools kann das die Kosten pro Anfrage erheblich senken.
+
+## Caching mit Bildern und Dokumenten
+
+Für Vision-Modelle können Bilder in gecachten Inhalt einbezogen werden:
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image_url",
+          "image_url": { "url": "data:image/png;base64,..." }
+        },
+        {
+          "type": "text",
+          "text": "This is the floor plan. I'll ask several questions about it.",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "I can see the floor plan. What would you like to know?"
+    },
+    {
+      "role": "user",
+      "content": "How many bedrooms are there?"
+    }
+  ]
+}
+```
+
+Das Bild und der initiale Kontext werden gecacht, sodass Folgefragen zum selben Bild es nicht erneut verarbeiten.
+
+## Fehlersuche
+
+<Accordion title="cached_tokens ist immer 0">
+
+| Ursache | Lösung |
+|-------|----------|
+| Prompt zu kurz | Sicherstellen, dass der Prompt ca. 1.024 Tokens überschreitet (4.000 bei Claude) |
+| Präfix geändert | Prüfen, ob dynamische Inhalte am Anfang des Prompts stehen |
+| Erste Anfrage | Erwartet: Erste Anfrage schreibt in den Cache, nachfolgende lesen |
+| Cache abgelaufen | Zeit zwischen Anfragen auf unter 5 Minuten reduzieren |
+| Unterschiedliche Server | `prompt_cache_key` hinzufügen, um Anfragen konsistent zu routen |
+
+</Accordion>
+
+<Accordion title="cache_creation_input_tokens bei jeder Anfrage">
+
+| Ursache | Lösung |
+|-------|----------|
+| Prompt ändert sich | Zeitstempel, Request-IDs oder andere dynamische Inhalte aus dem Präfix entfernen |
+| Fehlendes cache_control | Für Claude sicherstellen, dass `cache_control`-Marker an Content-Blöcken vorhanden ist |
+| Unter Schwellwert | Prompts unter Mindest-Token-Anzahl lösen kein Caching aus |
+| Einzelne Nutzernachricht | Erwartet für die erste Runde. Cache wächst mit dem Gesprächsverlauf. |
+
+</Accordion>
+
+<Accordion title="Höhere Kosten als erwartet">
+
+| Ursache | Lösung |
+|-------|----------|
+| Cache-Write-Aufschlag | Claude verlangt 25 % Aufschlag für Writes. Nur sinnvoll, wenn der Prompt wiederverwendet wird. |
+| Geringe Wiederverwendung | Wenn jeder Prompt einzigartig ist, zahlen Sie Write-Kosten ohne Read-Nutzen |
+| Schlechte Prompt-Struktur | Dynamischen Inhalt ans Ende verschieben, damit der Präfix stabil bleibt |
+
+</Accordion>

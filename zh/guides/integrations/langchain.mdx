@@ -1,0 +1,254 @@
+---
+title: "LangChain 集成"
+description: "在 LangChain 中使用 Venice AI 构建链、代理和 RAG 流水线"
+"og:title": "LangChain 集成 | Venice API 文档"
+"og:description": "构建由 Venice AI 私有、未审查模型驱动的 LangChain 应用"
+---
+
+得益于对 OpenAI SDK 的完全兼容，Venice AI 可以与 [LangChain](https://python.langchain.com/) 无缝协作。基于 Venice 的隐私优先基础设施构建链、代理和 RAG 流水线。
+
+## 安装
+
+```bash
+pip install langchain langchain-openai openai
+```
+
+## 聊天模型
+
+使用 `ChatOpenAI` 并指定 Venice 的 base URL：
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    model="venice-uncensored-1-2",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    temperature=0.7,
+)
+
+response = llm.invoke("Explain privacy-preserving AI in 2 sentences.")
+print(response.content)
+```
+
+## 流式
+
+```python
+for chunk in llm.stream("Write a haiku about decentralization."):
+    print(chunk.content, end="", flush=True)
+```
+
+## 嵌入
+
+```python
+from langchain_openai import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-bge-m3",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    check_embedding_ctx_length=False,  # Venice 需要
+)
+
+vectors = embeddings.embed_documents([
+    "Venice AI provides private inference.",
+    "No data is retained after processing.",
+])
+print(f"Embedding dimension: {len(vectors[0])}")
+```
+
+## 链
+
+### 带提示模板的简单链
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a {role}. Answer concisely."),
+    ("user", "{question}"),
+])
+
+chain = prompt | llm
+response = chain.invoke({"role": "privacy expert", "question": "Why does zero data retention matter?"})
+print(response.content)
+```
+
+### 顺序链
+
+```python
+from langchain_core.output_parsers import StrOutputParser
+
+# 链 1：生成主题摘要
+summarizer = ChatPromptTemplate.from_messages([
+    ("user", "Summarize this topic in 3 bullet points: {topic}")
+]) | llm | StrOutputParser()
+
+# 链 2：根据摘要生成问题
+questioner = ChatPromptTemplate.from_messages([
+    ("user", "Based on this summary, generate 3 thought-provoking questions:\n{summary}")
+]) | llm | StrOutputParser()
+
+# 组合
+summary = summarizer.invoke({"topic": "decentralized AI inference"})
+questions = questioner.invoke({"summary": summary})
+print(questions)
+```
+
+## RAG 流水线
+
+使用 Venice 构建检索增强生成（RAG）流水线：
+
+```python
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+
+# 初始化 Venice 模型
+llm = ChatOpenAI(
+    model="zai-org-glm-5-1",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+)
+
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-bge-m3",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    check_embedding_ctx_length=False,
+)
+
+# 加载并切分文档
+documents = [
+    "Venice AI provides private, uncensored AI inference with zero data retention.",
+    "The Venice API is OpenAI-compatible, supporting chat completions, images, audio, video, and embeddings.",
+    "Venice supports function calling, structured outputs, web search, and reasoning models.",
+    "Privacy levels include Private (zero retention) and Anonymized (third-party processed).",
+]
+
+# 创建向量库
+vectorstore = FAISS.from_texts(documents, embeddings)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+
+# RAG 提示
+rag_prompt = ChatPromptTemplate.from_messages([
+    ("system", "Answer the question based only on the following context:\n\n{context}"),
+    ("user", "{question}"),
+])
+
+# RAG 链
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+rag_chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | rag_prompt
+    | llm
+    | StrOutputParser()
+)
+
+answer = rag_chain.invoke("What privacy levels does Venice offer?")
+print(answer)
+```
+
+## 函数调用与代理
+
+```python
+from langchain_core.tools import tool
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_core.prompts import ChatPromptTemplate
+
+# 使用支持函数调用的模型
+llm = ChatOpenAI(
+    model="zai-org-glm-5-1",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+)
+
+@tool
+def get_venice_model_price(model_id: str) -> str:
+    """Get the pricing for a Venice AI model."""
+    prices = {
+        "venice-uncensored-1-2": "Input: $0.20/1M, Output: $0.90/1M",
+        "zai-org-glm-5-1": "Input: $1.75/1M, Output: $5.50/1M",
+        "qwen3-5-9b": "Input: $0.10/1M, Output: $0.15/1M",
+    }
+    return prices.get(model_id, f"Model {model_id} not found in price list.")
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You help users find the right Venice AI model. Use tools when needed."),
+    ("placeholder", "{chat_history}"),
+    ("user", "{input}"),
+    ("placeholder", "{agent_scratchpad}"),
+])
+
+agent = create_tool_calling_agent(llm, [get_venice_model_price], prompt)
+executor = AgentExecutor(agent=agent, tools=[get_venice_model_price], verbose=True)
+
+result = executor.invoke({"input": "What's the cheapest Venice text model?", "chat_history": []})
+print(result["output"])
+```
+
+## 结构化输出
+
+```python
+from pydantic import BaseModel, Field
+
+class MovieReview(BaseModel):
+    title: str = Field(description="Movie title")
+    rating: float = Field(description="Rating out of 10")
+    summary: str = Field(description="One-sentence summary")
+
+structured_llm = llm.with_structured_output(MovieReview)
+review = structured_llm.invoke("Review the movie Inception")
+print(f"{review.title}: {review.rating}/10 — {review.summary}")
+```
+
+## 网页搜索集成
+
+通过 `venice_parameters` 使用 Venice 内置的网页搜索：
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm_with_search = ChatOpenAI(
+    model="venice-uncensored",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    extra_body={
+        "venice_parameters": {
+            "enable_web_search": "auto"
+        }
+    }
+)
+
+response = llm_with_search.invoke("What are the latest developments in AI this week?")
+print(response.content)
+```
+
+或按请求传入：
+
+```python
+response = llm.invoke(
+    "What are the latest developments in AI this week?",
+    extra_body={"venice_parameters": {"enable_web_search": "auto"}}
+)
+```
+
+## LangChain 推荐模型
+
+| 用例 | 模型 | 原因 |
+|----------|-------|-----|
+| 通用链路 | `venice-uncensored` | 快、便宜、未审查 |
+| 复杂推理 | `zai-org-glm-5-1` | 最佳私有旗舰模型 |
+| 函数调用 | `zai-org-glm-5-1` | 可靠的工具使用 |
+| 视觉 + 文本 | `qwen3-vl-235b-a22b` | 高级视觉理解 |
+| 代码生成 | `qwen3-coder-480b-a35b-instruct` | 针对代码优化 |
+| 嵌入（RAG） | `text-embedding-bge-m3` | 私有嵌入 |
+| 预算 / 高吞吐 | `qwen3-5-9b` | 输入 $0.10/100 万 |
+
+<Card title="查看所有模型" icon="database" href="/zh/models/overview">
+  浏览所有 Venice 模型的定价和能力
+</Card>

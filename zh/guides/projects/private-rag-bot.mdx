@@ -1,0 +1,468 @@
+---
+title: "构建一个私密 RAG 机器人"
+slug: private-rag-bot-venice-qdrant-reranking
+"og:title": "用 Venice、Qdrant 和重排序构建一个私密 RAG 机器人"
+"og:description": "使用 Venice embeddings、Qdrant 向量检索、FastEmbed 重排序与 Venice chat completions，构建一个现代私密 RAG 机器人的实用指南。"
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="29 April 2026"/>
+
+检索增强生成（RAG）是构建需要基于你自己文档作答的 AI 应用最有用的模式之一。不再让模型仅凭记忆作答，而是先检索相关源材料，把上下文发送给模型，并要求它带引用作答。
+
+在本教程中，我们将使用 Python、用于 embeddings 与 chat completions 的 Venice、用于向量检索的 Qdrant，以及用于本地重排序的 FastEmbed，构建一个私密 RAG 机器人。结束时，你将拥有一个本地文档助理的核心组件：可以摄取文件、检索相关片段、重排序，并带引用作答。
+
+![运行中的 RAG 机器人](/images/guides/private-rag-bot/screenshot.png)
+
+继续之前：如果你想运行本文中的代码，你需要一个 Venice API key。将其作为环境变量导出：
+
+```bash
+export VENICE_API_KEY=<my-key>
+```
+
+想看完整代码实现？请查看 [GitHub 仓库](https://github.com/joshua-mo-143/venice-rag-bot-demo)。
+
+## 现代 RAG 机器人的工作方式
+
+一个好的 RAG 流水线不只是"把文档塞进向量数据库"。基本流程如下：
+
+| 步骤 | 发生了什么 |
+| --- | --- |
+| 加载 | 读取本地 Markdown、文本或 reStructuredText 文件 |
+| 切块 | 将长文档拆分为带重叠的片段 |
+| 嵌入 | 用 Venice embeddings 把片段变成向量 |
+| 存储 | 把向量和源元数据保存到 Qdrant |
+| 检索 | 嵌入用户问题，并进行向量检索 |
+| 重排序 | 用 cross-encoder 对最佳候选重新打分 |
+| 回答 | 把最佳上下文连同引用说明发给 Venice chat 模型 |
+
+重排序步骤是让它比基础 RAG 演示更有用的关键升级。向量检索速度快，擅长找到语义相似的片段，但仍可能返回与主题相邻而非直接有用的段落。Cross-encoder 把问题和每个候选片段一起读，然后对该片段对问题的实际相关度进行打分。
+
+## 安装依赖
+
+我们将使用 OpenAI Python SDK，因为 Venice 暴露了 OpenAI 兼容 API。我们也会用带 FastEmbed 支持的 Qdrant Python 客户端：
+
+```bash
+pip install "openai>=1.0.0" "qdrant-client[fastembed]>=1.14.1"
+```
+
+如果你更喜欢把依赖写入文件，创建 `requirements.txt` 并放入相同的包：
+
+```text
+openai>=1.0.0
+qdrant-client[fastembed]>=1.14.1
+```
+
+## 选择模型
+
+创建一个名为 `rag_bot.py` 的文件，先添加 imports、数据结构、API URL 和模型名：
+
+```python
+import os
+import textwrap
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+from fastembed.rerank.cross_encoder import TextCrossEncoder
+from openai import OpenAI
+from qdrant_client import QdrantClient, models
+
+VENICE_BASE_URL = "https://api.venice.ai/api/v1"
+CHAT_MODEL = "kimi-k2-6"
+EMBEDDING_MODEL = "text-embedding-bge-m3"
+RERANKER_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
+COLLECTION_NAME = "private_rag_bot"
+
+
+@dataclass
+class SourceDocument:
+    content: str
+    metadata: dict
+
+
+@dataclass
+class RankedChunk:
+    content: str
+    metadata: dict
+    vector_score: float
+    rerank_score: float
+```
+
+Embedding 模型名特意采用与 OpenAI 兼容的形式。Venice 会把兼容的 embedding 模型名映射到 Venice 托管的 embedding 模型，因此现有的 OpenAI SDK 代码通常只需改 `base_url` 和 API key 即可迁移过来。
+
+可以用以下命令列出 Venice 可用模型：
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=embedding" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+对于 chat 模型：
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=text" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+## 创建 Venice 和 Qdrant 客户端
+
+为 embeddings 和 chat completions 创建同一个 OpenAI 兼容的 Venice 客户端：
+
+```python
+venice = OpenAI(
+    api_key=os.environ["VENICE_API_KEY"],
+    base_url=VENICE_BASE_URL,
+)
+```
+
+对于 Qdrant，你有三种有用的模式：
+
+| 模式 | 何时使用 |
+| --- | --- |
+| `QdrantClient(":memory:")` | 本地快速演示和测试 |
+| `QdrantClient(path="./qdrant_data")` | 本地持久化存储 |
+| `QdrantClient(url=..., api_key=...)` | 远程或托管的 Qdrant 集群 |
+
+对于本地私密机器人，先从磁盘本地 Qdrant 路径开始：
+
+```python
+qdrant = QdrantClient(path="./qdrant_data")
+```
+
+生产环境的部署有几种不同方式。但如果你使用远程 Qdrant 部署，请记住你的文档片段和元数据会存储在那里。Venice 可以让推理层保持私密，但你仍需要为你的数据选择正确的 Qdrant 部署方式。
+
+## 加载并切分文档
+
+本教程中，让机器人摄取本地文件或文件夹。从 `.md`、`.rst` 和 `.txt` 文件开始：
+
+```python
+TEXT_EXTENSIONS = {".md", ".rst", ".txt"}
+
+def expand_paths(paths: list[Path]) -> list[Path]:
+    files = []
+    for path in paths:
+        if path.is_dir():
+            files.extend(
+                sorted(
+                    file_path
+                    for file_path in path.rglob("*")
+                    if file_path.is_file()
+                    and file_path.suffix.lower() in TEXT_EXTENSIONS
+                )
+            )
+        elif path.is_file():
+            files.append(path)
+        else:
+            raise FileNotFoundError(f"Document path does not exist: {path}")
+    return files
+```
+
+文件加载后，我们需要把文本"切块"——分成数据片段。朴素的策略可能按等长切分。但大多数情况下，这会在语义边界处丢失信息，降低 RAG 系统的效果。
+
+我们使用的切块策略优先选择段落或句子边界，让模型获得连贯的上下文：
+
+```python
+def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
+    clean_text = textwrap.dedent(text).strip()
+    if not clean_text:
+        return []
+    if len(clean_text) <= chunk_size:
+        return [clean_text]
+
+    chunks = []
+    start = 0
+    while start < len(clean_text):
+        end = min(start + chunk_size, len(clean_text))
+
+        if end < len(clean_text):
+            paragraph_break = clean_text.rfind("\n\n", start, end)
+            sentence_break = clean_text.rfind(". ", start, end)
+            split_at = max(paragraph_break, sentence_break)
+            if split_at > start + chunk_size // 2:
+                end = split_at + 1
+
+        chunk = clean_text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        if end >= len(clean_text):
+            break
+
+        start = max(end - chunk_overlap, start + 1)
+
+    return chunks
+```
+
+混合 Markdown 与文本文档的良好起始值是 `1000` 字符的片段大小，`150` 字符的重叠。更小的片段可提升精度；更大的片段保留更多上下文。具体取值通常取决于你存储的文档类型。
+
+## 用 Venice 嵌入文档
+
+有了片段后，分批嵌入它们：
+
+```python
+def embed(texts: list[str]) -> list[list[float]]:
+    embeddings = []
+    for start in range(0, len(texts), 32):
+        batch = texts[start : start + 32]
+        response = venice.embeddings.create(
+            model="text-embedding-bge-m3",
+            input=batch,
+        )
+        embeddings.extend(
+            item.embedding
+            for item in sorted(response.data, key=lambda item: item.index)
+        )
+    return embeddings
+```
+
+批处理很重要。一次只嵌入一个片段虽然简单，但会增加可避免的延迟。让批大小可配置，以便根据工作负载调整吞吐。
+
+## 把向量存入 Qdrant
+
+插入数据点之前，先用正确的向量尺寸创建 Qdrant 集合。最简单的方法是嵌入第一个批次后用 `len(embeddings[0])`。
+
+```python
+qdrant.create_collection(
+    collection_name=COLLECTION_NAME,
+    vectors_config=models.VectorParams(
+        size=len(embeddings[0]),
+        distance=models.Distance.COSINE,
+    ),
+)
+```
+
+每个数据点存储向量加 payload 元数据。Payload 包含原文与源路径，使回答可以引用上下文来源：
+
+```python
+points.append(
+    models.PointStruct(
+        id=chunk_id,
+        vector=embedding,
+        payload={
+            "text": chunk.content,
+            "source": source,
+            "chunk_index": chunk_index,
+        },
+    )
+)
+
+qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
+```
+
+使用从 `source`、`chunk_index` 和内容派生的确定性 UUID，可让对未变片段的重复摄取保持幂等。
+
+## 检索候选片段
+
+提问时，机器人对用户问题做嵌入，并向 Qdrant 请求最匹配的向量：
+
+```python
+query_vector = embed([question])[0]
+hits = qdrant.query_points(
+    collection_name=COLLECTION_NAME,
+    query=query_vector,
+    with_payload=True,
+    limit=8,
+).points
+```
+
+这里的 `limit` 是候选数量。通常应高于你计划发送给模型的片段数量，因为下一步会对它们做重排序。一个不错的默认是检索 `8` 个候选，把最佳 `4` 个发给 chat 模型。
+
+## 用 FastEmbed 做重排序
+
+现在添加让检索变得更智能的部分。
+
+```python
+from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+reranker = TextCrossEncoder(model_name="Xenova/ms-marco-MiniLM-L-6-v2")
+
+candidate_texts = [str((hit.payload or {}).get("text", "")) for hit in hits]
+rerank_scores = list(reranker.rerank(question, candidate_texts))
+reranked = sorted(
+    zip(hits, rerank_scores),
+    key=lambda hit_and_score: hit_and_score[1],
+    reverse=True,
+)
+```
+
+Embedding 检索与 cross-encoder 重排序的关键差别在于打分方式。
+
+Embedding 检索将问题的一个向量与每个片段的一个向量对比。它快速且可扩展。Cross-encoder 把问题和片段一起评估。它较慢，但能更直接地判断相关性。
+
+因此通常的模式是：
+
+1. 用向量检索得到较大的候选集。
+2. 仅在本地对这些候选进行重排序。
+3. 把最靠前的几个片段发给语言模型。
+
+`candidate_k=8` 与 `top_k=4` 是个不错的起点。如果正确的源经常在附近但没进入最终上下文，就提高 `candidate_k`。
+
+## 用 Venice Chat Completions 作答
+
+选定上下文后，按编号格式化：
+
+```python
+def format_context(chunks: list[RankedChunk]) -> str:
+    if not chunks:
+        return "No relevant context was retrieved."
+
+    context_parts = []
+    for index, chunk in enumerate(chunks, start=1):
+        source = chunk.metadata.get("source", "unknown")
+        context_parts.append(
+            f"[{index}] Source: {source} | "
+            f"Vector score: {chunk.vector_score:.4f} | "
+            f"Rerank score: {chunk.rerank_score:.4f}\n"
+            f"{chunk.content}"
+        )
+    return "\n\n---\n\n".join(context_parts)
+```
+
+然后把上下文发给 Venice chat 模型：
+
+```python
+response = venice.chat.completions.create(
+    model="kimi-k2-6",
+    temperature=0.2,
+    messages=[
+        {
+            "role": "system",
+            "content": (
+                "You are a helpful RAG assistant. Answer using only the supplied "
+                "context. If the context does not answer the question, say that "
+                "you do not have enough information."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Retrieved context:\n{context}\n\n"
+                f"Question: {question}\n\n"
+                "Answer with citations like [1] when the context supports the answer:"
+            ),
+        },
+    ],
+)
+```
+
+注意 system prompt：明确告诉机器人仅从所提供的上下文作答。这是简单但重要的护栏。当检索到的文档不支持答案时，RAG 助理不应自信地从模型通用知识作答。
+
+## 运行机器人
+
+把各部分组装成脚本后保存为 `rag_bot.py`。首次运行可先用几篇内置示例文档以验证流水线，再摄取你自己的文件：
+
+```bash
+python rag_bot.py \
+  --question "What does reranking improve in a RAG pipeline?"
+```
+
+摄取你自己的文档：
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --question "What does this project do?"
+```
+
+把本地 Qdrant 集合留在磁盘并启动交互式聊天：
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --qdrant-path ./qdrant_data \
+  --chat
+```
+
+脚本会打印答案，然后打印带向量分数与重排序分数的来源：
+
+```text
+Answer
+============================================================
+Reranking improves retrieval quality by rescoring the top
+vector-search candidates with a cross-encoder model [1].
+
+Sources
+============================================================
+1. sample-docs (vector=0.8123, rerank=0.7342)
+```
+
+如果想检查实际传给模型的文本，加上：
+
+```bash
+--show-context
+```
+
+## 实用的 CLI 选项
+
+把主要的检索旋钮暴露为 CLI 选项，便于不改代码就能调参：
+
+| 选项 | 默认值 | 控制什么 |
+| --- | --- | --- |
+| `--candidate-k` | `8` | 要重排序的向量检索结果数 |
+| `--top-k` | `4` | 发送给 chat 模型的重排序片段数 |
+| `--chunk-size` | `1000` | 重叠前的最大片段尺寸 |
+| `--chunk-overlap` | `150` | 相邻片段间重复的字符数 |
+| `--embedding-batch-size` | `32` | 每次 Venice embeddings 请求的片段数 |
+| `--qdrant-path` | 未设置 | 本地持久化 Qdrant 存储路径 |
+| `--qdrant-url` | 未设置 | 远程 Qdrant URL |
+| `--skip-ingest` | `false` | 查询已有集合而不重新加载文档 |
+| `--recreate-collection` | `false` | 删除并重建 Qdrant 集合 |
+
+本地反复开发的常见流程：
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --qdrant-path ./qdrant_data \
+  --recreate-collection \
+  --question "Summarize the most important setup steps."
+```
+
+之后无需再次摄取即可继续追问：
+
+```bash
+python rag_bot.py \
+  --qdrant-path ./qdrant_data \
+  --skip-ingest \
+  --question "Which file explains deployment?"
+```
+
+## 隐私说明
+
+对私密 RAG 配置而言，请分别考虑每一层：
+
+| 层 | 隐私考量 |
+| --- | --- |
+| Venice embeddings | 文档片段会发送给 Venice 生成向量 |
+| Venice chat | 检索到的上下文会发送给 Venice 用于作答 |
+| 本地 Qdrant | 向量与 payload 保留在你的机器上 |
+| 远程 Qdrant | 向量与 payload 存储在你 Qdrant 服务器所在之处 |
+| FastEmbed reranker | 重排序在本地运行，模型首次可用后即可 |
+
+本教程最私密的默认是：用 Venice 做推理、本地 Qdrant 落盘、本地 FastEmbed 重排序。这样你就有了实用的 RAG 机器人，又不必把向量库 payload 发到第三方向量存储。
+
+## 提前应对的常见错误
+
+| 现象 | 通常含义 | 处理方法 |
+| --- | --- | --- |
+| `Set VENICE_API_KEY before running this example.` | 缺少环境变量 | 在运行脚本前导出 `VENICE_API_KEY` |
+| `Document path does not exist` | 传给 `--docs` 的路径不对 | 检查文件或文件夹路径 |
+| 检索结果为空 | 什么都没摄取，或查询了错误的集合 | 移除 `--skip-ingest`，或确认 `--collection` 和 `--qdrant-path` |
+| Qdrant 向量尺寸错误 | 集合是用不同的 embedding 模型创建的 | 切换 embedding 模型后重建集合 |
+| 首次重排序慢 | FastEmbed 可能正在下载或初始化 cross-encoder | 让首次运行跑完，之后会快得多 |
+
+如果你换了 embedding 模型，请重建 Qdrant 集合。不同的 embedding 模型会产生不同维度的向量，而 Qdrant 集合要求固定的向量尺寸。
+
+## 下一步
+
+跑通基线后，影响最大的改进通常是：
+
+- 为 PDF、HTML、工单或内部 wiki 页面添加专用文档加载器。
+- 存储更丰富的元数据，如标题、章节、日期、负责人和 URL。
+- 在真实问题上调优 `candidate_k`、`top_k`、片段大小与重叠。
+- 添加评估问题，便于在改动前后衡量检索质量。
+- 流式输出最终的 Venice chat completion，获得更好的交互体验。
+
+RAG 系统易于演示，也意外地容易做得平庸。"向量检索 + 重排序"这种组合是一个坚实的基础，因为它在保持检索快速的同时，给机器人更大概率把正确的上下文交给语言模型。

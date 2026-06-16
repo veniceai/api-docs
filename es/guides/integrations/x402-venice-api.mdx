@@ -1,0 +1,321 @@
+---
+title: X402
+description: Accede a Venice sin una API key usando autenticación con wallet.
+"og:title": X402
+"og:description": Accede a Venice sin una API key usando autenticación con wallet.
+---
+
+X402 te permite usar las rutas de pago de la API de Venice autenticándote con una wallet y manteniendo un saldo prepago en USDC. No se requiere API key ni cuenta. Firma un mensaje, recarga en Base o Solana y llama a cualquier ruta soportada.
+
+<CardGroup cols={3}>
+  <Card title="Autenticación con wallet" icon="wallet">
+    Autentícate con un payload Sign-In-With-X firmado en la cabecera `X-Sign-In-With-X`.
+  </Card>
+
+  <Card title="Paga con USDC" icon="coins">
+    Mantén saldo gastable con USDC en Base o Solana.
+  </Card>
+
+  <Card title="DIEM primero" icon="sparkles">
+    Si la wallet está vinculada a una cuenta de Venice con saldo DIEM, ese se gasta primero.
+  </Card>
+</CardGroup>
+
+## ¿Qué es X402?
+
+[X402](https://www.x402.org/) es un estándar de pago abierto que permite a aplicaciones y agentes pagar por servicios de forma programática usando criptomoneda. Venice implementa X402 para que las wallets puedan autenticarse y pagar la inferencia directamente con USDC en Base o Solana.
+
+## Requisitos previos
+
+- Una wallet en Base o Solana
+- Token nativo para gas en la cadena seleccionada, como ETH en Base o SOL en Solana
+- USDC en la cadena seleccionada (o saldo existente respaldado por DIEM desde una cuenta de Venice vinculada)
+
+<Tip>
+  Considera usar una wallet dedicada para automatización en lugar de tu wallet de tesorería principal.
+</Tip>
+
+## Inicio rápido
+
+El SDK [`venice-x402-client`](https://github.com/veniceai/x402-client) proporciona ayudantes para autenticación con wallet, recargas y seguimiento de saldo.
+
+```bash
+npm install venice-x402-client
+```
+
+```typescript
+import { VeniceClient } from 'venice-x402-client'
+
+const venice = new VeniceClient(process.env.WALLET_KEY)
+
+await venice.topUp(10) // omite si la wallet ya tiene saldo gastable
+
+const response = await venice.chat({
+  model: 'kimi-k2-5',
+  messages: [{ role: 'user', content: 'Hello!' }]
+})
+```
+
+El cliente genera una nueva cabecera `X-Sign-In-With-X` para cada solicitud y rastrea automáticamente el saldo desde las cabeceras de respuesta `X-Balance-Remaining`.
+
+### Con herramientas compatibles con OpenAI
+
+Si estás usando una herramienta que acepta un `fetch` personalizado, usa `createAuthFetch` para añadir autenticación con wallet a cualquier solicitud:
+
+```typescript
+import { createAuthFetch } from 'venice-x402-client'
+
+const authFetch = createAuthFetch(process.env.WALLET_KEY)
+```
+
+### Ayudantes disponibles
+
+El SDK incluye ayudantes de primera clase para las rutas x402 de Venice más comunes. Para cualquier cosa no cubierta, usa `request()` o `createAuthFetch()` directamente.
+
+| Categoría | Métodos |
+| --- | --- |
+| Chat | `chat()`, `chatStream()` |
+| Responses | `responses.create()`, `responses.stream()` |
+| Images | `images.generate()`, `images.generations()`, `images.upscale()`, `images.edit()`, `images.multiEdit()`, `images.backgroundRemove()` |
+| Audio | `audio.speech()`, `audio.transcribe()`, `audio.queue()`, `audio.retrieve()`, `audio.complete()` |
+| Video | `video.queue()`, `video.retrieve()`, `video.generate()`, `video.complete()`, `video.transcribe()` |
+| Embeddings | `embeddings()` |
+| Models | `models()` |
+| Wallet | `getBalance()`, `getTransactions()`, `topUp()` |
+
+---
+
+## Flujo manual
+
+Si no estás usando el SDK o necesitas entender el protocolo subyacente, aquí está el flujo paso a paso. Para una wallet nueva, asume que necesitas recargar primero a menos que ya tenga saldo gastable en DIEM.
+
+### Paso 1: Crear la cabecera X-Sign-In-With-X
+
+Venice espera un payload JSON codificado en Base64 que contenga un mensaje Sign-In-With-X firmado. Las wallets EVM firman un mensaje SIWE EIP-4361 en Base. Las wallets Solana firman el mensaje Solana SIWX con Ed25519. Genera un nonce y un timestamp nuevos para cada flujo de solicitud.
+
+Para Solana, establece `chainId` en `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`, incluye `type: "ed25519"` en el payload JSON codificado y proporciona la firma Ed25519 como base58 o base64. El mensaje firmado comienza con `<domain> wants you to sign in with your Solana account:`, seguido por la dirección de la wallet y los campos estándar `URI`, `Version`, `Chain ID`, `Nonce`, `Issued At` y `Expiration Time` opcional.
+
+```typescript
+import { Wallet } from 'ethers'
+import { SiweMessage, generateNonce } from 'siwe'
+
+const wallet = new Wallet(process.env.EVM_PRIVATE_KEY)
+const now = new Date()
+const resourceUrl = 'https://api.venice.ai/api/v1/chat/completions'
+
+const siwe = new SiweMessage({
+  domain: 'api.venice.ai',
+  address: wallet.address,
+  statement: 'Sign in to Venice AI',
+  uri: resourceUrl,
+  version: '1',
+  chainId: 8453,
+  nonce: generateNonce(),
+  issuedAt: now.toISOString(),
+  expirationTime: new Date(now.getTime() + 5 * 60 * 1000).toISOString(),
+})
+
+const message = siwe.prepareMessage()
+const signature = await wallet.signMessage(message)
+
+const xSignInWithX = Buffer.from(
+  JSON.stringify({
+    address: wallet.address,
+    message,
+    signature,
+    timestamp: now.getTime(),
+    chainId: 8453,
+  }),
+  'utf8',
+).toString('base64')
+
+console.log(xSignInWithX)
+```
+
+### Paso 2: Comprobar saldo
+
+Antes de hacer una solicitud de pago, verifica que la wallet tenga saldo gastable:
+
+```bash
+export WALLET_ADDRESS=0xYOUR_WALLET_ADDRESS_OR_SOLANA_ADDRESS
+export X402_AUTH=YOUR_BASE64_SIWX_HEADER
+
+curl --request GET \
+  --url "https://api.venice.ai/api/v1/x402/balance/$WALLET_ADDRESS" \
+  --header "X-Sign-In-With-X: $X402_AUTH"
+```
+
+La respuesta incluye:
+
+- `canConsume`: si la wallet puede hacer solicitudes de pago
+- `balanceUsd`: saldo gastable actual
+- `minimumTopUpUsd` y `suggestedTopUpUsd`: guía para recargas
+- `diemBalanceUsd`: saldo respaldado por DIEM, si lo hay
+
+El parámetro de ruta `walletAddress` acepta tanto una dirección EVM (`0x...`) como una dirección Solana en base58.
+
+### Paso 3: Recargar
+
+Recarga con USDC en Base o Solana:
+
+```bash
+curl --request POST \
+  --url https://api.venice.ai/api/v1/x402/top-up
+```
+
+La primera llamada devuelve `402 Payment Required` con una cabecera `PAYMENT-REQUIRED` que contiene un array `accepts`. Cada entrada describe una opción de pago aceptada, incluyendo `network`, `asset`, `payTo` y `amount`. Elige la opción de Base o Solana con la que quieras pagar, usa esos detalles exactos para construir una cabecera `X-402-Payment` y reintenta la misma ruta.
+
+#### Construyendo la cabecera X-402-Payment para Base
+
+El siguiente script crea un pago x402 firmado en Base y envía la solicitud de recarga. Requiere los paquetes npm `x402` y `viem`.
+
+```bash
+export EVM_PRIVATE_KEY=0xYOUR_PRIVATE_KEY
+```
+
+```bash
+export X402_PAYMENT="$(
+node --input-type=module <<'EOF'
+import { createPaymentHeader } from "x402/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const signer = privateKeyToAccount(process.env.EVM_PRIVATE_KEY);
+const amountUsd = 5;
+const amountBaseUnits = String(Math.round(amountUsd * 1e6));
+
+const header = await createPaymentHeader(signer, 2, {
+  scheme: "exact",
+  network: "base",
+  maxAmountRequired: amountBaseUnits,
+  resource: "https://api.venice.ai/api/v1/x402/top-up",
+  description: "Venice x402 top-up",
+  mimeType: "application/json",
+  payTo: "0x2670B922ef37C7Df47158725C0CC407b5382293F",
+  maxTimeoutSeconds: 300,
+  asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  extra: { name: "USD Coin", version: "2" },
+});
+
+process.stdout.write(header);
+EOF
+)"
+
+curl -X POST "https://api.venice.ai/api/v1/x402/top-up" \
+  -H "X-402-Payment: $X402_PAYMENT"
+```
+
+<Note>
+  En producción usa como fuente de verdad la respuesta más reciente `PAYMENT-REQUIRED` / `accepts` en lugar de codificar estos valores. Para recargas en Solana, construye el pago a partir de la entrada de Solana devuelta en `accepts`. Las entradas de Solana usan `network: "solana"`, la mint de USDC como `asset` y pueden incluir metadatos específicos de la red como `extra.feePayer`.
+</Note>
+
+### Paso 4: Hacer una solicitud
+
+Una vez que la wallet tenga saldo gastable, llama a cualquier endpoint soportado con la cabecera `X-Sign-In-With-X`:
+
+```bash
+export X402_AUTH=YOUR_BASE64_SIWX_HEADER
+
+curl --request POST \
+  --url https://api.venice.ai/api/v1/chat/completions \
+  --header "Content-Type: application/json" \
+  --header "X-Sign-In-With-X: $X402_AUTH" \
+  --data '{
+    "model": "kimi-k2-5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello from an x402-authenticated wallet."
+      }
+    ]
+  }'
+```
+
+Las respuestas exitosas pueden incluir una cabecera `X-Balance-Remaining`.
+
+### Paso 5: Inspeccionar transacciones (opcional)
+
+Revisa el historial de transacciones de la wallet:
+
+```bash
+export WALLET_ADDRESS=0xYOUR_WALLET_ADDRESS_OR_SOLANA_ADDRESS
+export X402_AUTH=YOUR_BASE64_SIWX_HEADER
+
+curl --request GET \
+  --url "https://api.venice.ai/api/v1/x402/transactions/$WALLET_ADDRESS?limit=10&offset=0" \
+  --header "X-Sign-In-With-X: $X402_AUTH"
+```
+
+El libro mayor incluye entradas como `TOP_UP`, `CHARGE` y `REFUND`.
+
+El parámetro de ruta `walletAddress` acepta tanto una dirección EVM (`0x...`) como una dirección Solana en base58.
+
+---
+
+## Rutas soportadas
+
+### Rutas de inferencia de pago
+
+Las siguientes rutas públicas de pago de Venice soportan actualmente la autenticación de wallet x402.
+
+| Categoría | Endpoints |
+| --- | --- |
+| Chat | `POST /api/v1/chat/completions`, `POST /api/v1/responses` |
+| Image | `POST /api/v1/image/generate`, `POST /api/v1/images/generations`, `POST /api/v1/image/upscale`, `POST /api/v1/image/edit`, `POST /api/v1/image/multi-edit`, `POST /api/v1/image/background-remove` |
+| Embeddings | `POST /api/v1/embeddings` |
+| Audio | `POST /api/v1/audio/speech`, `POST /api/v1/audio/transcriptions`, `POST /api/v1/audio/complete`, `POST /api/v1/audio/queue`, `POST /api/v1/audio/retrieve` |
+| Video | `POST /api/v1/video/complete`, `POST /api/v1/video/queue`, `POST /api/v1/video/retrieve`, `POST /api/v1/video/transcriptions` |
+
+### Ruta de recarga
+
+| Endpoint | Autenticación | Propósito |
+| --- | --- | --- |
+| `POST /api/v1/x402/top-up` | Solicitud inicial: ninguna. Reintento: `X-402-Payment` | Añade créditos USDC al saldo gastable de la wallet usando una opción de pago aceptada en Base o Solana |
+
+### Rutas solo de wallet
+
+Estas rutas usan `X-Sign-In-With-X` para identidad pero no cobran saldo.
+
+| Endpoint | Propósito |
+| --- | --- |
+| `GET /api/v1/x402/balance/{walletAddress}` | Comprobar saldo gastable de una dirección de wallet EVM o Solana |
+| `GET /api/v1/x402/transactions/{walletAddress}` | Ver historial de transacciones de una dirección de wallet EVM o Solana |
+
+---
+
+## Errores
+
+| Estado | Causa probable | Qué hacer |
+| --- | --- | --- |
+| `401` | Payload Sign-In-With-X malformado o expirado | Reconstruye `X-Sign-In-With-X` con un nonce y timestamp nuevos |
+| `402` en una ruta de pago | Saldo gastable insuficiente | Recarga y reintenta |
+| `402` en `/x402/top-up` | Esperado. Este es el flujo de inicio de pago. | Usa los detalles de pago devueltos para construir `X-402-Payment` y reintenta |
+| `403` en balance o transactions | Discrepancia de wallet | Asegúrate de que la wallet autenticada coincida con el parámetro de ruta `walletAddress` |
+| `400` en top-up | Cabecera de pago malformada | Reconstruye desde la respuesta `402` más reciente |
+
+---
+
+## Para agentes
+
+El flujo es el mismo. Guarda las claves privadas en variables de entorno o en un gestor de secretos, y comprueba el saldo antes de las solicitudes para evitar viajes de ida y vuelta innecesarios con `402`.
+
+---
+
+## Recursos relacionados
+
+<CardGroup cols={2}>
+  <Card title="SDK de x402 Client" icon="npm" href="https://github.com/veniceai/x402-client">
+    Cliente oficial de Venice x402 para Node.js/TypeScript.
+  </Card>
+
+  <Card title="Precios de la API" icon="coins" href="/es/overview/pricing">
+    Consulta los precios de los modelos y cómo Venice cobra el uso.
+  </Card>
+
+  <Card title="Chat Completions" icon="message" href="/es/api-reference/endpoint/chat/completions">
+    Una ruta de pago común para el acceso basado en wallet.
+  </Card>
+
+  <Card title="Especificación de la API" icon="code" href="/es/api-reference/api-spec">
+    Documentación de referencia y acceso a la especificación cruda.
+  </Card>
+</CardGroup>

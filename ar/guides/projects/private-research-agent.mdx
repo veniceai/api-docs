@@ -1,0 +1,1647 @@
+---
+title: "بناء وكيل بحث خاص"
+slug: private-research-agent-venice
+"og:title": "بناء وكيل بحث خاص مع Venice AI"
+"og:description": "دليل عملي لبناء وكيل بحث بلغة Python يخطط للبحوث، ويقرأ مصادر الويب باستخدام Venice scrape API، ويستخرج الأدلة، ويكتب تقارير Markdown مذيّلة بالاستشهادات."
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="7 May 2026"/>
+
+وكلاء البحث مفيدون حين تريد أكثر من نتيجة بحث واحدة أو إجابة سريعة من نموذج. يستطيع وكيل بحث جيّد تحويل موضوع واسع إلى استعلامات بحث، وجمع المصادر، واستخراج الأدلة المهمة، ومتابعة الفجوات، وكتابة موجز مذيّل بالاستشهادات يمكنك فحصه لاحقًا.
+
+في هذا الدرس، سنبني وكيل بحث خاصًا باستخدام Python وVenice API. وفي النهاية، سيكون لديك CLI قادر على البحث في موضوع، واستخراج صفحات عامة إلى Markdown، وتلخيص مقاطع المصادر، وتشغيل دورات متابعة بحثية واعية بالفجوات، وتوليد تقرير مذيّل بالاستشهادات مع artifacts JSONL محلية اختيارية.
+
+هل تهتم بالتنفيذ الكامل للكود؟ راجع [مستودع GitHub.](https://github.com/joshua-mo-143/venice-research-agent-demo)
+
+قبل المتابعة، ستحتاج إلى مفتاح Venice API:
+
+```bash
+export VENICE_API_KEY=<my-key>
+```
+
+## ما الذي سنبنيه
+
+التنفيذ المرجعي هو مشروع Python صغير بعدة أجزاء واضحة:
+
+| الجزء | ما يفعله |
+| --- | --- |
+| CLI | يقبل موضوع بحث ونموذجًا ومزوّدين وإعدادات عمق ومسار إخراج ومجلد artifacts |
+| عميل Venice | يستدعي chat completions وstreaming chat completions و`POST /augment/scrape` |
+| طبقة البحث | تبحث في DuckDuckGo افتراضيًا، مع اكتشاف أوراق arXiv اختياري |
+| النماذج البيانية | تتعقب روابط المصادر والروابط القانونية والمقاطع والأدلة والملاحظات والأخطاء والتقارير |
+| وكيل البحث | يخطط للبحوث، ويقرأ المصادر، ويستخرج الأدلة، ويحلل الفجوات، ويولّد استعلامات متابعة، ويكتب التقرير النهائي |
+| كاتب artifacts | يخزّن سجلات JSONL قابلة للتدقيق للاستعلامات والفجوات البحثية والنتائج والجلب والمقاطع وملاحظات المصادر ومسودات التقارير والأخطاء والتقارير |
+
+يبدو التدفّق هكذا:
+
+![خط أنابيب وكيل البحث الخاص](/images/guides/private-research-agent/research-pipeline.svg)
+
+1. اطلب من Venice توليد استعلامات بحث متنوعة للموضوع.
+2. ابحث في الويب بمزوّد واحد أو أكثر.
+3. أزل تكرار الروابط قبل قراءتها.
+4. استخدم نقطة نهاية scrape في Venice لتحويل كل صفحة مصدر عامة إلى Markdown.
+5. قسّم الصفحات الطويلة إلى مقاطع.
+6. اطلب من Venice استخراج الأدلة من كل مقطع.
+7. اطلب من Venice تحويل أدلة المقاطع إلى ملاحظات مصادر.
+8. حدّد الفجوات البحثية ومشكلات توازن المصادر قبل توليد استعلامات المتابعة.
+9. اطلب من Venice تأليف التقرير النهائي بأسلوب استشهادات حاشية سفلية.
+
+هذا "خاص" بالمعنى العملي بأن الوكيل يبقي التنسيق وملاحظات المصادر والـ artifacts والتقارير النهائية على جهازك. ويتولى Venice استدعاءات النموذج وعملية الاستخراج عبر API الخاص به. لكن التنفيذ المرجعي الافتراضي لا يزال يرسل استعلامات البحث إلى DuckDuckGo أو arXiv، لذا اعتبر اختيار المزوّد جزءًا من تصميم خصوصيتك.
+
+## إعداد المشروع
+
+يستخدم المشروع المرجعي Python 3.13 و`uv`، لكن نفس الكود يعمل مع بيئة افتراضية عادية أيضًا.
+
+أنشئ مشروعًا جديدًا:
+
+```bash
+mkdir venice-research-agent
+cd venice-research-agent
+uv init
+```
+
+ثبّت الاعتماديات:
+
+```bash
+uv add httpx beautifulsoup4 python-dotenv
+```
+
+إذا فضّلت `pip`، أنشئ بيئة افتراضية وثبّت نفس الحزم:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install "httpx>=0.28.0" "beautifulsoup4>=4.13.0" "python-dotenv>=1.0.0"
+```
+
+أنشئ ملف `.env` للتطوير المحلي:
+
+```bash
+VENICE_API_KEY=your_venice_api_key_here
+VENICE_MODEL=openai-gpt-55
+```
+
+نستخدم `VENICE_MODEL` لتتمكن من تغيير النموذج دون تحرير الكود. التنفيذ المرجعي يفترض حاليًا `openai-gpt-55`، لكن يمكنك استبداله بأي نموذج دردشة آخر متاح لحسابك على Venice.
+
+## إنشاء النماذج البيانية
+
+قبل كتابة منطق الوكيل، سنُعرّف الكائنات التي تتدفّق عبر الخط. هذه النماذج تجعل بقية الكود أسهل في التفكير لأن كل مصدر يحمل أصله: من أين جاء، وأي استعلام عثر عليه، ومتى استُرجع، وكيف قُسِّم.
+
+أنشئ `research_agent/models.py`:
+
+```python
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+TRACKING_PARAMS = {
+    "fbclid",
+    "gclid",
+    "igshid",
+    "mc_cid",
+    "mc_eid",
+    "msclkid",
+    "ref",
+    "ref_src",
+}
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    title: str
+    url: str
+    snippet: str
+    query: str = ""
+    rank: int = 0
+    provider: str = "duckduckgo"
+    canonical_url: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.canonical_url:
+            object.__setattr__(self, "canonical_url", canonicalize_url(self.url))
+
+
+@dataclass(frozen=True)
+class ScrapeResult:
+    url: str
+    content: str
+    title: str = ""
+    final_url: str = ""
+    content_type: str = "text/markdown"
+
+
+@dataclass(frozen=True)
+class TextChunk:
+    chunk_id: str
+    text: str
+    start: int
+    end: int
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class WebPage:
+    title: str
+    url: str
+    text: str
+    final_url: str = ""
+    canonical_url: str = ""
+    content_type: str = ""
+    retrieved_at: str = ""
+    content_hash: str = ""
+    chunks: tuple[TextChunk, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        final_url = self.final_url or self.url
+        object.__setattr__(self, "final_url", final_url)
+        if not self.canonical_url:
+            object.__setattr__(self, "canonical_url", canonicalize_url(final_url))
+        if not self.retrieved_at:
+            object.__setattr__(self, "retrieved_at", utc_now())
+        if not self.content_hash:
+            object.__setattr__(self, "content_hash", content_hash(self.text))
+
+
+@dataclass(frozen=True)
+class EvidenceChunk:
+    chunk_id: str
+    text: str
+    summary: str
+    quotes: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class SourceNote:
+    source_id: str
+    title: str
+    url: str
+    query: str
+    summary: str
+    canonical_url: str = ""
+    final_url: str = ""
+    rank: int = 0
+    snippet: str = ""
+    provider: str = "duckduckgo"
+    retrieved_at: str = ""
+    content_type: str = ""
+    content_hash: str = ""
+    chunks: tuple[EvidenceChunk, ...] = field(default_factory=tuple)
+```
+
+الحقول المهمة هنا هي `canonical_url` و`content_hash` و`chunks`.
+
+`canonical_url` يتيح للوكيل تجنّب قراءة المصدر نفسه مرارًا عندما تختلف نتائج البحث فقط بسبب معاملات التتبع أو الـ fragments. ويُساعد `content_hash` على رصد الصفحات المكررة حتى لو كانت تحت روابط مختلفة. ويسمح لنا `chunks` بتلخيص الصفحات الطويلة على قطع أصغر بدلًا من فقدان أدلة مفيدة بسبب حدود السياق.
+
+أضف الدوال المساعدة أسفل dataclasses:
+
+```python
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def canonicalize_url(raw_url: str) -> str:
+    if not raw_url:
+        return ""
+
+    parsed = urlparse(raw_url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+
+    scheme = parsed.scheme.lower()
+    netloc = parsed.netloc.lower()
+    path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/")
+
+    query_pairs = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not _is_tracking_param(key)
+    ]
+    query = urlencode(sorted(query_pairs), doseq=True)
+    return urlunparse((scheme, netloc, path, "", query, ""))
+
+
+def chunk_text(text: str, *, chunk_chars: int = 3000, overlap: int = 250) -> tuple[TextChunk, ...]:
+    clean = text.strip()
+    if not clean:
+        return ()
+    if chunk_chars <= 0:
+        raise ValueError("chunk_chars must be greater than 0")
+    if overlap < 0 or overlap >= chunk_chars:
+        raise ValueError("overlap must be at least 0 and smaller than chunk_chars")
+
+    chunks: list[TextChunk] = []
+    start = 0
+    index = 1
+    while start < len(clean):
+        end = min(len(clean), start + chunk_chars)
+        chunk = clean[start:end].strip()
+        if chunk:
+            chunks.append(
+                TextChunk(
+                    chunk_id=f"C{index}",
+                    text=chunk,
+                    start=start,
+                    end=end,
+                    content_hash=content_hash(chunk),
+                )
+            )
+            index += 1
+        if end == len(clean):
+            break
+        start = end - overlap
+
+    return tuple(chunks)
+
+
+def _is_tracking_param(key: str) -> bool:
+    lowered = key.lower()
+    return lowered.startswith("utm_") or lowered in TRACKING_PARAMS
+```
+
+التقسيم بسيط عمدًا هنا: مقاطع بحجم حرف ثابت مع تداخل. هذا يكفي لوكيل بحث تجريبي لأن نقطة نهاية scrape في Venice تُعيد Markdown، وهو عادةً أنظف بكثير من HTML الخام. للبحث الإنتاجي على مستندات تقنية طويلة، يمكنك تحسين هذا بالتقسيم على العناوين أو الفقرات أو عدد الـ tokens.
+
+## بناء عميل Venice
+
+بعد ذلك، سننشئ عميل Venice صغيرًا. يمكنك استخدام OpenAI Python SDK لإكمالات الدردشة لأن Venice متوافق مع OpenAI، لكن التنفيذ المرجعي يستخدم `httpx` مباشرة بحيث يستطيع العميل نفسه استدعاء نقطة نهاية `POST /augment/scrape` في Venice.
+
+أنشئ `research_agent/venice.py`:
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import time
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+from .models import ScrapeResult
+
+DEFAULT_BASE_URL = "https://api.venice.ai/api/v1"
+DEFAULT_MODEL = "openai-gpt-55"
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+class VeniceError(RuntimeError):
+    """Raised when the Venice API returns an unusable response."""
+
+
+@dataclass(frozen=True)
+class VeniceClient:
+    api_key: str
+    model: str = DEFAULT_MODEL
+    base_url: str = DEFAULT_BASE_URL
+    timeout: float = 60.0
+    max_retries: int = 2
+    backoff_seconds: float = 1.0
+
+    @classmethod
+    def from_env(cls, model: str | None = None, *, max_retries: int = 2) -> "VeniceClient":
+        api_key = os.getenv("VENICE_API_KEY")
+        if not api_key:
+            raise VeniceError("VENICE_API_KEY is required.")
+
+        return cls(
+            api_key=api_key,
+            model=model or os.getenv("VENICE_MODEL", DEFAULT_MODEL),
+            base_url=os.getenv("VENICE_BASE_URL", DEFAULT_BASE_URL).rstrip("/"),
+            max_retries=max_retries,
+        )
+```
+
+تُبقي `from_env()` الأسرار خارج كودك المصدري. كما تجعل التطوير المحلي مريحًا لأن `python-dotenv` يستطيع تحميل `VENICE_API_KEY` و`VENICE_MODEL` من `.env`.
+
+الآن أضف إكمالات الدردشة:
+
+```python
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 1600,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        data = self._post_json("/chat/completions", payload)
+        try:
+            return data["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError, TypeError) as exc:
+            raise VeniceError(f"Unexpected Venice API response: {data}") from exc
+```
+
+للتقرير النهائي، نريد استخدام البث لأن التقارير العميقة قد تستغرق وقتًا أطول بكثير (لأنها ستُنتج نصًا أكثر). قد يسبب هذا مشكلات timeout للطلبات التي قد تستغرق وقتًا طويلًا للغاية لإنتاج الإخراج النهائي. باستخدام البث، يمكننا إزالة هذه المشكلة وجعل الطلب أكثر مقاومة لأعطال timeout:
+
+```python
+    def chat_stream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 1600,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        return self._post_chat_stream("/chat/completions", payload).strip()
+```
+
+ثم أضف الـ scraping:
+
+```python
+    def scrape(self, url: str) -> ScrapeResult:
+        data = self._post_json("/augment/scrape", {"url": url})
+        content = _first_string(data, "content", "markdown", "text")
+        if not content:
+            raise VeniceError(f"Unexpected Venice scrape response: {data}")
+
+        return ScrapeResult(
+            url=url,
+            final_url=_first_string(data, "final_url", "url", "source_url") or url,
+            title=_first_string(data, "title"),
+            content=content,
+            content_type="text/markdown",
+        )
+```
+
+تقبل نقطة نهاية scrape في Venice رابطًا يمكن الوصول إليه عامًا وتُعيد الصفحة بصيغة Markdown. هذا يعني أن النموذج لا يحتاج إلى تحليل HTML الخام، ويمكن لموجّهات استخراج المصادر أن تعمل بنص أنظف.
+
+تتعامل الدالة المساعدة المتبقية مع إعادات المحاولة وتحليل الاستجابة:
+
+```python
+    def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = httpx.post(
+                    f"{self.base_url}{path}",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
+                    time.sleep(self.backoff_seconds * (2**attempt))
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, dict):
+                    raise VeniceError(f"Unexpected Venice API response: {data}")
+                return data
+            except httpx.HTTPError as exc:
+                if attempt < self.max_retries:
+                    time.sleep(self.backoff_seconds * (2**attempt))
+                    continue
+                raise VeniceError(f"Could not reach Venice API: {exc}") from exc
+
+        raise VeniceError("Could not reach Venice API")
+
+
+def _first_string(data: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    for nested_key in ("data", "result", "scrape"):
+        nested = data.get(nested_key)
+        if isinstance(nested, dict):
+            value = _first_string(nested, *keys)
+            if value:
+                return value
+
+    return ""
+```
+
+يتضمن المستودع الكامل أيضًا دالة مساعدة قوية `_post_chat_stream()` تقرأ أحداث الخادم من إكمالات الدردشة المُبثّة. يمكنك البدء بدون بث، ثم إضافته بمجرد عمل بقية تدفّق البحث.
+
+## إضافة مزوّدي البحث
+
+لطبقة البحث وظيفتان: العثور على روابط المصادر وجلب تلك الروابط عبر scraper الخاص بـ Venice. يستخدم التنفيذ المرجعي نقطة نهاية HTML الخاصة بـ DuckDuckGo للبحث العام على الويب وArXiv Atom API للأوراق.
+
+أنشئ `research_agent/web.py`:
+
+```python
+from __future__ import annotations
+
+import re
+import xml.etree.ElementTree as ET
+from collections.abc import Callable, Iterable
+from urllib.parse import parse_qs, unquote, urlparse
+
+import httpx
+from bs4 import BeautifulSoup
+
+from .models import ScrapeResult, SearchResult, TextChunk, WebPage, canonicalize_url, chunk_text, content_hash, utc_now
+
+USER_AGENT = "venice-research-agent-demo/0.1 (+https://venice.ai)"
+
+
+class SearchProvider:
+    name = "provider"
+
+    def search(self, web: "WebSearch", query: str, limit: int) -> list[SearchResult]:
+        raise NotImplementedError
+```
+
+الآن أضف DuckDuckGo:
+
+```python
+class DuckDuckGoProvider(SearchProvider):
+    name = "duckduckgo"
+
+    def search(self, web: "WebSearch", query: str, limit: int) -> list[SearchResult]:
+        response = web.get("https://duckduckgo.com/html/", params={"q": query})
+        soup = BeautifulSoup(response.text, "html.parser")
+        results: list[SearchResult] = []
+        seen_urls: set[str] = set()
+
+        for node in soup.select(".result"):
+            link = node.select_one(".result__a")
+            if link is None:
+                continue
+
+            url = _normalize_duckduckgo_url(link.get("href", ""))
+            canonical_url = canonicalize_url(url)
+            if not canonical_url or canonical_url in seen_urls:
+                continue
+
+            snippet = node.select_one(".result__snippet")
+            results.append(
+                SearchResult(
+                    title=_clean_text(link.get_text(" ", strip=True)),
+                    url=url,
+                    snippet=_clean_text(snippet.get_text(" ", strip=True) if snippet else ""),
+                    query=query,
+                    rank=len(results) + 1,
+                    provider=self.name,
+                    canonical_url=canonical_url,
+                )
+            )
+            seen_urls.add(canonical_url)
+
+            if len(results) >= limit:
+                break
+
+        return results
+```
+
+وarXiv:
+
+```python
+class ArxivProvider(SearchProvider):
+    name = "arxiv"
+
+    def search(self, web: "WebSearch", query: str, limit: int) -> list[SearchResult]:
+        response = web.get(
+            "https://export.arxiv.org/api/query",
+            params={
+                "search_query": f"all:{query}",
+                "start": 0,
+                "max_results": limit,
+                "sortBy": "relevance",
+            },
+        )
+        namespace = {"atom": "http://www.w3.org/2005/Atom"}
+        root = ET.fromstring(response.text)
+        results: list[SearchResult] = []
+
+        for entry in root.findall("atom:entry", namespace):
+            title = _clean_text(_xml_text(entry.find("atom:title", namespace)))
+            summary = _clean_text(_xml_text(entry.find("atom:summary", namespace)))
+            url = _xml_text(entry.find("atom:id", namespace)).strip()
+            canonical_url = canonicalize_url(url)
+            if not url or not canonical_url:
+                continue
+
+            results.append(
+                SearchResult(
+                    title=title or url,
+                    url=url,
+                    snippet=summary,
+                    query=query,
+                    rank=len(results) + 1,
+                    provider=self.name,
+                    canonical_url=canonical_url,
+                )
+            )
+
+            if len(results) >= limit:
+                break
+
+        return results
+```
+
+تنسّق فئة `WebSearch` المزوّدين وتجلب الصفحات:
+
+```python
+class WebSearch:
+    def __init__(
+        self,
+        timeout: float = 15.0,
+        *,
+        providers: Iterable[SearchProvider] | None = None,
+        chunk_chars: int = 3000,
+        scraper: Callable[[str], ScrapeResult] | None = None,
+    ) -> None:
+        self._client = httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": USER_AGENT},
+        )
+        self.providers = tuple(providers or (DuckDuckGoProvider(),))
+        self.chunk_chars = chunk_chars
+        self.scraper = scraper
+
+    @classmethod
+    def from_provider_names(cls, provider_names: Iterable[str], **kwargs: object) -> "WebSearch":
+        providers = [_provider_from_name(name) for name in provider_names]
+        return cls(providers=providers, **kwargs)
+
+    def search(self, query: str, limit: int = 5) -> list[SearchResult]:
+        results: list[SearchResult] = []
+        seen_urls: set[str] = set()
+
+        for provider in self.providers:
+            for result in provider.search(self, query, limit):
+                if result.canonical_url in seen_urls:
+                    continue
+                results.append(result)
+                seen_urls.add(result.canonical_url)
+
+        return results
+
+    def fetch(self, result: SearchResult) -> WebPage:
+        if self.scraper is None:
+            raise RuntimeError("WebSearch.fetch requires a Venice scrape function.")
+
+        scraped = self.scraper(result.url)
+        text = scraped.content.strip() or result.snippet
+        chunks = self._chunk_text(text)
+        return WebPage(
+            title=scraped.title or result.title,
+            url=result.url,
+            final_url=scraped.final_url or scraped.url or result.url,
+            canonical_url=canonicalize_url(scraped.final_url or result.url),
+            text=text,
+            content_type=scraped.content_type or "text/markdown",
+            retrieved_at=utc_now(),
+            content_hash=content_hash(text),
+            chunks=chunks,
+        )
+
+    def get(self, url: str, *, params: dict[str, object] | None = None) -> httpx.Response:
+        response = self._client.get(url, params=params)
+        response.raise_for_status()
+        return response
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> "WebSearch":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def _chunk_text(self, text: str) -> tuple[TextChunk, ...]:
+        overlap = min(250, max(0, self.chunk_chars // 10))
+        return chunk_text(text, chunk_chars=self.chunk_chars, overlap=overlap)
+```
+
+يضيف التنفيذ المرجعي الكامل إعادات المحاولة، وتأخيرات طلب على مستوى المضيف، وأخطاء أكثر ودية. تستحق هذه أن تبقى لأن وكلاء البحث يقضون وقتًا طويلًا في التعامل مع صفحات تحظر الأتمتة أو تُعيد التوجيه بشكل غير متوقع أو تُرجع أخطاء عابرة.
+
+أضف مساعدي المزوّد الصغار في الأسفل:
+
+```python
+def _normalize_duckduckgo_url(raw_url: str) -> str:
+    if not raw_url:
+        return ""
+
+    parsed = urlparse(raw_url)
+    if parsed.netloc.endswith("duckduckgo.com") and parsed.path == "/l/":
+        target = parse_qs(parsed.query).get("uddg", [""])[0]
+        return unquote(target)
+
+    if parsed.scheme in {"http", "https"}:
+        return raw_url
+
+    return ""
+
+
+def _provider_from_name(name: str) -> SearchProvider:
+    normalized = name.strip().lower()
+    if normalized in {"duckduckgo", "ddg", "web"}:
+        return DuckDuckGoProvider()
+    if normalized == "arxiv":
+        return ArxivProvider()
+    raise ValueError(f"Unknown source provider: {name}")
+
+
+def _clean_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _xml_text(node: ET.Element | None) -> str:
+    return "" if node is None or node.text is None else node.text
+```
+
+## كتابة الـ Artifacts المحلية
+
+لسير عمل البحث، تهم القابلية للتدقيق. إذا قال التقرير النهائي شيئًا مفاجئًا، يجب أن تستطيع فحص أي مصدر أدى إليه.
+
+أنشئ `research_agent/artifacts.py`:
+
+```python
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
+from typing import Any
+
+
+class ArtifactWriter:
+    def __init__(self, root: Path | None = None) -> None:
+        self.root = root
+        if self.root is not None:
+            self.root.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def enabled(self) -> bool:
+        return self.root is not None
+
+    def write(self, kind: str, record: object) -> None:
+        if self.root is None:
+            return
+
+        path = self.root / f"{kind}.jsonl"
+        payload = json.dumps(_to_jsonable(record), ensure_ascii=False, sort_keys=True)
+        with path.open("a", encoding="utf-8") as file:
+            file.write(f"{payload}\n")
+
+
+def _to_jsonable(value: object) -> Any:
+    if is_dataclass(value):
+        return _to_jsonable(asdict(value))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(item) for item in value]
+    return value
+```
+
+يكتب هذا كائن JSON واحدًا لكل سطر، مما يجعل الـ artifacts سهلة الإلحاق والفحص والمعالجة بأدوات سطر الأوامر لاحقًا.
+
+## بناء وكيل البحث
+
+الآن وقد أصبح لدينا Venice والبحث والنماذج والـ artifacts، يمكننا بناء الوكيل الفعلي.
+
+أنشئ `research_agent/agent.py`:
+
+```python
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from textwrap import dedent
+
+from .artifacts import ArtifactWriter
+from .models import CollectionError, EvidenceChunk, ResearchReport, SearchResult, SourceNote, WebPage, utc_now
+from .venice import VeniceClient, VeniceError
+from .web import WebSearch
+
+SYSTEM_PROMPT = """You are a careful research assistant.
+Use the supplied source material only when making factual claims.
+Flag uncertainty, contradictions, and missing context instead of filling gaps."""
+
+ProgressCallback = Callable[[str], None]
+
+DEFAULT_ITERATIONS = 3
+DEFAULT_QUERY_COUNT = 6
+DEFAULT_RESULTS_PER_QUERY = 4
+DEFAULT_MAX_SOURCES = 40
+DEFAULT_MAX_CHUNKS_PER_SOURCE = 6
+```
+
+موجّه النظام هو الحاجز السلوكي الأساسي. لا نريد للنموذج أن يُنتج تقريرًا يبدو مبهرًا من الذاكرة. نريده أن يستخدم المادة المصدرية ويُشير إلى عدم اليقين عندما تكون الأدلة شحيحة.
+
+نحتاج أيضًا إلى dataclasses نهائيتين في `models.py` إن لم تكن قد أضفتهما بعد:
+
+```python
+@dataclass(frozen=True)
+class CollectionError:
+    stage: str
+    message: str
+    query: str = ""
+    url: str = ""
+    source_id: str = ""
+    provider: str = ""
+
+
+@dataclass(frozen=True)
+class ResearchReport:
+    topic: str
+    markdown: str
+    sources: list[SourceNote]
+    artifacts_dir: str | None = None
+```
+
+بعد ذلك، عرّف `ResearchAgent`:
+
+```python
+class ResearchAgent:
+    def __init__(
+        self,
+        venice: VeniceClient,
+        web: WebSearch | None = None,
+        artifacts: ArtifactWriter | None = None,
+        progress: ProgressCallback | None = None,
+        max_sources: int | None = DEFAULT_MAX_SOURCES,
+        max_chunks_per_source: int = DEFAULT_MAX_CHUNKS_PER_SOURCE,
+    ) -> None:
+        self.venice = venice
+        self.web = web or WebSearch(scraper=venice.scrape)
+        self.artifacts = artifacts or ArtifactWriter()
+        self.progress = progress or (lambda _: None)
+        self.max_sources = max_sources
+        self.max_chunks_per_source = max_chunks_per_source
+```
+
+تُنسّق طريقة `run()` تمريرات البحث:
+
+```python
+    def run(
+        self,
+        topic: str,
+        *,
+        iterations: int = DEFAULT_ITERATIONS,
+        query_count: int = DEFAULT_QUERY_COUNT,
+        results_per_query: int = DEFAULT_RESULTS_PER_QUERY,
+    ) -> ResearchReport:
+        notes: list[SourceNote] = []
+        seen_source_keys: set[str] = set()
+        seen_content_hashes: set[str] = set()
+        queries = self._initial_queries(topic, query_count)
+
+        self.artifacts.write("queries", {"stage": "initial", "topic": topic, "queries": queries})
+
+        for iteration in range(1, iterations + 1):
+            self.progress(f"Research pass {iteration}/{iterations}: {', '.join(queries)}")
+            self._collect_notes(
+                topic,
+                queries,
+                results_per_query,
+                seen_source_keys,
+                seen_content_hashes,
+                notes,
+                iteration,
+            )
+
+            if iteration < iterations:
+                gaps, queries = self._gap_follow_up_queries(topic, notes, query_count)
+                self.artifacts.write(
+                    "research_gaps",
+                    {
+                        "topic": topic,
+                        "after_iteration": iteration,
+                        "source_balance": _source_cluster_counts(notes),
+                        "gaps": gaps,
+                        "queries": queries,
+                    },
+                )
+                self.artifacts.write(
+                    "queries",
+                    {
+                        "stage": "follow_up",
+                        "topic": topic,
+                        "iteration": iteration + 1,
+                        "gap_count": len(gaps),
+                        "queries": queries,
+                    },
+                )
+
+        report = self._write_report(topic, notes)
+        self.artifacts.write(
+            "reports",
+            {
+                "topic": topic,
+                "source_count": len(notes),
+                "generated_at": utc_now(),
+                "markdown": report,
+            },
+        )
+
+        return ResearchReport(
+            topic=topic,
+            markdown=report,
+            sources=notes,
+            artifacts_dir=str(self.artifacts.root) if self.artifacts.root is not None else None,
+        )
+```
+
+مجموعتا `seen_*` هما ما يبقي الوكيل من إهدار الوقت على مصادر مكررة. إزالة تكرار الـ URL تلتقط الروابط المتكررة. وإزالة تكرار content hash تلتقط النسخ المرآة والمنشورات المنقولة والصفحات التي تُعيد التوجيه إلى نفس المحتوى النهائي.
+
+## التخطيط للبحوث الأولية وبحوث المتابعة
+
+أول استدعاء للنموذج يحوّل الموضوع إلى استعلامات بحث:
+
+```python
+    def _initial_queries(self, topic: str, count: int) -> list[str]:
+        prompt = dedent(
+            f"""
+            Create {count} diverse web search queries for researching this topic:
+            {topic}
+
+            Cover background, recent developments, primary sources, criticism, and data.
+            Include at least one query likely to find primary sources or datasets.
+            Return JSON only in this shape: {{"queries": ["..."]}}
+            """
+        ).strip()
+        return self._query_list(prompt, count, fallback=[topic])
+```
+
+بعد كل تمريرة بحث، يقوم الوكيل المُحدَّث بخطوة أكثر تأنّيًا لتحليل الفجوات. ينظر إلى الملاحظات الحالية، ويُحصي مجموعات المصادر حسب النطاق، ويسأل Venice ما التغطية الناقصة، ويكتب تلك الفجوات إلى الـ artifacts، ثم يستخدم الاستعلامات الناتجة للتمريرة التالية.
+
+![Gap analysis loop](/images/guides/private-research-agent/gap-analysis-loop.svg)
+
+ابدأ بتتبّع توازن المصادر:
+
+```python
+from urllib.parse import urlparse
+
+
+def _source_cluster_counts(notes: list[SourceNote]) -> list[dict[str, object]]:
+    total = len(notes)
+    if total == 0:
+        return []
+
+    clusters: dict[str, list[str]] = {}
+    for note in notes:
+        cluster = _source_cluster(note)
+        clusters.setdefault(cluster, []).append(note.source_id)
+
+    return [
+        {
+            "cluster": cluster,
+            "source_count": len(source_ids),
+            "source_share": round(len(source_ids) / total, 3),
+            "source_ids": source_ids,
+        }
+        for cluster, source_ids in sorted(
+            clusters.items(), key=lambda item: (-len(item[1]), item[0])
+        )
+    ]
+
+
+def _source_cluster(note: SourceNote) -> str:
+    url = note.canonical_url or note.final_url or note.url
+    host = urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host or "unknown"
+
+
+def _source_balance_digest(notes: list[SourceNote], limit: int = 8) -> str:
+    clusters = _source_cluster_counts(notes)
+    if not clusters:
+        return "No source clusters yet."
+
+    total = len(notes)
+    lines = [
+        f"- {cluster['cluster']}: {cluster['source_count']}/{total} sources "
+        f"({cluster['source_share']:.0%}); IDs: {', '.join(cluster['source_ids'])}"
+        for cluster in clusters[:limit]
+    ]
+    return "\n".join(lines)
+```
+
+يمنح هذا الوكيل طريقة بسيطة لملاحظة استحواذ مجموعة المصادر. إذا كانت كل المصادر تأتي من شركة واحدة أو إطار عمل واحد أو نطاق واحد، فعلى استعلامات المتابعة أن توسّع مجموعة المصادر عمدًا بدلًا من جمع المزيد من الشيء نفسه.
+
+الآن استخدم معلومات التوازن تلك عند إنشاء بحوث المتابعة:
+
+```python
+    def _follow_up_queries(self, topic: str, notes: list[SourceNote], count: int) -> list[str]:
+        digest = _source_digest(notes, max_chars=9000)
+        source_balance = _source_balance_digest(notes)
+        prompt = dedent(
+            f"""
+            We are researching: {topic}
+
+            Current notes:
+            {digest}
+
+            Source balance:
+            {source_balance}
+
+            Create {count} follow-up web search queries that fill gaps, verify important claims,
+            find primary evidence, and look for dissenting evidence.
+            If one source domain, vendor, framework, product, or perspective is overrepresented,
+            deliberately broaden beyond it unless the topic explicitly asks for that focus.
+            Return JSON only in this shape: {{"queries": ["..."]}}
+            """
+        ).strip()
+        return self._query_list(prompt, count, fallback=[topic])
+```
+
+يلفّ التنفيذ المرجعي الأحدث هذا في `_gap_follow_up_queries()`، الذي يسأل Venice أن يُعيد سجلات الفجوات والاستعلامات معًا:
+
+```python
+    def _gap_follow_up_queries(
+        self, topic: str, notes: list[SourceNote], count: int
+    ) -> tuple[list[dict[str, str]], list[str]]:
+        if not notes:
+            return [], [topic]
+
+        digest = _source_digest(notes, max_chars=12000)
+        source_balance = _source_balance_digest(notes)
+        prompt = dedent(
+            f"""
+            Identify coverage gaps before the next research pass.
+
+            Research topic:
+            {topic}
+
+            Current source notes:
+            {digest}
+
+            Source balance:
+            {source_balance}
+
+            Find important missing coverage that would improve a deep research report.
+            Look specifically for primary sources, technical concepts, dissenting views,
+            overrepresented source clusters, and claims that need verification.
+
+            Return JSON only in this shape:
+            {{"gaps": [{{"missing": "...", "why_it_matters": "...", "query": "..."}}],
+              "queries": ["targeted web search query"]}}
+            """
+        ).strip()
+        response = self.venice.chat(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            max_tokens=900,
+        )
+
+        data = json.loads(response)
+        gaps = _clean_gap_records(data.get("gaps"))
+        queries = _clean_string_list(data.get("queries"))
+        if not queries:
+            queries = [gap["query"] for gap in gaps if gap.get("query")]
+        return gaps, queries[:count]
+```
+
+عند تفعيل `--artifacts`، تُكتب هذه السجلات إلى `research_gaps.jsonl`. هذا يمنحك مسار تدقيق مفيد لسبب بحث الوكيل عن استعلام معيّن في التمريرة الثانية.
+
+يجب أن يكون المحلّل متسامحًا. إذا أعاد النموذج JSON مشوّهًا، يعود الوكيل إلى الموضوع الأصلي:
+
+```python
+    def _query_list(self, prompt: str, count: int, fallback: list[str]) -> list[str]:
+        response = self.venice.chat(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.4,
+            max_tokens=500,
+        )
+        try:
+            data = json.loads(response)
+            queries = data.get("queries", [])
+        except (json.JSONDecodeError, AttributeError):
+            queries = []
+
+        clean_queries = [
+            query.strip()
+            for query in queries
+            if isinstance(query, str) and query.strip()
+        ]
+        return (clean_queries or fallback)[:count]
+```
+
+يستحق هذا النمط الاستخدام في كل كود الوكيل: اطلب إخراجًا مُهيكلًا، حلّله، وقدّم بديلًا بسيطًا عندما يكون الإخراج غير قابل للاستخدام.
+
+## قراءة وتلخيص المصادر
+
+الآن نجمع ملاحظات المصادر. يبحث الوكيل عن كل استعلام، ويجلب كل نتيجة عبر Venice scrape، ويقسّم الـ Markdown، ويلخّص الأدلة المفيدة.
+
+```python
+    def _collect_notes(
+        self,
+        topic: str,
+        queries: list[str],
+        results_per_query: int,
+        seen_source_keys: set[str],
+        seen_content_hashes: set[str],
+        notes: list[SourceNote],
+        iteration: int,
+    ) -> None:
+        for query in queries:
+            if self.max_sources is not None and len(notes) >= self.max_sources:
+                return
+
+            self.progress(f"Searching: {query}")
+            try:
+                results = self.web.search(query, limit=results_per_query)
+            except Exception as exc:
+                self._record_error("search", exc, query=query)
+                continue
+
+            self.artifacts.write(
+                "search_results",
+                {"iteration": iteration, "query": query, "results": results},
+            )
+
+            for result in results:
+                if self.max_sources is not None and len(notes) >= self.max_sources:
+                    return
+
+                source_key = result.canonical_url or result.url
+                if source_key in seen_source_keys:
+                    self.artifacts.write("dedupe", {"reason": "canonical_url", "url": result.url})
+                    continue
+
+                seen_source_keys.add(source_key)
+                source_id = f"S{len(notes) + 1}"
+                note = self._read_source(topic, query, source_id, result, seen_source_keys, seen_content_hashes)
+                if note is not None:
+                    notes.append(note)
+```
+
+إخفاقات البحث والجلب الفردية لا يجب أن توقف التشغيل بأكمله. الويب العام فوضوي. بعض الصفحات تحظر الـ scraping، وبعضها يُعيد PDF، وبعضها معطّل، وبعضها يُعيد التوجيه إلى أماكن غير متوقعة. على وكيل البحث أن يستمر ويُسجّل ما فشل.
+
+هذه طريقة قراءة المصادر:
+
+```python
+    def _read_source(
+        self,
+        topic: str,
+        query: str,
+        source_id: str,
+        result: SearchResult,
+        seen_source_keys: set[str],
+        seen_content_hashes: set[str],
+    ) -> SourceNote | None:
+        self.progress(f"Reading {source_id}: {result.title}")
+        try:
+            page = self.web.fetch(result)
+        except Exception as exc:
+            self._record_error("fetch", exc, query=query, url=result.url, source_id=source_id)
+            return None
+
+        if page.content_hash in seen_content_hashes:
+            self.artifacts.write(
+                "dedupe",
+                {"reason": "content_hash", "source_id": source_id, "url": result.url},
+            )
+            return None
+        seen_content_hashes.add(page.content_hash)
+
+        chunks = self._summarize_chunks(topic, query, source_id, page)
+        if not chunks:
+            self._record_error("summarize_chunk", VeniceError("no chunks could be summarized"), url=result.url)
+            return None
+
+        summary = self._summarize_source(topic, query, source_id, page, chunks)
+        note = SourceNote(
+            source_id=source_id,
+            title=page.title,
+            url=result.url,
+            canonical_url=page.canonical_url,
+            final_url=page.final_url,
+            query=query,
+            rank=result.rank,
+            snippet=result.snippet,
+            provider=result.provider,
+            retrieved_at=page.retrieved_at,
+            content_type=page.content_type,
+            content_hash=page.content_hash,
+            chunks=chunks,
+            summary=summary,
+        )
+        self.artifacts.write("source_notes", note)
+        return note
+```
+
+لكل مقطع مصدر، اطلب من Venice ملخص أدلة قصيرًا واقتباسات دقيقة:
+
+```python
+    def _summarize_chunks(
+        self,
+        topic: str,
+        query: str,
+        source_id: str,
+        page: WebPage,
+    ) -> tuple[EvidenceChunk, ...]:
+        evidence: list[EvidenceChunk] = []
+        for chunk in page.chunks[: self.max_chunks_per_source]:
+            prompt = dedent(
+                f"""
+                Topic: {topic}
+                Search query: {query}
+                Source ID: {source_id}
+                Chunk ID: {chunk.chunk_id}
+                Source title: {page.title}
+                Source URL: {page.final_url}
+
+                Source chunk:
+                {chunk.text}
+
+                Extract only evidence relevant to the topic.
+                Return JSON only in this shape:
+                {{"summary": "...", "quotes": ["short exact quote", "..."]}}
+                """
+            ).strip()
+
+            try:
+                response = self.venice.chat(
+                    [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.1,
+                    max_tokens=600,
+                )
+                data = json.loads(response)
+                evidence.append(
+                    EvidenceChunk(
+                        chunk_id=chunk.chunk_id,
+                        text=chunk.text,
+                        summary=str(data.get("summary", "")).strip(),
+                        quotes=tuple(
+                            quote.strip()
+                            for quote in data.get("quotes", [])
+                            if isinstance(quote, str) and quote.strip()
+                        ),
+                    )
+                )
+            except Exception as exc:
+                self._record_error("summarize_chunk", exc, query=query, url=page.final_url, source_id=source_id)
+                continue
+
+        return tuple(evidence)
+```
+
+ثم اطوِ ملخصات المقاطع إلى ملاحظة مصدر واحدة:
+
+```python
+    def _summarize_source(
+        self,
+        topic: str,
+        query: str,
+        source_id: str,
+        page: WebPage,
+        chunks: tuple[EvidenceChunk, ...],
+    ) -> str:
+        chunk_digest = _chunk_digest(chunks, max_chars=9000)
+        prompt = dedent(
+            f"""
+            Topic: {topic}
+            Search query: {query}
+            Source ID: {source_id}
+            Source title: {page.title}
+            Source URL: {page.final_url}
+
+            Chunk evidence:
+            {chunk_digest}
+
+            Synthesize a source note using only the chunk evidence. Include:
+            - key facts with dates/numbers where present
+            - any limitations or bias in the source
+            - useful exact wording from quotes if it is short
+
+            Keep the note under 180 words and refer to the source as [{source_id}].
+            """
+        ).strip()
+        return self.venice.chat(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            max_tokens=500,
+        )
+```
+
+التلخيص بخطوتين هو الجزء الذي يجعل الوكيل يبدو أكثر موثوقية من سكربت أساسي "لخّص هذه الـ URLs". يقرأ النموذج أولًا مقاطع المصدر، ثم يكتب ملاحظة على مستوى المصدر من تلك القطع من الأدلة المستخرجة.
+
+## كتابة التقرير النهائي
+
+بمجرد أن يصبح لدى الوكيل ملاحظات المصادر، يمكنه كتابة التقرير. ابدأ بكاتب تقرير بتمريرة واحدة:
+
+```python
+    def _write_report(self, topic: str, notes: list[SourceNote]) -> str:
+        if not notes:
+            return (
+                f"# Research report: {topic}\n\n"
+                "No usable web sources were collected. Check your network connection or try a narrower topic."
+            )
+
+        prompt = dedent(
+            f"""
+            Research topic:
+            {topic}
+
+            Source notes:
+            {_source_digest(notes, max_chars=45000)}
+
+            Write a detailed source-backed Markdown research survey.
+
+            Requirements:
+            - Start with a precise H1 title.
+            - Open with "## Overview".
+            - Use topic-specific sections.
+            - Use footnote-style citation markers like [^1] and [^2].
+            - Do not cite with internal source IDs like [S1] in the report body.
+            - Do not include uncited factual claims.
+            - Avoid source-cluster capture from one vendor, domain, framework, or viewpoint.
+            - Include uncertainty, contradictions, and missing context where relevant.
+            - End with "## References" as a numbered list ordered by first citation.
+            """
+        ).strip()
+
+        return self.venice.chat_stream(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=7000,
+        )
+```
+
+يذهب التنفيذ المرجعي أبعد للتقارير العميقة: يطلب من Venice مخططًا، ويصيغ كل قسم تقرير على حدة، ثم يطلب تمريرة محرّر نهائية لتجميع التقرير المنتهي وتحويل معرّفات المصادر الداخلية إلى استشهادات بأسلوب حاشية سفلية.
+
+تلك المقاربة المرحلية مفيدة عندما تريد إخراج بحث طويل لأن موجّهًا عملاقًا واحدًا غالبًا ما يضغط الكثير. كما تدفع الموجّهات المُحدَّثة التقرير نحو مسح واسع مدعوم بالمصادر بدلًا من دليل قرار رفيع. إذا كانت قاعدة المصادر منحازة نحو مجموعة واحدة، يطلب موجّه المحرّر من Venice الإقرار بذلك الانحياز وتجنّب تقديمه كممثّل لكامل المجال.
+
+أضف مساعدي الـ digest:
+
+```python
+def _chunk_digest(chunks: tuple[EvidenceChunk, ...], max_chars: int) -> str:
+    parts = []
+    for chunk in chunks:
+        quote_text = "; ".join(chunk.quotes)
+        parts.append(
+            f"{chunk.chunk_id}: {chunk.summary}"
+            + (f"\nQuotes: {quote_text}" if quote_text else "")
+        )
+    return "\n\n".join(parts)[:max_chars]
+
+
+def _source_digest(notes: list[SourceNote], max_chars: int) -> str:
+    chunks = [
+        "\n".join(
+            [
+                f"[{note.source_id}] {note.title}",
+                f"URL: {note.final_url or note.url}",
+                f"Canonical URL: {note.canonical_url}",
+                f"Found via: {note.query}",
+                f"Provider/rank: {note.provider}/{note.rank}",
+                f"Retrieved: {note.retrieved_at}",
+                f"Content hash: {note.content_hash}",
+                f"Note: {note.summary}",
+                f"Chunk evidence: {_chunk_digest(note.chunks, max_chars=1000)}",
+            ]
+        )
+        for note in notes
+    ]
+    return "\n\n".join(chunks)[:max_chars]
+```
+
+أخيرًا، أضف تسجيل الأخطاء:
+
+```python
+    def _record_error(
+        self,
+        stage: str,
+        exc: Exception,
+        *,
+        query: str = "",
+        url: str = "",
+        source_id: str = "",
+        provider: str = "",
+    ) -> None:
+        message = str(exc)
+        self.progress(f"{stage.replace('_', ' ').title()} failed: {message}")
+        self.artifacts.write(
+            "errors",
+            CollectionError(
+                stage=stage,
+                message=message,
+                query=query,
+                url=url,
+                source_id=source_id,
+                provider=provider,
+            ),
+        )
+```
+
+في هذه المرحلة، حلقة البحث الأساسية في مكانها.
+
+## إضافة الـ CLI
+
+الآن نحتاج إلى نقطة دخول لسطر الأوامر. أنشئ `main.py`:
+
+```python
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from research_agent.agent import (
+    DEFAULT_ITERATIONS,
+    DEFAULT_MAX_CHUNKS_PER_SOURCE,
+    DEFAULT_MAX_SOURCES,
+    DEFAULT_QUERY_COUNT,
+    DEFAULT_REPORT_STYLE,
+    DEFAULT_RESULTS_PER_QUERY,
+    ResearchAgent,
+)
+from research_agent.artifacts import ArtifactWriter
+from research_agent.venice import VeniceClient, VeniceError
+from research_agent.web import WebSearch
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run a minimal deep research agent powered by Venice AI.",
+    )
+    parser.add_argument("topic", nargs="+", help="Research topic, wrapped in quotes for best results.")
+    parser.add_argument("--model", help="Venice model name. Defaults to VENICE_MODEL or openai-gpt-55.")
+    parser.add_argument("--iterations", type=int, default=DEFAULT_ITERATIONS)
+    parser.add_argument("--queries", type=int, default=DEFAULT_QUERY_COUNT)
+    parser.add_argument("--results", type=int, default=DEFAULT_RESULTS_PER_QUERY)
+    parser.add_argument("--output", "--markdown-output", dest="output", type=Path)
+    parser.add_argument("--artifacts", type=Path, help="Optional directory for JSONL research artifacts.")
+    parser.add_argument("--providers", default="duckduckgo", help="Comma-separated providers: duckduckgo, arxiv.")
+    parser.add_argument("--max-sources", type=int, default=DEFAULT_MAX_SOURCES)
+    parser.add_argument("--chunk-chars", type=int, default=3000)
+    parser.add_argument("--max-chunks-per-source", type=int, default=DEFAULT_MAX_CHUNKS_PER_SOURCE)
+    parser.add_argument(
+        "--report-style",
+        choices=["brief", "standard", "deep"],
+        default=DEFAULT_REPORT_STYLE,
+        help=f"Final report depth. Default: {DEFAULT_REPORT_STYLE}.",
+    )
+    parser.add_argument("--quiet", action="store_true", help="Hide progress messages.")
+    return parser.parse_args()
+```
+
+يكشف الـ CLI المفاتيح التي ستضبطها فعلًا أثناء البحث:
+
+| Option | What it controls |
+| --- | --- |
+| `--iterations` | Number of research passes |
+| `--queries` | Search queries generated per pass |
+| `--results` | Results read per provider for each query |
+| `--providers` | Search providers, such as `duckduckgo` or `duckduckgo,arxiv` |
+| `--max-sources` | Maximum usable sources to collect |
+| `--chunk-chars` | Approximate chunk size before source evidence extraction |
+| `--max-chunks-per-source` | Number of chunks summarized per source |
+| `--report-style` | Final report depth: `brief`, `standard`, or `deep` |
+| `--artifacts` | Directory for JSONL audit records |
+| `--output` | Path for the final Markdown report |
+
+الآن أوصل كل شيء معًا:
+
+```python
+def main() -> int:
+    load_dotenv()
+    args = parse_args()
+    topic = " ".join(args.topic)
+
+    try:
+        venice = VeniceClient.from_env(model=args.model)
+        progress = None if args.quiet else lambda message: print(f"[agent] {message}")
+        provider_names = [name.strip() for name in args.providers.split(",") if name.strip()]
+
+        with WebSearch.from_provider_names(
+            provider_names,
+            chunk_chars=args.chunk_chars,
+            scraper=venice.scrape,
+        ) as web:
+            agent = ResearchAgent(
+                venice=venice,
+                web=web,
+                artifacts=ArtifactWriter(args.artifacts),
+                progress=progress,
+                max_sources=args.max_sources,
+                max_chunks_per_source=args.max_chunks_per_source,
+                report_style=args.report_style,
+            )
+            report = agent.run(
+                topic,
+                iterations=args.iterations,
+                query_count=args.queries,
+                results_per_query=args.results,
+            )
+    except ValueError as exc:
+        print(f"Configuration error: {exc}")
+        return 1
+    except VeniceError as exc:
+        print(f"Venice API error: {exc}")
+        return 1
+
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(report.markdown, encoding="utf-8")
+        print(f"\nSaved report to {args.output}")
+    else:
+        print()
+        print(report.markdown)
+
+    if report.artifacts_dir:
+        print(f"Saved research artifacts to {report.artifacts_dir}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+يمنحنا هذا CLI بحث محلي يعمل.
+
+## تشغيل الوكيل
+
+شغّل تمريرة بحث سريعة:
+
+```bash
+uv run python main.py "How are AI agents changing software engineering workflows?"
+```
+
+اكتب التقرير إلى ملف Markdown:
+
+```bash
+uv run python main.py "state of open source LLM inference in 2026" \
+  --output reports/inference.md
+```
+
+استخدم مصادر أكثر ومزوّدين متعددين:
+
+```bash
+uv run python main.py "agentic coding research" \
+  --providers duckduckgo,arxiv \
+  --iterations 3 \
+  --queries 5 \
+  --results 4 \
+  --max-sources 12
+```
+
+اختر أسلوب التقرير النهائي:
+
+```bash
+uv run python main.py "AI agents in software engineering" --report-style deep
+```
+
+استخدم `brief` لموجز مدعوم بالمصادر مختصر، و`standard` لمسح أوفى، و`deep` لسير عمل المخطط/القسم/المحرّر المرحلي.
+
+احفظ artifacts قابلة للتدقيق:
+
+```bash
+uv run python main.py "privacy tradeoffs in hosted LLM APIs" \
+  --output reports/privacy.md \
+  --artifacts runs/privacy
+```
+
+عند تفعيل الـ artifacts، سترى ملفات مثل:
+
+```text
+runs/privacy/
+  queries.jsonl
+  research_gaps.jsonl
+  search_results.jsonl
+  fetches.jsonl
+  source_chunks.jsonl
+  chunk_summaries.jsonl
+  source_notes.jsonl
+  dedupe.jsonl
+  errors.jsonl
+  report_outline.jsonl
+  report_sections.jsonl
+  report_editor.jsonl
+  reports.jsonl
+```
+
+هذه الملفات مفيدة عندما تريد فهم كيف وصل الوكيل إلى استنتاج. على سبيل المثال، يُظهر `source_notes.jsonl` أدلة المصادر الملخّصة، ويُظهر `research_gaps.jsonl` لماذا توّلدت بحوث المتابعة، ويُظهر `errors.jsonl` الصفحات التي فشلت أثناء البحث أو الـ scraping أو التلخيص.
+
+## ملاحظات الخصوصية والموثوقية
+
+يلامس وكيل البحث عدة أنظمة، لذا يساعد أن تكون دقيقًا بشأن ما يذهب إلى أين:
+
+![حدود بيانات وكيل البحث الخاص](/images/guides/private-research-agent/data-boundaries.svg)
+
+| الطبقة | ما يرى البيانات |
+| --- | --- |
+| CLI محلي | الموضوع والإعداد وملاحظات المصادر والـ artifacts والتقارير النهائية تبقى على جهازك |
+| مزوّد البحث | تُرسَل استعلامات البحث إلى المزوّد الذي تختاره، مثل DuckDuckGo أو arXiv |
+| Venice scrape | تُرسَل روابط المصادر العامة إلى نقطة نهاية scrape في Venice |
+| Venice chat completions | تُرسَل الموجّهات ومقاطع المصادر وملاحظات المصادر وتعليمات توليد التقرير إلى Venice |
+| ملفات الإخراج | تُكتَب تقارير Markdown وartifacts JSONL محليًا |
+
+إذا أردت إبقاء المزيد من مسار البحث داخل Venice، يمكنك تكييف طبقة المزوّد لاستدعاء نقطة نهاية `POST /augment/search` في Venice بدلًا من الاستعلام من DuckDuckGo مباشرة. يستخدم التنفيذ المرجعي مزوّدين عامين خفيفين بحيث يبقى العرض سهل التشغيل والفهم.
+
+للموثوقية، أبقِ هذه الافتراضات متحفظة:
+
+- استخدم إعادات المحاولة لاستدعاءات Venice وطلبات الويب.
+- أضف `--request-delay` صغيرًا إن كنت تقرأ صفحات كثيرة من نفس المضيف.
+- حُدّ `--max-sources` بحيث لا تستمر المواضيع الواسعة إلى ما لا نهاية.
+- احفظ `--artifacts` للتقارير المهمة حتى تتمكن من تدقيق الإخراج النهائي.
+- عامِل التقرير كموجز، لا حقيقة مطلقة. اتبع الاستشهادات إلى المصدر الأصلي عندما تكون الدقة مهمة.
+
+## اختبار القطع
+
+لست بحاجة إلى طلبات ويب حية أو استدعاءات Venice لاختبار معظم النظام. يستخدم المستودع المرجعي فئات Venice وويب مزيّفة لاختبار حلقة البحث وسلوك إزالة التكرار والـ artifacts وموجّهات التقرير.
+
+اختبار أول مفيد هو canonicalization للـ URL:
+
+```python
+from research_agent.models import canonicalize_url
+
+
+def test_canonicalize_url_removes_tracking_params():
+    url = "https://example.com/post?utm_source=x&b=2&a=1#section"
+    assert canonicalize_url(url) == "https://example.com/post?a=1&b=2"
+```
+
+ثم اختبر أن المحتوى المكرر يُتخطّى:
+
+```python
+from research_agent.models import SearchResult, WebPage, chunk_text
+
+
+class FakeWeb:
+    def search(self, query: str, limit: int = 5) -> list[SearchResult]:
+        return [
+            SearchResult(title="First source", url="https://example.com/a", snippet="snippet"),
+            SearchResult(title="Mirror", url="https://example.com/b", snippet="snippet"),
+        ]
+
+    def fetch(self, result: SearchResult) -> WebPage:
+        text = "This page contains relevant evidence. " * 5
+        return WebPage(
+            title=result.title,
+            url=result.url,
+            final_url=result.url,
+            text=text,
+            content_hash="same-content",
+            chunks=chunk_text(text, chunk_chars=80, overlap=10),
+        )
+```
+
+تجعل المزيّفات اختبارات الوكيل أسرع بكثير وأقل اهتزازًا. يمكنك التحقق من منطق التنسيق دون الاعتماد على نتائج بحث حية أو ظروف شبكة أو إخراج نموذج.
+
+## القياس الأدائي
+
+لدى العديد من مزوّدي الذكاء الاصطناعي الآن سير عمل بحث عميق خاصة بهم، لذا يتضمن المستودع المرجعي قياسًا أدائيًا بسيطًا مقابل أداة Deep Research من Perplexity. طُلب من كلا الوكيلين كتابة تقرير عن بنية إطار وكيل الذكاء الاصطناعي، ثم رُفعت التقارير المُولَّدة إلى [مستودع GitHub](https://github.com/joshua-mo-143/venice-research-agent-demo/tree/main/reports).
+
+هذا ليس معدًّا ليكون قياسًا أدائيًا رسميًا. إنه طريقة عملية لفحص بنية التقرير وتغطية المصادر وجودة الاستشهاد وما إذا كان الوكيل يُفرط في التركيز على مجموعة مصادر واحدة. وهذا أيضًا لماذا يتعقّب التنفيذ المُحدَّث `research_gaps.jsonl` وتوازن المصادر قبل بحوث المتابعة.
+
+## توسيع هذا المثال
+
+بمجرد عمل الوكيل الأساس، إليك طرقًا عملية لتحسينه:
+
+- أضف مزوّد بحث Venice باستخدام `POST /augment/search`.
+- خزّن التقارير والـ artifacts في قاعدة بيانات SQLite صغيرة بدلًا من ملفات JSONL.
+- أضف قوائم سماح أو حظر للمصادر لنطاقات بحث موثوقة.
+- أضف دعم PDF بدمج Venice scrape مع تحليل المستندات للمصادر التي لا تكشف HTML نظيفًا.
+- أضف مجموعة تقييم من المواضيع وأنواع المصادر المتوقعة حتى تتمكن من مقارنة جودة البحث بعد تغييرات الموجّه.
+- أضف خطوة مراجعة تطلب من Venice العثور على ادعاءات غير مدعومة في التقرير النهائي قبل حفظه.
+
+أكبر ترقية عادةً هي اختيار مصادر أفضل. توليد الاستعلامات يساعد، لكن يمكنك أيضًا تحسين الجودة بتفضيل المصادر الأولية ووثائق المعايير والوثائق الرسمية والأوراق وسجلات التغييرات وصفحات مجموعات البيانات على الملخصات منخفضة الإشارة.
+
+## الإنهاء
+
+شكرًا للقراءة! نأمل أن يكون هذا قد ساعدك في بناء وكيل بحث خاص عملي مع Python وVenice API.
+
+النمط المفيد هنا ليس مجرد "اطلب من نموذج البحث عن شيء." إنه تقسيم البحث إلى خطوات قابلة للتدقيق: خطّط للبحوث، اجمع المصادر، استخرج الأدلة، اكتب ملاحظات المصادر، تابع الفجوات، وألّف مع الاستشهادات. بإبقاء تلك الخطوات صريحة، نحصل على سير عمل بحث أسهل في الفحص والاختبار والتحسين بمرور الوقت.

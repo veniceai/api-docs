@@ -1,0 +1,278 @@
+---
+title: "تحرير الصور"
+description: "حرّر الصور، وأعد رسم أجزاء منها (inpaint)، وركّبها، وأزل الخلفيات باستخدام واجهات الصور المتزامنة في Venice"
+'og:title': "تحرير الصور | مستندات Venice API"
+'og:description': "تعلّم كيف تحرّر الصور مع Venice عبر inpainting مبني على الموجّه، ومدخلات multi-edit متعددة الطبقات، وإزالة الخلفية."
+---
+
+تحرير الصور في Venice متزامن. أرسل صورتك المصدرية إلى `/image/edit` أو `/image/multi-edit` وستعود النتيجة المحرّرة في نفس الاستجابة بصيغة PNG. لاقتطاع الخلفية، تُعيد `/image/background-remove` ملف PNG بخلفية شفافة.
+
+<Warning>
+نقاط نهاية تحرير الصور تجريبية وقد يتغير سلوك النموذج بمرور الوقت.
+</Warning>
+
+## نقاط النهاية
+
+| نقطة النهاية | الغرض | الأفضل لـ |
+|---|---|---|
+| `POST /image/edit` | حرّر صورة واحدة بموجّه | تعديلات عامة وinpainting يقوده الموجّه |
+| `POST /image/multi-edit` | حرّر باستخدام من 1 إلى 3 صور متعدّدة الطبقات | تعديلات أكثر تحكّمًا بأقنعة أو طبقات تراكب |
+| `POST /image/background-remove` | أزل خلفية صورة | اقتطاعات شفافة للمنتجات والصور الشخصية والأصول |
+
+## متى تستخدم كل نقطة نهاية
+
+- استخدم `/image/edit` عندما يكون لديك صورة مصدر واحدة وتريد تغيير جزء منها أو إزالته أو إعادة تنميطه بموجّه.
+- استخدم `/image/multi-edit` عند الحاجة إلى تحكّم إضافي عبر أقنعة أو طبقات تراكب أو طبقات مرجعية.
+- استخدم `/image/background-remove` عندما تريد فقط موضوعًا أماميًا نظيفًا بشفافية.
+
+<Note>
+لإعادة الرسم (inpainting)، استخدم `/image/edit` أو `/image/multi-edit`. أُهمل المعامل القديم `inpaint` في `/image/generate`.
+</Note>
+
+## الخطوة 1: تحرير صورة واحدة
+
+تحرير صورة واحدة هو أبسط تدفّق inpainting. أرسل صورة واحدة مع موجّه قصير مثل "أزل اللافتة" أو "غيّر السماء إلى شروق" أو "استبدل الخلفية بخلفية استوديو".
+
+**الطلب:**
+```bash
+POST https://api.venice.ai/api/v1/image/edit
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "qwen-edit",
+  "prompt": "Replace the cloudy sky with a warm sunrise while preserving the buildings and canal",
+  "image": "https://example.com/venice-canal.jpg"
+}
+```
+
+**الاستجابة (200):**
+جسم الاستجابة بيانات `image/png` ثنائية خام. احفظها مباشرة إلى ملف.
+
+<CodeGroup>
+```python Python
+import base64
+import os
+import requests
+
+with open("input.jpg", "rb") as f:
+    image_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+response = requests.post(
+    "https://api.venice.ai/api/v1/image/edit",
+    headers={
+        "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "model": "qwen-edit",
+        "prompt": "Remove the tourist crowd from the square and keep the architecture intact",
+        "image": image_base64,
+    },
+)
+
+with open("edited.png", "wb") as f:
+    f.write(response.content)
+```
+
+```javascript Node.js
+import fs from "fs";
+
+const imageBase64 = fs.readFileSync("input.jpg").toString("base64");
+
+const response = await fetch("https://api.venice.ai/api/v1/image/edit", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    model: "qwen-edit",
+    prompt: "Remove the tourist crowd from the square and keep the architecture intact",
+    image: imageBase64,
+  }),
+});
+
+const editedImage = Buffer.from(await response.arrayBuffer());
+fs.writeFileSync("edited.png", editedImage);
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/image/edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -o edited.png \
+  -d '{
+    "model": "qwen-edit",
+    "prompt": "Colorize this black and white portrait naturally",
+    "image": "https://example.com/portrait-bw.jpg"
+  }'
+```
+</CodeGroup>
+
+## الخطوة 2: استخدم multi-edit للأقنعة أو الـ inpainting الطبقي
+
+تقبل `/image/multi-edit` حتى ثلاث صور. الصورة الأولى هي الصورة الأساسية. والصور المتبقية تُعامل كطبقات تحرير أو أقنعة، مما يمنحك تحكّمًا أكبر من التحرير بالموجّه فقط.
+
+هذا الخيار الأفضل عندما تريد:
+
+- استهداف منطقة محددة بقناع
+- دمج تركيب موجود مع طبقة تراكب
+- تقييد التعديل بإحكام أكثر مما يستطيع الموجّه الواحد
+
+**طلب JSON:**
+```json
+{
+  "modelId": "qwen-edit",
+  "prompt": "Replace the blank billboard area with a glowing Venice film festival poster while preserving lighting and perspective",
+  "images": [
+    "https://example.com/street-scene.png",
+    "https://example.com/billboard-mask.png"
+  ]
+}
+```
+
+**طلب Multipart:**
+```bash
+curl https://api.venice.ai/api/v1/image/multi-edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "modelId=qwen-edit" \
+  -F "prompt=Replace the blank billboard area with a glowing Venice film festival poster while preserving lighting and perspective" \
+  -F "images=@street-scene.png" \
+  -F "images=@billboard-mask.png" \
+  -o multi-edited.png
+```
+
+كما في `/image/edit`، جسم الاستجابة بيانات `image/png` خام.
+
+<Note>
+تستخدم `/image/multi-edit` حاليًا حقل `modelId` بدلًا من `model` في مخطط الطلب.
+</Note>
+
+---
+
+## نصائح inpainting
+
+يعمل الـ inpainting المعتمد على الموجّه بشكل أفضل عندما يكون التعليمات قصيرة ومحلية:
+
+- `remove the tree`
+- `change the sky to sunset`
+- `replace the logo with a blank sign`
+- `restore the torn corner of the photo`
+
+لتغييرات المشهد الأوسع، صِف ما يجب أن يبقى كما هو:
+
+```text
+Replace the background with a modern photo studio backdrop while preserving the subject pose, facial features, and clothing.
+```
+
+إذا استمر التعديل في إحداث تأثير على المنطقة الخاطئة، انتقل من `/image/edit` إلى `/image/multi-edit` وقدّم طبقة قناع أو تراكب.
+
+---
+
+## الخطوة 3: إزالة الخلفية
+
+استخدم `/image/background-remove` عندما تريد عزل الموضوع الأمامي على خلفية شفافة. تُعيد هذه النقطة PNG بشفافية alpha.
+
+**باستخدام رابط صورة:**
+```bash
+curl https://api.venice.ai/api/v1/image/background-remove \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -o cutout.png \
+  -d '{
+    "image_url": "https://example.com/product-photo.jpg"
+  }'
+```
+
+**باستخدام رفع ملف محلي:**
+```bash
+curl https://api.venice.ai/api/v1/image/background-remove \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "image=@product-photo.jpg" \
+  -o cutout.png
+```
+
+استخدم إزالة الخلفية لـ:
+
+- صور منتجات التجارة الإلكترونية
+- الصور الشخصية والـ portraits
+- الأصول التي تخطط لوضعها فوق خلفية جديدة
+
+---
+
+## معاملات الطلب
+
+### `/image/edit`
+
+| المعامل | النوع | مطلوب | افتراضي | الوصف |
+|---|---|---|---|---|
+| `image` | ملف، أو سلسلة base64، أو URL | نعم | - | الصورة المصدر للتحرير |
+| `prompt` | string | نعم | - | تعليمات نصية للتعديل |
+| `model` | string | لا | `qwen-edit` | معرّف نموذج التحرير |
+| `aspect_ratio` | string | لا | افتراضي النموذج | نسبة الإخراج للنماذج التي تدعمها |
+| `modelId` | string | مهجور | - | اسم بديل مهجور لـ `model` |
+
+### `/image/multi-edit`
+
+| المعامل | النوع | مطلوب | افتراضي | الوصف |
+|---|---|---|---|---|
+| `images` | مصفوفة من 1 إلى 3 ملفات أو سلاسل base64 أو URLs | نعم | - | الصورة الأولى هي الأساس؛ البقية طبقات تحرير أو أقنعة |
+| `prompt` | string | نعم | - | تعليمات نصية لكيفية الدمج أو تحرير الطبقات |
+| `modelId` | string | لا | `qwen-edit` | معرّف نموذج التحرير |
+
+### `/image/background-remove`
+
+| المعامل | النوع | مطلوب | الوصف |
+|---|---|---|---|
+| `image` | ملف أو سلسلة base64 | أحدهما `image` أو `image_url` | الصورة المصدر للاقتطاع |
+| `image_url` | string | أحدهما `image` أو `image_url` | رابط صورة عام للاقتطاع |
+
+---
+
+## صيغ الإدخال المدعومة
+
+| نقطة النهاية | إدخال JSON | إدخال Multipart | الإخراج |
+|---|---|---|---|
+| `/image/edit` | سلسلة base64 أو URL | رفع ملف | `image/png` |
+| `/image/multi-edit` | سلاسل base64 أو URLs | رفع ملفات | `image/png` |
+| `/image/background-remove` | سلسلة base64 أو URL | رفع ملف | `image/png` |
+
+لنقاط نهاية التحرير، يجب ألا تقل أبعاد الصورة عن `65536` بكسل ولا تزيد عن `33177600` بكسل. ويجب أن تكون الملفات المرفوعة أقل من `25MB`.
+
+---
+
+## النماذج والأسعار
+
+نموذج التحرير الافتراضي هو `qwen-edit`، بسعر **$0.04 لكل تعديل**. قد يكون لنماذج التحرير الأخرى تسعير وقيود مختلفة.
+
+راجع:
+
+- [أسعار الصور](/ar/overview/pricing)
+- [Models API](/ar/api-reference/endpoint/models/list) مع `type=inpaint`
+
+---
+
+## الأخطاء
+
+| الحالة | المعنى | الإجراء |
+|---|---|---|
+| `400` | معاملات طلب غير صالحة | تحقق من عدد الصور وأسماء الحقول وصيغة الإدخال |
+| `401` | فشلت المصادقة | تحقق من مفتاح API |
+| `402` | رصيد غير كافٍ | أضف أرصدة على [venice.ai/settings/api](https://venice.ai/settings/api) |
+| `415` | نوع محتوى غير صالح | استخدم JSON أو multipart form-data بشكل صحيح |
+| `429` | تجاوز حد المعدل أو النموذج محمَّل بشكل زائد | أعِد المحاولة مع backoff؛ تحقق من رأس `Retry-After` |
+| `500` | فشلت معالجة الاستدلال | أعِد محاولة الطلب |
+| `503` | النموذج عند الطاقة القصوى | أعِد المحاولة بعد تأخير قصير |
+
+<Note>
+لبعض نماذج التحرير سياسات محتوى أصرم من نماذج توليد الصور. على سبيل المثال، يحظر `qwen-edit` الطلبات التي تتضمن صورًا جنسية صريحة، أو إساءة جنسية للقاصرين، أو عنفًا حقيقيًا.
+</Note>
+
+---
+
+## سير عمل ذي صلة
+
+- استخدم [توليد الصور](/ar/guides/media/image-generation) عندما تبدأ من نص بدلًا من صورة موجودة.
+- استخدم [نماذج الصور](/ar/models/image) لمقارنة عائلات نماذج التوليد والتحرير والتحسين.
+- استخدم [Image Edit API](/ar/api-reference/endpoint/image/edit) و[Multi-Edit API](/ar/api-reference/endpoint/image/multi-edit) و[Background Remove API](/ar/api-reference/endpoint/image/background-remove) للحصول على تفاصيل المخطط الكامل.

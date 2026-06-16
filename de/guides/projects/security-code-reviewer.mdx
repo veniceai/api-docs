@@ -1,0 +1,1456 @@
+---
+title: "Einen Codebase Security Reviewer bauen"
+slug: security-code-reviewer-venice
+"og:title": "Einen Codebase Security Reviewer mit Venice AI bauen"
+"og:description": "Eine praktische Anleitung zum Bau eines Python-Sicherheits-Agents, der atomare Schwachstellen findet und sie mithilfe von Venice AI, einer AST-basierten Repo Map und Pydantic-Guardrails zu Exploit-Pfaden verkettet."
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="2 June 2026"/>
+
+Die meisten statischen Sicherheits-Tools finden Bugs in Isolation. Sie scannen eine Datei, listen die Probleme auf und ziehen weiter. Das Problem ist, dass die schädlichsten Schwachstellen in modernen Codebases selten ein einzelner Bug sind. Sie sind eine Kette: ein hartkodierter Signing Key plus ein fehlender Autorisierungscheck plus eine SQL Injection, die für sich genommen alle handhabbar wirken. Zusammen bilden sie einen Pfad zur Account-Übernahme.
+
+Genau diese Art von übergreifendem Reasoning beherrschen LLMs gut, sofern Sie ihnen die richtige Struktur geben. In diesem Artikel bauen wir mit Python und der Venice AI API einen Security Code Reviewer mit zwei Agents. Am Ende haben Sie eine CLI, die Sie auf jede Python-Codebase richten können, um einen Markdown-Report mit atomaren Findings und Exploit Chains zu erzeugen.
+
+Interessiert an der vollständigen Code-Implementierung? Schauen Sie sich das [GitHub-Repo](https://github.com/joshua-mo-143/venice-security-agent-demo) an.
+
+Bevor wir fortfahren, benötigen Sie einen Venice API Key. Exportieren Sie ihn als Umgebungsvariable:
+
+```bash
+export VENICE_API_KEY=<my-key>
+```
+
+## Was wir bauen
+
+Der Reviewer ist ein kleines Python-Projekt mit ein paar klar abgegrenzten Teilen:
+
+| Teil | Was er macht |
+| --- | --- |
+| Pydantic-Modelle | Definieren `Evidence`, `Finding` und `Chain` und geben uns eine harte Validierungsgrenze zwischen dem LLM und dem Rest des Programms |
+| Venice-Client | Kapselt das OpenAI Python SDK, das auf den OpenAI-kompatiblen Endpoint von Venice zeigt |
+| AST-Repo-Map | Durchläuft den Zielbaum mit Pythons `ast`-Modul und baut eine deterministische Karte aller öffentlichen Symbole und Import-Kanten jedes Moduls |
+| Scanner-Agent | Liest jeweils eine Python-Datei plus einen Per-File-Nachbarschafts-Slice der Repo Map und gibt atomare Schwachstellen-Findings mit file:line-Evidenzen aus |
+| Chainer-Agent | Liest die Vereinigung der Findings plus eine kondensierte vollständige Repo Map und gibt Exploit Chains aus, die zwei oder mehr Findings kombinieren |
+| Referenz-Validator | Verwirft jede Chain, die eine Finding-ID referenziert, die der Scanner nicht produziert hat, oder die eine Datei nennt, aus der keines ihrer referenzierten Findings tatsächlich stammt |
+| Markdown-Report | Rendert Findings und Chains in einen menschenlesbaren Report |
+| CLI | Verdrahtet alles mit Typer |
+
+Der Ablauf sieht so aus:
+
+1. Durchlaufe das Zielverzeichnis nach `.py`-Dateien.
+2. Baue eine deterministische Repo Map (Imports, öffentliche Symbole, Signaturen).
+3. Sende für jede Datei dem Scanner den Quellcode plus einen Per-File-Nachbarschafts-Slice der Map und sammle atomare Findings.
+4. Sende dem Chainer die Vereinigung der Findings plus die kondensierte Repo Map und sammle Exploit Chains.
+5. Verwirf jede Chain, die eine Finding-ID referenziert, die der Scanner nicht produziert hat, oder die eine Datei nennt, aus der keines ihrer referenzierten Findings tatsächlich stammt.
+6. Schreibe einen Markdown-Report.
+
+Zwei Designentscheidungen sind es wert, vor dem Schreiben von Code hervorgehoben zu werden.
+
+Die erste ist **warum zwei Agents statt einem**. Ein Single-Agent-Scanner, der in einem einzigen Prompt alles tun will, muss zwischen gründlicher Per-File-Bug-Erkennung und cleverem kombinatorischen Reasoning balancieren. Die Arbeit aufzuteilen bedeutet, dass der Scanner gnadenlos und laut sein kann, während der Chainer selektiv und leise sein kann. Einen einzigen zusätzlichen LLM-Call, der sich auf das Kombinieren von Findings konzentriert, schaltet eine ganze Klasse von Bugs frei – für sehr wenig zusätzlichen Code.
+
+Die zweite ist **warum eine Repo Map**. Reale Codebases erstrecken sich über viele Dateien. Ein Bug, der darin besteht, dass "der Validator zwar läuft, aber im Fetcher nicht pro Iteration angewendet wird, und die Antwort des Fetchers im Renderer landet", ist für einen Per-File-Scanner unsichtbar. Vor jedem LLM-Call durchlaufen wir den Zielbaum mit Pythons `ast` und bauen eine strukturelle Karte. Der Scanner sieht eine Per-File-*Nachbarschaft* (wer importiert aus dieser Datei, was importiert diese Datei, Signaturen dieser externen Symbole). Der Chainer sieht eine *kondensierte* vollständige Map (jedes Modul, jedes öffentliche Symbol, jede Import-Kante, kein Quellcode). Das ist die kleinste Menge Context Engineering, mit der wir den Chainer dazu bringen, Chains zu konstruieren, deren Data Flow Modulgrenzen überschreitet, ohne die Token-Kosten für das Stopfen der gesamten Codebase in jeden Prompt zu zahlen.
+
+## Voraussetzungen
+
+- Python 3.12+
+- Ein Venice API Key von [venice.ai](https://venice.ai)
+- Grundkenntnisse in Pydantic, Pythons `ast`-Modul und dem OpenAI Python SDK
+
+Das Referenz-Repo nutzt [`uv`](https://docs.astral.sh/uv/) für das Dependency Management, aber ein normales Virtual Environment funktioniert genauso gut.
+
+## Das Projekt einrichten
+
+Erstellen Sie ein neues Projekt und installieren Sie die Dependencies:
+
+```bash
+mkdir venice-security-reviewer
+cd venice-security-reviewer
+uv init
+uv add "openai>=1.54" "pydantic>=2.9" "typer>=0.12" "jinja2>=3.1" "python-dotenv>=1.0" "rich>=13.0"
+```
+
+Wenn Sie `pip` bevorzugen, erstellen Sie stattdessen ein Virtual Environment:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install "openai>=1.54" "pydantic>=2.9" "typer>=0.12" "jinja2>=3.1" "python-dotenv>=1.0" "rich>=13.0"
+```
+
+Erstellen Sie eine `.env`-Datei für die lokale Entwicklung:
+
+```bash
+VENICE_API_KEY=your-venice-api-key-here
+# Optional overrides
+# VENICE_BASE_URL=https://api.venice.ai/api/v1
+# VENICE_MODEL=zai-org-glm-5
+```
+
+Wir legen den Quellcode unter `src/venice_security_reviewer/` ab, damit er als Package importierbar bleibt, mit Prompts unter `prompts/` im Repo-Root, sodass sie wie jedes andere Quell-Artefakt reviewt und gediffed werden können:
+
+```
+src/venice_security_reviewer/
+  __init__.py
+  models.py     # Pydantic models
+  client.py     # Venice client factory
+  repo_map.py   # AST-built repo map
+  scanner.py    # Scanner agent
+  chainer.py    # Chainer agent
+  report.py     # Jinja2 Markdown rendering
+  cli.py        # Typer CLI
+  templates/
+    report.md.j2
+prompts/
+  scanner.md
+  chainer.md
+tests/
+  test_models.py
+  test_cross_file_chain.py
+```
+
+## Den Venice-Client einrichten
+
+Venice ist OpenAI-kompatibel, daher können wir das offizielle OpenAI Python SDK verwenden und einfach dessen `base_url` auf Venice zeigen lassen. Die Client-Konstruktion in einer Datei zu zentralisieren bedeutet, dass der Rest des Codes nie wissen muss, mit welchem Provider er spricht: ein Backend-Wechsel würde nur dieses eine Modul berühren.
+
+Erstellen Sie `src/venice_security_reviewer/client.py`:
+
+```python
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+from dotenv import load_dotenv
+from openai import OpenAI
+
+DEFAULT_BASE_URL = "https://api.venice.ai/api/v1"
+DEFAULT_MODEL = "zai-org-glm-5"
+
+
+class VeniceConfigError(RuntimeError):
+    """Raised when Venice client config is missing or invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class VeniceConfig:
+    api_key: str
+    base_url: str
+    model: str
+
+    @classmethod
+    def from_env(cls) -> "VeniceConfig":
+        load_dotenv()
+        api_key = os.getenv("VENICE_API_KEY")
+        if not api_key:
+            raise VeniceConfigError(
+                "VENICE_API_KEY is not set. Add it to your .env file, "
+                "or export VENICE_API_KEY in your shell."
+            )
+        return cls(
+            api_key=api_key,
+            base_url=os.getenv("VENICE_BASE_URL", DEFAULT_BASE_URL),
+            model=os.getenv("VENICE_MODEL", DEFAULT_MODEL),
+        )
+
+
+def build_client(config: VeniceConfig | None = None) -> tuple[OpenAI, str]:
+    cfg = config or VeniceConfig.from_env()
+    client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
+    return client, cfg.model
+```
+
+Ein paar Dinge sind erwähnenswert:
+
+- Wir verwenden standardmäßig `zai-org-glm-5`, weil es ein starkes Allzweck-Venice-Modell ist, aber Sie können es über die Umgebungsvariable `VENICE_MODEL` überschreiben. Für größere oder feinsinnigere Codebases kann der Wechsel zu einem stärkeren Modell den Chainer in der narrativen Qualität spürbar besser machen.
+- `build_client` gibt sowohl den Client *als auch* die Model-ID zurück, sodass Aufrufer nicht selbst Umgebungsvariablen lesen müssen und Tests eine Fake-Config ohne Monkeypatching injizieren können.
+
+## Die Datenmodelle definieren
+
+Der ganze Sinn, Pydantic hier zu verwenden, anstatt rohe Dicts herumzureichen, ist, dass wir eine harte Validierungsgrenze zwischen dem LLM und dem Rest des Programms erhalten. Wenn das Modell fehlerhaftes JSON zurückgibt oder eine Finding-ID erfindet, die nicht existiert, schlägt das Parsing laut fehl, und wir propagieren die Halluzination nie in den Report.
+
+Erstellen Sie `src/venice_security_reviewer/models.py`:
+
+```python
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Literal, Self
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+Severity = Literal["low", "medium", "high", "critical"]
+ChainSeverity = Literal["high", "critical"]
+
+
+class Evidence(BaseModel):
+    """A concrete code span that justifies a finding."""
+
+    model_config = ConfigDict(frozen=True)
+
+    file: Path
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    snippet: str
+
+    @model_validator(mode="after")
+    def _check_line_range(self) -> Self:
+        if self.end_line < self.start_line:
+            raise ValueError(
+                f"end_line ({self.end_line}) must be >= start_line ({self.start_line})"
+            )
+        return self
+
+
+class Finding(BaseModel):
+    """An atomic vulnerability surfaced by the Scanner agent."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(pattern=r"^F-\d{3,}$")
+    title: str = Field(min_length=1)
+    severity: Severity
+    description: str = Field(min_length=1)
+    cwe: str | None = None
+    evidence: Evidence
+
+
+class Chain(BaseModel):
+    """An exploit chain combining two or more atomic findings."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(pattern=r"^C-\d{3,}$")
+    findings: list[str] = Field(min_length=2)
+    narrative: str = Field(min_length=1)
+    severity: ChainSeverity
+    files_involved: list[Path] = Field(min_length=1)
+```
+
+Die Constraints leisten hier echte Arbeit:
+
+- `Finding.id` und `Chain.id` sind durch eine Regex wie `F-001`, `C-001` eingeschränkt. Wenn das Modell beim Format kreativ wird, schlägt die Validierung fehl.
+- `Chain.findings` verlangt mindestens zwei Einträge: eine "Chain" mit nur einem Finding ist einfach ein Finding.
+- `Chain.severity` ist auf `high` oder `critical` beschränkt. Eine Kombination von Findings, die den Impact nicht über die höchste Einzel-Severity hebt, ist keine berichtenswerte Chain.
+- `Evidence` erzwingt `end_line >= start_line`, sodass das Modell keine unsinnigen Zeilenbereiche zurückgeben kann.
+
+Das ist die *Form-Validierung*. Wir brauchen auch eine *Cross-Reference-Validierung*: eine Chain, die eine Finding-ID referenziert, die der Scanner nie produziert hat, ist bedeutungslos. Fügen Sie diese Funktion zu `models.py` hinzu:
+
+```python
+def validate_chain_references(
+    chains: list[Chain], findings: list[Finding]
+) -> tuple[list[Chain], list[Chain]]:
+    findings_by_id = {f.id: f for f in findings}
+    valid: list[Chain] = []
+    dropped: list[Chain] = []
+    for chain in chains:
+        if not all(ref in findings_by_id for ref in chain.findings):
+            dropped.append(chain)
+            continue
+        chain_evidence_files = {
+            findings_by_id[ref].evidence.file.as_posix() for ref in chain.findings
+        }
+        if not all(p.as_posix() in chain_evidence_files for p in chain.files_involved):
+            dropped.append(chain)
+            continue
+        valid.append(chain)
+    return valid, dropped
+```
+
+Das ist das deterministische Guardrail, das den Chainer ehrlich hält. Er kann nur Findings referenzieren, die der Scanner tatsächlich produziert hat, und kann nur Dateien als an der Chain beteiligt deklarieren, aus denen eines dieser Findings tatsächlich stammt. Die verworfenen Chains zurückzugeben, statt sie still zu filtern, ermöglicht es der CLI, eine Warnung anzuzeigen, wenn das Modell versucht, etwas zu erfinden.
+
+## Die AST-Repo-Map bauen
+
+Die Repo Map ist das strukturelle Skelett einer Python-Codebase: die öffentliche Oberfläche jedes Moduls, jede Import-Kante und ein Rückwärts-Index von "Modul M" auf "Module, die aus M importieren". Sie wird einmal pro Scan-Lauf mit Pythons `ast` gebaut, niemals durch Ausführung, daher ist es sicher, sie auf feindlichem Code laufen zu lassen: der Parser importiert oder ruft nichts aus dem gescannten Baum auf.
+
+Wir konsumieren die Map in zwei Formen. Der Scanner bekommt einen Per-File-*Nachbarschafts*-Slice, sodass seine Prompts in der Größe begrenzt bleiben. Der Chainer bekommt eine *kondensierte* vollständige Map, sodass er Chains über Dateien hinweg konstruieren kann.
+
+Erstellen Sie `src/venice_security_reviewer/repo_map.py` und beginnen Sie mit den Pydantic-Modellen, die die Map beschreiben:
+
+```python
+from __future__ import annotations
+
+import ast
+import logging
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
+
+SymbolKind = Literal["function", "class", "constant"]
+_SIGNATURE_CHAR_CAP = 200
+
+SKIP_DIR_NAMES: frozenset[str] = frozenset({
+    ".git", ".venv", "venv", "env", "__pycache__", "node_modules",
+    "dist", "build", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    "site-packages",
+})
+
+
+class SymbolDef(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    name: str
+    kind: SymbolKind
+    line: int = Field(ge=1)
+    signature: str | None = None
+
+
+class ImportEdge(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    from_module: str
+    imported_names: list[str]
+    line: int = Field(ge=1)
+
+
+class ModuleEntry(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    path: Path
+    module_name: str
+    defines: list[SymbolDef]
+    imports: list[ImportEdge]
+    exports: list[str]
+```
+
+Nun der Helper, der den Baum durchläuft und Verzeichnisse überspringt, die wir nicht indizieren sollten:
+
+```python
+def _iter_python_files(root: Path) -> Iterable[Path]:
+    for path in sorted(root.rglob("*.py")):
+        if any(part in SKIP_DIR_NAMES for part in path.parts):
+            continue
+        if path.is_file():
+            yield path
+
+
+def _path_to_module_name(path: Path, root: Path) -> str:
+    rel = path.relative_to(root)
+    parts = list(rel.with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+```
+
+Für jede Datei wollen wir drei Dinge aus dem AST: die Top-Level-Symbole, die sie definiert, die Import-Kanten und eine explizite `__all__`-Liste, falls vorhanden. Funktionssignaturen und Klassen-Header werden als kompakte Strings gerendert, die das LLM direkt lesen kann:
+
+```python
+def _render_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    try:
+        prefix = "async def " if isinstance(node, ast.AsyncFunctionDef) else "def "
+        args = ast.unparse(node.args)
+        returns = f" -> {ast.unparse(node.returns)}" if node.returns is not None else ""
+        sig = f"{prefix}{node.name}({args}){returns}"
+        if len(sig) > _SIGNATURE_CHAR_CAP:
+            return f"{prefix}{node.name}(...)"
+        return sig
+    except Exception:
+        return f"def {node.name}(...)"
+
+
+def _render_class_header(node: ast.ClassDef) -> str:
+    try:
+        bases = [ast.unparse(b) for b in node.bases]
+        sig = f"class {node.name}({', '.join(bases)})" if bases else f"class {node.name}"
+        if len(sig) > _SIGNATURE_CHAR_CAP:
+            return f"class {node.name}(...)"
+        return sig
+    except Exception:
+        return f"class {node.name}"
+```
+
+Das `_SIGNATURE_CHAR_CAP` von 200 erhält typische reale Signaturen (einschließlich Type Hints), verhindert aber pathologische Fälle wie eine 200-zeilige typisierte Union, die den Prompt sprengen würde.
+
+Als Nächstes der Extractor, der die strukturellen Daten aus einem geparsten Modul holt. Wir behandeln `ast.FunctionDef`, `ast.ClassDef`, Top-Level `ast.Assign` und `ast.AnnAssign` für Konstanten und sowohl `ast.Import` als auch `ast.ImportFrom` für die Import-Kanten. Relative Imports werden in ihre absolute Dotted Form aufgelöst, sodass der Chainer sie später gegen Modulnamen matchen kann:
+
+```python
+def _resolve_relative_package(
+    *, importer_module: str, importer_is_init: bool, level: int
+) -> str | None:
+    if level <= 0:
+        return None
+    importer_parts = importer_module.split(".") if importer_module else []
+    base_parts = list(importer_parts) if importer_is_init else importer_parts[:-1]
+    steps_up = level - 1
+    if steps_up > len(base_parts):
+        return None
+    package_parts = (
+        base_parts[: len(base_parts) - steps_up] if steps_up else list(base_parts)
+    )
+    return ".".join(package_parts)
+```
+
+Die vollständige Extraktions-Logik durchläuft `tree.body` und gibt `SymbolDef`- und `ImportEdge`-Einträge für jeden Top-Level-Knoten aus. Die `_extract`-Funktion des Referenz-Repos in [`repo_map.py`](https://github.com/joshua-mo-143/venice-security-agent-demo/blob/main/src/venice_security_reviewer/repo_map.py) deckt die vollständige Implementierung ab. Heraus kommt eine Liste von `ModuleEntry`-Objekten, eines pro Datei.
+
+Der interessante Teil ist, was wir mit diesen Einträgen machen. Wir kapseln sie in eine `RepoMap` mit zwei verbraucherorientierten Methoden:
+
+```python
+class RepoMap(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    root: Path
+    modules: list[ModuleEntry]
+
+    def by_module_name(self, module_name: str) -> ModuleEntry | None:
+        for m in self.modules:
+            if m.module_name == module_name:
+                return m
+        return None
+
+    def importers_of(self, module_name: str) -> list["ImportingRef"]:
+        refs: list["ImportingRef"] = []
+        for m in self.modules:
+            for edge in m.imports:
+                if edge.from_module == module_name:
+                    refs.append(
+                        ImportingRef(
+                            importer_path=m.path,
+                            importer_module=m.module_name,
+                            imported_names=list(edge.imported_names),
+                            line=edge.line,
+                        )
+                    )
+        return refs
+
+    def neighborhood(self, path: Path) -> "ModuleNeighborhood | None":
+        m = next((mod for mod in self.modules if mod.path == path), None)
+        if m is None:
+            return None
+        return ModuleNeighborhood(
+            this_module=m,
+            imported_by=self.importers_of(m.module_name),
+            imports_from_repo=self.resolve_imports_in_repo(m.module_name),
+        )
+
+    def condensed_dict(self) -> dict[str, object]:
+        return {
+            "modules": [
+                {
+                    "path": str(m.path),
+                    "module": m.module_name,
+                    "exports": list(m.exports),
+                    "imports": [
+                        {"from": e.from_module, "names": list(e.imported_names)}
+                        for e in m.imports
+                    ],
+                }
+                for m in self.modules
+            ]
+        }
+```
+
+`neighborhood(path)` ist das, was der Scanner für jede Datei aufruft. Es gibt ein `ModuleNeighborhood`-Objekt zurück, das das Modul selbst, jedes andere Modul, das daraus importiert, und jedes Repo-interne Symbol, das es von anderswo importiert (mit ihren aufgelösten Signaturen), enthält. Das gibt dem Scanner genug Kontext, um Findings zu melden, die nur im Cross-File-Kontext offensichtlich sind, ohne die gesamte Codebase in den Prompt zu ziehen.
+
+`condensed_dict()` ist das, was der Chainer bekommt. Snippets und Signaturen werden entfernt; nur Pfade, Modulnamen, öffentliche Exports und Import-Kanten bleiben. Das ist die kleinste Repräsentation, die dem Chainer noch erlaubt, über Cross-Module-Data-Flow zu reasonen.
+
+Schließlich der Entry Point, der das Ganze aufbaut:
+
+```python
+def build_repo_map(root: Path) -> RepoMap:
+    root = root.resolve()
+    modules: list[ModuleEntry] = []
+    for path in _iter_python_files(root):
+        rel = path.relative_to(root)
+        module_name = _path_to_module_name(path, root)
+        is_init = path.stem == "__init__"
+        try:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+        except (OSError, SyntaxError, UnicodeDecodeError) as exc:
+            logger.warning("repo_map: skipping %s: %s", rel, exc)
+            continue
+        defines, imports, explicit_all = _extract(
+            tree, importer_module=module_name, importer_is_init=is_init
+        )
+        exports = explicit_all or [s.name for s in defines if not s.name.startswith("_")]
+        modules.append(
+            ModuleEntry(
+                path=rel,
+                module_name=module_name,
+                defines=defines,
+                imports=imports,
+                exports=exports,
+            )
+        )
+    return RepoMap(root=root, modules=modules)
+```
+
+Dateien, die wir nicht lesen können oder die das Parsing nicht bestehen, werden geloggt und übersprungen. Wir geben eine partielle Map zurück, statt den ganzen Lauf scheitern zu lassen; im schlimmsten Fall sieht ein Scanner-Call für eine Datei keine Nachbarschaft, was immer noch ein funktionierender Scan ist.
+
+## Den Scanner-Agent schreiben
+
+Der Scanner durchläuft einen Zielpfad, sammelt Python-Quelldateien und bittet Venice, atomare Schwachstellen jeweils Datei für Datei zu identifizieren. Per-File-Scanning hält den Prompt klein und macht Fehler isoliert: eine fehlerhafte Datei killt nicht den ganzen Lauf.
+
+Wir halten den Prompt selbst in einer separaten Datei, sodass er wie jedes andere Quell-Artefakt reviewt und gediffed werden kann. Erstellen Sie `prompts/scanner.md`:
+
+````markdown
+You are a static security analyst reviewing a single Python source file for
+vulnerabilities. You will be given the file path, its full contents, and a
+*neighborhood* slice of the surrounding repo: which other modules import
+from this file (and what symbols they pull), and which in-repo symbols this
+file imports from elsewhere. You must respond with a JSON object that lists
+every distinct vulnerability you can identify, with concrete file:line
+evidence for each.
+
+# Rules
+
+1. Output a single JSON object. No prose before or after. No markdown fences.
+2. The object must match this schema exactly:
+
+```json
+{
+  "findings": [
+    {
+      "id": "F-001",
+      "title": "Short imperative title, e.g. 'Hardcoded session signing key'",
+      "severity": "low | medium | high | critical",
+      "description": "One to three sentences explaining the vulnerability and why it matters.",
+      "cwe": "CWE-798 or null if not applicable",
+      "evidence": {
+        "file": "{filename}",
+        "start_line": 12,
+        "end_line": 14,
+        "snippet": "the exact lines from the source, copied verbatim including whitespace"
+      }
+    }
+  ]
+}
+```
+
+3. Finding IDs must be sequential within this file: F-001, F-002, F-003, etc.
+4. The `file` field in evidence must equal the filename you were given, exactly.
+5. `start_line` and `end_line` must be 1-indexed line numbers from the source you were given.
+6. The `snippet` must be the exact text of those lines, copied verbatim. Do not paraphrase. Do not truncate.
+7. Do not invent vulnerabilities. If you are unsure, omit it. False positives waste the operator's time and erode trust in the tool.
+8. Every finding's evidence must point at lines in THIS file. Do not produce findings whose evidence lives in a different file. The Chainer is the agent that reasons across files.
+9. If the file contains no vulnerabilities, return `{"findings": []}`.
+````
+
+Der vollständige Prompt im [Referenz-Repo](https://github.com/joshua-mo-143/venice-security-agent-demo/blob/main/prompts/scanner.md) enthält auch einen Abschnitt "What to look for", der gängige Schwachstellenklassen auflistet (hartkodierte Secrets, SQL Injection, Command Injection, SSRF, unsichere Deserialisierung etc.), und einen Abschnitt "How to use the neighborhood", der erklärt, wie das Modell den Cross-File-Kontext konsumieren soll.
+
+Ein paar Prompt-Design-Hinweise:
+
+- Wir weisen das Modell an, nur JSON auszugeben, ohne Prosa oder Fences. Das OpenAI SDK unterstützt einen Parameter `response_format={"type": "json_object"}`, der das auf API-Seite erzwingt, aber es im Prompt zu verstärken reduziert Edge Cases.
+- Wir verbieten dem Scanner explizit, Cross-File-Chains zu produzieren. Chains sind der Job des Chainers, und den Scanner beides tun zu lassen verwischt die Verantwortlichkeit.
+- Wir verlangen, dass der Snippet wortwörtlich kopiert wird. Das bedeutet, der Report kann die exakten Bytes zitieren, die das Modell behauptet gesehen zu haben, und ein Reviewer kann ein Finding stichprobenartig prüfen, indem er den Snippet mit dem Quellcode vergleicht.
+
+Nun der Agent-Code. Erstellen Sie `src/venice_security_reviewer/scanner.py` und beginnen Sie mit dem File Walker und dem Prompt Loader:
+
+```python
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import Iterable, Iterator
+from pathlib import Path
+
+from openai import OpenAI
+from pydantic import ValidationError
+
+from .models import Finding
+from .repo_map import ModuleNeighborhood, RepoMap
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_SOURCE_EXTENSIONS: frozenset[str] = frozenset({".py"})
+
+SKIP_DIR_NAMES: frozenset[str] = frozenset({
+    ".git", ".venv", "venv", "env", "__pycache__", "node_modules",
+    "dist", "build", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    "site-packages",
+})
+
+MAX_FILE_BYTES = 200_000
+
+
+def _load_prompt_template(name: str) -> str:
+    here = Path(__file__).resolve()
+    return (here.parents[2] / "prompts" / name).read_text(encoding="utf-8")
+
+
+def iter_source_files(
+    root: Path, extensions: Iterable[str] = DEFAULT_SOURCE_EXTENSIONS
+) -> Iterator[Path]:
+    exts = {e.lower() for e in extensions}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in exts:
+            continue
+        if any(part in SKIP_DIR_NAMES for part in path.parts):
+            continue
+        try:
+            if path.stat().st_size > MAX_FILE_BYTES:
+                logger.warning("skipping %s: exceeds %d bytes", path, MAX_FILE_BYTES)
+                continue
+        except OSError:
+            continue
+        yield path
+```
+
+`MAX_FILE_BYTES` ist eine Sicherheitsobergrenze. Über etwa 200 KB überspringen wir, statt einen riesigen Prompt zu senden, der wahrscheinlich sowohl teuer als auch von geringer Qualität wäre.
+
+Das nächste Stück ist der Prompt Builder. Das Template nutzt `{filename}`, `{source}` und `{neighborhood}` als Platzhalter; wir verwenden `str.replace` statt `.format()`, weil das Template JSON-Beispiele mit literalen geschweiften Klammern enthält:
+
+```python
+def _render_neighborhood(neighborhood: ModuleNeighborhood | None) -> str:
+    if neighborhood is None:
+        return "null"
+    return neighborhood.model_dump_json(indent=2)
+
+
+def _build_prompt(
+    template: str, *, filename: str, source: str, neighborhood: ModuleNeighborhood | None
+) -> str:
+    return (
+        template.replace("{filename}", filename)
+        .replace("{source}", source)
+        .replace("{neighborhood}", _render_neighborhood(neighborhood))
+    )
+```
+
+Nun der Parser. Wir deserialisieren das JSON, validieren jedes Finding über Pydantic und verwerfen einzelne fehlerhafte Findings, statt die ganze Datei scheitern zu lassen. Ein schlechtes Finding sollte uns nicht die guten kosten:
+
+```python
+def _parse_findings(raw: str, *, source_file: Path) -> list[Finding]:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"model did not return valid JSON: {exc}") from exc
+
+    if not isinstance(data, dict) or "findings" not in data:
+        raise ValueError("model JSON missing 'findings' key")
+
+    findings: list[Finding] = []
+    for entry in data["findings"]:
+        try:
+            findings.append(Finding.model_validate(entry))
+        except ValidationError as exc:
+            logger.warning("dropping malformed finding from %s: %s", source_file, exc)
+    return findings
+```
+
+Der Scanner gibt IDs wie `F-001` pro Datei aus, aber der Chainer muss Findings über das ganze Repo hinweg referenzieren. Wir vergeben die IDs gegen einen monoton steigenden Zähler neu, sodass sie global eindeutig sind:
+
+```python
+def _renumber_findings(findings: list[Finding], offset: int) -> tuple[list[Finding], int]:
+    renumbered: list[Finding] = []
+    for i, f in enumerate(findings):
+        new_id = f"F-{offset + i + 1:03d}"
+        renumbered.append(f.model_copy(update={"id": new_id}))
+    return renumbered, offset + len(findings)
+```
+
+Der Single-File-Scan-Call kombiniert all das. Wir lesen die Datei, bauen den Prompt, senden ihn mit `response_format={"type": "json_object"}` und niedriger Temperatur an Venice und parsen das Ergebnis:
+
+```python
+def scan_file(
+    client: OpenAI,
+    model: str,
+    path: Path,
+    *,
+    prompt_template: str,
+    repo_root: Path,
+    repo_map: RepoMap,
+    max_retries: int = 1,
+) -> list[Finding]:
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("could not read %s: %s", path, exc)
+        return []
+
+    rel = path.relative_to(repo_root)
+    neighborhood = repo_map.neighborhood(rel)
+    prompt = _build_prompt(
+        prompt_template, filename=str(rel), source=source, neighborhood=neighborhood
+    )
+
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a precise static security analyst. You respond "
+                            "only with valid JSON matching the schema in the user prompt."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.1,
+            )
+        except Exception as exc:
+            logger.warning("Venice call failed for %s on attempt %d: %s", rel, attempt, exc)
+            last_error = exc
+            continue
+
+        content = response.choices[0].message.content or ""
+        try:
+            findings = _parse_findings(content, source_file=path)
+        except ValueError as exc:
+            logger.warning("parse failure for %s on attempt %d: %s", rel, attempt, exc)
+            last_error = exc
+            continue
+
+        return [
+            f.model_copy(update={"evidence": f.evidence.model_copy(update={"file": rel})})
+            for f in findings
+        ]
+
+    logger.error("giving up on %s after %d attempts: %s", rel, max_retries + 1, last_error)
+    return []
+```
+
+Zwei Details sind hervorhebenswert:
+
+- Wir patchen den Evidence-Dateipfad *nach* dem Parsing auf relativ zu `repo_root`, da das Modell den Dateinamen zurückspiegelt, den wir ihm gegeben haben, wir aber eine einzige kanonische Form im gesamten Report wollen.
+- `temperature=0.1` ist bewusst niedrig. Wir wollen, dass der Scanner über Läufe hinweg konservativ und konsistent ist; Kreativität ist der Job des Chainers.
+
+Schließlich der Orchestrator, der jede berechtigte Datei unterhalb des Roots scannt:
+
+```python
+def scan_path(
+    client: OpenAI,
+    model: str,
+    root: Path,
+    repo_map: RepoMap,
+    *,
+    extensions: Iterable[str] = DEFAULT_SOURCE_EXTENSIONS,
+) -> list[Finding]:
+    template = _load_prompt_template("scanner.md")
+    all_findings: list[Finding] = []
+    offset = 0
+    for path in iter_source_files(root, extensions=extensions):
+        logger.info("scanning %s", path.relative_to(root))
+        findings = scan_file(
+            client, model, path,
+            prompt_template=template,
+            repo_root=root,
+            repo_map=repo_map,
+        )
+        renumbered, offset = _renumber_findings(findings, offset)
+        all_findings.extend(renumbered)
+    return all_findings
+```
+
+Die Repo Map wird einmal vom Aufrufer gebaut und für jede Datei wiederverwendet, sodass der Scanner eine konsistente globale Struktur sieht, auch wenn einzelne Dateien beim Parsing fehlschlagen oder übersprungen werden.
+
+## Den Chainer-Agent schreiben
+
+Der Chainer nimmt die Vereinigung der Scanner-Findings plus die kondensierte Repo Map und fragt Venice, ob irgendwelche der Findings sich zu einer echten Exploit Chain kombinieren lassen. Zwei deterministische Guardrails sitzen zwischen dem LLM und dem Report:
+
+1. Jede Chain darf nur Finding-IDs referenzieren, die der Scanner produziert hat.
+2. Jede Chain darf nur Dateien beanspruchen, die die Evidence mindestens eines referenzierten Findings berührt.
+
+Chains, die eine dieser Regeln verletzen, werden zur Parse-Zeit verworfen. Das hindert das Modell daran, Chains "auf Verdacht" zu halluzinieren und zu behaupten, eine Chain erstrecke sich über Dateien, für die es keine Evidence hat.
+
+Der Chainer-Prompt liegt in `prompts/chainer.md`. Sein Kern sieht so aus:
+
+````markdown
+You are a senior offensive security engineer. You are given a list of atomic
+vulnerability findings discovered in a single codebase, plus a structural map
+of that codebase showing every module's public symbols and import edges. Your
+job is to identify whether any subset of the findings can be combined into a
+real, end-to-end exploit chain.
+
+# Rules
+
+1. Output a single JSON object. No prose before or after. No markdown fences.
+2. The object must match this schema exactly:
+
+```json
+{
+  "chains": [
+    {
+      "id": "C-001",
+      "findings": ["F-001", "F-003"],
+      "narrative": "Step-by-step explanation of how an attacker combines these specific findings into a single exploit. Reference each finding by ID where it is used.",
+      "severity": "high | critical",
+      "files_involved": ["pkg/validators.py", "pkg/fetcher.py"]
+    }
+  ]
+}
+```
+
+3. Chain IDs must be sequential: C-001, C-002, C-003, etc.
+4. Every entry in `findings` MUST be the ID of a finding from the input list. You may NOT invent new finding IDs.
+5. Every entry in `files_involved` MUST be the `evidence.file` of at least one of the findings you reference in this chain.
+6. A chain must reference at least two distinct findings.
+7. Chains are by definition severity high or critical. If a combination doesn't raise the impact above the highest individual severity, it is not a chain worth reporting.
+8. If no real chain exists, return `{"chains": []}`. It is correct and expected for many codebases to have findings that do not chain.
+````
+
+Der vollständige Prompt im [Referenz-Repo](https://github.com/joshua-mo-143/venice-security-agent-demo/blob/main/prompts/chainer.md) erklärt auch, wie man die Repo Map liest, wie man entscheidet, was in `files_involved` gehört, und – entscheidend – wann *nicht* zu verketten. Dem Modell zu sagen "es ist korrekt und zu erwarten, dass viele Codebases Findings haben, die sich nicht verketten lassen", ist das, was es davon abhält, Chains zu erfinden, um produktiv auszusehen.
+
+Nun der Agent-Code. Erstellen Sie `src/venice_security_reviewer/chainer.py`:
+
+```python
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
+from openai import OpenAI
+from pydantic import ValidationError
+
+from .models import Chain, Finding, validate_chain_references
+from .repo_map import RepoMap
+
+logger = logging.getLogger(__name__)
+
+MAX_REPO_MAP_CHARS = 8000
+
+
+def _load_prompt_template(name: str) -> str:
+    here = Path(__file__).resolve()
+    return (here.parents[2] / "prompts" / name).read_text(encoding="utf-8")
+```
+
+`MAX_REPO_MAP_CHARS = 8000` ist eine weiche Obergrenze für den als JSON gerenderten Repo-Map-Block im Chainer-Prompt. Bei rund 4 Zeichen pro Token sind das ~2000 Tokens, die bequem in das Kontextfenster jedes Venice-Modells passen, selbst mit Findings und Narrativ-Budget obendrauf.
+
+Wir serialisieren Findings in einen kompakten JSON-Block. Beachten Sie, dass wir hier den `snippet` aus der Evidence absichtlich entfernen: Der Chainer braucht keine Rohdaten, um zu entscheiden, ob zwei Findings kombinieren, und sie einzuschließen verdoppelt die Token-Kosten auf realen Codebases ungefähr:
+
+```python
+def _findings_to_input_json(findings: list[Finding]) -> str:
+    payload = [
+        {
+            "id": f.id,
+            "title": f.title,
+            "severity": f.severity,
+            "description": f.description,
+            "cwe": f.cwe,
+            "evidence": {
+                "file": str(f.evidence.file),
+                "start_line": f.evidence.start_line,
+                "end_line": f.evidence.end_line,
+            },
+        }
+        for f in findings
+    ]
+    return json.dumps(payload, indent=2)
+```
+
+Bei größeren Codebases kann die vollständige kondensierte Repo Map unser Zeichenbudget sprengen. Wenn das passiert, kürzen wir auf Module mit Findings plus ihre direkten Nachbarn. Das erhält genug Struktur, damit der Chainer über Chains nachdenken kann, für die wir Evidence haben, und verwirft den Rest:
+
+```python
+def _prune_for_budget(
+    repo_map: RepoMap, findings: list[Finding], *, char_budget: int
+) -> dict[str, object]:
+    full = repo_map.condensed_dict()
+    if len(json.dumps(full)) <= char_budget:
+        return full
+
+    finding_files = {f.evidence.file for f in findings}
+    keep_modules = {
+        m.module_name for m in repo_map.modules if m.path in finding_files
+    }
+    if not keep_modules:
+        return full
+
+    neighbours: set[str] = set()
+    for m in repo_map.modules:
+        if m.module_name in keep_modules:
+            for edge in m.imports:
+                neighbours.add(edge.from_module)
+        for edge in m.imports:
+            if edge.from_module in keep_modules:
+                neighbours.add(m.module_name)
+    keep_modules.update(neighbours)
+
+    pruned_modules = [
+        {
+            "path": str(m.path),
+            "module": m.module_name,
+            "exports": list(m.exports),
+            "imports": [
+                {"from": e.from_module, "names": list(e.imported_names)}
+                for e in m.imports
+            ],
+        }
+        for m in repo_map.modules
+        if m.module_name in keep_modules
+    ]
+    return {
+        "modules": pruned_modules,
+        "_pruned": True,
+        "_kept": len(pruned_modules),
+        "_total": len(repo_map.modules),
+    }
+
+
+def _render_repo_map(
+    repo_map: RepoMap, findings: list[Finding], *, char_budget: int = MAX_REPO_MAP_CHARS
+) -> str:
+    payload = _prune_for_budget(repo_map, findings, char_budget=char_budget)
+    if payload.get("_pruned"):
+        logger.info(
+            "chainer: repo map pruned for token budget (kept %s of %s modules)",
+            payload.get("_kept"),
+            payload.get("_total"),
+        )
+    return json.dumps(payload, indent=2)
+```
+
+Die Pruning-Strategie ist bewusst einfach: behalte die Module, in denen unsere Findings leben, und behalte ihre direkten Import-Graph-Nachbarn. Alles weiter draußen hat keine plausible Rolle in einer Chain, für die wir aktuell Evidence haben, kann also fallengelassen werden, ohne Reasoning-Power zu verlieren. Wir annotieren das Payload außerdem mit den Markern `_pruned`, `_kept` und `_total`, sodass der Chainer-Prompt das Modell warnen kann, wenn die Map gekürzt wurde.
+
+Das Parsen der Antwort hat dieselbe Form wie beim Scanner: deserialisieren, jede Chain über Pydantic validieren, fehlerhafte Einträge verwerfen:
+
+```python
+def _parse_chains(raw: str) -> list[Chain]:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"chainer did not return valid JSON: {exc}") from exc
+
+    if not isinstance(data, dict) or "chains" not in data:
+        raise ValueError("chainer JSON missing 'chains' key")
+
+    chains: list[Chain] = []
+    for entry in data["chains"]:
+        try:
+            chains.append(Chain.model_validate(entry))
+        except ValidationError as exc:
+            logger.warning("dropping malformed chain: %s", exc)
+    return chains
+```
+
+Dann der Agent selbst:
+
+```python
+def find_chains(
+    client: OpenAI,
+    model: str,
+    findings: list[Finding],
+    repo_map: RepoMap,
+    *,
+    max_retries: int = 1,
+) -> tuple[list[Chain], list[Chain]]:
+    if len(findings) < 2:
+        return [], []
+
+    template = _load_prompt_template("chainer.md")
+    prompt = template.replace(
+        "{findings_json}", _findings_to_input_json(findings)
+    ).replace("{repo_map}", _render_repo_map(repo_map, findings))
+
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a senior offensive security engineer. You respond "
+                            "only with valid JSON matching the schema in the user prompt."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.2,
+            )
+        except Exception as exc:
+            logger.warning("Venice call failed on attempt %d: %s", attempt, exc)
+            last_error = exc
+            continue
+
+        content = response.choices[0].message.content or ""
+        try:
+            chains = _parse_chains(content)
+        except ValueError as exc:
+            logger.warning("chainer parse failure on attempt %d: %s", attempt, exc)
+            last_error = exc
+            continue
+
+        valid, dropped = validate_chain_references(chains, findings)
+        if dropped:
+            logger.warning(
+                "chainer referenced %d unknown finding id(s) or file(s); chains dropped: %s",
+                len(dropped),
+                [c.id for c in dropped],
+            )
+        return valid, dropped
+
+    logger.error("giving up on chainer after %d attempts: %s", max_retries + 1, last_error)
+    return [], []
+```
+
+Ein paar Dinge sind hervorhebenswert:
+
+- Wir steigen aus, bevor wir das Modell aufrufen, wenn es weniger als zwei Findings gibt. Sie können kein einzelnes Finding verketten, und das Überspringen des Calls bedeutet, dass wir keine Tokens für ein garantiert leeres Ergebnis verbrennen.
+- `temperature=0.2` ist leicht höher als die `0.1` des Scanners. Der Chainer profitiert von einem Hauch mehr Kreativität, um nicht offensichtliche Kombinationen zu erkennen, aber wir wollen ihn dennoch in den Findings und der Map, die wir ihm gegeben haben, verankert wissen.
+- Nach dem Parsen führt `validate_chain_references` die deterministische Cross-Reference-Prüfung aus, die wir zuvor geschrieben haben. Alles, was überlebt, ist sicher zu rendern; alles andere wird geloggt, damit der Operator weiß, dass das Modell etwas zu erfinden versucht hat.
+
+Diese Cross-Reference-Prüfung ist das wichtigste Stück des gesamten Projekts. Sie ist die Grenze zwischen "nützliches Security-Tool" und "gelegentlich selbstbewusst falscher KI-Report." Mit ihr an Ort und Stelle erreicht eine falsche Chain den Report nie, selbst wenn das Modell halluziniert.
+
+## Den Markdown-Report rendern
+
+Das Rendering von der Agent-Logik getrennt zu halten bedeutet, dass dieselben `Finding`- und `Chain`-Objekte später in andere Formate (JSON, SARIF, HTML) eingespeist werden können, ohne Scanner oder Chainer anzufassen.
+
+Wir verwenden Jinja2 mit einer kleinen Template-Datei. Erstellen Sie `src/venice_security_reviewer/templates/report.md.j2`:
+
+````jinja
+# Security Review Report
+
+**Target:** `{{ target }}`
+**Scanned at:** {{ scanned_at }}
+**Model:** `{{ model }}`
+
+---
+
+## Summary
+
+- **Atomic findings:** {{ findings | length }}
+- **Exploit chains:** {{ chains | length }}
+{%- if dropped_chains %}
+- **Dropped chains (referenced unknown findings):** {{ dropped_chains | length }}
+{%- endif %}
+
+---
+
+## Exploit Chains
+
+{% if not chains %}
+_No exploit chains were identified by the Chainer agent._
+{% else %}
+{% for c in chains %}
+### {{ c.id }} — {{ c.severity | upper }}
+
+**Findings combined:** {{ c.findings | join(', ') }}
+**Files involved:** {{ c.files_involved | map('string') | join(', ') }}
+
+{{ c.narrative }}
+
+{% endfor %}
+{% endif %}
+
+---
+
+## Atomic Findings
+
+{% for f in findings %}
+### {{ f.id }} — {{ f.title }}
+
+- **Severity:** {{ f.severity }}
+{%- if f.cwe %}
+- **CWE:** {{ f.cwe }}
+{%- endif %}
+- **Location:** `{{ f.evidence.file }}:{{ f.evidence.start_line }}-{{ f.evidence.end_line }}`
+
+{{ f.description }}
+
+```
+{{ f.evidence.snippet }}
+```
+
+{% endfor %}
+````
+
+Dann der Renderer in `src/venice_security_reviewer/report.py`:
+
+```python
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+
+from jinja2 import Environment, PackageLoader, select_autoescape
+
+from .models import Chain, Finding
+
+
+def _build_env() -> Environment:
+    return Environment(
+        loader=PackageLoader("venice_security_reviewer", "templates"),
+        autoescape=select_autoescape(enabled_extensions=("html",)),
+        keep_trailing_newline=True,
+    )
+
+
+def render_report(
+    *,
+    target: Path,
+    model: str,
+    findings: list[Finding],
+    chains: list[Chain],
+    dropped_chains: list[Chain] | None = None,
+) -> str:
+    env = _build_env()
+    template = env.get_template("report.md.j2")
+    return template.render(
+        target=str(target),
+        scanned_at=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        model=model,
+        findings=findings,
+        chains=chains,
+        dropped_chains=dropped_chains or [],
+    )
+```
+
+Autoescape bleibt für das Markdown-Template deaktiviert (Markdown ist nicht HTML), aber wir lassen es für jegliche zukünftigen `.html`-Templates per Erweiterung aktiviert.
+
+## Die CLI verdrahten
+
+Die CLI ist der Orchestrator: Repo Map bauen, scannen, verketten, rendern. Wir verwenden Typer, um das Argument Parsing zu handhaben, und Rich, um eine schöne Zusammenfassungstabelle auszugeben.
+
+Erstellen Sie `src/venice_security_reviewer/cli.py`:
+
+```python
+from __future__ import annotations
+
+import logging
+import sys
+from pathlib import Path
+from typing import Annotated
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from .chainer import find_chains
+from .client import VeniceConfigError, build_client
+from .models import Chain, Finding
+from .repo_map import build_repo_map
+from .report import render_report
+from .scanner import scan_path
+
+app = typer.Typer(
+    add_completion=False,
+    help="Two-agent security code reviewer powered by Venice AI.",
+    no_args_is_help=True,
+)
+console = Console()
+
+
+@app.callback()
+def _root() -> None:
+    """Force Typer to keep `scan` as a named subcommand."""
+
+
+def _configure_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+
+
+def _print_summary(
+    findings: list[Finding], chains: list[Chain], dropped: list[Chain]
+) -> None:
+    table = Table(title="Scan summary", show_header=True, header_style="bold")
+    table.add_column("Metric")
+    table.add_column("Count", justify="right")
+    table.add_row("Atomic findings", str(len(findings)))
+    table.add_row("Exploit chains", str(len(chains)))
+    if dropped:
+        table.add_row("Chains dropped (bad refs)", str(len(dropped)))
+    console.print(table)
+
+
+@app.command()
+def scan(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            exists=True, file_okay=False, dir_okay=True, readable=True, resolve_path=True,
+            help="Path to the codebase to scan.",
+        ),
+    ],
+    out: Annotated[
+        Path, typer.Option("--out", "-o", help="Where to write the Markdown report.")
+    ] = Path("report.md"),
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Enable debug logging.")
+    ] = False,
+) -> None:
+    """Scan a codebase for vulnerabilities and exploit chains."""
+    _configure_logging(verbose)
+
+    try:
+        client, model = build_client()
+    except VeniceConfigError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    console.print(f"[bold]Indexing[/bold] {path} (AST repo map)...")
+    repo_map = build_repo_map(path)
+    edge_count = sum(len(m.imports) for m in repo_map.modules)
+    console.print(
+        f"Repo map: [bold]{len(repo_map.modules)}[/bold] module(s), "
+        f"[bold]{edge_count}[/bold] import edge(s)."
+    )
+
+    console.print(f"[bold]Scanning[/bold] {path} with model [cyan]{model}[/cyan]...")
+    findings = scan_path(client, model, path, repo_map)
+    console.print(f"Scanner produced [bold]{len(findings)}[/bold] finding(s).")
+
+    console.print("[bold]Chaining[/bold] findings...")
+    chains, dropped = find_chains(client, model, findings, repo_map)
+    console.print(f"Chainer produced [bold]{len(chains)}[/bold] chain(s).")
+
+    report = render_report(
+        target=path, model=model,
+        findings=findings, chains=chains, dropped_chains=dropped,
+    )
+    out.write_text(report, encoding="utf-8")
+    console.print(f"Report written to [green]{out}[/green]")
+    _print_summary(findings, chains, dropped)
+
+
+def main() -> None:
+    app()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Fügen Sie den Script Entry Point zu `pyproject.toml` hinzu:
+
+```toml
+[project.scripts]
+venice-security-reviewer = "venice_security_reviewer.cli:app"
+```
+
+Das ist die gesamte Pipeline verdrahtet.
+
+## Die Guardrails testen
+
+Wir haben uns während des gesamten Builds stark auf eine Idee gestützt: die deterministischen Guardrails sind das, was ein nützliches Security-Tool von einem selbstbewusst falschen trennt. Diese Behauptung ist nur dann wert, gemacht zu werden, wenn wir beweisen können, dass die Guardrails tatsächlich halten, daher rufen die wertvollsten Tests in diesem Projekt Venice gar nicht auf. Sie sperren die Pydantic-Grenze und die Prompt-Assembly-Verrohrung ab, was bedeutet, dass sie offline laufen, in Millisekunden, ohne API Key und ohne Token-Kosten.
+
+Fügen Sie zuerst die Dev Dependencies hinzu:
+
+```bash
+uv add --dev "pytest>=8.3" "ruff>=0.7" "mypy>=1.13"
+```
+
+Das Erste, was zu testen lohnt, ist die Modellgrenze selbst. Diese Tests prüfen, dass fehlerhafte Findings und Chains zur Konstruktionszeit zurückgewiesen werden, bevor sie jemals einen Report erreichen können. Erstellen Sie `tests/test_models.py`:
+
+```python
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from venice_security_reviewer.models import (
+    Chain,
+    Evidence,
+    Finding,
+    validate_chain_references,
+)
+
+
+def _finding(fid: str) -> Finding:
+    return Finding(
+        id=fid,
+        title="t",
+        severity="medium",
+        description="d",
+        evidence=Evidence(file=Path("a.py"), start_line=1, end_line=2, snippet="x"),
+    )
+
+
+def test_evidence_rejects_inverted_line_range() -> None:
+    with pytest.raises(ValidationError):
+        Evidence(file=Path("a.py"), start_line=10, end_line=5, snippet="x")
+
+
+def test_finding_id_pattern_enforced() -> None:
+    with pytest.raises(ValidationError):
+        Finding(
+            id="not-an-id",
+            title="t",
+            severity="medium",
+            description="d",
+            evidence=Evidence(file=Path("a.py"), start_line=1, end_line=2, snippet="x"),
+        )
+
+
+def test_chain_requires_two_findings() -> None:
+    with pytest.raises(ValidationError):
+        Chain(
+            id="C-001",
+            findings=["F-001"],
+            narrative="n",
+            severity="high",
+            files_involved=[Path("a.py")],
+        )
+```
+
+Jeder davon spiegelt eine Bedingung wider, die wir den Modellen zuvor auferlegt haben: ein invertierter Zeilenbereich, eine ID, die nicht zum Pattern `F-###` passt, und eine "Chain" mit nur einem Finding. Wenn einer davon aufhört zu werfen, ist eine ganze Klasse von Halluzinationen still wieder möglich geworden.
+
+Der wichtigste Test deckt den Cross-Reference-Validator ab, da das die Funktion ist, die tatsächlich erfundene Chains verwirft:
+
+```python
+def test_validate_chain_references_drops_unknown_ids() -> None:
+    findings = [_finding("F-001"), _finding("F-002")]
+    good = Chain(
+        id="C-001",
+        findings=["F-001", "F-002"],
+        narrative="n",
+        severity="critical",
+        files_involved=[Path("a.py")],
+    )
+    bad = Chain(
+        id="C-002",
+        findings=["F-001", "F-999"],
+        narrative="n",
+        severity="critical",
+        files_involved=[Path("a.py")],
+    )
+    valid, dropped = validate_chain_references([good, bad], findings)
+    assert [c.id for c in valid] == ["C-001"]
+    assert [c.id for c in dropped] == ["C-002"]
+```
+
+`F-999` wurde nie vom Scanner produziert, also landet die Chain, die es referenziert, in `dropped` und erreicht nie den Report. Der Begleittest im Referenz-Repo, `test_validate_chain_references_drops_unknown_files`, macht dasselbe für eine Chain, die eine Datei beansprucht, aus der keines ihrer Findings stammt.
+
+Das Zweite, was zu testen lohnt, ist die Verrohrung, die den Chainer speist. Es ist einfach, die Prompt-Assembly umzubauen und still aufzuhören, Cross-File-Kontext zu übergeben – zu diesem Zeitpunkt würde der Chainer weiterhin funktionieren, aber still schlechter werden. Dieser Test baut eine Zwei-Modul-Fixture, rendert den Prompt und prüft, dass die Cross-File-Informationen tatsächlich vorhanden sind, wieder ohne Venice-Round-Trip. Erstellen Sie `tests/test_cross_file_chain.py`:
+
+```python
+from __future__ import annotations
+
+from pathlib import Path
+
+from venice_security_reviewer.chainer import (
+    _findings_to_input_json,
+    _load_prompt_template,
+    _render_repo_map,
+)
+from venice_security_reviewer.models import Evidence, Finding
+from venice_security_reviewer.repo_map import build_repo_map
+
+
+def _write(root: Path, rel: str, content: str) -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def test_chainer_prompt_carries_cross_file_context(tmp_path: Path) -> None:
+    _write(tmp_path, "validators.py", "def is_safe_url(url: str) -> bool:\n    return True")
+    _write(
+        tmp_path,
+        "fetcher.py",
+        "from .validators import is_safe_url\n\ndef fetch(url: str) -> bytes:\n    return b''",
+    )
+
+    rmap = build_repo_map(tmp_path)
+    findings = [
+        Finding(
+            id="F-001",
+            title="Validator returns True unconditionally",
+            severity="low",
+            description="The validator always returns True.",
+            evidence=Evidence(
+                file=Path("validators.py"), start_line=1, end_line=2, snippet="..."
+            ),
+        ),
+        Finding(
+            id="F-002",
+            title="Fetcher trusts a stub validator",
+            severity="low",
+            description="The fetcher gates network access on is_safe_url.",
+            evidence=Evidence(
+                file=Path("fetcher.py"), start_line=1, end_line=1, snippet="..."
+            ),
+        ),
+    ]
+
+    template = _load_prompt_template("chainer.md")
+    prompt = template.replace(
+        "{findings_json}", _findings_to_input_json(findings)
+    ).replace("{repo_map}", _render_repo_map(rmap, findings))
+
+    assert "{findings_json}" not in prompt and "{repo_map}" not in prompt
+    assert "F-001" in prompt and "F-002" in prompt
+    assert "validators.py" in prompt and "fetcher.py" in prompt
+    assert "is_safe_url" in prompt
+```
+
+Wenn dieser Test besteht, bekommt der Chainer einen Prompt überreicht, der beide Findings, beide Dateipfade und die Import-Kante zwischen ihnen enthält. Ob das *Modell* diese Information gut nutzt, ist eine separate, out-of-band-Evaluation; dieser Test schützt nur die Verrohrung, die die Information überhaupt in den Prompt bringt.
+
+Lassen Sie die gesamte Suite, plus Linter und Type Checker, laufen mit:
+
+```bash
+uv run pytest          # offline tests, no live Venice calls
+uv run ruff check .
+uv run mypy src/
+```
+
+Da keiner dieser Tests das Netzwerk berührt, sind sie sicher bei jedem Commit und in CI auszuführen, ohne Tokens zu verbrennen oder einen Venice Key zu benötigen. Das Referenz-Repo enthält außerdem `tests/test_scanner_parse.py`, `tests/test_chainer_parse.py` und `tests/test_repo_map.py`, die JSON-Parsing-Edge-Cases (fehlerhafte Einträge, die verworfen werden, statt den Lauf abstürzen zu lassen) und den AST-Repo-Map-Builder abdecken.
+
+## Das Projekt ausführen
+
+Um es auf einer echten Codebase auszuprobieren, richten Sie die CLI auf ein Verzeichnis mit Python-Quellcode:
+
+```bash
+uv run venice-security-reviewer scan path/to/your/code
+```
+
+Oder installieren Sie es mit `pip install -e .` in Ihr Virtualenv und führen Sie `venice-security-reviewer scan path/to/your/code` aus.
+
+Die Ausgabe sieht ungefähr so aus:
+
+```text
+Indexing /path/to/code (AST repo map)...
+Repo map: 6 module(s), 14 import edge(s).
+Scanning /path/to/code with model zai-org-glm-5...
+Scanner produced 4 finding(s).
+Chaining findings...
+Chainer produced 1 chain(s).
+Report written to report.md
+                Scan summary
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓
+┃ Metric                    ┃ Count ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━┩
+│ Atomic findings           │     4 │
+│ Exploit chains            │     1 │
+└───────────────────────────┴───────┘
+```
+
+Der Markdown-Report zeigt jede Chain oben mit ihrer Narrative, dann jedes einzelne Finding darunter mit Severity, CWE, Dateiposition, Beschreibung und dem wortwörtlichen Snippet, das das Modell gelesen zu haben behauptet.
+
+Das Referenz-Repo wird außerdem mit vier mitgelieferten Demo-Zielen ausgeliefert, die jeweils eine andere Form von Reasoning trainieren, das der Chainer leisten muss:
+
+- `examples/vulnerable_app` — eine Multi-File-Flask-App mit drei "low"-Findings, von denen sich zwei zu einer kritischen Privilege-Escalation-Chain über Dateien hinweg kombinieren. Testet, ob der Chainer selektiv ist bei dem, was er kombiniert.
+- `examples/url_preview` — ein Multi-File-URL-Fetcher mit einer defensiven Allowlist, die nicht pro Iteration angewendet wird. Testet Cross-File-Data-Flow-Reasoning in Kombination mit Deployment-Topologie (Link-Local-IPs sind Gateways für Cloud-Credentials).
+- `examples/csv_query` — ein Single-File-CSV-Filter mit einem `eval`-Sandbox-Escape über `__class__.__base__.__subclasses__()`. Testet Reasoning auf Sprachebene statt HTTP-Flow.
+- `examples/webhook_handler` — ein Single-File-HMAC-Verifier mit einer JSON-Parser-Differential-Schwachstelle. Testet Reasoning über mehrere Spezifikationen hinweg.
+
+Probieren Sie sie mit:
+
+```bash
+uv run venice-security-reviewer scan examples/vulnerable_app
+uv run venice-security-reviewer scan examples/csv_query
+```
+
+Wenn Sie jemals sehen, dass die CLI `chainer referenced N unknown finding id(s) or file(s); chains dropped` loggt, ist das der Cross-Reference-Validator, der das Modell auf frischer Tat ertappt, wie es eine Chain erfindet. Die verworfenen Chains erreichen nie den Report; Sie erhalten lediglich eine Warnung, die Sie nutzen können, um den Prompt anzupassen oder zusätzliche Chainer-Läufe zu sampeln.
+
+## Dieses Beispiel erweitern
+
+Die Zwei-Agent-Form generalisiert gut. Ein paar Richtungen, die sich zu erkunden lohnen:
+
+- **Mehr Sprachen.** Der Scanner ist auf Prompt-Ebene sprachagnostisch; der AST-Builder ist das, was Python-spezifisch ist. Tauschen Sie ihn gegen `tree-sitter`, und Sie können dieselben Neighbourhood-/Condensed-Map-Formen für TypeScript, Go oder Rust bauen.
+- **Ein dritter Agent für Fixes.** Sobald Sie eine Chain haben, ist es ein kleiner Schritt, einen Patcher-Agent zu bitten, einen Unified Diff zu entwerfen, der *eines* der konstituierenden Findings entschärft. Validieren Sie den Diff mit Pydantic gegen dasselbe Evidence-File-Set, und Sie bekommen denselben Halluzinations-Schutz gratis.
+- **Ausgabeformate.** `render_report` ist der einzige Ort, der von Markdown weiß. Fügen Sie einen SARIF-Renderer hinzu, und dieselben Findings können in GitHub Code Scanning landen. Fügen Sie einen JSON-Renderer hinzu, und Sie können Ergebnisse in ein nachgelagertes System pipen.
+- **Caching nach File-Hash.** Die Per-File-Calls des Scanners sind unabhängig und idempotent. Caching nach `(file_hash, prompt_hash, model)` bedeutet, dass ein erneuter Scan eines Repos, in dem sich eine Datei geändert hat, den Scanner nur für diese eine Datei erneut ausführt.
+- **Sampling für den Chainer.** Für Läufe mit hohem Einsatz rufen Sie den Chainer N-mal bei leicht erhöhter Temperatur auf und schneiden Sie die Ergebnisse. Chains, die das Modell konsistent findet, sind eher real; Chains, die es einmal und nie wieder findet, sind wahrscheinlich Rauschen.
+- **Stärkere Modelle.** `zai-org-glm-5` ist der Default, weil es eine gute Balance aus Kosten und Qualität für kombinatorisches Reasoning trifft, aber für schwierigere Codebases kann der Wechsel zu einem stärkeren Venice-Modell (gesetzt über `VENICE_MODEL`) die Narratives des Chainers spürbar straffer machen.
+
+## Abschluss
+
+Vielen Dank fürs Lesen! Wir hoffen, das hat Ihnen geholfen zu verstehen, wie man ein KI-Sicherheits-Tool strukturiert, das tatsächlich vertrauenswürdig ist. Das Pattern, das wir hier verwendet haben, generalisiert auch über Sicherheit hinaus: Immer wenn Sie ein LLM dazu bringen wollen, über Dateien hinweg in einer Weise zu reasonen, die in echter Evidence münden muss, ist das Rezept dasselbe. Bauen Sie eine deterministische strukturelle Map, reichen Sie dem Modell einen Slice davon in den Kontext, validieren Sie die Referenzen des Modells gegen die Struktur zurück und verwerfen Sie alles, was es nicht verankern kann.
+
+Indem wir Python mit der Venice AI API verwenden, können wir Agents bauen, die LLM-Reasoning mit harten Validierungsgrenzen kombinieren, und etwas ausliefern, das eine nützliche Antwort statt einer selbstbewusst klingenden gibt.

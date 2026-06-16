@@ -1,0 +1,374 @@
+---
+title: Video Generation
+description: Generate videos from text prompts or images using Venice's async queue system
+"og:title": "Video Generation | Venice API Docs"
+"og:description": "Learn how to generate videos from text prompts or images using Venice's async video generation API."
+---
+
+Video generation is async. Submit a job, save `queue_id`, then poll `/video/retrieve` until the response is `video/mp4`.
+
+## 엔드포인트
+
+| Endpoint | Purpose | Required |
+|----------|---------|----------|
+| `POST /video/quote` | Get price in USD before generating | No |
+| `POST /video/queue` | Submit generation request | Yes |
+| `POST /video/retrieve` | Poll status or download video | Yes |
+| `POST /video/complete` | Delete video from storage | No |
+
+## Step 1: Queue Generation
+
+**Request:**
+```bash
+POST https://api.venice.ai/api/v1/video/queue
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "prompt": "A gondola gliding through Venice canals at sunset",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9"
+}
+```
+
+**Response (200):**
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+For Grok Imagine Private models, the queue response includes an extra `download_url` field:
+
+```json
+{
+  "model": "grok-imagine-text-to-video-private",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000",
+  "download_url": "https://private-share.venice.ai/v1/share/read/..."
+}
+```
+
+`download_url` is a pre-signed URL you use to download the finished video instead of reading it from the retrieve response. It is only returned once in the queue response, so persist it alongside `queue_id`. This applies to all four Grok Imagine Private variants:
+
+- `grok-imagine-text-to-video-private`
+- `grok-imagine-image-to-video-private`
+- `grok-imagine-reference-to-video-private`
+- `grok-imagine-video-to-video-private`
+
+Unlike the public `grok-imagine-*-video` variants, Grok Imagine Private models are not billed for content-moderation rejections, so you only pay for successful generations.
+
+Save `model`, `queue_id`, and `download_url` (if present) for all subsequent calls.
+
+### Private download links
+
+For private models, `download_url` is how you fetch the finished file once the job is complete. The link is **short-lived and single-purpose**: it is there to deliver the MP4 to you, not to serve as a long-term or widely shared URL.
+
+If a download is interrupted, you can **retry the same `GET` a few times** from the same environment until the file finishes. Those retries are for recovering from network blips—not for polling the same link indefinitely, sharing it across many clients, or embedding it like a permanent media URL. Patterns like that often show up as **`429`** or **`410`**, which can be surprising if you expected the link to behave like regular file hosting.
+
+For reliability, **`GET` requests should originate from one client network**. There is some flexibility if your IP changes once (for example you disconnect a VPN and try again), but wide variation in source IPs usually will not work.
+
+The URL stays valid for up to **24 hours**, or until the object is removed.
+
+<Note>
+If you need a stable URL, public playback, or repeated access over time, save the file to **your own storage** first and serve it from there.
+</Note>
+
+**Privacy: revoke the link with `DELETE`**
+
+When you are done fetching the file—or if you decide not to keep it—you can call **`DELETE`** on the same `download_url`. No Venice API key is required on that request. This is optional but **recommended when privacy matters**, because some proxies and middleboxes outside Venice keep logs of full URLs, and deleting the link is the simplest way to narrow the window where the pre-signed URL exists.
+
+```bash
+curl -X DELETE "$DOWNLOAD_URL"
+```
+
+**Flow:** poll `/video/retrieve` until `COMPLETED` → `GET` the `download_url` (retry lightly if the transfer drops) → save the file where you need it → `DELETE` the `download_url` if you want the link invalidated → optionally call `/video/complete` if you still use queue-based cleanup.
+
+## Step 2: Poll for Completion
+
+**Request:**
+```bash
+POST https://api.venice.ai/api/v1/video/retrieve
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+**Response depends on status:**
+
+| Content-Type | Meaning | Action |
+|--------------|---------|--------|
+| `application/json` | Still processing | Wait 5s, poll again |
+| `video/mp4` | Complete | Response body is the video file |
+| `application/json` with `"COMPLETED"` | Complete, video not inline | `GET` the `download_url` from the queue response |
+
+**Processing response (200, application/json):**
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 145000,
+  "execution_duration": 53200
+}
+```
+
+Times are in milliseconds. Use `average_execution_time` to estimate remaining wait.
+
+**Complete response (200, video/mp4):**
+Response body is raw binary video data. Save to file.
+
+**Complete response (200, application/json with `"COMPLETED"`):**
+For models that returned a `download_url` at queue time, retrieve always returns JSON. Fetch the video with `GET download_url` (no auth header). See [Private download links](#private-download-links) for how these URLs work, retries, and optional `DELETE`.
+
+## Step 3: Cleanup (Optional)
+
+Either auto-delete on retrieval:
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000",
+  "delete_media_on_completion": true
+}
+```
+
+Or call `/video/complete` after saving:
+```bash
+POST https://api.venice.ai/api/v1/video/complete
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true
+}
+```
+
+---
+
+## Complete Example
+
+<CodeGroup>
+```python Python
+import os
+import time
+import requests
+
+API_KEY = os.environ.get("VENICE_API_KEY")
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+
+# Queue
+resp = requests.post(f"{BASE_URL}/video/queue", headers=HEADERS, json={
+    "model": "wan-2.5-preview-text-to-video",
+    "prompt": "A gondola gliding through Venice canals at sunset",
+    "duration": "5s",
+    "resolution": "720p",
+    "aspect_ratio": "16:9"
+})
+data = resp.json()
+model, queue_id = data["model"], data["queue_id"]
+download_url = data.get("download_url")
+
+# Poll
+while True:
+    resp = requests.post(f"{BASE_URL}/video/retrieve", headers=HEADERS,
+                         json={"model": model, "queue_id": queue_id})
+    if "video/mp4" in resp.headers.get("Content-Type", ""):
+        with open("output.mp4", "wb") as f:
+            f.write(resp.content)
+        break
+    if resp.json().get("status") == "COMPLETED" and download_url:
+        with open("output.mp4", "wb") as f:
+            f.write(requests.get(download_url).content)
+        break
+    time.sleep(5)
+
+# Cleanup
+requests.post(f"{BASE_URL}/video/complete", headers=HEADERS,
+              json={"model": model, "queue_id": queue_id})
+```
+
+```javascript Node.js
+const API_KEY = process.env.VENICE_API_KEY;
+const BASE_URL = "https://api.venice.ai/api/v1";
+const headers = {"Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json"};
+
+// Queue
+const queueResp = await fetch(`${BASE_URL}/video/queue`, {
+    method: "POST", headers,
+    body: JSON.stringify({
+        model: "wan-2.5-preview-text-to-video",
+        prompt: "A gondola gliding through Venice canals at sunset",
+        duration: "5s", resolution: "720p", aspect_ratio: "16:9"
+    })
+});
+const {model, queue_id, download_url} = await queueResp.json();
+
+// Poll
+while (true) {
+    const resp = await fetch(`${BASE_URL}/video/retrieve`, {
+        method: "POST", headers,
+        body: JSON.stringify({model, queue_id})
+    });
+    if (resp.headers.get("Content-Type")?.includes("video/mp4")) {
+        const fs = await import("fs");
+        fs.writeFileSync("output.mp4", Buffer.from(await resp.arrayBuffer()));
+        break;
+    }
+    const status = await resp.json();
+    if (status.status === "COMPLETED" && download_url) {
+        const fs = await import("fs");
+        const video = await fetch(download_url);
+        fs.writeFileSync("output.mp4", Buffer.from(await video.arrayBuffer()));
+        break;
+    }
+    await new Promise(r => setTimeout(r, 5000));
+}
+
+// Cleanup
+await fetch(`${BASE_URL}/video/complete`, {
+    method: "POST", headers,
+    body: JSON.stringify({model, queue_id})
+});
+```
+</CodeGroup>
+
+---
+
+## 요청 Parameters
+
+### Queue Request
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | Yes | - | Model ID. Use `wan-2.5-preview-text-to-video` for text-to-video, `wan-2.5-preview-image-to-video` for image-to-video |
+| `prompt` | string | Yes | - | What to generate. Max 2500 chars |
+| `negative_prompt` | string | No | `"low resolution, error, worst quality, low quality, defects"` | What to avoid |
+| `duration` | string | Yes | - | `"5s"` or `"10s"` |
+| `resolution` | string | No | `"720p"` | `"480p"`, `"720p"`, or `"1080p"` |
+| `aspect_ratio` | string | Conditional | - | Model-dependent. Required for models that expose aspect-ratio options; omit for models that do not support aspect-ratio selection |
+| `audio` | boolean | Conditional | `true` (when supported) | Only valid for models with `supportsAudioConfig: true`; omit for models without audio config support |
+| `image_url` | string | Only for image-to-video | - | URL or base64 data URL of source image |
+| `audio_url` | string | Conditional | - | URL or base64 data URL of reference audio for models that support audio input |
+
+Queue validation is model-specific. Check `/models?type=video` for each model's supported request fields before calling `/video/queue`.
+
+### Quote Request
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | Yes | - | Model ID to price |
+| `duration` | string | Yes | - | `"5s"` or `"10s"` |
+| `resolution` | string | No | `"720p"` | `"480p"`, `"720p"`, or `"1080p"` |
+| `aspect_ratio` | string | Conditional | - | Include when the selected model supports or requires aspect-ratio selection |
+| `audio` | boolean | Conditional | `true` (when supported) | Only valid for models with `supportsAudioConfig: true` |
+
+### Retrieve Request
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | Yes | - | From queue response |
+| `queue_id` | string | Yes | - | From queue response |
+| `delete_media_on_completion` | boolean | No | `false` | Delete video after successful retrieval |
+
+### Complete Request
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | string | Yes | From queue response |
+| `queue_id` | string | Yes | From queue response |
+
+---
+
+## Image to Video
+
+For image-to-video models, pass source image via `image_url`. The prompt describes desired motion, not the image content.
+
+```json
+{
+  "model": "wan-2.5-preview-image-to-video",
+  "prompt": "Camera slowly zooms in as leaves rustle in the wind",
+  "image_url": "https://example.com/image.jpg",
+  "duration": "5s"
+}
+```
+
+Or with base64:
+```json
+{
+  "model": "wan-2.5-preview-image-to-video",
+  "prompt": "Camera slowly zooms in as leaves rustle in the wind",
+  "image_url": "data:image/jpeg;base64,/9j/4AAQ...",
+  "duration": "5s"
+}
+```
+
+---
+
+## Price Quote
+
+Get exact cost before generating. Send only pricing inputs (`model`, `duration`, and optional `resolution`, `aspect_ratio`, `audio`):
+
+**Request:**
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "duration": "10s",
+  "resolution": "1080p"
+}
+```
+
+**Response:**
+```json
+{
+  "quote": 0.085
+}
+```
+
+Quote is in USD.
+
+---
+
+## 오류
+
+| Status | Returned By | Meaning | Action |
+|--------|-------------|---------|--------|
+| 400 | `queue`, `quote`, `retrieve`, `complete` | Invalid parameters | Check request body against schema |
+| 401 | `queue`, `retrieve`, `complete` | Auth failed | Check API key |
+| 402 | `queue` | Insufficient balance | Add funds |
+| 404 | `retrieve`, `download_url` | Media not found (invalid, expired, or deleted) | Verify `model`/`queue_id` or re-queue |
+| 410 | `download_url` | Pre-signed URL expired, fully used, or revoked (for example after `DELETE`) | Start a new generation if you need another file; each link is intentionally short-lived |
+| 429 | `download_url` | Rate limited—often from many retries or repeated fetches of the same link | Finish the download (a few retries are fine if the connection drops), save a local copy, and use `DELETE` if you want to clear the link; keep ongoing access on your own storage |
+| 413 | `queue` | Payload too large | Reduce image/audio size |
+| 422 | `queue`, `retrieve` | Content violation | Modify prompt |
+| 500 | `queue`, `retrieve`, `complete` | Inference/processing failed | Retry with backoff; contact support if persistent |
+| 503 | `retrieve` | Model at capacity | Retry with backoff |
+
+---
+
+## Polling Strategy
+
+1. Poll `/video/retrieve` on an interval (for example, every 5 seconds)
+2. If `Content-Type` is `application/json` and `status` is `"PROCESSING"`, wait and poll again. Use `average_execution_time` and `execution_duration` (milliseconds) to estimate remaining time
+3. If `Content-Type` is `video/mp4`, save the response body as your output file
+4. If `Content-Type` is `application/json` and `status` is `"COMPLETED"`, `GET` the `download_url` from the queue response to fetch the video (see [Private download links](#private-download-links))
+5. If you used `download_url`, consider `DELETE` on that URL when you are done to narrow how long the pre-signed URL exists; then optionally set `delete_media_on_completion: true` on retrieve or call `/video/complete` for queue-based cleanup
+6. Handle `404` as invalid, expired, or deleted media; handle `500/503` with retries/backoff
+
+---
+
+## Available Models
+
+See [Video Models](/ko/models/video) for current model list and pricing.

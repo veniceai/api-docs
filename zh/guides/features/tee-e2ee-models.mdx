@@ -1,0 +1,1204 @@
+---
+title: "TEE 与 E2EE 模型"
+description: "采用可信执行环境与端到端加密的隐私增强 AI"
+'og:title': "TEE 与 E2EE 模型 | Venice API 文档"
+'og:description': "了解如何在 AI 应用中使用 TEE 与 E2EE 模型以获得最大隐私保护"
+---
+
+Venice 提供运行在可信执行环境（TEE）中并支持端到端加密（E2EE）的隐私增强模型。这些模型提供加密学保证，使你的数据保持私密 —— 即使对 Venice 也是如此。
+
+## 理解隐私级别
+
+| 类型 | 前缀 | 含义 |
+|------|--------|---------------|
+| **TEE** | `tee-*` | 模型运行在硬件安全飞地中。Venice 无法访问其计算过程。你可以通过证明（attestation）来验证。 |
+| **E2EE** | `e2ee-*` | 全程端到端加密。你的提示在客户端被加密后才发送。只有 TEE 能解密它们。 |
+
+<Info>
+E2EE 模型在 TEE 保护之上增加了客户端加密。TEE 模型提供飞地安全性，但不要求客户端加密。
+</Info>
+
+## 可用模型
+
+<div id="tee-e2ee-models-placeholder">Loading...</div>
+
+完整列表与定价、上下文上限请见[模型页面](/zh/overview/models)。
+
+## TEE 模型
+
+TEE 模型运行在硬件保护的飞地中（Intel TDX、NVIDIA Confidential Computing）。模型权重和你的数据都受到保护，无法被宿主系统访问 —— 包括 Venice 的基础设施。
+
+### 基本用法
+
+TEE 模型的用法与常规模型完全一致：
+
+<CodeGroup>
+```python Python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1"
+)
+
+response = client.chat.completions.create(
+    model="tee-qwen3-5-122b-a10b",
+    messages=[{"role": "user", "content": "Explain quantum computing"}]
+)
+
+print(response.choices[0].message.content)
+```
+
+```javascript Node.js
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+    apiKey: 'your-venice-api-key',
+    baseURL: 'https://api.venice.ai/api/v1'
+});
+
+const response = await client.chat.completions.create({
+    model: 'tee-qwen3-5-122b-a10b',
+    messages: [{ role: 'user', content: 'Explain quantum computing' }]
+});
+
+console.log(response.choices[0].message.content);
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $API_KEY_VENICE" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tee-qwen3-5-122b-a10b",
+    "messages": [{"role": "user", "content": "Explain quantum computing"}]
+  }'
+```
+</CodeGroup>
+
+### 验证 TEE 证明
+
+你可以通过获取模型的证明报告，以加密学方式验证它确实运行在真实的 TEE 中：
+
+<CodeGroup>
+```bash cURL
+# 生成随机 nonce（防止重放攻击）
+NONCE=$(openssl rand -hex 16)
+
+# 获取证明
+curl "https://api.venice.ai/api/v1/tee/attestation?model=tee-qwen3-5-122b-a10b&nonce=$NONCE" \
+  -H "Authorization: Bearer $API_KEY_VENICE"
+```
+
+```python Python
+import secrets
+import requests
+
+nonce = secrets.token_hex(16)
+
+response = requests.get(
+    f"https://api.venice.ai/api/v1/tee/attestation",
+    params={"model": "tee-qwen3-5-122b-a10b", "nonce": nonce},
+    headers={"Authorization": f"Bearer {api_key}"}
+)
+
+attestation = response.json()
+print(f"Verified: {attestation['verified']}")
+print(f"TEE Provider: {attestation['tee_provider']}")
+print(f"Model: {attestation['model']}")
+```
+</CodeGroup>
+
+证明响应包含：
+
+| 字段 | 说明 |
+|-------|-------------|
+| `verified` | 证明是否通过了服务端验证 |
+| `nonce` | 你的 nonce，确认新鲜度 |
+| `model` | 被证明的模型 ID |
+| `tee_provider` | TEE 提供商标识 |
+| `intel_quote` | 原始 Intel TDX quote（base64），用于客户端验证 |
+| `nvidia_payload` | NVIDIA GPU 证明数据（如适用） |
+| `signing_key` | 用于验证响应签名的公钥（E2EE 流程通常需要；某些纯 TEE 模型可能省略） |
+| `signing_address` | 由签名密钥派生的以太坊地址 |
+
+<Tip>
+生产环境中，请在客户端解析 Intel TDX quote 并检查 NVIDIA 证明，从而进行验证。
+</Tip>
+
+<Note>
+对于纯 TEE 模型验证，`signing_address` 与服务端验证字段足以进行基线证明检查。当你需要客户端 E2EE 密钥协商与严格的密钥绑定检查时，才需要 `signing_key`。
+</Note>
+
+### 响应签名
+
+TEE 模型可以对其响应进行签名，证明输出来自经过证明的飞地：
+
+<CodeGroup>
+```bash cURL
+# 获取补全后，验证签名
+curl "https://api.venice.ai/api/v1/tee/signature?model=tee-qwen3-5-122b-a10b&request_id=chatcmpl-abc123" \
+  -H "Authorization: Bearer $API_KEY_VENICE"
+```
+
+```python Python
+response = requests.get(
+    f"https://api.venice.ai/api/v1/tee/signature",
+    params={"model": "tee-qwen3-5-122b-a10b", "request_id": completion_id},
+    headers={"Authorization": f"Bearer {api_key}"}
+)
+
+signature = response.json()
+# 验证签名是否与证明中的 signing_address 匹配
+```
+</CodeGroup>
+
+## E2EE 模型
+
+E2EE 模型在 TEE 保护之上增加了客户端加密。你的提示在离开设备之前就会被加密，且只有 TEE 能解密。
+
+Venice 的 E2EE 使用：
+
+- 基于 secp256k1 的 **ECDH（椭圆曲线 Diffie-Hellman）** 进行密钥交换
+- **HKDF-SHA256** 用于密钥派生
+- **AES-256-GCM** 用于对称加密
+- **TEE 证明**用于验证模型运行在安全飞地中
+
+<Warning>
+E2EE 需要客户端实现。下方示例展示了完整协议。
+</Warning>
+
+### E2EE 工作流程
+
+<Steps>
+  <Step title="生成临时密钥对">
+    客户端为当前会话生成 secp256k1 密钥对。
+  </Step>
+  <Step title="获取 TEE 证明">
+    客户端请求 `/api/v1/tee/attestation`，并接收模型的公钥、证明证据与 nonce。
+  </Step>
+  <Step title="验证证明">
+    客户端检查 nonce 匹配、debug 模式已禁用以及证明有效性。
+  </Step>
+  <Step title="加密消息">
+    客户端使用 ECDH 共享密钥 → HKDF → AES-GCM 加密提示。
+  </Step>
+  <Step title="发送请求">
+    客户端带上 E2EE 头部（`X-Venice-TEE-Client-Pub-Key`、`X-Venice-TEE-Model-Pub-Key`、`X-Venice-TEE-Signing-Algo`）发送请求。
+  </Step>
+  <Step title="TEE 处理">
+    TEE 解密请求、进行处理并加密响应。
+  </Step>
+  <Step title="解密响应">
+    客户端接收加密的分块并用私钥解密。
+  </Step>
+</Steps>
+
+### 前置条件
+
+**JavaScript（Node.js ESM）：**
+
+```bash
+npm install elliptic @noble/ciphers @noble/hashes
+```
+
+**Python：**
+
+```bash
+pip install cryptography ecdsa requests
+```
+
+### 步骤 1：检查模型是否支持 E2EE
+
+首先通过 `/models` 端点确认该模型支持 E2EE。
+
+<CodeGroup>
+```javascript JavaScript
+async function getE2EEModels(apiKey) {
+  const response = await fetch('https://api.venice.ai/api/v1/models', {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  })
+  const { data } = await response.json()
+
+  return data.filter(model => model.model_spec?.capabilities?.supportsE2EE === true)
+}
+
+// 示例用法
+const models = await getE2EEModels('your-api-key')
+console.log('E2EE Models:', models.map(m => m.id))
+// 输出: ['e2ee-qwen3-5-122b-a10b', 'e2ee-glm-5', ...]
+```
+
+```python Python
+import requests
+
+def get_e2ee_models(api_key: str) -> list:
+    """获取支持 E2EE 的模型列表。"""
+    response = requests.get(
+        'https://api.venice.ai/api/v1/models',
+        headers={'Authorization': f'Bearer {api_key}'}
+    )
+    models = response.json()['data']
+
+    return [
+        model for model in models
+        if model.get('model_spec', {}).get('capabilities', {}).get('supportsE2EE')
+    ]
+
+# 示例用法
+models = get_e2ee_models('your-api-key')
+print('E2EE Models:', [m['id'] for m in models])
+```
+</CodeGroup>
+
+### 步骤 2：生成临时密钥对
+
+每个会话都生成一个新的密钥对。私钥应仅保留在内存中，并在用完后安全清零。
+
+<CodeGroup>
+```javascript JavaScript
+import { ec as EC } from 'elliptic'
+
+function generateEphemeralKeyPair() {
+  const ec = new EC('secp256k1')
+  const keyPair = ec.genKeyPair()
+
+  return {
+    privateKey: new Uint8Array(keyPair.getPrivate().toArray('be', 32)),
+    publicKeyHex: keyPair.getPublic('hex'), // 未压缩格式（65 字节十六进制）
+  }
+}
+
+// 安全：完成后将私钥清零
+function zeroFill(arr) {
+  arr.fill(0)
+}
+```
+
+```python Python
+from ecdsa import SECP256k1, SigningKey
+import secrets
+
+def generate_ephemeral_key_pair():
+    """为 E2EE 会话生成临时 secp256k1 密钥对。"""
+    private_key = SigningKey.generate(curve=SECP256k1)
+    public_key = private_key.get_verifying_key()
+
+    # 获取未压缩公钥（04 || x || y）
+    public_key_bytes = b'\x04' + public_key.to_string()
+
+    return {
+        'private_key': private_key.to_string(),  # 32 字节
+        'public_key_hex': public_key_bytes.hex()  # 130 个十六进制字符
+    }
+```
+</CodeGroup>
+
+#### 校验辅助函数
+
+发送请求前使用这些辅助函数校验密钥和加密内容。
+
+<CodeGroup>
+```javascript JavaScript
+function validateClientPubkey(pubkeyHex) {
+  if (pubkeyHex.length !== 130 || !pubkeyHex.startsWith('04')) {
+    throw new Error(`Client pubkey must be 130 hex chars starting with '04' (got ${pubkeyHex.length})`)
+  }
+}
+
+function isValidEncrypted(s) {
+  // 最小值：ephemeral_pub (65) + nonce (12) + tag (16) = 93 字节 = 186 十六进制字符
+  return s.length >= 186 && /^[0-9a-fA-F]+$/.test(s)
+}
+```
+
+```python Python
+def validate_client_pubkey(pubkey_hex: str) -> None:
+    """校验客户端公钥格式。"""
+    if len(pubkey_hex) != 130 or not pubkey_hex.startswith('04'):
+        raise ValueError(f"Client pubkey must be 130 hex chars starting with '04' (got {len(pubkey_hex)})")
+
+def is_valid_encrypted(s: str) -> bool:
+    """检查字符串是否为有效的十六进制加密内容。"""
+    # 最小值：ephemeral_pub (65) + nonce (12) + tag (16) = 93 字节 = 186 十六进制字符
+    return len(s) >= 186 and all(c in '0123456789abcdefABCDEF' for c in s)
+```
+</CodeGroup>
+
+### 步骤 3：获取并验证 TEE 证明
+
+证明用于证明模型运行在真实的 TEE 中。在信任模型公钥之前，请始终验证证明。
+
+<Info>
+**重要：Nonce 长度** —— 客户端 nonce 必须是**32 字节（64 个十六进制字符）**。部分 TEE 提供商严格要求 32 字节，会拒绝更短的 nonce。
+</Info>
+
+<CodeGroup>
+```javascript JavaScript
+import crypto from 'crypto'
+
+async function fetchAndVerifyAttestation(modelId, apiKey) {
+  // 生成客户端 nonce 用于防重放（32 字节 = 64 十六进制字符）
+  const clientNonce = crypto.randomBytes(32).toString('hex')
+
+  const response = await fetch(
+    `https://api.venice.ai/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}&nonce=${clientNonce}`,
+    { headers: { Authorization: `Bearer ${apiKey}` } }
+  )
+
+  const attestation = await response.json()
+
+  // 验证证明
+  if (attestation.verified !== true) {
+    throw new Error('TEE attestation verification failed on server')
+  }
+
+  if (attestation.nonce !== clientNonce) {
+    throw new Error('Attestation nonce mismatch - possible replay attack')
+  }
+
+  // 获取模型用于加密的公钥
+  const modelPublicKey = attestation.signing_key || attestation.signing_public_key
+  if (!modelPublicKey) {
+    throw new Error('No signing key in attestation response')
+  }
+
+  return {
+    modelPublicKey,
+    signingAddress: attestation.signing_address,
+    attestation,
+  }
+}
+```
+
+```python Python
+import secrets
+import requests
+
+def fetch_and_verify_attestation(model_id: str, api_key: str) -> dict:
+    """获取并验证某个模型的 TEE 证明。"""
+    # 生成客户端 nonce 用于防重放（32 字节 = 64 十六进制字符）
+    client_nonce = secrets.token_hex(32)
+
+    response = requests.get(
+        f'https://api.venice.ai/api/v1/tee/attestation',
+        params={'model': model_id, 'nonce': client_nonce},
+        headers={'Authorization': f'Bearer {api_key}'}
+    )
+    attestation = response.json()
+
+    # 验证证明
+    if attestation.get('verified') != True:
+        raise ValueError('TEE attestation verification failed on server')
+
+    if attestation.get('nonce') != client_nonce:
+        raise ValueError('Attestation nonce mismatch - possible replay attack')
+
+    # 获取模型用于加密的公钥
+    model_public_key = attestation.get('signing_key') or attestation.get('signing_public_key')
+    if not model_public_key:
+        raise ValueError('No signing key in attestation response')
+
+    return {
+        'model_public_key': model_public_key,
+        'signing_address': attestation.get('signing_address'),
+        'attestation': attestation
+    }
+```
+</CodeGroup>
+
+### 步骤 4：加密消息
+
+在发送前对用户消息与系统消息进行加密。只有 `user` 与 `system` 角色的消息需要加密。
+
+<Warning>
+当存在 E2EE 头部时，**所有** `user` 与 `system` 角色的消息都必须加密。这些角色中若发送任何明文内容，会导致 "Encrypted field is not valid hex" 错误。
+</Warning>
+
+<CodeGroup>
+```javascript JavaScript
+import { gcm } from '@noble/ciphers/aes.js'
+import { hkdf } from '@noble/hashes/hkdf.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { ec as EC } from 'elliptic'
+import crypto from 'crypto'
+
+const HKDF_INFO = new TextEncoder().encode('ecdsa_encryption')
+
+function encryptMessage(plaintext, modelPublicKeyHex) {
+  const ec = new EC('secp256k1')
+
+  // 标准化公钥（必要时补上 04 前缀）
+  let normalizedKey = modelPublicKeyHex
+  if (!normalizedKey.startsWith('04') && normalizedKey.length === 128) {
+    normalizedKey = '04' + normalizedKey
+  }
+
+  const modelPublicKey = ec.keyFromPublic(normalizedKey, 'hex')
+
+  // 为此消息生成临时密钥对
+  const ephemeralKeyPair = ec.genKeyPair()
+
+  // ECDH 共享密钥
+  const sharedSecret = ephemeralKeyPair.derive(modelPublicKey.getPublic())
+  const sharedSecretBytes = new Uint8Array(sharedSecret.toArray('be', 32))
+
+  // 使用 HKDF 派生 AES 密钥
+  const aesKey = hkdf(sha256, sharedSecretBytes, undefined, HKDF_INFO, 32)
+
+  // 生成随机 nonce
+  const nonce = crypto.randomBytes(12)
+
+  // 使用 AES-GCM 加密
+  const cipher = gcm(aesKey, nonce)
+  const encrypted = cipher.encrypt(new TextEncoder().encode(plaintext))
+
+  // 获取临时公钥（未压缩）
+  const ephemeralPublic = new Uint8Array(ephemeralKeyPair.getPublic(false, 'array'))
+
+  // 拼接：ephemeral_public（65 字节）+ nonce（12 字节）+ 密文
+  const result = new Uint8Array(65 + 12 + encrypted.length)
+  result.set(ephemeralPublic, 0)
+  result.set(nonce, 65)
+  result.set(encrypted, 65 + 12)
+
+  return Buffer.from(result).toString('hex')
+}
+
+function encryptMessagesForE2EE(messages, modelPublicKey) {
+  return messages.map(msg => {
+    if (msg.role === 'user' || msg.role === 'system') {
+      return {
+        ...msg,
+        content: encryptMessage(msg.content, modelPublicKey),
+      }
+    }
+    return msg
+  })
+}
+```
+
+```python Python
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
+from ecdsa import SECP256k1, VerifyingKey, SigningKey
+import os
+
+HKDF_INFO = b'ecdsa_encryption'
+
+def encrypt_message(plaintext: str, model_public_key_hex: str) -> str:
+    """使用 ECDH + HKDF + AES-GCM 加密消息。"""
+    # 标准化公钥
+    key_hex = model_public_key_hex
+    if not key_hex.startswith('04') and len(key_hex) == 128:
+        key_hex = '04' + key_hex
+
+    model_public_key_bytes = bytes.fromhex(key_hex)
+
+    # 解析模型公钥（跳过 04 前缀）
+    model_verifying_key = VerifyingKey.from_string(
+        model_public_key_bytes[1:],
+        curve=SECP256k1
+    )
+
+    # 为此消息生成临时密钥对
+    ephemeral_private = SigningKey.generate(curve=SECP256k1)
+    ephemeral_public = ephemeral_private.get_verifying_key()
+
+    # ECDH：计算共享密钥
+    shared_point = model_verifying_key.pubkey.point * ephemeral_private.privkey.secret_multiplier
+    shared_secret = shared_point.x().to_bytes(32, 'big')
+
+    # 使用 HKDF 派生 AES 密钥
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=HKDF_INFO,
+    )
+    aes_key = hkdf.derive(shared_secret)
+
+    # 生成随机 nonce
+    nonce = os.urandom(12)
+
+    # 使用 AES-GCM 加密
+    aesgcm = AESGCM(aes_key)
+    ciphertext = aesgcm.encrypt(nonce, plaintext.encode('utf-8'), None)
+
+    # 获取临时公钥（未压缩：04 || x || y）
+    ephemeral_public_bytes = b'\x04' + ephemeral_public.to_string()
+
+    # 拼接：ephemeral_public（65 字节）+ nonce（12 字节）+ 密文
+    result = ephemeral_public_bytes + nonce + ciphertext
+
+    return result.hex()
+
+def encrypt_messages_for_e2ee(messages: list, model_public_key: str) -> list:
+    """加密用户和系统消息。"""
+    encrypted_messages = []
+    for msg in messages:
+        if msg['role'] in ('user', 'system'):
+            encrypted_messages.append({
+                **msg,
+                'content': encrypt_message(msg['content'], model_public_key)
+            })
+        else:
+            encrypted_messages.append(msg)
+    return encrypted_messages
+```
+</CodeGroup>
+
+### 步骤 5：携带 E2EE 头部发送请求
+
+包含必需的头部以启用 E2EE 处理。
+
+| 头部 | 说明 |
+|--------|-------------|
+| `X-Venice-TEE-Client-Pub-Key` | 你的临时公钥（未压缩 hex，130 个字符） |
+| `X-Venice-TEE-Model-Pub-Key` | 来自证明的模型公钥 |
+| `X-Venice-TEE-Signing-Algo` | 始终为 `ecdsa` |
+
+<CodeGroup>
+```javascript JavaScript
+async function sendE2EERequest(messages, model, e2eeContext, apiKey) {
+  // 加密消息
+  const encryptedMessages = encryptMessagesForE2EE(messages, e2eeContext.modelPublicKey)
+
+  const response = await fetch('https://api.venice.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      // E2EE 头部
+      'X-Venice-TEE-Client-Pub-Key': e2eeContext.publicKeyHex,
+      'X-Venice-TEE-Model-Pub-Key': e2eeContext.modelPublicKey,
+      'X-Venice-TEE-Signing-Algo': 'ecdsa',
+    },
+    body: JSON.stringify({
+      model,
+      messages: encryptedMessages,
+      stream: true, // E2EE 需要流式
+    }),
+  })
+
+  return response
+}
+```
+
+```python Python
+import requests
+
+def send_e2ee_request(
+    messages: list,
+    model: str,
+    e2ee_context: dict,
+    api_key: str
+) -> requests.Response:
+    """发送 E2EE 加密的聊天补全请求。"""
+    # 加密消息
+    encrypted_messages = encrypt_messages_for_e2ee(
+        messages,
+        e2ee_context['model_public_key']
+    )
+
+    response = requests.post(
+        'https://api.venice.ai/api/v1/chat/completions',
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+            # E2EE 头部
+            'X-Venice-TEE-Client-Pub-Key': e2ee_context['public_key_hex'],
+            'X-Venice-TEE-Model-Pub-Key': e2ee_context['model_public_key'],
+            'X-Venice-TEE-Signing-Algo': 'ecdsa'
+        },
+        json={
+            'model': model,
+            'messages': encrypted_messages,
+            'stream': True  # E2EE 需要流式
+        },
+        stream=True
+    )
+
+    return response
+```
+</CodeGroup>
+
+### 步骤 6：解密响应分块
+
+E2EE 模型的响应是十六进制编码的加密分块。使用你的私钥解密每个分块。
+
+<CodeGroup>
+```javascript JavaScript
+import { gcm } from '@noble/ciphers/aes.js'
+import { hkdf } from '@noble/hashes/hkdf.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { ec as EC } from 'elliptic'
+
+const HKDF_INFO = new TextEncoder().encode('ecdsa_encryption')
+
+function hexToBytes(hex) {
+  const h = hex.startsWith('0x') ? hex.slice(2) : hex
+  const bytes = new Uint8Array(h.length / 2)
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(h.substring(i * 2, i * 2 + 2), 16)
+  }
+  return bytes
+}
+
+function isHexEncrypted(s) {
+  // 最小值：ephemeral_pub (65) + nonce (12) + tag (16) = 93 字节 = 186 十六进制字符
+  if (s.length < 186) return false
+  return /^[0-9a-fA-F]+$/.test(s)
+}
+
+function decryptChunk(ciphertextHex, clientPrivateKey) {
+  const raw = hexToBytes(ciphertextHex)
+
+  // 解析各部分
+  const serverEphemeralPubKey = raw.slice(0, 65)
+  const nonce = raw.slice(65, 65 + 12)
+  const ciphertext = raw.slice(65 + 12)
+
+  // 与服务端临时密钥进行 ECDH
+  const ec = new EC('secp256k1')
+  const clientKey = ec.keyFromPrivate(Buffer.from(clientPrivateKey))
+  const serverKey = ec.keyFromPublic(Buffer.from(serverEphemeralPubKey))
+  const sharedSecret = clientKey.derive(serverKey.getPublic())
+  const sharedSecretBytes = new Uint8Array(sharedSecret.toArray('be', 32))
+
+  // 派生 AES 密钥
+  const aesKey = hkdf(sha256, sharedSecretBytes, undefined, HKDF_INFO, 32)
+
+  // 解密
+  const cipher = gcm(aesKey, nonce)
+  const plaintext = cipher.decrypt(ciphertext)
+
+  return new TextDecoder().decode(plaintext)
+}
+
+// 处理流式响应
+async function processE2EEStream(response, clientPrivateKey) {
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let fullContent = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    const text = decoder.decode(value)
+    const lines = text.split('\n')
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const data = line.slice(6)
+      if (data === '[DONE]') continue
+
+      try {
+        const chunk = JSON.parse(data)
+        const content = chunk.choices?.[0]?.delta?.content
+
+        if (content && isHexEncrypted(content)) {
+          const decrypted = decryptChunk(content, clientPrivateKey)
+          fullContent += decrypted
+          process.stdout.write(decrypted) // 实时输出
+        } else if (content) {
+          fullContent += content
+          process.stdout.write(content)
+        }
+      } catch (e) {
+        // 跳过格式错误的分块
+      }
+    }
+  }
+
+  return fullContent
+}
+```
+
+```python Python
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
+from ecdsa import SECP256k1, VerifyingKey, SigningKey
+import json
+import re
+
+HKDF_INFO = b'ecdsa_encryption'
+
+def is_hex_encrypted(s: str) -> bool:
+    """检查字符串是否看起来像十六进制加密内容。"""
+    if len(s) < 186:  # 最小值：65 + 12 + 16 = 93 字节 = 186 hex
+        return False
+    return bool(re.match(r'^[0-9a-fA-F]+$', s))
+
+def decrypt_chunk(ciphertext_hex: str, client_private_key: bytes) -> str:
+    """解密 E2EE 响应分块。"""
+    raw = bytes.fromhex(ciphertext_hex)
+
+    # 解析各部分
+    server_ephemeral_pub = raw[:65]
+    nonce = raw[65:77]
+    ciphertext = raw[77:]
+
+    # 解析服务端临时公钥（跳过 04 前缀）
+    server_verifying_key = VerifyingKey.from_string(
+        server_ephemeral_pub[1:],
+        curve=SECP256k1
+    )
+
+    # 还原客户端私钥
+    client_signing_key = SigningKey.from_string(client_private_key, curve=SECP256k1)
+
+    # ECDH：计算共享密钥
+    shared_point = server_verifying_key.pubkey.point * client_signing_key.privkey.secret_multiplier
+    shared_secret = shared_point.x().to_bytes(32, 'big')
+
+    # 派生 AES 密钥
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=HKDF_INFO,
+    )
+    aes_key = hkdf.derive(shared_secret)
+
+    # 解密
+    aesgcm = AESGCM(aes_key)
+    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+
+    return plaintext.decode('utf-8')
+
+def process_e2ee_stream(response, client_private_key: bytes) -> str:
+    """处理流式 E2EE 响应。"""
+    full_content = ''
+
+    for line in response.iter_lines():
+        if not line:
+            continue
+
+        line_str = line.decode('utf-8')
+        if not line_str.startswith('data: '):
+            continue
+
+        data = line_str[6:]
+        if data == '[DONE]':
+            continue
+
+        try:
+            chunk = json.loads(data)
+            content = chunk.get('choices', [{}])[0].get('delta', {}).get('content', '')
+
+            if content and is_hex_encrypted(content):
+                decrypted = decrypt_chunk(content, client_private_key)
+                full_content += decrypted
+                print(decrypted, end='', flush=True)  # 实时输出
+            elif content:
+                full_content += content
+                print(content, end='', flush=True)
+        except json.JSONDecodeError:
+            pass
+
+    print()  # 最后换行
+    return full_content
+```
+</CodeGroup>
+
+### 完整可运行示例
+
+<Tabs>
+  <Tab title="JavaScript">
+```javascript
+import elliptic from 'elliptic';
+import { gcm } from '@noble/ciphers/aes.js';
+import { hkdf } from '@noble/hashes/hkdf.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import crypto from 'crypto';
+
+const EC = elliptic.ec;
+
+const API_KEY = process.env.API_KEY_VENICE;
+const BASE_URL = 'https://api.venice.ai/api/v1';
+const MODEL = 'e2ee-qwen3-5-122b-a10b';
+const HKDF_INFO = new TextEncoder().encode('ecdsa_encryption');
+
+function hexToBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+async function main() {
+  // 步骤 1：生成临时密钥对
+  console.log('🔑 Generating ephemeral key pair...');
+  const ec = new EC('secp256k1');
+  const keyPair = ec.genKeyPair();
+  const clientPublicKeyHex = keyPair.getPublic('hex');
+
+  // 步骤 2：获取并验证证明
+  console.log('🔍 Fetching TEE attestation...');
+  const clientNonce = crypto.randomBytes(32).toString('hex'); // 必须 32 字节
+  const attestationRes = await fetch(
+    `${BASE_URL}/tee/attestation?model=${MODEL}&nonce=${clientNonce}`,
+    { headers: { Authorization: `Bearer ${API_KEY}` } }
+  );
+  const attestation = await attestationRes.json();
+
+  if (attestation.verified !== true || attestation.nonce !== clientNonce) {
+    throw new Error('Attestation verification failed');
+  }
+
+  const modelPublicKey = attestation.signing_key || attestation.signing_public_key;
+  console.log('✅ TEE attestation verified');
+
+  // 步骤 3：加密消息
+  console.log('🔐 Encrypting message...');
+  const plaintext = 'What is 2+2? Answer briefly.';
+
+  // 标准化并解析模型公钥
+  let normalizedKey = modelPublicKey;
+  if (!normalizedKey.startsWith('04') && normalizedKey.length === 128) {
+    normalizedKey = '04' + normalizedKey;
+  }
+
+  const modelKey = ec.keyFromPublic(normalizedKey, 'hex');
+  const ephemeralKeyPair = ec.genKeyPair();
+  const sharedSecret = ephemeralKeyPair.derive(modelKey.getPublic());
+  const sharedSecretBytes = new Uint8Array(sharedSecret.toArray('be', 32));
+  const aesKey = hkdf(sha256, sharedSecretBytes, undefined, HKDF_INFO, 32);
+  const nonce = crypto.randomBytes(12);
+  const cipher = gcm(aesKey, nonce);
+  const encrypted = cipher.encrypt(new TextEncoder().encode(plaintext));
+  const ephemeralPublic = new Uint8Array(ephemeralKeyPair.getPublic(false, 'array'));
+
+  const result = new Uint8Array(65 + 12 + encrypted.length);
+  result.set(ephemeralPublic, 0);
+  result.set(nonce, 65);
+  result.set(encrypted, 77);
+
+  const encryptedContent = Buffer.from(result).toString('hex');
+  const messages = [{ role: 'user', content: encryptedContent }];
+
+  // 步骤 4：发送 E2EE 请求
+  console.log('📤 Sending encrypted request...');
+  const response = await fetch(`${BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json',
+      'X-Venice-TEE-Client-Pub-Key': clientPublicKeyHex,
+      'X-Venice-TEE-Model-Pub-Key': modelPublicKey,
+      'X-Venice-TEE-Signing-Algo': 'ecdsa',
+    },
+    body: JSON.stringify({ model: MODEL, messages, stream: true }),
+  });
+
+  // 步骤 5：解密响应
+  console.log('📥 Decrypting response...\n');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const text = decoder.decode(value);
+    for (const line of text.split('\n')) {
+      if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
+
+      try {
+        const chunk = JSON.parse(line.slice(6));
+        const content = chunk.choices?.[0]?.delta?.content;
+        if (!content) continue;
+
+        if (/^[0-9a-fA-F]+$/.test(content) && content.length >= 186) {
+          // 解密
+          const raw = hexToBytes(content);
+          const serverEphemeralPub = raw.slice(0, 65);
+          const nonce = raw.slice(65, 77);
+          const ciphertext = raw.slice(77);
+
+          const serverKey = ec.keyFromPublic(Buffer.from(serverEphemeralPub));
+          const sharedSecret = keyPair.derive(serverKey.getPublic());
+          const aesKey = hkdf(sha256, new Uint8Array(sharedSecret.toArray('be', 32)), undefined, HKDF_INFO, 32);
+          const cipher = gcm(aesKey, nonce);
+          const plaintext = new TextDecoder().decode(cipher.decrypt(ciphertext));
+          process.stdout.write(plaintext);
+        } else {
+          process.stdout.write(content);
+        }
+      } catch {}
+    }
+  }
+
+  console.log('\n\n🔐 Response decrypted end-to-end');
+}
+
+main().catch(console.error);
+```
+  </Tab>
+  <Tab title="Python">
+```python
+#!/usr/bin/env python3
+"""Venice AI API 的完整 E2EE 实现示例。"""
+
+import os
+import json
+import secrets
+import requests
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
+from ecdsa import SECP256k1, VerifyingKey, SigningKey
+
+API_KEY = os.environ.get('API_KEY_VENICE')
+BASE_URL = 'https://api.venice.ai/api/v1'
+MODEL = 'e2ee-qwen3-5-122b-a10b'
+HKDF_INFO = b'ecdsa_encryption'
+
+def main():
+    # 步骤 1：生成临时密钥对
+    print('🔑 Generating ephemeral key pair...')
+    private_key = SigningKey.generate(curve=SECP256k1)
+    public_key = private_key.get_verifying_key()
+    client_public_key_hex = (b'\x04' + public_key.to_string()).hex()
+
+    # 步骤 2：获取并验证证明
+    print('🔍 Fetching TEE attestation...')
+    client_nonce = secrets.token_hex(32)  # 必须 32 字节
+    attestation_res = requests.get(
+        f'{BASE_URL}/tee/attestation',
+        params={'model': MODEL, 'nonce': client_nonce},
+        headers={'Authorization': f'Bearer {API_KEY}'},
+        timeout=30
+    )
+    attestation = attestation_res.json()
+
+    if attestation.get('verified') != True or attestation.get('nonce') != client_nonce:
+        raise ValueError('Attestation verification failed')
+
+    model_public_key = attestation.get('signing_key') or attestation.get('signing_public_key')
+    print(f'✅ TEE attestation verified (provider: {attestation.get("tee_provider", "unknown")})')
+
+    # 步骤 3：加密消息
+    print('🔐 Encrypting message...')
+    plaintext = 'What is 2+2? Answer briefly.'
+
+    # 标准化公钥
+    key_hex = model_public_key
+    if not key_hex.startswith('04') and len(key_hex) == 128:
+        key_hex = '04' + key_hex
+
+    model_key_bytes = bytes.fromhex(key_hex)
+    model_verifying_key = VerifyingKey.from_string(model_key_bytes[1:], curve=SECP256k1)
+
+    # ECDH
+    ephemeral_private = SigningKey.generate(curve=SECP256k1)
+    ephemeral_public = ephemeral_private.get_verifying_key()
+    shared_point = model_verifying_key.pubkey.point * ephemeral_private.privkey.secret_multiplier
+    shared_secret = shared_point.x().to_bytes(32, 'big')
+
+    # 派生 AES 密钥
+    hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=HKDF_INFO)
+    aes_key = hkdf.derive(shared_secret)
+
+    # 加密
+    nonce = os.urandom(12)
+    aesgcm = AESGCM(aes_key)
+    ciphertext = aesgcm.encrypt(nonce, plaintext.encode('utf-8'), None)
+
+    ephemeral_public_bytes = b'\x04' + ephemeral_public.to_string()
+    result = ephemeral_public_bytes + nonce + ciphertext
+    encrypted_content = result.hex()
+
+    messages = [{'role': 'user', 'content': encrypted_content}]
+
+    # 步骤 4：发送 E2EE 请求
+    print('📤 Sending encrypted request...')
+    response = requests.post(
+        f'{BASE_URL}/chat/completions',
+        headers={
+            'Authorization': f'Bearer {API_KEY}',
+            'Content-Type': 'application/json',
+            'X-Venice-TEE-Client-Pub-Key': client_public_key_hex,
+            'X-Venice-TEE-Model-Pub-Key': model_public_key,
+            'X-Venice-TEE-Signing-Algo': 'ecdsa'
+        },
+        json={'model': MODEL, 'messages': messages, 'stream': True},
+        stream=True,
+        timeout=60
+    )
+
+    # 步骤 5：解密响应
+    print('📥 Decrypting response...\n')
+
+    for line in response.iter_lines():
+        if not line:
+            continue
+        line_str = line.decode('utf-8')
+        if not line_str.startswith('data: ') or '[DONE]' in line_str:
+            continue
+
+        try:
+            chunk = json.loads(line_str[6:])
+            content = chunk.get('choices', [{}])[0].get('delta', {}).get('content', '')
+            if not content:
+                continue
+
+            # 检查是否加密
+            if len(content) >= 186 and all(c in '0123456789abcdefABCDEF' for c in content):
+                raw = bytes.fromhex(content)
+                server_ephemeral_pub = raw[:65]
+                nonce = raw[65:77]
+                ciphertext = raw[77:]
+
+                server_verifying_key = VerifyingKey.from_string(server_ephemeral_pub[1:], curve=SECP256k1)
+                shared_point = server_verifying_key.pubkey.point * private_key.privkey.secret_multiplier
+                shared_secret = shared_point.x().to_bytes(32, 'big')
+
+                hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=HKDF_INFO)
+                aes_key = hkdf.derive(shared_secret)
+
+                aesgcm = AESGCM(aes_key)
+                plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+                print(plaintext.decode('utf-8'), end='', flush=True)
+            else:
+                print(content, end='', flush=True)
+        except Exception:
+            pass
+
+    print('\n\n🔐 Response decrypted end-to-end')
+
+if __name__ == '__main__':
+    main()
+```
+  </Tab>
+</Tabs>
+
+### E2EE 的限制
+
+<Warning>
+由于加密要求，E2EE 存在一些限制：
+</Warning>
+
+| 功能 | 状态 |
+|---------|--------|
+| 流式 | **必需**（不支持非流式） |
+| 网页搜索 | **禁用**（会泄露内容） |
+| 文件上传 | **不支持** |
+| 函数调用 | **不支持** |
+| Venice 系统提示 | **禁用**（必须在客户端加密） |
+
+### 安全最佳实践
+
+1. **为每个会话生成新的密钥对** —— 不要复用临时密钥
+2. **清零私钥** —— 用完后从内存中清除私钥字节
+3. **验证证明** —— 始终检查 `verified: true` 和 nonce 匹配
+4. **检查 debug 模式** —— 拒绝来自 debug 飞地的证明
+5. **使用流式** —— E2EE 需要流式以便正确分块加密
+6. **优雅处理错误** —— 不要向用户暴露解密错误
+7. **使用 32 字节 nonce** —— TEE 提供商要求恰好 32 字节
+
+## 最佳实践
+
+<AccordionGroup>
+  <Accordion title="生产环境务必验证证明">
+    不要仅信任 `verified: true` 响应。请在客户端解析 Intel TDX quote 并验证度量值是否符合预期。对于 NVIDIA GPU，请通过 NVIDIA 的验证服务进行证明检查。
+  </Accordion>
+  
+  <Accordion title="使用新鲜的 nonce">
+    每次请求证明都生成新的随机 nonce。这可以防止攻击者重放过期的证明。
+  </Accordion>
+  
+  <Accordion title="验证密钥绑定">
+    签名密钥应绑定到 TDX REPORTDATA 字段。这证明该密钥是在飞地内部生成的。
+  </Accordion>
+  
+  <Accordion title="检查 debug 模式">
+    验证 TDX 证明中没有 debug 标志。debug 飞地可被检查，生产环境不应信任。
+  </Accordion>
+  
+  <Accordion title="E2EE 推荐使用我们的 SDK">
+    E2EE 需要细致的加密学实现。请优先使用我们的官方 SDK，而不是自行实现协议。
+  </Accordion>
+</AccordionGroup>
+
+## 检查模型能力
+
+你可以通过模型端点检查某个模型是否支持 TEE 或 E2EE：
+
+<CodeGroup>
+```bash cURL
+curl https://api.venice.ai/api/v1/models \
+  -H "Authorization: Bearer $API_KEY_VENICE" | jq '.data[] | select(.model_spec.capabilities.supportsTeeAttestation == true or .model_spec.capabilities.supportsE2EE == true) | {id, tee: .model_spec.capabilities.supportsTeeAttestation, e2ee: .model_spec.capabilities.supportsE2EE}'
+```
+
+```python Python
+models = client.models.list()
+
+for model in models.data:
+    caps = getattr(model, 'model_spec', {}).get('capabilities', {})
+    if caps.get('supportsTeeAttestation') or caps.get('supportsE2EE'):
+        print(f"{model.id}: TEE={caps.get('supportsTeeAttestation')}, E2EE={caps.get('supportsE2EE')}")
+```
+</CodeGroup>
+
+## 错误处理
+
+| 错误 | 原因 | 解决方案 |
+|-------|-------|----------|
+| `TEE attestation verification failed` | 证明未通过校验 | 重试或联系支持 |
+| `Attestation nonce mismatch` | 可能的重放攻击 | 生成新的 nonce |
+| `TDX debug mode detected` | 飞地处于 debug 模式 | 不要用于生产 |
+| `Failed to decrypt field` | 服务端 E2EE 解密失败 | 检查你的加密实现 |
+| `E2EE requires streaming` | 向 E2EE 模型发起了非流式请求 | 设置 `stream: true` |
+| `Encrypted field is not valid hex` | 带 E2EE 头部时发送了明文 | 加密所有 user/system 消息 |
+| `Invalid public key` | 密钥格式错误 | 使用以 `04` 开头的 130 个十六进制字符 |
+
+## 故障排查
+
+<AccordionGroup>
+  <Accordion title="502 Bad Gateway 或 'Nonce must be exactly 32 bytes'">
+    nonce 长度不正确。TEE 提供商要求**32 字节（64 个十六进制字符）**。
+    
+    - 使用 `crypto.randomBytes(32).toString('hex')`（JS）或 `secrets.token_hex(32)`（Python）
+    - 常见错误：`secrets.token_hex(16)` 生成 32 个 hex 字符（16 字节），而不是 32 字节
+  </Accordion>
+  
+  <Accordion title="证明验证失败">
+    - 检查该模型是否支持 E2EE（`supportsE2EE: true`）
+    - 验证 API 密钥有效且有权限访问所请求的模型
+    - 验证与 Venice API 的网络连通性
+  </Accordion>
+  
+  <Accordion title="解密失败">
+    - 确保使用的是与请求头中公钥匹配的同一私钥
+    - 检查响应内容确实是十六进制编码（E2EE 已激活）
+    - 验证用于加密的模型公钥与此次匹配
+  </Accordion>
+  
+  <Accordion title="Encrypted field is not valid hex">
+    - 当存在 E2EE 头部时，所有 `user` 与 `system` 角色消息都必须加密
+    - 通过 `isValidEncrypted()` 校验你的加密内容（至少 186 个 hex 字符）
+    - 确保加密输出为小写 hex，且没有任何前缀
+  </Accordion>
+  
+  <Accordion title="无效的公钥错误">
+    - 客户端公钥必须恰好为 **130 个 hex 字符**，并以 `04` 开头
+    - 发送前使用 `validateClientPubkey()` 辅助函数校验格式
+    - 确保使用未压缩公钥格式（65 字节 = 130 hex 字符）
+  </Accordion>
+  
+  <Accordion title="找不到模型">
+    - 验证模型 ID 正确且该模型支持 E2EE
+    - 使用 `/models` 端点验证可用的 E2EE 模型
+  </Accordion>
+</AccordionGroup>
+
+## 资源
+
+- [Intel TDX 文档](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html)
+- [NVIDIA Confidential Computing](https://developer.nvidia.com/confidential-computing)
