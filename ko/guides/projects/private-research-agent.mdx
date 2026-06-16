@@ -1,0 +1,1647 @@
+---
+title: "프라이빗 리서치 에이전트 만들기"
+slug: private-research-agent-venice
+"og:title": "Venice AI로 프라이빗 리서치 에이전트 만들기"
+"og:description": "검색을 계획하고, Venice의 scrape API로 웹 소스를 읽고, 증거를 추출하고, 인용이 포함된 Markdown 보고서를 작성하는 Python 리서치 에이전트를 만드는 실용 가이드."
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="7 May 2026"/>
+
+리서치 에이전트는 단순한 검색 결과 하나나 빠른 모델 답변 이상을 원할 때 유용합니다. 좋은 리서치 에이전트는 광범위한 주제를 검색 쿼리로 바꾸고, 소스를 수집하고, 중요한 증거를 추출하고, 빈 곳을 추가 조사하고, 나중에 검토할 수 있는 인용된 브리핑을 작성할 수 있습니다.
+
+이 튜토리얼에서는 Python과 Venice API로 프라이빗 리서치 에이전트를 만듭니다. 마지막에는 주제를 조사하고, 공개 페이지를 Markdown으로 스크래핑하고, 소스 청크를 요약하고, 갭 인식 후속 리서치 패스를 실행하고, 선택적 로컬 JSONL 아티팩트와 함께 인용된 보고서를 생성하는 CLI가 갖춰집니다.
+
+전체 코드 구현이 궁금하다면 [GitHub 레포](https://github.com/joshua-mo-143/venice-research-agent-demo)를 확인하세요.
+
+계속하기 전에 Venice API 키가 필요합니다:
+
+```bash
+export VENICE_API_KEY=<my-key>
+```
+
+## 무엇을 만드나요
+
+레퍼런스 구현은 몇 가지 명확한 부분으로 구성된 작은 Python 프로젝트입니다:
+
+| Part | What it does |
+| --- | --- |
+| CLI | 리서치 주제, 모델, 공급자, 깊이 설정, 출력 경로, 아티팩트 디렉터리 수락 |
+| Venice 클라이언트 | chat completion, 스트리밍 chat completion, `POST /augment/scrape` 호출 |
+| Search 레이어 | 기본 DuckDuckGo 검색, 선택적 arXiv 논문 발견 |
+| 데이터 모델 | 소스 URL, 정규 URL, 청크, 증거, 노트, 에러, 보고서 추적 |
+| 리서치 에이전트 | 검색 계획, 소스 읽기, 증거 추출, 갭 분석, 후속 쿼리 생성, 최종 보고서 작성 |
+| 아티팩트 작성기 | 쿼리, 리서치 갭, 결과, 가져오기, 청크, 소스 노트, 보고서 초안, 에러, 보고서에 대한 감사 가능한 JSONL 레코드 저장 |
+
+흐름은 다음과 같습니다:
+
+![프라이빗 리서치 에이전트 파이프라인](/images/guides/private-research-agent/research-pipeline.svg)
+
+1. 주제에 대해 다양한 검색 쿼리를 생성하도록 Venice에 요청.
+2. 하나 이상의 공급자로 웹 검색.
+3. 읽기 전에 URL 중복 제거.
+4. Venice의 scrape endpoint로 각 공개 소스 페이지를 Markdown으로 변환.
+5. 긴 페이지를 청크로 분할.
+6. 각 청크에서 증거를 추출하도록 Venice에 요청.
+7. 청크 증거를 소스 노트로 변환하도록 Venice에 요청.
+8. 후속 쿼리를 생성하기 전에 리서치 갭과 소스 균형 문제 식별.
+9. 각주 스타일 인용이 포함된 최종 보고서를 합성하도록 Venice에 요청.
+
+이는 에이전트가 오케스트레이션, 소스 노트, 아티팩트, 최종 보고서를 사용자의 머신에 유지한다는 실질적 의미에서 "프라이빗"합니다. Venice는 API를 통해 모델 호출과 스크래핑을 처리합니다. 기본 레퍼런스 구현은 여전히 DuckDuckGo나 arXiv로 검색 쿼리를 보내므로, 공급자 선택을 프라이버시 설계의 일부로 다루세요.
+
+## 프로젝트 설정
+
+레퍼런스 프로젝트는 Python 3.13과 `uv`를 사용하지만, 일반 가상 환경에서도 같은 코드가 동작합니다.
+
+새 프로젝트 생성:
+
+```bash
+mkdir venice-research-agent
+cd venice-research-agent
+uv init
+```
+
+의존성 설치:
+
+```bash
+uv add httpx beautifulsoup4 python-dotenv
+```
+
+`pip`를 선호한다면 가상 환경을 만들고 같은 패키지를 설치하세요:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install "httpx>=0.28.0" "beautifulsoup4>=4.13.0" "python-dotenv>=1.0.0"
+```
+
+로컬 개발용 `.env` 파일 생성:
+
+```bash
+VENICE_API_KEY=your_venice_api_key_here
+VENICE_MODEL=openai-gpt-55
+```
+
+코드 수정 없이 모델을 변경할 수 있도록 `VENICE_MODEL`을 사용합니다. 레퍼런스 구현은 현재 기본값으로 `openai-gpt-55`를 사용하지만, Venice 계정에서 사용 가능한 다른 chat 모델로 교체할 수 있습니다.
+
+## 데이터 모델 만들기
+
+에이전트 로직을 작성하기 전에 파이프라인을 흐르는 객체를 정의합니다. 이 모델은 모든 소스가 출처(어디서 왔는지, 어떤 쿼리가 찾았는지, 언제 수집되었는지, 어떻게 청킹되었는지)를 가지므로 나머지 코드를 더 이해하기 쉽게 만듭니다.
+
+`research_agent/models.py` 생성:
+
+```python
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+TRACKING_PARAMS = {
+    "fbclid",
+    "gclid",
+    "igshid",
+    "mc_cid",
+    "mc_eid",
+    "msclkid",
+    "ref",
+    "ref_src",
+}
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    title: str
+    url: str
+    snippet: str
+    query: str = ""
+    rank: int = 0
+    provider: str = "duckduckgo"
+    canonical_url: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.canonical_url:
+            object.__setattr__(self, "canonical_url", canonicalize_url(self.url))
+
+
+@dataclass(frozen=True)
+class ScrapeResult:
+    url: str
+    content: str
+    title: str = ""
+    final_url: str = ""
+    content_type: str = "text/markdown"
+
+
+@dataclass(frozen=True)
+class TextChunk:
+    chunk_id: str
+    text: str
+    start: int
+    end: int
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class WebPage:
+    title: str
+    url: str
+    text: str
+    final_url: str = ""
+    canonical_url: str = ""
+    content_type: str = ""
+    retrieved_at: str = ""
+    content_hash: str = ""
+    chunks: tuple[TextChunk, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        final_url = self.final_url or self.url
+        object.__setattr__(self, "final_url", final_url)
+        if not self.canonical_url:
+            object.__setattr__(self, "canonical_url", canonicalize_url(final_url))
+        if not self.retrieved_at:
+            object.__setattr__(self, "retrieved_at", utc_now())
+        if not self.content_hash:
+            object.__setattr__(self, "content_hash", content_hash(self.text))
+
+
+@dataclass(frozen=True)
+class EvidenceChunk:
+    chunk_id: str
+    text: str
+    summary: str
+    quotes: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class SourceNote:
+    source_id: str
+    title: str
+    url: str
+    query: str
+    summary: str
+    canonical_url: str = ""
+    final_url: str = ""
+    rank: int = 0
+    snippet: str = ""
+    provider: str = "duckduckgo"
+    retrieved_at: str = ""
+    content_type: str = ""
+    content_hash: str = ""
+    chunks: tuple[EvidenceChunk, ...] = field(default_factory=tuple)
+```
+
+여기서 중요한 필드는 `canonical_url`, `content_hash`, `chunks`입니다.
+
+`canonical_url`은 검색 결과가 추적 파라미터나 fragment에서만 다를 때 에이전트가 같은 소스를 반복해서 읽지 않도록 합니다. `content_hash`는 다른 URL에 있더라도 중복 페이지를 잡는 데 도움이 됩니다. `chunks`는 context 한도로 인해 유용한 증거를 잃는 대신 긴 페이지를 더 작은 조각으로 요약할 수 있게 합니다.
+
+dataclass 아래에 헬퍼 함수를 추가하세요:
+
+```python
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def canonicalize_url(raw_url: str) -> str:
+    if not raw_url:
+        return ""
+
+    parsed = urlparse(raw_url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+
+    scheme = parsed.scheme.lower()
+    netloc = parsed.netloc.lower()
+    path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/")
+
+    query_pairs = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not _is_tracking_param(key)
+    ]
+    query = urlencode(sorted(query_pairs), doseq=True)
+    return urlunparse((scheme, netloc, path, "", query, ""))
+
+
+def chunk_text(text: str, *, chunk_chars: int = 3000, overlap: int = 250) -> tuple[TextChunk, ...]:
+    clean = text.strip()
+    if not clean:
+        return ()
+    if chunk_chars <= 0:
+        raise ValueError("chunk_chars must be greater than 0")
+    if overlap < 0 or overlap >= chunk_chars:
+        raise ValueError("overlap must be at least 0 and smaller than chunk_chars")
+
+    chunks: list[TextChunk] = []
+    start = 0
+    index = 1
+    while start < len(clean):
+        end = min(len(clean), start + chunk_chars)
+        chunk = clean[start:end].strip()
+        if chunk:
+            chunks.append(
+                TextChunk(
+                    chunk_id=f"C{index}",
+                    text=chunk,
+                    start=start,
+                    end=end,
+                    content_hash=content_hash(chunk),
+                )
+            )
+            index += 1
+        if end == len(clean):
+            break
+        start = end - overlap
+
+    return tuple(chunks)
+
+
+def _is_tracking_param(key: str) -> bool:
+    lowered = key.lower()
+    return lowered.startswith("utm_") or lowered in TRACKING_PARAMS
+```
+
+여기서 청킹은 의도적으로 단순합니다: 오버랩이 있는 고정 크기 문자 청크. Venice의 scrape endpoint가 보통 raw HTML보다 훨씬 깨끗한 Markdown을 반환하기 때문에 데모 리서치 에이전트에는 이 정도면 충분합니다. 긴 기술 문서에 대한 프로덕션 리서치라면 헤딩, 문단, 또는 토큰 수로 분할해 개선할 수 있습니다.
+
+## Venice 클라이언트 빌드
+
+다음으로 작은 Venice 클라이언트를 만듭니다. Venice가 OpenAI 호환이므로 chat completion에 OpenAI Python SDK를 쓸 수도 있지만, 레퍼런스 구현은 같은 클라이언트가 Venice의 `POST /augment/scrape` endpoint를 호출할 수 있도록 `httpx`를 직접 사용합니다.
+
+`research_agent/venice.py` 생성:
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import time
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+from .models import ScrapeResult
+
+DEFAULT_BASE_URL = "https://api.venice.ai/api/v1"
+DEFAULT_MODEL = "openai-gpt-55"
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+class VeniceError(RuntimeError):
+    """Raised when the Venice API returns an unusable response."""
+
+
+@dataclass(frozen=True)
+class VeniceClient:
+    api_key: str
+    model: str = DEFAULT_MODEL
+    base_url: str = DEFAULT_BASE_URL
+    timeout: float = 60.0
+    max_retries: int = 2
+    backoff_seconds: float = 1.0
+
+    @classmethod
+    def from_env(cls, model: str | None = None, *, max_retries: int = 2) -> "VeniceClient":
+        api_key = os.getenv("VENICE_API_KEY")
+        if not api_key:
+            raise VeniceError("VENICE_API_KEY is required.")
+
+        return cls(
+            api_key=api_key,
+            model=model or os.getenv("VENICE_MODEL", DEFAULT_MODEL),
+            base_url=os.getenv("VENICE_BASE_URL", DEFAULT_BASE_URL).rstrip("/"),
+            max_retries=max_retries,
+        )
+```
+
+`from_env()` 헬퍼는 시크릿을 소스 코드 밖에 둡니다. `python-dotenv`가 `.env`에서 `VENICE_API_KEY`와 `VENICE_MODEL`을 로드할 수 있기 때문에 로컬 개발이 편리합니다.
+
+이제 chat completion을 추가하세요:
+
+```python
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 1600,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        data = self._post_json("/chat/completions", payload)
+        try:
+            return data["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError, TypeError) as exc:
+            raise VeniceError(f"Unexpected Venice API response: {data}") from exc
+```
+
+최종 보고서에는 스트리밍을 사용하고 싶습니다. 심층 보고서는 (훨씬 많은 텍스트를 생성하기 때문에) 상당히 더 오래 걸릴 수 있습니다. 이는 최종 출력을 생성하는 데 극도로 오랜 시간이 걸리는 요청에서 타임아웃 문제를 일으킬 수 있습니다. 스트리밍을 사용하면 이 문제를 제거하고 요청을 타임아웃 실패에 더 강하게 만들 수 있습니다:
+
+```python
+    def chat_stream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 1600,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        return self._post_chat_stream("/chat/completions", payload).strip()
+```
+
+그런 다음 스크래핑을 추가하세요:
+
+```python
+    def scrape(self, url: str) -> ScrapeResult:
+        data = self._post_json("/augment/scrape", {"url": url})
+        content = _first_string(data, "content", "markdown", "text")
+        if not content:
+            raise VeniceError(f"Unexpected Venice scrape response: {data}")
+
+        return ScrapeResult(
+            url=url,
+            final_url=_first_string(data, "final_url", "url", "source_url") or url,
+            title=_first_string(data, "title"),
+            content=content,
+            content_type="text/markdown",
+        )
+```
+
+Venice의 scrape endpoint는 공개 접근 가능한 URL을 받아 페이지를 Markdown으로 반환합니다. 즉, 모델이 raw HTML을 파싱할 필요가 없고, 소스 추출 prompt가 더 깨끗한 텍스트로 동작할 수 있습니다.
+
+나머지 헬퍼는 재시도와 응답 파싱을 처리합니다:
+
+```python
+    def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = httpx.post(
+                    f"{self.base_url}{path}",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
+                    time.sleep(self.backoff_seconds * (2**attempt))
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, dict):
+                    raise VeniceError(f"Unexpected Venice API response: {data}")
+                return data
+            except httpx.HTTPError as exc:
+                if attempt < self.max_retries:
+                    time.sleep(self.backoff_seconds * (2**attempt))
+                    continue
+                raise VeniceError(f"Could not reach Venice API: {exc}") from exc
+
+        raise VeniceError("Could not reach Venice API")
+
+
+def _first_string(data: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    for nested_key in ("data", "result", "scrape"):
+        nested = data.get(nested_key)
+        if isinstance(nested, dict):
+            value = _first_string(nested, *keys)
+            if value:
+                return value
+
+    return ""
+```
+
+전체 레포에는 스트리밍 chat completion에서 server-sent event를 읽는 견고한 `_post_chat_stream()` 헬퍼도 포함되어 있습니다. 스트리밍 없이 시작한 다음 나머지 리서치 흐름이 동작하면 추가할 수 있습니다.
+
+## 검색 공급자 추가
+
+검색 레이어는 두 가지 일을 합니다: 소스 URL을 찾고, Venice 스크래퍼를 통해 그 URL들을 가져옵니다. 레퍼런스 구현은 일반 웹 검색에 DuckDuckGo의 HTML endpoint를, 논문에 arXiv의 Atom API를 사용합니다.
+
+`research_agent/web.py` 생성:
+
+```python
+from __future__ import annotations
+
+import re
+import xml.etree.ElementTree as ET
+from collections.abc import Callable, Iterable
+from urllib.parse import parse_qs, unquote, urlparse
+
+import httpx
+from bs4 import BeautifulSoup
+
+from .models import ScrapeResult, SearchResult, TextChunk, WebPage, canonicalize_url, chunk_text, content_hash, utc_now
+
+USER_AGENT = "venice-research-agent-demo/0.1 (+https://venice.ai)"
+
+
+class SearchProvider:
+    name = "provider"
+
+    def search(self, web: "WebSearch", query: str, limit: int) -> list[SearchResult]:
+        raise NotImplementedError
+```
+
+이제 DuckDuckGo를 추가하세요:
+
+```python
+class DuckDuckGoProvider(SearchProvider):
+    name = "duckduckgo"
+
+    def search(self, web: "WebSearch", query: str, limit: int) -> list[SearchResult]:
+        response = web.get("https://duckduckgo.com/html/", params={"q": query})
+        soup = BeautifulSoup(response.text, "html.parser")
+        results: list[SearchResult] = []
+        seen_urls: set[str] = set()
+
+        for node in soup.select(".result"):
+            link = node.select_one(".result__a")
+            if link is None:
+                continue
+
+            url = _normalize_duckduckgo_url(link.get("href", ""))
+            canonical_url = canonicalize_url(url)
+            if not canonical_url or canonical_url in seen_urls:
+                continue
+
+            snippet = node.select_one(".result__snippet")
+            results.append(
+                SearchResult(
+                    title=_clean_text(link.get_text(" ", strip=True)),
+                    url=url,
+                    snippet=_clean_text(snippet.get_text(" ", strip=True) if snippet else ""),
+                    query=query,
+                    rank=len(results) + 1,
+                    provider=self.name,
+                    canonical_url=canonical_url,
+                )
+            )
+            seen_urls.add(canonical_url)
+
+            if len(results) >= limit:
+                break
+
+        return results
+```
+
+그리고 arXiv:
+
+```python
+class ArxivProvider(SearchProvider):
+    name = "arxiv"
+
+    def search(self, web: "WebSearch", query: str, limit: int) -> list[SearchResult]:
+        response = web.get(
+            "https://export.arxiv.org/api/query",
+            params={
+                "search_query": f"all:{query}",
+                "start": 0,
+                "max_results": limit,
+                "sortBy": "relevance",
+            },
+        )
+        namespace = {"atom": "http://www.w3.org/2005/Atom"}
+        root = ET.fromstring(response.text)
+        results: list[SearchResult] = []
+
+        for entry in root.findall("atom:entry", namespace):
+            title = _clean_text(_xml_text(entry.find("atom:title", namespace)))
+            summary = _clean_text(_xml_text(entry.find("atom:summary", namespace)))
+            url = _xml_text(entry.find("atom:id", namespace)).strip()
+            canonical_url = canonicalize_url(url)
+            if not url or not canonical_url:
+                continue
+
+            results.append(
+                SearchResult(
+                    title=title or url,
+                    url=url,
+                    snippet=summary,
+                    query=query,
+                    rank=len(results) + 1,
+                    provider=self.name,
+                    canonical_url=canonical_url,
+                )
+            )
+
+            if len(results) >= limit:
+                break
+
+        return results
+```
+
+`WebSearch` 클래스가 공급자를 조율하고 페이지를 가져옵니다:
+
+```python
+class WebSearch:
+    def __init__(
+        self,
+        timeout: float = 15.0,
+        *,
+        providers: Iterable[SearchProvider] | None = None,
+        chunk_chars: int = 3000,
+        scraper: Callable[[str], ScrapeResult] | None = None,
+    ) -> None:
+        self._client = httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": USER_AGENT},
+        )
+        self.providers = tuple(providers or (DuckDuckGoProvider(),))
+        self.chunk_chars = chunk_chars
+        self.scraper = scraper
+
+    @classmethod
+    def from_provider_names(cls, provider_names: Iterable[str], **kwargs: object) -> "WebSearch":
+        providers = [_provider_from_name(name) for name in provider_names]
+        return cls(providers=providers, **kwargs)
+
+    def search(self, query: str, limit: int = 5) -> list[SearchResult]:
+        results: list[SearchResult] = []
+        seen_urls: set[str] = set()
+
+        for provider in self.providers:
+            for result in provider.search(self, query, limit):
+                if result.canonical_url in seen_urls:
+                    continue
+                results.append(result)
+                seen_urls.add(result.canonical_url)
+
+        return results
+
+    def fetch(self, result: SearchResult) -> WebPage:
+        if self.scraper is None:
+            raise RuntimeError("WebSearch.fetch requires a Venice scrape function.")
+
+        scraped = self.scraper(result.url)
+        text = scraped.content.strip() or result.snippet
+        chunks = self._chunk_text(text)
+        return WebPage(
+            title=scraped.title or result.title,
+            url=result.url,
+            final_url=scraped.final_url or scraped.url or result.url,
+            canonical_url=canonicalize_url(scraped.final_url or result.url),
+            text=text,
+            content_type=scraped.content_type or "text/markdown",
+            retrieved_at=utc_now(),
+            content_hash=content_hash(text),
+            chunks=chunks,
+        )
+
+    def get(self, url: str, *, params: dict[str, object] | None = None) -> httpx.Response:
+        response = self._client.get(url, params=params)
+        response.raise_for_status()
+        return response
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> "WebSearch":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def _chunk_text(self, text: str) -> tuple[TextChunk, ...]:
+        overlap = min(250, max(0, self.chunk_chars // 10))
+        return chunk_text(text, chunk_chars=self.chunk_chars, overlap=overlap)
+```
+
+전체 레퍼런스 구현은 재시도, 호스트 수준 요청 지연, 더 친절한 에러를 추가합니다. 리서치 에이전트는 자동화를 차단하거나, 예기치 않게 리다이렉트하거나, 일시적 에러를 반환하는 페이지를 다루는 데 많은 시간을 보내므로 그런 기능들은 유지할 가치가 있습니다.
+
+하단에 작은 공급자 헬퍼를 추가하세요:
+
+```python
+def _normalize_duckduckgo_url(raw_url: str) -> str:
+    if not raw_url:
+        return ""
+
+    parsed = urlparse(raw_url)
+    if parsed.netloc.endswith("duckduckgo.com") and parsed.path == "/l/":
+        target = parse_qs(parsed.query).get("uddg", [""])[0]
+        return unquote(target)
+
+    if parsed.scheme in {"http", "https"}:
+        return raw_url
+
+    return ""
+
+
+def _provider_from_name(name: str) -> SearchProvider:
+    normalized = name.strip().lower()
+    if normalized in {"duckduckgo", "ddg", "web"}:
+        return DuckDuckGoProvider()
+    if normalized == "arxiv":
+        return ArxivProvider()
+    raise ValueError(f"Unknown source provider: {name}")
+
+
+def _clean_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _xml_text(node: ET.Element | None) -> str:
+    return "" if node is None or node.text is None else node.text
+```
+
+## 로컬 아티팩트 작성
+
+리서치 워크플로의 경우 감사 가능성이 중요합니다. 최종 보고서가 놀라운 내용을 말한다면, 어떤 소스가 그것을 이끌었는지 검토할 수 있어야 합니다.
+
+`research_agent/artifacts.py` 생성:
+
+```python
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
+from typing import Any
+
+
+class ArtifactWriter:
+    def __init__(self, root: Path | None = None) -> None:
+        self.root = root
+        if self.root is not None:
+            self.root.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def enabled(self) -> bool:
+        return self.root is not None
+
+    def write(self, kind: str, record: object) -> None:
+        if self.root is None:
+            return
+
+        path = self.root / f"{kind}.jsonl"
+        payload = json.dumps(_to_jsonable(record), ensure_ascii=False, sort_keys=True)
+        with path.open("a", encoding="utf-8") as file:
+            file.write(f"{payload}\n")
+
+
+def _to_jsonable(value: object) -> Any:
+    if is_dataclass(value):
+        return _to_jsonable(asdict(value))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(item) for item in value]
+    return value
+```
+
+이는 줄당 하나의 JSON 객체를 작성해 아티팩트를 추가하고, 검토하고, 나중에 명령줄 도구로 처리하기 쉽게 만듭니다.
+
+## 리서치 에이전트 빌드
+
+이제 Venice, 검색, 모델, 아티팩트가 있으니 실제 에이전트를 만들 수 있습니다.
+
+`research_agent/agent.py` 생성:
+
+```python
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from textwrap import dedent
+
+from .artifacts import ArtifactWriter
+from .models import CollectionError, EvidenceChunk, ResearchReport, SearchResult, SourceNote, WebPage, utc_now
+from .venice import VeniceClient, VeniceError
+from .web import WebSearch
+
+SYSTEM_PROMPT = """You are a careful research assistant.
+Use the supplied source material only when making factual claims.
+Flag uncertainty, contradictions, and missing context instead of filling gaps."""
+
+ProgressCallback = Callable[[str], None]
+
+DEFAULT_ITERATIONS = 3
+DEFAULT_QUERY_COUNT = 6
+DEFAULT_RESULTS_PER_QUERY = 4
+DEFAULT_MAX_SOURCES = 40
+DEFAULT_MAX_CHUNKS_PER_SOURCE = 6
+```
+
+system prompt는 핵심 행동 가드레일입니다. 모델이 기억에서 인상적으로 들리는 보고서를 만들기를 원하지 않습니다. 소스 자료를 사용하고 증거가 빈약할 때 불확실성을 알리기를 원합니다.
+
+아직 추가하지 않았다면 `models.py`에 두 개의 최종 dataclass도 필요합니다:
+
+```python
+@dataclass(frozen=True)
+class CollectionError:
+    stage: str
+    message: str
+    query: str = ""
+    url: str = ""
+    source_id: str = ""
+    provider: str = ""
+
+
+@dataclass(frozen=True)
+class ResearchReport:
+    topic: str
+    markdown: str
+    sources: list[SourceNote]
+    artifacts_dir: str | None = None
+```
+
+다음으로 `ResearchAgent`를 정의하세요:
+
+```python
+class ResearchAgent:
+    def __init__(
+        self,
+        venice: VeniceClient,
+        web: WebSearch | None = None,
+        artifacts: ArtifactWriter | None = None,
+        progress: ProgressCallback | None = None,
+        max_sources: int | None = DEFAULT_MAX_SOURCES,
+        max_chunks_per_source: int = DEFAULT_MAX_CHUNKS_PER_SOURCE,
+    ) -> None:
+        self.venice = venice
+        self.web = web or WebSearch(scraper=venice.scrape)
+        self.artifacts = artifacts or ArtifactWriter()
+        self.progress = progress or (lambda _: None)
+        self.max_sources = max_sources
+        self.max_chunks_per_source = max_chunks_per_source
+```
+
+`run()` 메서드가 리서치 패스를 조율합니다:
+
+```python
+    def run(
+        self,
+        topic: str,
+        *,
+        iterations: int = DEFAULT_ITERATIONS,
+        query_count: int = DEFAULT_QUERY_COUNT,
+        results_per_query: int = DEFAULT_RESULTS_PER_QUERY,
+    ) -> ResearchReport:
+        notes: list[SourceNote] = []
+        seen_source_keys: set[str] = set()
+        seen_content_hashes: set[str] = set()
+        queries = self._initial_queries(topic, query_count)
+
+        self.artifacts.write("queries", {"stage": "initial", "topic": topic, "queries": queries})
+
+        for iteration in range(1, iterations + 1):
+            self.progress(f"Research pass {iteration}/{iterations}: {', '.join(queries)}")
+            self._collect_notes(
+                topic,
+                queries,
+                results_per_query,
+                seen_source_keys,
+                seen_content_hashes,
+                notes,
+                iteration,
+            )
+
+            if iteration < iterations:
+                gaps, queries = self._gap_follow_up_queries(topic, notes, query_count)
+                self.artifacts.write(
+                    "research_gaps",
+                    {
+                        "topic": topic,
+                        "after_iteration": iteration,
+                        "source_balance": _source_cluster_counts(notes),
+                        "gaps": gaps,
+                        "queries": queries,
+                    },
+                )
+                self.artifacts.write(
+                    "queries",
+                    {
+                        "stage": "follow_up",
+                        "topic": topic,
+                        "iteration": iteration + 1,
+                        "gap_count": len(gaps),
+                        "queries": queries,
+                    },
+                )
+
+        report = self._write_report(topic, notes)
+        self.artifacts.write(
+            "reports",
+            {
+                "topic": topic,
+                "source_count": len(notes),
+                "generated_at": utc_now(),
+                "markdown": report,
+            },
+        )
+
+        return ResearchReport(
+            topic=topic,
+            markdown=report,
+            sources=notes,
+            artifacts_dir=str(self.artifacts.root) if self.artifacts.root is not None else None,
+        )
+```
+
+두 개의 `seen_*` 집합이 에이전트가 중복 소스에 시간을 낭비하지 않도록 막습니다. URL 중복 제거는 반복된 링크를 잡습니다. 콘텐츠 해시 중복 제거는 미러, 신디케이트된 게시물, 같은 최종 콘텐츠로 리다이렉트되는 페이지를 잡습니다.
+
+## 초기 및 후속 검색 계획
+
+첫 번째 모델 호출은 주제를 검색 쿼리로 바꿉니다:
+
+```python
+    def _initial_queries(self, topic: str, count: int) -> list[str]:
+        prompt = dedent(
+            f"""
+            Create {count} diverse web search queries for researching this topic:
+            {topic}
+
+            Cover background, recent developments, primary sources, criticism, and data.
+            Include at least one query likely to find primary sources or datasets.
+            Return JSON only in this shape: {{"queries": ["..."]}}
+            """
+        ).strip()
+        return self._query_list(prompt, count, fallback=[topic])
+```
+
+각 리서치 패스 후 업데이트된 에이전트는 더 의도적인 갭 분석 단계를 수행합니다. 현재 노트를 살펴보고, 도메인별로 소스 클러스터를 세고, Venice에 어떤 커버리지가 누락되어 있는지 묻고, 그 갭을 아티팩트에 기록한 다음, 결과 쿼리를 다음 패스에 사용합니다.
+
+![갭 분석 루프](/images/guides/private-research-agent/gap-analysis-loop.svg)
+
+먼저 소스 균형을 추적하세요:
+
+```python
+from urllib.parse import urlparse
+
+
+def _source_cluster_counts(notes: list[SourceNote]) -> list[dict[str, object]]:
+    total = len(notes)
+    if total == 0:
+        return []
+
+    clusters: dict[str, list[str]] = {}
+    for note in notes:
+        cluster = _source_cluster(note)
+        clusters.setdefault(cluster, []).append(note.source_id)
+
+    return [
+        {
+            "cluster": cluster,
+            "source_count": len(source_ids),
+            "source_share": round(len(source_ids) / total, 3),
+            "source_ids": source_ids,
+        }
+        for cluster, source_ids in sorted(
+            clusters.items(), key=lambda item: (-len(item[1]), item[0])
+        )
+    ]
+
+
+def _source_cluster(note: SourceNote) -> str:
+    url = note.canonical_url or note.final_url or note.url
+    host = urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host or "unknown"
+
+
+def _source_balance_digest(notes: list[SourceNote], limit: int = 8) -> str:
+    clusters = _source_cluster_counts(notes)
+    if not clusters:
+        return "No source clusters yet."
+
+    total = len(notes)
+    lines = [
+        f"- {cluster['cluster']}: {cluster['source_count']}/{total} sources "
+        f"({cluster['source_share']:.0%}); IDs: {', '.join(cluster['source_ids'])}"
+        for cluster in clusters[:limit]
+    ]
+    return "\n".join(lines)
+```
+
+이는 에이전트가 소스 클러스터 캡처를 알아차릴 수 있는 단순한 방법을 제공합니다. 모든 소스가 한 회사, 한 프레임워크, 또는 한 도메인에서 온다면, 후속 쿼리는 같은 것을 더 모으는 대신 의도적으로 소스 집합을 넓혀야 합니다.
+
+이제 후속 검색을 만들 때 그 균형 정보를 사용하세요:
+
+```python
+    def _follow_up_queries(self, topic: str, notes: list[SourceNote], count: int) -> list[str]:
+        digest = _source_digest(notes, max_chars=9000)
+        source_balance = _source_balance_digest(notes)
+        prompt = dedent(
+            f"""
+            We are researching: {topic}
+
+            Current notes:
+            {digest}
+
+            Source balance:
+            {source_balance}
+
+            Create {count} follow-up web search queries that fill gaps, verify important claims,
+            find primary evidence, and look for dissenting evidence.
+            If one source domain, vendor, framework, product, or perspective is overrepresented,
+            deliberately broaden beyond it unless the topic explicitly asks for that focus.
+            Return JSON only in this shape: {{"queries": ["..."]}}
+            """
+        ).strip()
+        return self._query_list(prompt, count, fallback=[topic])
+```
+
+새로운 레퍼런스 구현은 이것을 `_gap_follow_up_queries()`로 감싸고, Venice에 갭 레코드와 쿼리를 모두 반환하도록 요청합니다:
+
+```python
+    def _gap_follow_up_queries(
+        self, topic: str, notes: list[SourceNote], count: int
+    ) -> tuple[list[dict[str, str]], list[str]]:
+        if not notes:
+            return [], [topic]
+
+        digest = _source_digest(notes, max_chars=12000)
+        source_balance = _source_balance_digest(notes)
+        prompt = dedent(
+            f"""
+            Identify coverage gaps before the next research pass.
+
+            Research topic:
+            {topic}
+
+            Current source notes:
+            {digest}
+
+            Source balance:
+            {source_balance}
+
+            Find important missing coverage that would improve a deep research report.
+            Look specifically for primary sources, technical concepts, dissenting views,
+            overrepresented source clusters, and claims that need verification.
+
+            Return JSON only in this shape:
+            {{"gaps": [{{"missing": "...", "why_it_matters": "...", "query": "..."}}],
+              "queries": ["targeted web search query"]}}
+            """
+        ).strip()
+        response = self.venice.chat(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            max_tokens=900,
+        )
+
+        data = json.loads(response)
+        gaps = _clean_gap_records(data.get("gaps"))
+        queries = _clean_string_list(data.get("queries"))
+        if not queries:
+            queries = [gap["query"] for gap in gaps if gap.get("query")]
+        return gaps, queries[:count]
+```
+
+`--artifacts`가 활성화되면 이 레코드는 `research_gaps.jsonl`에 작성됩니다. 그러면 에이전트가 특정 2차 패스 쿼리를 검색한 이유에 대한 유용한 감사 추적을 얻습니다.
+
+파서는 관대해야 합니다. 모델이 잘못된 JSON을 반환하면 에이전트는 원래 주제로 폴백합니다:
+
+```python
+    def _query_list(self, prompt: str, count: int, fallback: list[str]) -> list[str]:
+        response = self.venice.chat(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.4,
+            max_tokens=500,
+        )
+        try:
+            data = json.loads(response)
+            queries = data.get("queries", [])
+        except (json.JSONDecodeError, AttributeError):
+            queries = []
+
+        clean_queries = [
+            query.strip()
+            for query in queries
+            if isinstance(query, str) and query.strip()
+        ]
+        return (clean_queries or fallback)[:count]
+```
+
+이 패턴은 에이전트 코드 전반에 걸쳐 사용할 가치가 있습니다: 구조화된 출력을 요청하고, 파싱하고, 출력이 사용 불가능할 때 단순한 폴백을 제공하세요.
+
+## 소스 읽기 및 요약
+
+이제 소스 노트를 수집합니다. 에이전트는 각 쿼리를 검색하고, Venice scrape를 통해 각 결과를 가져오고, Markdown을 청킹하고, 유용한 증거를 요약합니다.
+
+```python
+    def _collect_notes(
+        self,
+        topic: str,
+        queries: list[str],
+        results_per_query: int,
+        seen_source_keys: set[str],
+        seen_content_hashes: set[str],
+        notes: list[SourceNote],
+        iteration: int,
+    ) -> None:
+        for query in queries:
+            if self.max_sources is not None and len(notes) >= self.max_sources:
+                return
+
+            self.progress(f"Searching: {query}")
+            try:
+                results = self.web.search(query, limit=results_per_query)
+            except Exception as exc:
+                self._record_error("search", exc, query=query)
+                continue
+
+            self.artifacts.write(
+                "search_results",
+                {"iteration": iteration, "query": query, "results": results},
+            )
+
+            for result in results:
+                if self.max_sources is not None and len(notes) >= self.max_sources:
+                    return
+
+                source_key = result.canonical_url or result.url
+                if source_key in seen_source_keys:
+                    self.artifacts.write("dedupe", {"reason": "canonical_url", "url": result.url})
+                    continue
+
+                seen_source_keys.add(source_key)
+                source_id = f"S{len(notes) + 1}"
+                note = self._read_source(topic, query, source_id, result, seen_source_keys, seen_content_hashes)
+                if note is not None:
+                    notes.append(note)
+```
+
+개별 검색과 가져오기 실패가 전체 실행을 중단해서는 안 됩니다. 공개 웹은 지저분합니다. 어떤 페이지는 스크래핑을 차단하고, 어떤 페이지는 PDF를 반환하고, 어떤 페이지는 다운되어 있으며, 어떤 페이지는 예기치 않은 곳으로 리다이렉트합니다. 리서치 에이전트는 계속 움직이며 무엇이 실패했는지 기록해야 합니다.
+
+소스 읽기 메서드는 다음과 같습니다:
+
+```python
+    def _read_source(
+        self,
+        topic: str,
+        query: str,
+        source_id: str,
+        result: SearchResult,
+        seen_source_keys: set[str],
+        seen_content_hashes: set[str],
+    ) -> SourceNote | None:
+        self.progress(f"Reading {source_id}: {result.title}")
+        try:
+            page = self.web.fetch(result)
+        except Exception as exc:
+            self._record_error("fetch", exc, query=query, url=result.url, source_id=source_id)
+            return None
+
+        if page.content_hash in seen_content_hashes:
+            self.artifacts.write(
+                "dedupe",
+                {"reason": "content_hash", "source_id": source_id, "url": result.url},
+            )
+            return None
+        seen_content_hashes.add(page.content_hash)
+
+        chunks = self._summarize_chunks(topic, query, source_id, page)
+        if not chunks:
+            self._record_error("summarize_chunk", VeniceError("no chunks could be summarized"), url=result.url)
+            return None
+
+        summary = self._summarize_source(topic, query, source_id, page, chunks)
+        note = SourceNote(
+            source_id=source_id,
+            title=page.title,
+            url=result.url,
+            canonical_url=page.canonical_url,
+            final_url=page.final_url,
+            query=query,
+            rank=result.rank,
+            snippet=result.snippet,
+            provider=result.provider,
+            retrieved_at=page.retrieved_at,
+            content_type=page.content_type,
+            content_hash=page.content_hash,
+            chunks=chunks,
+            summary=summary,
+        )
+        self.artifacts.write("source_notes", note)
+        return note
+```
+
+각 소스 청크에 대해 Venice에 짧은 증거 요약과 정확한 인용을 요청하세요:
+
+```python
+    def _summarize_chunks(
+        self,
+        topic: str,
+        query: str,
+        source_id: str,
+        page: WebPage,
+    ) -> tuple[EvidenceChunk, ...]:
+        evidence: list[EvidenceChunk] = []
+        for chunk in page.chunks[: self.max_chunks_per_source]:
+            prompt = dedent(
+                f"""
+                Topic: {topic}
+                Search query: {query}
+                Source ID: {source_id}
+                Chunk ID: {chunk.chunk_id}
+                Source title: {page.title}
+                Source URL: {page.final_url}
+
+                Source chunk:
+                {chunk.text}
+
+                Extract only evidence relevant to the topic.
+                Return JSON only in this shape:
+                {{"summary": "...", "quotes": ["short exact quote", "..."]}}
+                """
+            ).strip()
+
+            try:
+                response = self.venice.chat(
+                    [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.1,
+                    max_tokens=600,
+                )
+                data = json.loads(response)
+                evidence.append(
+                    EvidenceChunk(
+                        chunk_id=chunk.chunk_id,
+                        text=chunk.text,
+                        summary=str(data.get("summary", "")).strip(),
+                        quotes=tuple(
+                            quote.strip()
+                            for quote in data.get("quotes", [])
+                            if isinstance(quote, str) and quote.strip()
+                        ),
+                    )
+                )
+            except Exception as exc:
+                self._record_error("summarize_chunk", exc, query=query, url=page.final_url, source_id=source_id)
+                continue
+
+        return tuple(evidence)
+```
+
+그런 다음 청크 요약을 소스 노트로 축소하세요:
+
+```python
+    def _summarize_source(
+        self,
+        topic: str,
+        query: str,
+        source_id: str,
+        page: WebPage,
+        chunks: tuple[EvidenceChunk, ...],
+    ) -> str:
+        chunk_digest = _chunk_digest(chunks, max_chars=9000)
+        prompt = dedent(
+            f"""
+            Topic: {topic}
+            Search query: {query}
+            Source ID: {source_id}
+            Source title: {page.title}
+            Source URL: {page.final_url}
+
+            Chunk evidence:
+            {chunk_digest}
+
+            Synthesize a source note using only the chunk evidence. Include:
+            - key facts with dates/numbers where present
+            - any limitations or bias in the source
+            - useful exact wording from quotes if it is short
+
+            Keep the note under 180 words and refer to the source as [{source_id}].
+            """
+        ).strip()
+        return self.venice.chat(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            max_tokens=500,
+        )
+```
+
+이 2단계 요약이 에이전트가 기본 "이 URL들을 요약하세요" 스크립트보다 더 신뢰성 있게 느껴지게 만드는 부분입니다. 모델은 먼저 소스 청크를 읽고, 그 추출된 증거 조각들로부터 소스 수준 노트를 작성합니다.
+
+## 최종 보고서 작성
+
+에이전트가 소스 노트를 갖게 되면 보고서를 작성할 수 있습니다. 단일 패스 보고서 작성기로 시작하세요:
+
+```python
+    def _write_report(self, topic: str, notes: list[SourceNote]) -> str:
+        if not notes:
+            return (
+                f"# Research report: {topic}\n\n"
+                "No usable web sources were collected. Check your network connection or try a narrower topic."
+            )
+
+        prompt = dedent(
+            f"""
+            Research topic:
+            {topic}
+
+            Source notes:
+            {_source_digest(notes, max_chars=45000)}
+
+            Write a detailed source-backed Markdown research survey.
+
+            Requirements:
+            - Start with a precise H1 title.
+            - Open with "## Overview".
+            - Use topic-specific sections.
+            - Use footnote-style citation markers like [^1] and [^2].
+            - Do not cite with internal source IDs like [S1] in the report body.
+            - Do not include uncited factual claims.
+            - Avoid source-cluster capture from one vendor, domain, framework, or viewpoint.
+            - Include uncertainty, contradictions, and missing context where relevant.
+            - End with "## References" as a numbered list ordered by first citation.
+            """
+        ).strip()
+
+        return self.venice.chat_stream(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=7000,
+        )
+```
+
+레퍼런스 구현은 심층 보고서를 위해 더 나아갑니다: Venice에 개요를 요청하고, 각 보고서 섹션을 별도로 초안하고, 마지막 편집자 패스에 완성된 보고서를 조립하고 내부 소스 ID를 각주 스타일 인용으로 변환하도록 요청합니다.
+
+그 단계적 접근은 장문 리서치 출력이 필요할 때 유용한데, 하나의 거대한 prompt는 종종 너무 많이 압축하기 때문입니다. 업데이트된 prompt는 또한 보고서를 빈약한 의사결정 가이드 대신 광범위한 소스 기반 조사로 밀어붙입니다. 소스 베이스가 한 클러스터에 편향되어 있다면, 편집자 prompt는 Venice에 그 편향을 인정하고 이를 분야 전체의 대표로 제시하지 말라고 지시합니다.
+
+다이제스트 헬퍼를 추가하세요:
+
+```python
+def _chunk_digest(chunks: tuple[EvidenceChunk, ...], max_chars: int) -> str:
+    parts = []
+    for chunk in chunks:
+        quote_text = "; ".join(chunk.quotes)
+        parts.append(
+            f"{chunk.chunk_id}: {chunk.summary}"
+            + (f"\nQuotes: {quote_text}" if quote_text else "")
+        )
+    return "\n\n".join(parts)[:max_chars]
+
+
+def _source_digest(notes: list[SourceNote], max_chars: int) -> str:
+    chunks = [
+        "\n".join(
+            [
+                f"[{note.source_id}] {note.title}",
+                f"URL: {note.final_url or note.url}",
+                f"Canonical URL: {note.canonical_url}",
+                f"Found via: {note.query}",
+                f"Provider/rank: {note.provider}/{note.rank}",
+                f"Retrieved: {note.retrieved_at}",
+                f"Content hash: {note.content_hash}",
+                f"Note: {note.summary}",
+                f"Chunk evidence: {_chunk_digest(note.chunks, max_chars=1000)}",
+            ]
+        )
+        for note in notes
+    ]
+    return "\n\n".join(chunks)[:max_chars]
+```
+
+마지막으로 에러 기록을 추가하세요:
+
+```python
+    def _record_error(
+        self,
+        stage: str,
+        exc: Exception,
+        *,
+        query: str = "",
+        url: str = "",
+        source_id: str = "",
+        provider: str = "",
+    ) -> None:
+        message = str(exc)
+        self.progress(f"{stage.replace('_', ' ').title()} failed: {message}")
+        self.artifacts.write(
+            "errors",
+            CollectionError(
+                stage=stage,
+                message=message,
+                query=query,
+                url=url,
+                source_id=source_id,
+                provider=provider,
+            ),
+        )
+```
+
+이 시점에서 핵심 리서치 루프가 자리 잡혔습니다.
+
+## CLI 추가
+
+이제 명령줄 진입점이 필요합니다. `main.py` 생성:
+
+```python
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from research_agent.agent import (
+    DEFAULT_ITERATIONS,
+    DEFAULT_MAX_CHUNKS_PER_SOURCE,
+    DEFAULT_MAX_SOURCES,
+    DEFAULT_QUERY_COUNT,
+    DEFAULT_REPORT_STYLE,
+    DEFAULT_RESULTS_PER_QUERY,
+    ResearchAgent,
+)
+from research_agent.artifacts import ArtifactWriter
+from research_agent.venice import VeniceClient, VeniceError
+from research_agent.web import WebSearch
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run a minimal deep research agent powered by Venice AI.",
+    )
+    parser.add_argument("topic", nargs="+", help="Research topic, wrapped in quotes for best results.")
+    parser.add_argument("--model", help="Venice model name. Defaults to VENICE_MODEL or openai-gpt-55.")
+    parser.add_argument("--iterations", type=int, default=DEFAULT_ITERATIONS)
+    parser.add_argument("--queries", type=int, default=DEFAULT_QUERY_COUNT)
+    parser.add_argument("--results", type=int, default=DEFAULT_RESULTS_PER_QUERY)
+    parser.add_argument("--output", "--markdown-output", dest="output", type=Path)
+    parser.add_argument("--artifacts", type=Path, help="Optional directory for JSONL research artifacts.")
+    parser.add_argument("--providers", default="duckduckgo", help="Comma-separated providers: duckduckgo, arxiv.")
+    parser.add_argument("--max-sources", type=int, default=DEFAULT_MAX_SOURCES)
+    parser.add_argument("--chunk-chars", type=int, default=3000)
+    parser.add_argument("--max-chunks-per-source", type=int, default=DEFAULT_MAX_CHUNKS_PER_SOURCE)
+    parser.add_argument(
+        "--report-style",
+        choices=["brief", "standard", "deep"],
+        default=DEFAULT_REPORT_STYLE,
+        help=f"Final report depth. Default: {DEFAULT_REPORT_STYLE}.",
+    )
+    parser.add_argument("--quiet", action="store_true", help="Hide progress messages.")
+    return parser.parse_args()
+```
+
+CLI는 리서치 중에 실제로 튜닝할 손잡이를 노출합니다:
+
+| Option | What it controls |
+| --- | --- |
+| `--iterations` | 리서치 패스 수 |
+| `--queries` | 패스당 생성되는 검색 쿼리 수 |
+| `--results` | 각 쿼리에 대해 공급자별로 읽는 결과 수 |
+| `--providers` | 검색 공급자, 예: `duckduckgo` 또는 `duckduckgo,arxiv` |
+| `--max-sources` | 수집할 사용 가능 최대 소스 수 |
+| `--chunk-chars` | 소스 증거 추출 전 대략적인 청크 크기 |
+| `--max-chunks-per-source` | 소스당 요약되는 청크 수 |
+| `--report-style` | 최종 보고서 깊이: `brief`, `standard`, `deep` |
+| `--artifacts` | JSONL 감사 레코드 디렉터리 |
+| `--output` | 최종 Markdown 보고서 경로 |
+
+이제 모든 것을 연결하세요:
+
+```python
+def main() -> int:
+    load_dotenv()
+    args = parse_args()
+    topic = " ".join(args.topic)
+
+    try:
+        venice = VeniceClient.from_env(model=args.model)
+        progress = None if args.quiet else lambda message: print(f"[agent] {message}")
+        provider_names = [name.strip() for name in args.providers.split(",") if name.strip()]
+
+        with WebSearch.from_provider_names(
+            provider_names,
+            chunk_chars=args.chunk_chars,
+            scraper=venice.scrape,
+        ) as web:
+            agent = ResearchAgent(
+                venice=venice,
+                web=web,
+                artifacts=ArtifactWriter(args.artifacts),
+                progress=progress,
+                max_sources=args.max_sources,
+                max_chunks_per_source=args.max_chunks_per_source,
+                report_style=args.report_style,
+            )
+            report = agent.run(
+                topic,
+                iterations=args.iterations,
+                query_count=args.queries,
+                results_per_query=args.results,
+            )
+    except ValueError as exc:
+        print(f"Configuration error: {exc}")
+        return 1
+    except VeniceError as exc:
+        print(f"Venice API error: {exc}")
+        return 1
+
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(report.markdown, encoding="utf-8")
+        print(f"\nSaved report to {args.output}")
+    else:
+        print()
+        print(report.markdown)
+
+    if report.artifacts_dir:
+        print(f"Saved research artifacts to {report.artifacts_dir}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+이로써 동작하는 로컬 리서치 CLI가 생깁니다.
+
+## 에이전트 실행
+
+빠른 리서치 패스 실행:
+
+```bash
+uv run python main.py "How are AI agents changing software engineering workflows?"
+```
+
+보고서를 Markdown 파일에 작성:
+
+```bash
+uv run python main.py "state of open source LLM inference in 2026" \
+  --output reports/inference.md
+```
+
+더 많은 소스와 여러 공급자 사용:
+
+```bash
+uv run python main.py "agentic coding research" \
+  --providers duckduckgo,arxiv \
+  --iterations 3 \
+  --queries 5 \
+  --results 4 \
+  --max-sources 12
+```
+
+최종 보고서 스타일 선택:
+
+```bash
+uv run python main.py "AI agents in software engineering" --report-style deep
+```
+
+간결한 소스 기반 브리핑에는 `brief`, 더 풍부한 조사에는 `standard`, 단계적 개요/섹션/편집자 워크플로에는 `deep`을 사용하세요.
+
+감사 가능한 아티팩트 저장:
+
+```bash
+uv run python main.py "privacy tradeoffs in hosted LLM APIs" \
+  --output reports/privacy.md \
+  --artifacts runs/privacy
+```
+
+아티팩트가 활성화되면 다음과 같은 파일이 보입니다:
+
+```text
+runs/privacy/
+  queries.jsonl
+  research_gaps.jsonl
+  search_results.jsonl
+  fetches.jsonl
+  source_chunks.jsonl
+  chunk_summaries.jsonl
+  source_notes.jsonl
+  dedupe.jsonl
+  errors.jsonl
+  report_outline.jsonl
+  report_sections.jsonl
+  report_editor.jsonl
+  reports.jsonl
+```
+
+이 파일들은 에이전트가 결론에 도달한 방식을 이해하고 싶을 때 유용합니다. 예를 들어 `source_notes.jsonl`은 요약된 소스 증거를, `research_gaps.jsonl`은 후속 검색이 생성된 이유를, `errors.jsonl`은 검색, 스크래핑, 요약 중 실패한 페이지를 보여줍니다.
+
+## 프라이버시 및 신뢰성 노트
+
+리서치 에이전트는 여러 시스템에 접근하므로 무엇이 어디로 가는지 정확하게 하는 것이 도움이 됩니다:
+
+![프라이빗 리서치 에이전트 데이터 경계](/images/guides/private-research-agent/data-boundaries.svg)
+
+| Layer | What sees the data |
+| --- | --- |
+| 로컬 CLI | 주제, 구성, 소스 노트, 아티팩트, 최종 보고서는 머신에 머묾 |
+| 검색 공급자 | 검색 쿼리는 선택한 공급자(DuckDuckGo 또는 arXiv 등)로 전송 |
+| Venice scrape | 공개 소스 URL이 Venice scrape endpoint로 전송 |
+| Venice chat completion | prompt, 소스 청크, 소스 노트, 보고서 생성 지시가 Venice로 전송 |
+| 출력 파일 | Markdown 보고서와 JSONL 아티팩트가 로컬에 작성 |
+
+검색 경로의 더 많은 부분을 Venice 안에 두고 싶다면, 공급자 레이어를 DuckDuckGo를 직접 쿼리하는 대신 Venice의 `POST /augment/search` endpoint를 호출하도록 조정할 수 있습니다. 레퍼런스 구현은 데모가 실행하고 이해하기 쉽도록 경량 공개 공급자를 사용합니다.
+
+신뢰성을 위해 이 기본값들을 보수적으로 유지하세요:
+
+- Venice 호출과 웹 요청에 재시도 사용.
+- 같은 호스트에서 많은 페이지를 읽고 있다면 작은 `--request-delay` 추가.
+- 광범위한 주제가 무기한 실행되지 않도록 `--max-sources` 상한.
+- 최종 출력을 감사할 수 있도록 중요한 보고서에는 `--artifacts` 저장.
+- 보고서를 ground truth가 아닌 브리핑으로 취급. 정확성이 중요할 때 인용을 원본 소스로 추적하세요.
+
+## 부품 테스트
+
+시스템의 대부분을 테스트하는 데 라이브 웹 요청이나 Venice 호출이 필요 없습니다. 레퍼런스 레포는 가짜 Venice와 가짜 웹 클래스로 리서치 루프, 중복 제거 동작, 아티팩트, 보고서 prompt를 테스트합니다.
+
+유용한 첫 번째 테스트는 URL 정규화입니다:
+
+```python
+from research_agent.models import canonicalize_url
+
+
+def test_canonicalize_url_removes_tracking_params():
+    url = "https://example.com/post?utm_source=x&b=2&a=1#section"
+    assert canonicalize_url(url) == "https://example.com/post?a=1&b=2"
+```
+
+그런 다음 중복 콘텐츠가 건너뛰어지는지 테스트:
+
+```python
+from research_agent.models import SearchResult, WebPage, chunk_text
+
+
+class FakeWeb:
+    def search(self, query: str, limit: int = 5) -> list[SearchResult]:
+        return [
+            SearchResult(title="First source", url="https://example.com/a", snippet="snippet"),
+            SearchResult(title="Mirror", url="https://example.com/b", snippet="snippet"),
+        ]
+
+    def fetch(self, result: SearchResult) -> WebPage:
+        text = "This page contains relevant evidence. " * 5
+        return WebPage(
+            title=result.title,
+            url=result.url,
+            final_url=result.url,
+            text=text,
+            content_hash="same-content",
+            chunks=chunk_text(text, chunk_chars=80, overlap=10),
+        )
+```
+
+가짜(Fake)는 에이전트 테스트를 훨씬 빠르고 덜 깨지게 만듭니다. 라이브 검색 결과, 네트워크 상태, 모델 출력에 의존하지 않고 오케스트레이션 로직을 검증할 수 있습니다.
+
+## 벤치마킹
+
+많은 AI 공급자가 이제 자체 심층 리서치 워크플로를 갖고 있으므로 레퍼런스 레포에는 Perplexity의 Deep Research 도구에 대한 간단한 벤치마크가 포함되어 있습니다. 두 에이전트에게 AI 에이전트 프레임워크 아키텍처에 대한 보고서 작성을 요청했고, 생성된 보고서는 [GitHub 레포](https://github.com/joshua-mo-143/venice-research-agent-demo/tree/main/reports)에 체크인되었습니다.
+
+이는 공식 벤치마크가 아닙니다. 보고서 구조, 소스 커버리지, 인용 품질, 에이전트가 한 소스 클러스터에 과도하게 집중하는지를 검토하는 실용적 방법입니다. 그것이 또한 업데이트된 구현이 후속 검색 전에 `research_gaps.jsonl`과 소스 균형을 추적하는 이유입니다.
+
+## 이 예제 확장
+
+베이스라인 에이전트가 동작하면, 개선할 실용적 방법은 다음과 같습니다:
+
+- `POST /augment/search`를 사용해 Venice 검색 공급자 추가.
+- JSONL 파일 대신 작은 SQLite 데이터베이스에 보고서와 아티팩트 저장.
+- 신뢰할 수 있는 리서치 도메인에 대한 소스 allowlist 또는 blocklist 추가.
+- 깨끗한 HTML을 노출하지 않는 소스에 대해 Venice scrape와 문서 파싱을 결합해 PDF 지원 추가.
+- prompt 변경 후 리서치 품질을 비교할 수 있도록 주제와 예상 소스 유형의 평가 세트 추가.
+- 최종 보고서를 저장하기 전에 Venice에 뒷받침되지 않는 주장을 찾도록 요청하는 검토 단계 추가.
+
+가장 큰 업그레이드는 보통 더 나은 소스 선택입니다. 쿼리 생성이 도움이 되지만, 저신호 요약보다 1차 소스, 표준 문서, 공식 docs, 논문, 변경 로그, 데이터셋 페이지를 선호함으로써 품질을 개선할 수도 있습니다.
+
+## 마무리
+
+읽어 주셔서 감사합니다! 이것이 Python과 Venice API로 실용적인 프라이빗 리서치 에이전트를 만드는 데 도움이 되었기를 바랍니다.
+
+여기서 유용한 패턴은 단순히 "모델에게 무언가를 조사하라고 요청하는" 것이 아닙니다. 리서치를 감사 가능한 단계로 나누는 것입니다: 검색 계획, 소스 수집, 증거 추출, 소스 노트 작성, 갭에 대한 후속 작업, 인용과 함께 합성. 그 단계들을 명시적으로 유지함으로써 시간이 지남에 따라 검사하고, 테스트하고, 개선하기 더 쉬운 리서치 워크플로를 얻습니다.

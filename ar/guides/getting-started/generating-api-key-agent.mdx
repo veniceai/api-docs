@@ -1,0 +1,168 @@
+---
+title: إنشاء مفتاح API للوكلاء المستقلين
+'og:title': "مفتاح API للوكلاء المستقلين | Venice API Docs"
+'og:description': كيف يمكن لوكيل ذكاء اصطناعي مستقل أن يصدر مفتاح Venice API الخاص به بتوقيع token صادر من Venice بمحفظة تحمل VVV مكدّس على Base.
+---
+
+يمكن لوكيل ذكاء اصطناعي يتحكم بمحفظة على Base أن يصدر مفتاح Venice API الخاص به دون أي تدخل بشري. يحصل الوكيل على VVV، ويكدّسها (stakes)، ويوقّع token قصير الأمد صادرًا من Venice، ويُرسل الـ token الموقّع للحصول على مفتاح API جديد مرتبط بمحفظة الـ staking.
+
+يستعرض هذا الدليل التدفق الكامل من البداية إلى النهاية ويغطي خيارات التمويل لدفع الاستدلال فعليًا بعد إصدار المفتاح.
+
+## المتطلبات
+
+* محفظة EVM على Base يتحكم بها الوكيل (مفتاح خاص في متغير بيئة أو مدير أسرار).
+* كمية صغيرة من ETH على Base للـ gas (الـ staking يتطلب معاملتين: `approve` ثم `stake`).
+* أي كمية غير صفرية من VVV للـ stake. تتطلب endpoint الإصدار فقط أن يكون لدى المحفظة رصيد sVVV غير صفري، لذا VVV واحد يكفي لإصدار مفتاح. راجع [الدفع للاستدلال](#paying-for-inference) لمعرفة ما تحتاجه لاستدعاء endpoints مدفوعة فعليًا.
+
+<Tip>
+  استخدم محفظة وكيل مخصصة بدلًا من محفظة الخزينة. يوقّع المفتاح الخاص للمحفظة كل طلب token من Venice، لذا يجب أن يكون نطاق تأثيرها صغيرًا.
+</Tip>
+
+## الخطوات
+
+<Steps>
+  <Step title="احصل على VVV">
+    أرسل VVV إلى محفظة الوكيل، أو اجعل الوكيل يقوم بمبادلة على DEX مثل [Aerodrome](https://aerodrome.finance/swap?from=eth\&to=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf\&chain0=8453\&chain1=8453) أو [Uniswap](https://app.uniswap.org/swap?chain=base\&inputCurrency=NATIVE\&outputCurrency=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf).
+
+    عقد token VVV على Base: `0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf`
+  </Step>
+
+  <Step title="قم بـ stake لـ VVV مع Venice">
+    قم بـ stake لـ VVV في [Venice Staking Smart Contract](https://basescan.org/address/0x321b7ff75154472b18edb199033ff4d116f340ff#code) عند `0x321b7ff75154472B18EDb199033fF4D116F340Ff`. هذه معاملتان:
+
+    1. `approve(spender, amount)` على token VVV، حيث `spender` هو عقد الـ staking.
+    2. `stake(amount)` على عقد الـ staking.
+
+    <Frame as="div">
+      <img src="/images/guides/SC-Stake.png" alt="Smart Contract Staking" />
+    </Frame>
+
+    عندما تؤكَّد المعاملة الثانية، ينخفض رصيد VVV للمحفظة ويزداد رصيد sVVV الخاص بها بنفس المقدار. تقرأ endpoint الإصدار رصيد sVVV لتأكيد أن المحفظة قد قامت بـ stake.
+  </Step>
+
+  <Step title="اطلب token تحقق">
+    استدعِ `GET /api/v1/api_keys/generate_web3_key` للحصول على token قصير الأمد موقّع من Venice. الـ endpoint غير مُصادَقة.
+
+    ```bash
+    curl --request GET \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+    ```
+
+    تحتوي الاستجابة على حقل `token`. ينتهي الـ token بعد 15 دقيقة من إصداره، لذا وقّعه وأرسله قبل ذلك بكثير.
+  </Step>
+
+  <Step title="وقّع الـ token بمحفظة الـ staking">
+    وقّع سلسلة الـ token الخام بالمحفظة التي تحمل VVV المُكدَّس. هذا `personal_sign` قياسي على بايتات الـ token. كلا `ethers.Wallet.signMessage(token)` و `account.signMessage({ message: token })` من `viem` يُنتجان التوقيع الصحيح.
+  </Step>
+
+  <Step title="أصدر مفتاح API">
+    `POST` العنوان والتوقيع والـ token إلى نفس الـ endpoint، بالإضافة إلى نوع المفتاح الذي تريده.
+
+    ```bash
+    curl --request POST \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "address": "<wallet address>",
+        "signature": "<signed token>",
+        "token": "<unsigned token>",
+        "apiKeyType": "INFERENCE",
+        "description": "Agent key minted on <date>"
+      }'
+    ```
+
+    الحقول المطلوبة: `address` و `signature` و `token` و `apiKeyType` (`INFERENCE` أو `ADMIN`).
+
+    الحقول الاختيارية: `description` و `expiresAt` و `consumptionLimit` (يحد من إجمالي الإنفاق على هذا المفتاح، بالعملة `usd` أو `vcu` أو `diem`).
+
+    عند النجاح، تحتوي الاستجابة على سلسلة `apiKey` المُصدَرة. خزّنها في مخزن أسرار الوكيل واستخدمها كـ Bearer token عادي (`Authorization: Bearer <key>`).
+  </Step>
+</Steps>
+
+## مثال شامل
+
+يستخدم المثال أدناه محفظة حقيقية من متغير بيئة بدلًا من محفظة مُولَّدة عشوائيًا. المحفظة العشوائية ليس لديها VVV مُكدَّس وسيتم رفض الإصدار بخطأ `Wallet has no staked VVV on Base`.
+
+```typescript
+import { ethers } from "ethers"
+
+const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
+const address = wallet.address
+
+const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
+const { data: { token } } = await tokenResponse.json()
+
+const signature = await wallet.signMessage(token)
+
+const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    address,
+    signature,
+    token,
+    apiKeyType: "INFERENCE",
+    description: "Agent key",
+  }),
+})
+
+const result = await mintResponse.json()
+if (!mintResponse.ok) {
+  throw new Error(`Mint failed: ${result.error}`)
+}
+
+console.log("Minted key:", result.data.apiKey)
+```
+
+## مرجع الأخطاء
+
+تُعيد الـ endpoint رسائل خطأ محددة وقابلة للتنفيذ. عيّن هذه في الوكيل حتى يتمكن من تقرير ما إذا كان سيعيد المحاولة أم يطلب token جديدًا أم يتوقف.
+
+| الحالة | تحتوي رسالة الخطأ | ما يعنيه | ما يجب فعله |
+| --- | --- | --- | --- |
+| `400` | `Invalid wallet address` | حقل `address` ليس عنوان EVM صالحًا. | صحّح العنوان وأعد الإرسال. |
+| `400` | `JWT has expired` | انتهى صلاحية token التحقق قبل أن توقّعه وترسله. | اطلب token جديدًا، ووقّعه، وأرسله فورًا. |
+| `400` | `JWT signature is invalid` | لم يتم توقيع الـ token من قِبَل Venice (على الأرجح تم العبث به أو تلفيقه). | استخدم دائمًا token جديدًا من endpoint `GET`. |
+| `400` | `JWT claims are invalid` | مُصدر الـ token أو الجمهور لا يتطابق مع ما تتوقعه Venice. | استخدم الـ token غير المعدَّل المُعاد من endpoint `GET`. |
+| `400` | `JWT is malformed` | الـ `token` المُرسَل ليس JWT. | تأكد من أنك ترسل سلسلة الـ `token` بالضبط المُعادة من endpoint `GET`. |
+| `400` | `Wallet signature does not match` | الـ `signature` لا يطابق `address` للـ `token` المُعطى. | وقّع بايتات الـ token الخام بالمحفظة التي تملك `address`. |
+| `400` | `Could not verify wallet signature` | فشل استدعاء RPC للتحقق من التوقيع (مؤقت). | أعد المحاولة مع backoff. |
+| `400` | `Wallet has no staked VVV on Base` | المحفظة لديها رصيد sVVV صفر. | قم بـ stake لـ VVV أولًا، ثم أعد المحاولة. |
+
+## الدفع للاستدلال
+
+إصدار مفتاح والقدرة على استدعاء endpoints مدفوعة به شيئان منفصلان. المفتاح المُصدَر حديثًا يصادق بشكل صحيح لكنه لا يستطيع استدعاء endpoints مدفوعة (مثل `/chat/completions`) حتى يكون لدى حساب المحفظة رصيد قابل للإنفاق.
+
+يمكن للمفتاح المُصدَر الإنفاق من حساب المستخدم بترتيب الأولوية هذا: DIEM، ثم الاعتمادات المُجمَّعة، ثم الدولار الأمريكي.
+
+| مصدر التمويل | مستقل؟ | كيف |
+| --- | --- | --- |
+| **DIEM من VVV staking** | نعم | حصة DIEM اليومية للمحفظة تتناسب مع حصتها في تجمع الـ staking. يحتاج الحساب إلى 0.1 على الأقل من DIEM المُكدَّسة ليكون أي DIEM قابلًا للإنفاق. الـ stakes الأكبر تكسب DIEM يومية أكثر بشكل متناسب، تُحدَّث كل epoch (00:00 UTC). |
+| **USD عبر Stripe** | لا (متصفح) | سجّل الدخول إلى venice.ai بنفس المحفظة (Sign-In-With-Ethereum). تجد اللوحة سجل المستخدم الموجود. أضف اعتمادات في Settings، API. |
+| **اشتراك Coinbase crypto** | لا (متصفح) | تسجيل دخول بنفس المحفظة، ثم اشترك عبر اللوحة. يعيد التدفق التوجيه إلى Coinbase Commerce للدفع الفعلي، لذا لا يمكن تشغيله من سكريبت. |
+| **Coinbase onramp** | لا (متصفح) | تسجيل دخول بنفس المحفظة، ثم استخدم widget onramp في اللوحة. مُستضاف على واجهة Coinbase. |
+
+إذا احتاج الوكيل إلى مسار تمويل crypto-native بالكامل وبدون رأس، فإن الخيارات الأنظف هي:
+
+1. **قم بـ stake لمزيد من VVV** بحيث تغطي حصة DIEM اليومية إنفاق الوكيل. يلتقط المفتاح المُصدَر هذا تلقائيًا.
+2. **استخدم [تدفق محفظة x402](/guides/integrations/x402-venice-api) بدلًا من مفتاح API.** مع x402 يوقّع الوكيل رسالة Sign-In-With-X لكل طلب، ويشحن مباشرة بـ USDC على Base أو Solana عبر `POST /api/v1/x402/top-up`، ويدفع لكل طلب. رصيد x402 USDC مرتبط بالمحفظة وليس بالمستخدم، لذا فهو لا يظهر كرصيد لمفتاح Bearer المُصدَر، لكنه يسمح لنفس المحفظة بدفع الاستدلال برمجيًا.
+
+## موارد ذات صلة
+
+<CardGroup cols={2}>
+  <Card title="Crypto والوكلاء" icon="link" href="/guides/integrations/crypto-rpc-agents">
+    استخدم Venice كموفّر للنموذج وكطبقة RPC للبلوكشين معًا للوكلاء المستقلين.
+  </Card>
+
+  <Card title="مصادقة محفظة x402" icon="wallet" href="/guides/integrations/x402-venice-api">
+    ادفع لكل طلب بـ USDC على Base أو Solana، دون الحاجة إلى مفتاح API.
+  </Card>
+
+  <Card title="Endpoint إنشاء مفتاح Web3 API" icon="code" href="/api-reference/endpoint/api_keys/generate_web3_key/post">
+    مرجع endpoint لـ endpoint الإصدار.
+  </Card>
+
+  <Card title="دليل مفتاح API القياسي" icon="key" href="/guides/getting-started/generating-api-key">
+    للمستخدمين الذين يفضلون إصدار مفتاح من اللوحة.
+  </Card>
+</CardGroup>

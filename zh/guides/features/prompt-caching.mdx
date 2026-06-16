@@ -1,0 +1,372 @@
+---
+title: Prompt 缓存
+description: 通过缓存重复的 prompt 内容来降低成本和延迟
+"og:title": "Prompt Caching | Venice API Docs"
+"og:description": "Learn how to use prompt caching to reduce costs and latency for repeated content in your API requests."
+---
+
+Prompt 缓存会存储已处理的输入 token，使后续具有相同前缀的请求可以复用它们，而无需重新处理。这降低了延迟（长 prompt 最高可降低 80%）和成本（缓存 token 最高可享 90% 折扣）。
+
+Venice 会为支持的模型自动处理缓存，但了解每个提供商如何实现缓存有助于您最大化缓存命中率并最小化成本。
+
+## 缓存的工作方式
+
+缓存基于**前缀匹配**：系统存储已处理的 token，并在后续请求以相同内容开头时复用它们。
+
+考虑一个具有 2,000 token 系统 prompt 的聊天机器人：
+
+<Steps>
+  <Step title="请求 1">
+    系统 prompt（2,000 tokens）+ 用户消息（50 tokens）
+    
+    **处理**：2,050 tokens · **来自缓存**：0 tokens
+    
+    前缀写入缓存。
+  </Step>
+  <Step title="请求 2">
+    系统 prompt（2,000 tokens）+ 用户消息（80 tokens）
+    
+    **处理**：80 tokens · **来自缓存**：2,000 tokens
+  </Step>
+  <Step title="请求 3">
+    系统 prompt（2,000 tokens）+ 用户消息（120 tokens）
+    
+    **处理**：120 tokens · **来自缓存**：2,000 tokens
+  </Step>
+</Steps>
+
+**无缓存总计**：2,050 + 2,080 + 2,120 = 6,250 tokens 全价
+
+**有缓存总计**：2,250 tokens 全价，4,000 tokens 折扣价
+
+<Warning>
+缓存仅对**前缀**有效。prompt 开头的任何更改都会使其后所有内容的缓存失效。请始终将静态内容（系统 prompt、文档、示例）放在动态内容（用户消息）之前。
+</Warning>
+
+## 支持的模型与定价
+
+<div id="cache-pricing-placeholder">Loading...</div>
+
+<Note>
+Claude Opus 4.5 对缓存写入收取**溢价费率**（\$7.50/1M tokens，而常规输入为 \$6.00）。首次填充缓存的请求成本更高，但后续缓存命中可节省 90%。其他模型不会对缓存写入额外收费。
+</Note>
+
+## 各提供商的特定行为
+
+Venice 跨提供商统一缓存行为。对于大多数模型，缓存是自动的。只需发送请求并在响应中查看缓存统计信息。**Claude** 需要在协议层显式设置缓存标记，但 Venice 会自动为系统 prompt 和对话历史添加这些标记。
+
+缓存行为最终由各提供商控制，可能会变化，因此请查阅提供商文档以获取最新细节。
+
+| 模型 | 提供商 | 最小 Tokens | 缓存生命周期 | 写入成本 | 读取折扣 | 显式标记 |
+|-------|----------|------------|----------------|------------|---------------|------------------|
+| Claude Opus 4.5 | Anthropic | ~4,000 | 5 分钟 | +25% | 90% | 必需 |
+| GPT-5.2 | OpenAI | 1,024 | 5-10 分钟 | 无 | 90% | 不需要 |
+| Gemini | Google | ~1,024 | 1 小时 | 无 | 75-90% | 不需要 |
+| Grok | xAI | ~1,024 | 5 分钟 | 无 | 75-88% | 不需要 |
+| DeepSeek | DeepSeek | ~1,024 | 5 分钟 | 无 | 50% | 不需要 |
+| MiniMax | MiniMax | ~1,024 | 5 分钟 | 无 | 90% | 不需要 |
+| Kimi | Moonshot | ~1,024 | 5 分钟 | 无 | 50% | 不需要 |
+
+### Claude Opus 4.5 (Anthropic)
+
+Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
+
+- **系统 prompt** 自动被缓存
+- **对话历史**通过在倒数第二条用户消息上放置断点进行缓存
+
+这意味着您的对话历史从缓存中读取，只有最新一轮作为新输入被处理：
+
+| 轮次 | Prompt Tokens | 缓存读取 | 缓存写入 | 节省 |
+|------|---------------|------------|-------------|---------|
+| 1 | 10,979 | 0 | 10,938 | 首次写入 |
+| 2 | 11,031 | 10,938 | 31 | 99.7% 已缓存 |
+| 3 | 11,062 | 10,969 | 52 | 99.5% 已缓存 |
+
+**附加细节：**
+
+- **每个请求最多 4 个断点**：系统使用最长的匹配前缀
+- **缓存键为字节精确**：空白字符变化、不同的图像编码或工具重排序都会破坏缓存命中
+- **缓存感知速率限制**：缓存的 token 不计入您的 ITPM 限制，可实现更高的有效吞吐量
+- **25% 写入溢价**：首个请求成本更高，但后续读取可节省 90%
+
+#### 手动缓存控制
+
+对于在首轮缓存大型文档等特殊情况，您可以添加显式断点：
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": [{
+        "type": "text",
+        "text": "You are a legal assistant...",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    {
+      "role": "user", 
+      "content": [{
+        "type": "text",
+        "text": "[Long contract document...]",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    { "role": "assistant", "content": "I've reviewed the contract." },
+    { "role": "user", "content": "What are the termination clauses?" }
+  ]
+}
+```
+
+这确保系统 prompt 和文档从首次请求开始就被缓存。对于典型对话，您不需要手动标记。
+
+### 所有其他模型
+
+缓存是**自动的**。无需特殊参数。只需确保您的 prompt 超过约 1,024 个 token，并使用 `prompt_cache_key` 保持路由一致。
+
+## 请求参数
+
+| 参数 | 类型 | 模型 | 说明 |
+|-----------|------|--------|-------------|
+| `prompt_cache_key` | string | 全部 | 缓存亲和性的路由提示。具有相同键的请求更有可能命中具有热缓存的相同服务器。 |
+| `cache_control` | object | Claude | 标记要缓存的内容块。请参阅 Claude Opus 4.5 部分。 |
+
+### prompt_cache_key
+
+对于对话或 agent 工作流，使用一致的 `prompt_cache_key` 来提高缓存命中率：
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "prompt_cache_key": "session-abc-123",
+  "messages": [...]
+}
+```
+
+这会将请求路由到可能已经缓存了您上下文的服务器。可使用 session ID、对话 ID 或用户 ID 作为键。
+
+## 响应字段
+
+响应的 `usage` 对象包含缓存统计信息：
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 5500,
+    "completion_tokens": 200,
+    "total_tokens": 5700,
+    "prompt_tokens_details": {
+      "cached_tokens": 5000,
+      "cache_creation_input_tokens": 0
+    }
+  }
+}
+```
+
+| 字段 | 说明 |
+|-------|-------------|
+| `prompt_tokens` | 请求中的输入 token 总数 |
+| `prompt_tokens_details.cached_tokens` | 从缓存提供的 token（按折扣费率计费） |
+| `prompt_tokens_details.cache_creation_input_tokens` | 写入缓存的 token（在 Claude 上可能产生溢价） |
+
+**计费明细**（以 Claude Opus 4.5 为例）：
+- 5000 个缓存 token × \$0.60/1M = \$0.003
+- 500 个非缓存 token × \$6.00/1M = \$0.003
+- 总计：\$0.006（相比无缓存时的 \$0.033，节省 82%）
+
+## 最佳实践
+
+### 为缓存构建 prompt 结构
+
+将静态内容放在开头，动态内容放在结尾。
+
+**良好结构**
+
+| 位置 | 内容 | 是否缓存？ |
+|----------|---------|---------|
+| 1 | 系统指令 | 是 |
+| 2 | 参考文档 | 是 |
+| 3 | Few-shot 示例 | 是 |
+| 4 | 用户查询 | 否 |
+
+**糟糕结构**
+
+| 位置 | 内容 | 是否缓存？ |
+|----------|---------|---------|
+| 1 | 当前时间戳 | 否（使后续所有内容失效） |
+| 2 | 系统指令 | 否 |
+| 3 | 用户查询 | 否 |
+
+### 保持前缀字节级一致
+
+缓存键是从精确的字节序列计算的。即使是微小的差异也会破坏缓存命中：
+
+- 不同的空白字符或换行符
+- prompt 中的时间戳或请求 ID
+- 随机化的 few-shot 示例顺序
+- 相同内容的不同格式
+
+### 满足最小 token 阈值
+
+如果您的 prompt 低于最小值（通常为 1,024 个 token），缓存不会激活。对于小型 prompt，可以考虑：
+
+- 添加更多上下文或示例以达到阈值
+- 将多个小请求合并为批量 prompt
+- 接受简单查询不会应用缓存的事实
+
+### 对对话使用 prompt_cache_key
+
+对于持续对话，设置一致的 `prompt_cache_key`：
+
+```json
+// Turn 1
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Turn 2
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Turn 3
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+```
+
+这提高了所有轮次命中具有热缓存的相同服务器的可能性。
+
+### 监控缓存性能
+
+跟踪以下指标：
+- **缓存命中率**：`cached_tokens / prompt_tokens`
+- **成本节省**：实际成本 vs 无缓存成本
+- **延迟降低**：有缓存命中与无缓存命中的首 token 时间对比
+
+如果 `cached_tokens` 持续为 0：
+1. Prompt 可能低于最小 token 阈值
+2. Prompt 可能在请求之间发生了变化
+3. 请求可能命中不同服务器（使用 `prompt_cache_key`）
+4. 缓存可能已过期（请求过于稀疏）
+
+### 考虑缓存经济性
+
+**Claude Opus 4.5 缓存写入溢价**：首个请求成本多 25%，但后续读取节省 90%。
+
+| 场景 | 缓存写入溢价是否值得？ |
+|----------|-------------------------------|
+| 此 prompt 只有 1 个请求 | 否（多付 25%，无收益） |
+| 2 个及以上请求使用相同前缀 | 是（在第 2 个请求时收支平衡） |
+| 快速变化的 prompt | 否（持续的写入成本） |
+| 稳定的系统 prompt、大量查询 | 是（分摊到多次读取上） |
+
+## 缓存生命周期
+
+缓存在一段不活动时间后过期（通常为 5-10 分钟）。这意味着：
+
+| 流量模式 | 缓存收益 |
+|-----------------|-----------------|
+| 连续请求（< 5 分钟间隔） | 高：缓存保持热状态 |
+| 突发流量（间隔 > 10 分钟） | 有限：缓存在突发之间过期 |
+| 稀疏请求（数小时间隔） | 无：缓存始终冷 |
+
+## 在工具和函数中使用缓存
+
+函数定义可以与系统 prompt 一起被缓存：
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search_database",
+        "description": "Search the product database",
+        "parameters": { ... }
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "You are a shopping assistant...",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    ...
+  ]
+}
+```
+
+工具定义会成为缓存前缀的一部分。如果您有许多工具，这可以显著降低每个请求的成本。
+
+## 在图像和文档中使用缓存
+
+对于视觉模型，图像可以包含在缓存内容中：
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image_url",
+          "image_url": { "url": "data:image/png;base64,..." }
+        },
+        {
+          "type": "text",
+          "text": "This is the floor plan. I'll ask several questions about it.",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "I can see the floor plan. What would you like to know?"
+    },
+    {
+      "role": "user",
+      "content": "How many bedrooms are there?"
+    }
+  ]
+}
+```
+
+图像和初始上下文被缓存，因此关于同一图像的后续问题不会重新处理它。
+
+## 故障排查
+
+<Accordion title="cached_tokens 始终为 0">
+
+| 原因 | 解决方案 |
+|-------|----------|
+| Prompt 过短 | 确保 prompt 超过约 1,024 个 token（Claude 为 4,000） |
+| 前缀已更改 | 检查 prompt 开头是否有动态内容 |
+| 首次请求 | 预期行为：首个请求写入缓存，后续请求读取 |
+| 缓存已过期 | 将请求间隔缩短至 5 分钟以内 |
+| 不同服务器 | 添加 `prompt_cache_key` 以一致地路由请求 |
+
+</Accordion>
+
+<Accordion title="每个请求都有 cache_creation_input_tokens">
+
+| 原因 | 解决方案 |
+|-------|----------|
+| Prompt 正在变化 | 从前缀中移除时间戳、请求 ID 或其他动态内容 |
+| 缺少 cache_control | 对于 Claude，确保内容块上存在 `cache_control` 标记 |
+| 低于阈值 | 低于最小 token 数的 prompt 不会触发缓存 |
+| 单条用户消息 | 首轮预期。缓存会随对话历史增长。 |
+
+</Accordion>
+
+<Accordion title="成本高于预期">
+
+| 原因 | 解决方案 |
+|-------|----------|
+| 缓存写入溢价 | Claude 对写入收取 25% 更多。仅当您复用 prompt 时才值得。 |
+| 低复用率 | 如果每个 prompt 都是独一无二的，您将支付写入成本而无读取收益 |
+| 糟糕的 prompt 结构 | 将动态内容移至末尾，使前缀保持稳定 |
+
+</Accordion>

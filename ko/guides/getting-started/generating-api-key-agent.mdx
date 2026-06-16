@@ -1,0 +1,168 @@
+---
+title: 자율 에이전트 API 키 생성
+'og:title': "Autonomous Agent API Key | Venice API Docs"
+'og:description': How an autonomous AI agent can mint its own Venice API key by signing a Venice-issued token with a wallet that holds staked VVV on Base.
+---
+
+Base에서 지갑을 제어하는 AI 에이전트는 사람의 개입 없이 자체 Venice API 키를 발행할 수 있습니다. 에이전트는 VVV를 획득하고, 스테이킹하며, Venice가 발급한 단기 검증 토큰에 서명하고, 서명된 토큰을 다시 게시하여 스테이킹 지갑에 연결된 새로운 API 키를 수신합니다.
+
+이 가이드는 전체 흐름을 끝에서 끝까지 안내하고, 키가 발행된 후 실제로 추론 비용을 지불하기 위한 자금 조달 옵션을 다룹니다.
+
+## 사전 요구 사항
+
+* 에이전트가 제어하는 Base의 EVM 지갑(환경 변수 또는 시크릿 매니저의 비공개 키).
+* 가스를 위한 Base의 소량의 ETH (스테이킹은 두 개의 트랜잭션입니다: `approve` 후 `stake`).
+* 스테이킹할 VVV의 0이 아닌 양. 발행 엔드포인트는 지갑에 0이 아닌 sVVV 잔액만 있으면 되므로, 1 VVV로도 키를 발행하기에 충분합니다. 실제로 유료 엔드포인트를 호출하는 데 필요한 것은 [추론 비용 지불](#paying-for-inference)을 참조하세요.
+
+<Tip>
+  재무 지갑보다는 전용 에이전트 지갑을 사용하세요. 지갑의 비공개 키는 모든 Venice 토큰 요청에 서명하므로 영향 범위는 작아야 합니다.
+</Tip>
+
+## 단계
+
+<Steps>
+  <Step title="VVV 획득">
+    에이전트의 지갑으로 VVV를 보내거나, 에이전트가 [Aerodrome](https://aerodrome.finance/swap?from=eth\&to=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf\&chain0=8453\&chain1=8453) 또는 [Uniswap](https://app.uniswap.org/swap?chain=base\&inputCurrency=NATIVE\&outputCurrency=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf)과 같은 DEX에서 스왑하도록 합니다.
+
+    Base의 VVV 토큰 컨트랙트: `0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf`
+  </Step>
+
+  <Step title="Venice에 VVV 스테이킹">
+    `0x321b7ff75154472B18EDb199033fF4D116F340Ff`의 [Venice Staking Smart Contract](https://basescan.org/address/0x321b7ff75154472b18edb199033ff4d116f340ff#code)에서 VVV를 스테이킹합니다. 이는 두 개의 트랜잭션입니다:
+
+    1. VVV 토큰에서 `approve(spender, amount)`, 여기서 `spender`는 스테이킹 컨트랙트입니다.
+    2. 스테이킹 컨트랙트에서 `stake(amount)`.
+
+    <Frame as="div">
+      <img src="/images/guides/SC-Stake.png" alt="Smart Contract Staking" />
+    </Frame>
+
+    두 번째 트랜잭션이 확인되면 지갑의 VVV 잔액이 감소하고 sVVV 잔액이 동일한 양만큼 증가합니다. 발행 엔드포인트는 지갑이 스테이킹되었는지 확인하기 위해 sVVV 잔액을 읽습니다.
+  </Step>
+
+  <Step title="검증 토큰 요청">
+    Venice가 서명한 단기 토큰을 받으려면 `GET /api/v1/api_keys/generate_web3_key`를 호출하세요. 엔드포인트는 인증되지 않습니다.
+
+    ```bash
+    curl --request GET \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+    ```
+
+    응답에는 `token` 필드가 포함됩니다. 토큰은 발급 후 15분이 지나면 만료되므로 그 전에 서명하고 제출해야 합니다.
+  </Step>
+
+  <Step title="스테이킹 지갑으로 토큰 서명">
+    스테이킹된 VVV를 보유한 지갑으로 원시 토큰 문자열에 서명합니다. 이는 토큰 바이트에 대한 표준 `personal_sign`입니다. `ethers.Wallet.signMessage(token)`와 `viem`의 `account.signMessage({ message: token })`는 모두 올바른 서명을 생성합니다.
+  </Step>
+
+  <Step title="API 키 발행">
+    원하는 키 유형과 함께 주소, 서명, 토큰을 동일한 엔드포인트에 `POST`합니다.
+
+    ```bash
+    curl --request POST \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "address": "<wallet address>",
+        "signature": "<signed token>",
+        "token": "<unsigned token>",
+        "apiKeyType": "INFERENCE",
+        "description": "Agent key minted on <date>"
+      }'
+    ```
+
+    필수 필드: `address`, `signature`, `token`, `apiKeyType` (`INFERENCE` 또는 `ADMIN`).
+
+    선택적 필드: `description`, `expiresAt`, `consumptionLimit` (이 키의 총 지출을 `usd`, `vcu` 또는 `diem`으로 표시되는 단위로 제한).
+
+    성공 시 응답에는 발행된 `apiKey` 문자열이 포함됩니다. 에이전트의 시크릿 저장소에 저장하고 일반 Bearer 토큰으로 사용하세요 (`Authorization: Bearer <key>`).
+  </Step>
+</Steps>
+
+## 종단 간 예제
+
+아래 예제는 임의로 생성된 지갑이 아닌 환경 변수의 실제 지갑을 사용합니다. 임의 지갑에는 스테이킹된 VVV가 없으며 발행은 `Wallet has no staked VVV on Base` 오류로 거부됩니다.
+
+```typescript
+import { ethers } from "ethers"
+
+const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
+const address = wallet.address
+
+const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
+const { data: { token } } = await tokenResponse.json()
+
+const signature = await wallet.signMessage(token)
+
+const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    address,
+    signature,
+    token,
+    apiKeyType: "INFERENCE",
+    description: "Agent key",
+  }),
+})
+
+const result = await mintResponse.json()
+if (!mintResponse.ok) {
+  throw new Error(`Mint failed: ${result.error}`)
+}
+
+console.log("Minted key:", result.data.apiKey)
+```
+
+## 오류 참조
+
+엔드포인트는 구체적이고 실행 가능한 오류 메시지를 반환합니다. 에이전트에서 이를 매핑하여 재시도, 새 토큰 요청 또는 중지 여부를 결정할 수 있도록 하세요.
+
+| 상태 | 오류 메시지에 포함됨 | 의미 | 조치 |
+| --- | --- | --- | --- |
+| `400` | `Invalid wallet address` | `address` 필드가 유효한 EVM 주소가 아닙니다. | 주소를 수정하고 다시 제출하세요. |
+| `400` | `JWT has expired` | 서명하고 제출하기 전에 검증 토큰이 만료되었습니다. | 새 토큰을 요청하고 서명한 다음 즉시 제출하세요. |
+| `400` | `JWT signature is invalid` | 토큰이 Venice에 의해 서명되지 않았습니다 (조작되거나 위조된 것 같음). | 항상 `GET` 엔드포인트의 새 토큰을 사용하세요. |
+| `400` | `JWT claims are invalid` | 토큰의 발급자나 대상이 Venice가 예상하는 것과 일치하지 않습니다. | `GET` 엔드포인트에서 반환된 수정되지 않은 토큰을 사용하세요. |
+| `400` | `JWT is malformed` | 제출된 `token`은 JWT가 아닙니다. | `GET` 엔드포인트에서 반환된 정확한 `token` 문자열을 전송하는지 확인하세요. |
+| `400` | `Wallet signature does not match` | `signature`가 주어진 `token`에 대한 `address`와 일치하지 않습니다. | `address`를 소유한 지갑으로 원시 토큰 바이트에 서명하세요. |
+| `400` | `Could not verify wallet signature` | 서명 확인을 위한 RPC 호출이 실패했습니다 (일시적). | 백오프로 재시도하세요. |
+| `400` | `Wallet has no staked VVV on Base` | 지갑의 sVVV 잔액이 0입니다. | 먼저 VVV를 스테이킹한 다음 재시도하세요. |
+
+## 추론 비용 지불
+
+키를 발행하는 것과 그 키로 유료 엔드포인트를 호출할 수 있는 것은 별개의 두 가지 일입니다. 새로 발행된 키는 올바르게 인증되지만, 지갑의 계정에 사용 가능한 잔액이 있을 때까지 유료 엔드포인트(예: `/chat/completions`)를 호출할 수 없습니다.
+
+발행된 키는 다음 우선순위 순서로 사용자 계정에서 지출할 수 있습니다: DIEM, 그 다음 번들 크레딧, 그 다음 USD.
+
+| 자금 출처 | 자율적? | 방법 |
+| --- | --- | --- |
+| **VVV 스테이킹에서 DIEM** | 예 | 지갑의 일일 DIEM 할당은 스테이킹 풀에서의 비율에 비례합니다. 계정은 DIEM이 지출 가능하려면 최소 0.1 스테이킹된 DIEM이 필요합니다. 스테이크가 클수록 비례적으로 더 많은 일일 DIEM을 얻으며, 각 epoch(00:00 UTC)마다 새로 고침됩니다. |
+| **Stripe를 통한 USD** | 아니요 (브라우저) | 동일한 지갑으로 venice.ai에 로그인 (Sign-In-With-Ethereum). 대시보드가 기존 사용자 레코드를 찾습니다. Settings, API에서 크레딧을 추가하세요. |
+| **Coinbase 크립토 구독** | 아니요 (브라우저) | 동일한 지갑 로그인 후 대시보드를 통해 구독하세요. 흐름은 실제 결제를 위해 Coinbase Commerce로 리디렉션되므로 스크립트에서 구동할 수 없습니다. |
+| **Coinbase 온램프** | 아니요 (브라우저) | 동일한 지갑 로그인 후 대시보드의 온램프 위젯을 사용하세요. Coinbase UI에서 호스팅됩니다. |
+
+에이전트가 완전히 크립토 네이티브하고 헤드리스한 자금 조달 경로가 필요한 경우, 가장 깔끔한 옵션은 다음과 같습니다:
+
+1. **더 많은 VVV를 스테이킹**하여 일일 DIEM 할당이 에이전트의 지출을 충당하도록 합니다. 발행된 키는 이를 자동으로 가져옵니다.
+2. **API 키 대신 [x402 지갑 흐름](/guides/integrations/x402-venice-api)을 사용하세요.** x402를 사용하면 에이전트는 요청당 Sign-In-With-X 메시지에 서명하고, `POST /api/v1/x402/top-up`을 통해 Base 또는 Solana의 USDC로 직접 충전하며, 요청당 지불합니다. x402 USDC 잔액은 사용자가 아닌 지갑에 바인딩되므로 발행된 Bearer 키에 대해 잔액으로 표시되지 않지만, 동일한 지갑이 프로그래밍 방식으로 추론 비용을 지불할 수 있도록 합니다.
+
+## 관련 리소스
+
+<CardGroup cols={2}>
+  <Card title="크립토와 에이전트" icon="link" href="/guides/integrations/crypto-rpc-agents">
+    자율 에이전트를 위한 모델 제공자와 블록체인 RPC 계층 모두로 Venice를 사용하세요.
+  </Card>
+
+  <Card title="x402 지갑 인증" icon="wallet" href="/guides/integrations/x402-venice-api">
+    API 키 없이 Base 또는 Solana의 USDC로 요청당 지불하세요.
+  </Card>
+
+  <Card title="Web3 API 키 엔드포인트 생성" icon="code" href="/api-reference/endpoint/api_keys/generate_web3_key/post">
+    발행 엔드포인트에 대한 엔드포인트 참조.
+  </Card>
+
+  <Card title="표준 API 키 가이드" icon="key" href="/guides/getting-started/generating-api-key">
+    대시보드에서 키 발행을 선호하는 사용자를 위해.
+  </Card>
+</CardGroup>

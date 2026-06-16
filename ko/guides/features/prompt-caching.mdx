@@ -1,0 +1,372 @@
+---
+title: Prompt 캐싱
+description: 반복되는 prompt 콘텐츠를 캐시하여 비용과 지연 시간을 줄이세요
+"og:title": "Prompt Caching | Venice API Docs"
+"og:description": "API 요청에서 반복되는 콘텐츠의 비용과 지연 시간을 줄이기 위해 prompt 캐싱을 사용하는 방법을 알아보세요."
+---
+
+Prompt 캐싱은 처리된 input 토큰을 저장해 이후 동일한 prefix로 요청이 들어오면 재처리하지 않고 재사용합니다. 이를 통해 지연 시간(긴 prompt의 경우 최대 80%)과 비용(캐시된 토큰에 대해 최대 90% 할인)을 줄일 수 있습니다.
+
+Venice는 지원되는 모델에 대해 캐싱을 자동으로 처리하지만, 각 공급자가 캐싱을 어떻게 구현하는지 이해하면 캐시 적중률을 극대화하고 비용을 최소화하는 데 도움이 됩니다.
+
+## 캐싱이 작동하는 방식
+
+캐싱은 **prefix 매칭** 기반으로 동작합니다. 처리된 토큰을 저장해 두고, 이후 요청이 동일한 콘텐츠로 시작하면 이를 재사용합니다.
+
+2,000 토큰짜리 system prompt를 사용하는 챗봇을 생각해 보세요:
+
+<Steps>
+  <Step title="요청 1">
+    System prompt (2,000 토큰) + 사용자 메시지 (50 토큰)
+    
+    **처리됨**: 2,050 토큰 · **캐시에서**: 0 토큰
+    
+    Prefix가 캐시에 기록됩니다.
+  </Step>
+  <Step title="요청 2">
+    System prompt (2,000 토큰) + 사용자 메시지 (80 토큰)
+    
+    **처리됨**: 80 토큰 · **캐시에서**: 2,000 토큰
+  </Step>
+  <Step title="요청 3">
+    System prompt (2,000 토큰) + 사용자 메시지 (120 토큰)
+    
+    **처리됨**: 120 토큰 · **캐시에서**: 2,000 토큰
+  </Step>
+</Steps>
+
+**캐싱 없는 총합**: 2,050 + 2,080 + 2,120 = 6,250 토큰을 전액 요금으로 처리
+
+**캐싱이 있는 총합**: 2,050 + 80 + 120 = 2,250 토큰을 전액 요금으로, 4,000 토큰을 할인 요금으로 처리
+
+<Warning>
+캐싱은 **prefix**에서만 작동합니다. prompt 시작 부분이 조금이라도 바뀌면 그 뒤의 모든 캐시가 무효화됩니다. 정적 콘텐츠(system prompt, 문서, 예시)는 항상 동적 콘텐츠(사용자 메시지)보다 앞에 두세요.
+</Warning>
+
+## 지원 모델 및 가격
+
+<div id="cache-pricing-placeholder">Loading...</div>
+
+<Note>
+Claude Opus 4.5는 캐시 쓰기에 **프리미엄 요율**을 부과합니다(일반 input \$6.00 대비 100만 토큰당 \$7.50). 캐시를 처음 채우는 요청의 비용은 더 높지만, 이후 캐시 적중 시 90% 절감 효과가 있습니다. 다른 모델은 캐시 쓰기에 추가 요금을 부과하지 않습니다.
+</Note>
+
+## 공급자별 동작
+
+Venice는 공급자 간의 캐싱 동작을 정규화합니다. 대부분의 모델에서 캐싱은 자동입니다. 요청을 보내고 응답의 캐시 통계를 확인하기만 하면 됩니다. **Claude**는 프로토콜 수준에서 명시적인 캐시 마커가 필요하지만, Venice는 system prompt와 대화 기록에 대해 이를 자동으로 추가합니다.
+
+캐싱 동작은 궁극적으로 각 공급자가 제어하며 변경될 수 있으므로, 최신 세부 사항은 공급자 문서를 확인하세요.
+
+| Model | Provider | Min Tokens | Cache Lifetime | Write Cost | Read Discount | Explicit Markers |
+|-------|----------|------------|----------------|------------|---------------|------------------|
+| Claude Opus 4.5 | Anthropic | ~4,000 | 5 min | +25% | 90% | Required |
+| GPT-5.2 | OpenAI | 1,024 | 5-10 min | None | 90% | Not needed |
+| Gemini | Google | ~1,024 | 1 hour | None | 75-90% | Not needed |
+| Grok | xAI | ~1,024 | 5 min | None | 75-88% | Not needed |
+| DeepSeek | DeepSeek | ~1,024 | 5 min | None | 50% | Not needed |
+| MiniMax | MiniMax | ~1,024 | 5 min | None | 90% | Not needed |
+| Kimi | Moonshot | ~1,024 | 5 min | None | 50% | Not needed |
+
+### Claude Opus 4.5 (Anthropic)
+
+Claude는 프로토콜 수준에서 명시적인 캐시 breakpoint를 요구합니다. Venice는 이를 자동으로 처리합니다:
+
+- **System prompt**는 자동으로 캐시됩니다
+- **대화 기록**은 마지막에서 두 번째 사용자 메시지에 breakpoint를 배치해 캐시됩니다
+
+즉, 대화 기록은 캐시에서 읽혀오고 최신 턴만 새 input으로 처리됩니다:
+
+| Turn | Prompt Tokens | Cache Read | Cache Write | Savings |
+|------|---------------|------------|-------------|---------|
+| 1 | 10,979 | 0 | 10,938 | First write |
+| 2 | 11,031 | 10,938 | 31 | 99.7% cached |
+| 3 | 11,062 | 10,969 | 52 | 99.5% cached |
+
+**추가 세부 사항:**
+
+- **요청당 최대 4개의 breakpoint**: 시스템은 가장 긴 매칭 prefix를 사용합니다
+- **캐시 키는 바이트 단위로 정확합니다**: 공백 변경, 다른 이미지 인코딩, 도구 순서 변경 등이 캐시 적중을 깨뜨립니다
+- **캐시를 인식하는 rate limit**: 캐시된 토큰은 ITPM 한도에 포함되지 않아 더 높은 실효 처리량을 제공합니다
+- **25% 쓰기 프리미엄**: 첫 요청은 비용이 더 들지만 이후 읽기에서 90% 절약됩니다
+
+#### 수동 캐시 제어
+
+첫 턴부터 큰 문서를 캐시하고 싶은 특수한 경우에는 명시적인 breakpoint를 추가할 수 있습니다:
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": [{
+        "type": "text",
+        "text": "You are a legal assistant...",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    {
+      "role": "user", 
+      "content": [{
+        "type": "text",
+        "text": "[Long contract document...]",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    { "role": "assistant", "content": "I've reviewed the contract." },
+    { "role": "user", "content": "What are the termination clauses?" }
+  ]
+}
+```
+
+이렇게 하면 첫 요청부터 system prompt와 문서가 모두 캐시됩니다. 일반적인 대화에서는 수동 마커가 필요 없습니다.
+
+### 그 외 모든 모델
+
+캐싱은 **자동**입니다. 특별한 파라미터가 필요 없습니다. prompt가 약 1,024 토큰을 넘는지 확인하고, 일관된 라우팅을 위해 `prompt_cache_key`를 사용하기만 하면 됩니다.
+
+## 요청 파라미터
+
+| Parameter | Type | Models | Description |
+|-----------|------|--------|-------------|
+| `prompt_cache_key` | string | All | 캐시 친화도(affinity)를 위한 라우팅 힌트. 같은 키를 가진 요청은 캐시가 따뜻한 동일 서버에 도달할 가능성이 더 높습니다. |
+| `cache_control` | object | Claude | 캐싱할 콘텐츠 블록을 표시합니다. Claude Opus 4.5 섹션을 참고하세요. |
+
+### prompt_cache_key
+
+대화나 에이전트 워크플로에서는 일관된 `prompt_cache_key`를 사용해 캐시 적중률을 높입니다:
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "prompt_cache_key": "session-abc-123",
+  "messages": [...]
+}
+```
+
+이렇게 하면 사용자의 context가 이미 캐시된 서버로 요청이 라우팅될 가능성이 커집니다. 세션 ID, 대화 ID, 사용자 ID 등을 키로 사용하세요.
+
+## 응답 필드
+
+응답의 `usage` 객체는 캐시 통계를 포함합니다:
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 5500,
+    "completion_tokens": 200,
+    "total_tokens": 5700,
+    "prompt_tokens_details": {
+      "cached_tokens": 5000,
+      "cache_creation_input_tokens": 0
+    }
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `prompt_tokens` | 요청의 총 input 토큰 수 |
+| `prompt_tokens_details.cached_tokens` | 캐시에서 제공된 토큰 수(할인 요율로 과금) |
+| `prompt_tokens_details.cache_creation_input_tokens` | 캐시에 기록된 토큰 수(Claude의 경우 프리미엄 적용 가능) |
+
+**과금 분해**(Claude Opus 4.5 예시):
+- 5000 캐시된 토큰 × \$0.60/1M = \$0.003
+- 500 비캐시 토큰 × \$6.00/1M = \$0.003
+- 총: \$0.006(캐싱 없을 시 \$0.033 대비 82% 절감)
+
+## 모범 사례
+
+### 캐싱에 맞게 prompt를 구조화하세요
+
+정적 콘텐츠는 앞에, 동적 콘텐츠는 뒤에 배치하세요.
+
+**좋은 구조**
+
+| Position | Content | Cached? |
+|----------|---------|---------|
+| 1 | System 지침 | 예 |
+| 2 | 참조 문서 | 예 |
+| 3 | Few-shot 예시 | 예 |
+| 4 | 사용자 쿼리 | 아니오 |
+
+**나쁜 구조**
+
+| Position | Content | Cached? |
+|----------|---------|---------|
+| 1 | 현재 타임스탬프 | 아니오(이후 모든 것을 무효화) |
+| 2 | System 지침 | 아니오 |
+| 3 | 사용자 쿼리 | 아니오 |
+
+### Prefix를 바이트 단위로 동일하게 유지하세요
+
+캐시 키는 정확한 바이트 시퀀스로 계산됩니다. 사소한 차이도 캐시 적중을 깨뜨립니다:
+
+- 다른 공백이나 줄바꿈
+- prompt 안의 타임스탬프나 요청 ID
+- 무작위로 순서가 바뀐 few-shot 예시
+- 동일한 콘텐츠의 다른 포맷
+
+### 최소 토큰 임계값을 충족하세요
+
+prompt가 최소값(보통 1,024 토큰) 미만이면 캐싱이 활성화되지 않습니다. 작은 prompt의 경우 다음을 고려하세요:
+
+- 임계값을 충족할 만큼 context나 예시 추가
+- 여러 작은 요청을 묶어서 일괄 prompt로 처리
+- 단순 쿼리에는 캐싱이 적용되지 않음을 받아들이기
+
+### 대화에는 prompt_cache_key를 사용하세요
+
+계속되는 대화에는 일관된 `prompt_cache_key`를 설정하세요:
+
+```json
+// Turn 1
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Turn 2
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Turn 3
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+```
+
+이렇게 하면 모든 턴이 캐시가 따뜻한 동일 서버에 도달할 가능성이 높아집니다.
+
+### 캐시 성능을 모니터링하세요
+
+다음 지표를 추적하세요:
+- **캐시 적중률**: `cached_tokens / prompt_tokens`
+- **비용 절감**: 실제 비용 vs 캐시 없는 비용
+- **지연 시간 감소**: 캐시 적중 유무에 따른 첫 토큰까지의 시간
+
+`cached_tokens`가 지속적으로 0이라면:
+1. prompt가 최소 토큰 임계값 미만일 수 있음
+2. 요청 간 prompt가 바뀌고 있을 수 있음
+3. 요청이 다른 서버로 라우팅될 수 있음(`prompt_cache_key` 사용)
+4. 캐시가 만료되었을 수 있음(요청 간격이 너무 김)
+
+### 캐시 경제성을 고려하세요
+
+**Claude Opus 4.5 캐시 쓰기 프리미엄**: 첫 요청은 25% 더 비싸지만, 이후 읽기에서 90% 절감됩니다.
+
+| 시나리오 | 캐시 쓰기 프리미엄을 지불할 가치가 있나요? |
+|----------|-------------------------------|
+| 이 prompt로 1번 요청 | 아니오(25% 더 내고 이점 없음) |
+| 같은 prefix로 2회 이상 요청 | 예(2번째 요청에서 손익분기) |
+| 빠르게 변하는 prompt | 아니오(쓰기 비용이 계속 발생) |
+| 안정적인 system prompt, 다수의 쿼리 | 예(많은 읽기에 비용이 분산) |
+
+## 캐시 수명
+
+캐시는 일정 시간 동안 비활성이면 만료됩니다(보통 5~10분). 즉:
+
+| 트래픽 패턴 | 캐싱 효과 |
+|-----------------|-----------------|
+| 연속 요청(간격 < 5분) | 높음: 캐시가 따뜻하게 유지됨 |
+| 버스트 트래픽(간격 > 10분) | 제한적: 버스트 사이에 캐시 만료 |
+| 산발적 요청(몇 시간 간격) | 없음: 캐시가 항상 차가움 |
+
+## 도구(Tools) 및 함수(Functions)와의 캐싱
+
+함수 정의는 system prompt와 함께 캐시될 수 있습니다:
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search_database",
+        "description": "Search the product database",
+        "parameters": { ... }
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "You are a shopping assistant...",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    ...
+  ]
+}
+```
+
+도구 정의는 캐시된 prefix의 일부가 됩니다. 도구가 많다면 요청당 비용을 크게 줄일 수 있습니다.
+
+## 이미지 및 문서와의 캐싱
+
+비전 모델의 경우 이미지를 캐시된 콘텐츠에 포함시킬 수 있습니다:
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image_url",
+          "image_url": { "url": "data:image/png;base64,..." }
+        },
+        {
+          "type": "text",
+          "text": "This is the floor plan. I'll ask several questions about it.",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "I can see the floor plan. What would you like to know?"
+    },
+    {
+      "role": "user",
+      "content": "How many bedrooms are there?"
+    }
+  ]
+}
+```
+
+이미지와 초기 context가 캐시되므로, 같은 이미지에 대한 후속 질문에서는 재처리되지 않습니다.
+
+## 문제 해결
+
+<Accordion title="cached_tokens가 항상 0입니다">
+
+| 원인 | 해결 방법 |
+|-------|----------|
+| Prompt가 너무 짧음 | prompt가 약 1,024 토큰(Claude의 경우 4,000)을 넘는지 확인 |
+| Prefix가 변경됨 | prompt 시작 부분에 동적 콘텐츠가 있는지 확인 |
+| 첫 요청 | 정상 동작: 첫 요청은 캐시에 쓰고, 이후 요청은 캐시에서 읽음 |
+| 캐시 만료 | 요청 간격을 5분 이내로 줄이기 |
+| 다른 서버 | 요청을 일관되게 라우팅하도록 `prompt_cache_key` 추가 |
+
+</Accordion>
+
+<Accordion title="매 요청마다 cache_creation_input_tokens가 발생합니다">
+
+| 원인 | 해결 방법 |
+|-------|----------|
+| Prompt가 변경됨 | prefix에서 타임스탬프, 요청 ID 등 동적 콘텐츠 제거 |
+| cache_control 누락 | Claude의 경우 콘텐츠 블록에 `cache_control` 마커가 있는지 확인 |
+| 임계값 미달 | 최소 토큰 수 미만 prompt는 캐싱이 트리거되지 않음 |
+| 단일 사용자 메시지 | 첫 턴에서 정상. 대화가 쌓이면서 캐시가 커집니다. |
+
+</Accordion>
+
+<Accordion title="예상보다 비용이 높습니다">
+
+| 원인 | 해결 방법 |
+|-------|----------|
+| 캐시 쓰기 프리미엄 | Claude는 쓰기에 25% 추가. prompt를 재사용할 때만 가치 있음 |
+| 낮은 재사용률 | 매 prompt가 고유하다면 읽기 이점 없이 쓰기 비용만 부담 |
+| 잘못된 prompt 구조 | prefix가 안정적으로 유지되도록 동적 콘텐츠를 끝으로 이동 |
+
+</Accordion>
