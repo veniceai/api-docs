@@ -1,0 +1,321 @@
+---
+title: X402
+description: 지갑 인증을 사용해 API 키 없이 Venice에 접근하세요.
+"og:title": X402
+"og:description": 지갑 인증을 사용해 API 키 없이 Venice에 접근하세요.
+---
+
+X402를 사용하면 지갑으로 인증하고 선불 USDC 잔액을 유지하는 방식으로 Venice의 유료 API 라우트를 사용할 수 있습니다. API 키나 계정이 필요 없습니다. 메시지에 서명하고, Base 또는 Solana에서 충전한 다음, 지원되는 라우트를 호출하세요.
+
+<CardGroup cols={3}>
+  <Card title="지갑 인증" icon="wallet">
+    `X-Sign-In-With-X` 헤더에 서명된 Sign-In-With-X 페이로드로 인증합니다.
+  </Card>
+
+  <Card title="USDC 결제" icon="coins">
+    Base 또는 Solana의 USDC로 사용 가능한 잔액을 유지합니다.
+  </Card>
+
+  <Card title="DIEM 우선" icon="sparkles">
+    지갑이 DIEM 잔액이 있는 Venice 계정에 연결되어 있다면 DIEM을 먼저 소비합니다.
+  </Card>
+</CardGroup>
+
+## X402란 무엇인가요?
+
+[X402](https://www.x402.org/)는 애플리케이션과 에이전트가 암호화폐로 서비스에 프로그래밍 방식으로 결제할 수 있게 하는 오픈 결제 표준입니다. Venice는 X402를 구현해 지갑이 Base 또는 Solana의 USDC로 추론에 직접 인증하고 결제할 수 있게 합니다.
+
+## 사전 요구사항
+
+- Base 또는 Solana 지갑
+- 선택한 체인의 가스용 네이티브 토큰(예: Base의 ETH, Solana의 SOL)
+- 선택한 체인의 USDC(또는 연결된 Venice 계정에 있는 기존 DIEM 기반 잔액)
+
+<Tip>
+  메인 트레저리 지갑이 아니라 자동화 전용 지갑 사용을 고려하세요.
+</Tip>
+
+## 빠른 시작
+
+[`venice-x402-client`](https://github.com/veniceai/x402-client) SDK는 지갑 인증, 충전, 잔액 추적을 위한 헬퍼를 제공합니다.
+
+```bash
+npm install venice-x402-client
+```
+
+```typescript
+import { VeniceClient } from 'venice-x402-client'
+
+const venice = new VeniceClient(process.env.WALLET_KEY)
+
+await venice.topUp(10) // 지갑에 이미 사용 가능한 잔액이 있으면 생략
+
+const response = await venice.chat({
+  model: 'kimi-k2-5',
+  messages: [{ role: 'user', content: 'Hello!' }]
+})
+```
+
+클라이언트는 각 요청에 대해 새로운 `X-Sign-In-With-X` 헤더를 생성하고 `X-Balance-Remaining` 응답 헤더에서 잔액을 자동으로 추적합니다.
+
+### OpenAI 호환 도구와 함께 사용
+
+커스텀 `fetch`를 받는 도구를 사용한다면, `createAuthFetch`로 모든 요청에 지갑 인증을 추가하세요:
+
+```typescript
+import { createAuthFetch } from 'venice-x402-client'
+
+const authFetch = createAuthFetch(process.env.WALLET_KEY)
+```
+
+### 사용 가능한 헬퍼
+
+SDK는 가장 자주 쓰이는 Venice x402 라우트에 대한 일급 헬퍼를 포함합니다. 다루지 않는 것은 `request()`나 `createAuthFetch()`를 직접 사용하세요.
+
+| Category | Methods |
+| --- | --- |
+| Chat | `chat()`, `chatStream()` |
+| Responses | `responses.create()`, `responses.stream()` |
+| Images | `images.generate()`, `images.generations()`, `images.upscale()`, `images.edit()`, `images.multiEdit()`, `images.backgroundRemove()` |
+| Audio | `audio.speech()`, `audio.transcribe()`, `audio.queue()`, `audio.retrieve()`, `audio.complete()` |
+| Video | `video.queue()`, `video.retrieve()`, `video.generate()`, `video.complete()`, `video.transcribe()` |
+| Embeddings | `embeddings()` |
+| Models | `models()` |
+| Wallet | `getBalance()`, `getTransactions()`, `topUp()` |
+
+---
+
+## 수동 흐름
+
+SDK를 사용하지 않거나 기저 프로토콜을 이해해야 한다면 단계별 흐름은 다음과 같습니다. 새 지갑은 이미 사용 가능한 DIEM 잔액이 없다면 먼저 충전해야 한다고 가정하세요.
+
+### 1단계: X-Sign-In-With-X 헤더 생성
+
+Venice는 서명된 Sign-In-With-X 메시지를 담은 Base64 인코딩 JSON 페이로드를 기대합니다. EVM 지갑은 Base에서 EIP-4361 SIWE 메시지에 서명합니다. Solana 지갑은 Ed25519로 Solana SIWX 메시지에 서명합니다. 각 요청 흐름마다 새로운 nonce와 타임스탬프를 생성하세요.
+
+Solana의 경우 `chainId`를 `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`로 설정하고, 인코딩된 JSON 페이로드에 `type: "ed25519"`를 포함하며, Ed25519 서명을 base58 또는 base64로 제공하세요. 서명된 메시지는 `<domain> wants you to sign in with your Solana account:`로 시작하고, 그 뒤에 지갑 주소와 표준 `URI`, `Version`, `Chain ID`, `Nonce`, `Issued At`, 선택적 `Expiration Time` 필드가 옵니다.
+
+```typescript
+import { Wallet } from 'ethers'
+import { SiweMessage, generateNonce } from 'siwe'
+
+const wallet = new Wallet(process.env.EVM_PRIVATE_KEY)
+const now = new Date()
+const resourceUrl = 'https://api.venice.ai/api/v1/chat/completions'
+
+const siwe = new SiweMessage({
+  domain: 'api.venice.ai',
+  address: wallet.address,
+  statement: 'Sign in to Venice AI',
+  uri: resourceUrl,
+  version: '1',
+  chainId: 8453,
+  nonce: generateNonce(),
+  issuedAt: now.toISOString(),
+  expirationTime: new Date(now.getTime() + 5 * 60 * 1000).toISOString(),
+})
+
+const message = siwe.prepareMessage()
+const signature = await wallet.signMessage(message)
+
+const xSignInWithX = Buffer.from(
+  JSON.stringify({
+    address: wallet.address,
+    message,
+    signature,
+    timestamp: now.getTime(),
+    chainId: 8453,
+  }),
+  'utf8',
+).toString('base64')
+
+console.log(xSignInWithX)
+```
+
+### 2단계: 잔액 확인
+
+유료 요청을 하기 전에 지갑에 사용 가능한 잔액이 있는지 확인하세요:
+
+```bash
+export WALLET_ADDRESS=0xYOUR_WALLET_ADDRESS_OR_SOLANA_ADDRESS
+export X402_AUTH=YOUR_BASE64_SIWX_HEADER
+
+curl --request GET \
+  --url "https://api.venice.ai/api/v1/x402/balance/$WALLET_ADDRESS" \
+  --header "X-Sign-In-With-X: $X402_AUTH"
+```
+
+응답에 포함되는 내용:
+
+- `canConsume`: 지갑이 유료 요청을 할 수 있는지 여부
+- `balanceUsd`: 현재 사용 가능한 잔액
+- `minimumTopUpUsd` 및 `suggestedTopUpUsd`: 충전 가이드
+- `diemBalanceUsd`: DIEM 기반 잔액(있는 경우)
+
+`walletAddress` 경로 파라미터는 EVM 주소(`0x...`) 또는 Solana base58 주소를 모두 허용합니다.
+
+### 3단계: 충전
+
+Base 또는 Solana의 USDC로 충전하세요:
+
+```bash
+curl --request POST \
+  --url https://api.venice.ai/api/v1/x402/top-up
+```
+
+첫 호출은 `accepts` 배열을 담은 `PAYMENT-REQUIRED` 헤더와 함께 `402 Payment Required`를 반환합니다. 각 항목은 `network`, `asset`, `payTo`, `amount`를 포함해 허용되는 결제 옵션 하나를 설명합니다. 결제할 Base 또는 Solana 옵션을 선택하고, 그 정확한 세부 사항으로 `X-402-Payment` 헤더를 만들어 같은 라우트를 재시도하세요.
+
+#### Base용 X-402-Payment 헤더 작성
+
+다음 스크립트는 Base에서 서명된 x402 결제를 생성해 충전 요청을 보냅니다. `x402`와 `viem` npm 패키지가 필요합니다.
+
+```bash
+export EVM_PRIVATE_KEY=0xYOUR_PRIVATE_KEY
+```
+
+```bash
+export X402_PAYMENT="$(
+node --input-type=module <<'EOF'
+import { createPaymentHeader } from "x402/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const signer = privateKeyToAccount(process.env.EVM_PRIVATE_KEY);
+const amountUsd = 5;
+const amountBaseUnits = String(Math.round(amountUsd * 1e6));
+
+const header = await createPaymentHeader(signer, 2, {
+  scheme: "exact",
+  network: "base",
+  maxAmountRequired: amountBaseUnits,
+  resource: "https://api.venice.ai/api/v1/x402/top-up",
+  description: "Venice x402 top-up",
+  mimeType: "application/json",
+  payTo: "0x2670B922ef37C7Df47158725C0CC407b5382293F",
+  maxTimeoutSeconds: 300,
+  asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  extra: { name: "USD Coin", version: "2" },
+});
+
+process.stdout.write(header);
+EOF
+)"
+
+curl -X POST "https://api.venice.ai/api/v1/x402/top-up" \
+  -H "X-402-Payment: $X402_PAYMENT"
+```
+
+<Note>
+  프로덕션에서는 이 값들을 하드코딩하지 말고 최신 `PAYMENT-REQUIRED` / `accepts` 응답을 신뢰의 원천으로 사용하세요. Solana 충전의 경우 `accepts`에 반환된 Solana 항목에서 결제를 빌드하세요. Solana 항목은 `network: "solana"`, USDC 민트를 `asset`으로 사용하고, `extra.feePayer` 같은 네트워크 고유 메타데이터를 포함할 수 있습니다.
+</Note>
+
+### 4단계: 요청 보내기
+
+지갑에 사용 가능한 잔액이 있으면, 지원되는 endpoint를 `X-Sign-In-With-X` 헤더와 함께 호출하세요:
+
+```bash
+export X402_AUTH=YOUR_BASE64_SIWX_HEADER
+
+curl --request POST \
+  --url https://api.venice.ai/api/v1/chat/completions \
+  --header "Content-Type: application/json" \
+  --header "X-Sign-In-With-X: $X402_AUTH" \
+  --data '{
+    "model": "kimi-k2-5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello from an x402-authenticated wallet."
+      }
+    ]
+  }'
+```
+
+성공 응답에는 `X-Balance-Remaining` 헤더가 포함될 수 있습니다.
+
+### 5단계: 트랜잭션 확인(선택)
+
+지갑의 트랜잭션 이력을 확인하세요:
+
+```bash
+export WALLET_ADDRESS=0xYOUR_WALLET_ADDRESS_OR_SOLANA_ADDRESS
+export X402_AUTH=YOUR_BASE64_SIWX_HEADER
+
+curl --request GET \
+  --url "https://api.venice.ai/api/v1/x402/transactions/$WALLET_ADDRESS?limit=10&offset=0" \
+  --header "X-Sign-In-With-X: $X402_AUTH"
+```
+
+원장에는 `TOP_UP`, `CHARGE`, `REFUND` 같은 항목이 포함됩니다.
+
+`walletAddress` 경로 파라미터는 EVM 주소(`0x...`) 또는 Solana base58 주소를 모두 허용합니다.
+
+---
+
+## 지원 라우트
+
+### 유료 추론 라우트
+
+다음의 공개 유료 Venice 라우트들이 현재 x402 지갑 인증을 지원합니다.
+
+| Category | Endpoints |
+| --- | --- |
+| Chat | `POST /api/v1/chat/completions`, `POST /api/v1/responses` |
+| Image | `POST /api/v1/image/generate`, `POST /api/v1/images/generations`, `POST /api/v1/image/upscale`, `POST /api/v1/image/edit`, `POST /api/v1/image/multi-edit`, `POST /api/v1/image/background-remove` |
+| Embeddings | `POST /api/v1/embeddings` |
+| Audio | `POST /api/v1/audio/speech`, `POST /api/v1/audio/transcriptions`, `POST /api/v1/audio/complete`, `POST /api/v1/audio/queue`, `POST /api/v1/audio/retrieve` |
+| Video | `POST /api/v1/video/complete`, `POST /api/v1/video/queue`, `POST /api/v1/video/retrieve`, `POST /api/v1/video/transcriptions` |
+
+### 충전 라우트
+
+| Endpoint | Auth | Purpose |
+| --- | --- | --- |
+| `POST /api/v1/x402/top-up` | 첫 요청: 없음. 재시도: `X-402-Payment` | 허용된 Base 또는 Solana 결제 옵션으로 지갑의 사용 가능한 잔액에 USDC 크레딧 추가 |
+
+### 지갑 전용 라우트
+
+이 라우트는 신원 확인에 `X-Sign-In-With-X`를 사용하지만 잔액을 차감하지 않습니다.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/x402/balance/{walletAddress}` | EVM 또는 Solana 지갑 주소의 사용 가능한 잔액 확인 |
+| `GET /api/v1/x402/transactions/{walletAddress}` | EVM 또는 Solana 지갑 주소의 트랜잭션 이력 조회 |
+
+---
+
+## 에러
+
+| Status | Likely cause | What to do |
+| --- | --- | --- |
+| `401` | 잘못되거나 만료된 Sign-In-With-X 페이로드 | 새로운 nonce와 타임스탬프로 `X-Sign-In-With-X`를 재빌드 |
+| 유료 라우트의 `402` | 사용 가능한 잔액 부족 | 충전 후 재시도 |
+| `/x402/top-up`의 `402` | 예상된 동작. 결제 개시 흐름. | 반환된 결제 세부 사항으로 `X-402-Payment`를 빌드해 재시도 |
+| 잔액/트랜잭션에서 `403` | 지갑 불일치 | 인증된 지갑이 `walletAddress` 경로 파라미터와 일치하는지 확인 |
+| 충전에서 `400` | 잘못된 결제 헤더 | 최신 `402` 응답에서 다시 빌드 |
+
+---
+
+## 에이전트용
+
+흐름은 동일합니다. private key는 환경 변수나 시크릿 매니저에 저장하고, 불필요한 `402` 왕복을 피하기 위해 요청 전에 잔액을 확인하세요.
+
+---
+
+## 관련 리소스
+
+<CardGroup cols={2}>
+  <Card title="x402 클라이언트 SDK" icon="npm" href="https://github.com/veniceai/x402-client">
+    Node.js/TypeScript용 공식 Venice x402 클라이언트.
+  </Card>
+
+  <Card title="API 가격" icon="coins" href="/overview/pricing">
+    모델 가격과 Venice의 사용량 과금 방식을 확인하세요.
+  </Card>
+
+  <Card title="Chat Completions" icon="message" href="/api-reference/endpoint/chat/completions">
+    지갑 기반 접근에 흔히 쓰이는 유료 라우트.
+  </Card>
+
+  <Card title="API 스펙" icon="code" href="/api-reference/api-spec">
+    레퍼런스 문서와 raw 스펙 접근.
+  </Card>
+</CardGroup>

@@ -1,0 +1,278 @@
+---
+title: "이미지 편집"
+description: "Venice의 동기 이미지 API로 이미지를 편집하고, inpainting하고, 합성하고, 배경을 제거하세요"
+'og:title': "Image Editing | Venice API Docs"
+'og:description': "prompt 기반 inpainting, 레이어드 multi-edit input, 배경 제거를 활용해 Venice로 이미지를 편집하는 방법을 알아보세요."
+---
+
+Venice의 이미지 편집은 동기 방식입니다. 원본 이미지를 `/image/edit` 또는 `/image/multi-edit`로 보내면 편집된 결과가 같은 응답에 PNG 파일로 돌아옵니다. 누끼 작업에는 `/image/background-remove`가 투명한 PNG를 반환합니다.
+
+<Warning>
+이미지 편집 endpoint는 실험적이며 모델별 동작은 시간이 지남에 따라 변경될 수 있습니다.
+</Warning>
+
+## Endpoint
+
+| Endpoint | Purpose | Best for |
+|---|---|---|
+| `POST /image/edit` | prompt로 단일 이미지 편집 | 일반 편집과 prompt 기반 inpainting |
+| `POST /image/multi-edit` | 1-3장의 레이어드 이미지로 편집 | 마스크나 오버레이가 있는 더 제어된 편집 |
+| `POST /image/background-remove` | 이미지에서 배경 제거 | 제품, 인물, 자산을 위한 투명 컷아웃 |
+
+## 어떤 endpoint를 언제 사용하나요
+
+- 원본 이미지가 하나이고 prompt로 일부를 변경, 제거, 재스타일링하고 싶다면 `/image/edit`를 사용하세요.
+- 마스크, 오버레이, 참조 레이어를 통한 추가 제어가 필요하면 `/image/multi-edit`를 사용하세요.
+- 깔끔한 전경 피사체와 투명도만 원한다면 `/image/background-remove`를 사용하세요.
+
+<Note>
+Inpainting에는 `/image/edit` 또는 `/image/multi-edit`를 사용하세요. `/image/generate`의 기존 `inpaint` 파라미터는 deprecated입니다.
+</Note>
+
+## 1단계: 단일 이미지 편집
+
+단일 이미지 편집은 가장 단순한 inpainting 흐름입니다. 이미지 한 장과 "remove the sign", "change the sky to sunrise", "replace the background with a studio backdrop" 같은 짧은 prompt를 함께 보내세요.
+
+**요청:**
+```bash
+POST https://api.venice.ai/api/v1/image/edit
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "qwen-edit",
+  "prompt": "Replace the cloudy sky with a warm sunrise while preserving the buildings and canal",
+  "image": "https://example.com/venice-canal.jpg"
+}
+```
+
+**응답(200):**
+응답 본문은 raw `image/png` 바이너리 데이터입니다. 그대로 파일에 저장하세요.
+
+<CodeGroup>
+```python Python
+import base64
+import os
+import requests
+
+with open("input.jpg", "rb") as f:
+    image_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+response = requests.post(
+    "https://api.venice.ai/api/v1/image/edit",
+    headers={
+        "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "model": "qwen-edit",
+        "prompt": "Remove the tourist crowd from the square and keep the architecture intact",
+        "image": image_base64,
+    },
+)
+
+with open("edited.png", "wb") as f:
+    f.write(response.content)
+```
+
+```javascript Node.js
+import fs from "fs";
+
+const imageBase64 = fs.readFileSync("input.jpg").toString("base64");
+
+const response = await fetch("https://api.venice.ai/api/v1/image/edit", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    model: "qwen-edit",
+    prompt: "Remove the tourist crowd from the square and keep the architecture intact",
+    image: imageBase64,
+  }),
+});
+
+const editedImage = Buffer.from(await response.arrayBuffer());
+fs.writeFileSync("edited.png", editedImage);
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/image/edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -o edited.png \
+  -d '{
+    "model": "qwen-edit",
+    "prompt": "Colorize this black and white portrait naturally",
+    "image": "https://example.com/portrait-bw.jpg"
+  }'
+```
+</CodeGroup>
+
+## 2단계: 마스크나 레이어드 inpainting에는 multi-edit 사용
+
+`/image/multi-edit`는 최대 세 장의 이미지를 받습니다. 첫 번째 이미지가 base 이미지입니다. 나머지 이미지는 편집 레이어나 마스크로 취급되어, prompt만으로 편집하는 것보다 더 많은 제어권을 줍니다.
+
+다음과 같은 경우에 더 나은 선택입니다:
+
+- 특정 영역을 마스크로 타겟팅하고 싶을 때
+- 기존 구도에 오버레이를 결합하고 싶을 때
+- 단일 이미지 prompt가 할 수 있는 것보다 더 엄격하게 편집을 제약하고 싶을 때
+
+**JSON 요청:**
+```json
+{
+  "modelId": "qwen-edit",
+  "prompt": "Replace the blank billboard area with a glowing Venice film festival poster while preserving lighting and perspective",
+  "images": [
+    "https://example.com/street-scene.png",
+    "https://example.com/billboard-mask.png"
+  ]
+}
+```
+
+**Multipart 요청:**
+```bash
+curl https://api.venice.ai/api/v1/image/multi-edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "modelId=qwen-edit" \
+  -F "prompt=Replace the blank billboard area with a glowing Venice film festival poster while preserving lighting and perspective" \
+  -F "images=@street-scene.png" \
+  -F "images=@billboard-mask.png" \
+  -o multi-edited.png
+```
+
+`/image/edit`와 마찬가지로 응답 본문은 raw `image/png` 데이터입니다.
+
+<Note>
+`/image/multi-edit`는 현재 요청 스키마에서 `model`이 아닌 `modelId` 필드를 사용합니다.
+</Note>
+
+---
+
+## Inpainting 팁
+
+Prompt 기반 inpainting은 지시가 짧고 국소적일 때 가장 잘 동작합니다:
+
+- `remove the tree`
+- `change the sky to sunset`
+- `replace the logo with a blank sign`
+- `restore the torn corner of the photo`
+
+더 넓은 장면 변경의 경우, 유지되어야 할 부분을 함께 설명하세요:
+
+```text
+Replace the background with a modern photo studio backdrop while preserving the subject pose, facial features, and clothing.
+```
+
+편집이 계속 잘못된 영역에 영향을 준다면 `/image/edit`에서 `/image/multi-edit`로 전환해 마스크나 오버레이 레이어를 제공하세요.
+
+---
+
+## 3단계: 배경 제거
+
+전경 피사체를 투명 배경에 격리하고 싶다면 `/image/background-remove`를 사용하세요. 이 endpoint는 알파 투명도가 있는 PNG를 반환합니다.
+
+**이미지 URL 사용:**
+```bash
+curl https://api.venice.ai/api/v1/image/background-remove \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -o cutout.png \
+  -d '{
+    "image_url": "https://example.com/product-photo.jpg"
+  }'
+```
+
+**로컬 파일 업로드 사용:**
+```bash
+curl https://api.venice.ai/api/v1/image/background-remove \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "image=@product-photo.jpg" \
+  -o cutout.png
+```
+
+배경 제거의 활용처:
+
+- 이커머스 제품 사진
+- 프로필 사진 및 인물 사진
+- 새 배경 위에 배치할 자산
+
+---
+
+## 요청 파라미터
+
+### `/image/edit`
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `image` | 파일, base64 문자열, 또는 URL | 예 | - | 편집할 원본 이미지 |
+| `prompt` | string | 예 | - | 편집을 위한 텍스트 지시 |
+| `model` | string | 아니오 | `qwen-edit` | 편집 모델 ID |
+| `aspect_ratio` | string | 아니오 | 모델 기본값 | 지원 모델의 출력 비율 |
+| `modelId` | string | Deprecated | - | `model`의 deprecated 별칭 |
+
+### `/image/multi-edit`
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `images` | 1-3개의 파일, base64 문자열, 또는 URL 배열 | 예 | - | 첫 이미지는 base 이미지, 나머지는 편집 레이어나 마스크 |
+| `prompt` | string | 예 | - | 레이어를 결합하거나 편집하는 방법에 대한 텍스트 지시 |
+| `modelId` | string | 아니오 | `qwen-edit` | 편집 모델 ID |
+
+### `/image/background-remove`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `image` | 파일 또는 base64 문자열 | `image`나 `image_url` 중 하나 | 잘라낼 원본 이미지 |
+| `image_url` | string | `image`나 `image_url` 중 하나 | 잘라낼 공개 이미지 URL |
+
+---
+
+## 지원 input 포맷
+
+| Endpoint | JSON input | Multipart input | Output |
+|---|---|---|---|
+| `/image/edit` | Base64 문자열 또는 URL | 파일 업로드 | `image/png` |
+| `/image/multi-edit` | Base64 문자열 또는 URL | 파일 업로드 | `image/png` |
+| `/image/background-remove` | Base64 문자열 또는 URL | 파일 업로드 | `image/png` |
+
+편집 endpoint의 경우 이미지 크기는 최소 `65536` 픽셀, 최대 `33177600` 픽셀이어야 합니다. 업로드 파일은 `25MB` 미만이어야 합니다.
+
+---
+
+## 모델 및 가격
+
+기본 편집 모델은 `qwen-edit`이며 **편집당 $0.04** 입니다. 편집 가능한 다른 모델은 가격과 제약이 다를 수 있습니다.
+
+참고:
+
+- [이미지 가격](/overview/pricing)
+- `type=inpaint`로 [Models API](/api-reference/endpoint/models/list)
+
+---
+
+## 에러
+
+| Status | Meaning | Action |
+|---|---|---|
+| `400` | 잘못된 요청 파라미터 | 이미지 수, 필드 이름, 입력 포맷 확인 |
+| `401` | 인증 실패 | API 키 확인 |
+| `402` | 잔액 부족 | [venice.ai/settings/api](https://venice.ai/settings/api)에서 크레딧 추가 |
+| `415` | 잘못된 content type | JSON 또는 multipart form-data를 올바르게 사용 |
+| `429` | Rate limit 초과 또는 모델 과부하 | 백오프와 함께 재시도, `Retry-After` 헤더 확인 |
+| `500` | 추론 처리 실패 | 요청 재시도 |
+| `503` | 모델 용량 초과 | 잠시 후 재시도 |
+
+<Note>
+일부 편집 모델은 이미지 생성 모델보다 엄격한 콘텐츠 정책을 가집니다. 예를 들어 `qwen-edit`는 노골적 성적 이미지, 미성년자 성적 묘사, 실제 폭력과 관련된 요청을 차단합니다.
+</Note>
+
+---
+
+## 관련 워크플로
+
+- 기존 이미지가 아닌 텍스트에서 시작한다면 [이미지 생성](/guides/media/image-generation)을 사용하세요.
+- 생성, 편집, 향상 모델 패밀리를 비교하려면 [이미지 모델](/models/image)을 참고하세요.
+- 전체 스키마는 [Image Edit API](/api-reference/endpoint/image/edit), [Multi-Edit API](/api-reference/endpoint/image/multi-edit), [Background Remove API](/api-reference/endpoint/image/background-remove)를 참고하세요.
