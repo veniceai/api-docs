@@ -1,0 +1,468 @@
+---
+title: "Einen privaten RAG-Bot bauen"
+slug: private-rag-bot-venice-qdrant-reranking
+"og:title": "Einen privaten RAG-Bot mit Venice, Qdrant und Re-Ranking bauen"
+"og:description": "Eine praktische Anleitung zum Bau eines modernen privaten RAG-Bots mit Venice-Embeddings, Qdrant-Vektorsuche, FastEmbed-Re-Ranking und Venice-Chat-Completions."
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="29 April 2026"/>
+
+Retrieval-Augmented Generation, kurz RAG, ist eines der nützlichsten Muster für KI-Anwendungen, die Antworten aus eigenen Dokumenten geben sollen. Statt das Modell allein aus dem Gedächtnis antworten zu lassen, holst du zuerst relevantes Quellmaterial, schickst diesen Kontext an das Modell und lässt es mit Quellenangaben antworten.
+
+In diesem Tutorial bauen wir einen privaten RAG-Bot mit Python, Venice für Embeddings und Chat-Completions, Qdrant für die Vektorsuche und FastEmbed für lokales Re-Ranking. Am Ende hast du die Kernbausteine für einen lokalen Dokumentenassistenten, der deine Dateien einlesen, relevante Chunks abrufen, neu ranken und mit Quellenangaben antworten kann.
+
+![Der RAG-Bot in Aktion](/images/guides/private-rag-bot/screenshot.png)
+
+Bevor wir loslegen: Wenn du den Code aus diesem Artikel laufen lassen willst, brauchst du einen Venice-API-Schlüssel. Exportiere ihn als Umgebungsvariable:
+
+```bash
+export VENICE_API_KEY=<my-key>
+```
+
+Interesse an der vollständigen Implementierung? Schau in das [GitHub-Repo](https://github.com/joshua-mo-143/venice-rag-bot-demo).
+
+## Wie ein moderner RAG-Bot funktioniert
+
+Eine gute RAG-Pipeline ist mehr als „Dokumente in eine Vektordatenbank stecken". Der grundlegende Flow sieht so aus:
+
+| Schritt | Was passiert |
+| --- | --- |
+| Laden | Lokale Markdown-, Text- oder reStructuredText-Dateien lesen |
+| Chunken | Lange Dokumente in überlappende Abschnitte splitten |
+| Embedden | Mit Venice-Embeddings Chunks in Vektoren umwandeln |
+| Speichern | Vektoren und Quell-Metadaten in Qdrant ablegen |
+| Abrufen | Frage des Nutzers embedden und Vektorsuche ausführen |
+| Re-Ranken | Mit einem Cross-Encoder die besten Kandidaten neu bewerten |
+| Antworten | Besten Kontext an ein Venice-Chat-Modell schicken, mit Zitations-Anweisungen |
+
+Der Re-Ranking-Schritt ist das Upgrade, das das Ganze deutlich nützlicher macht als eine einfache RAG-Demo. Die Vektorsuche ist schnell und findet semantisch ähnliche Chunks gut, kann aber Passagen liefern, die nur thema-nah, aber nicht direkt nützlich sind. Ein Cross-Encoder liest die Frage und jeden Kandidaten-Chunk zusammen und bewertet, wie gut der Chunk die Frage tatsächlich beantwortet.
+
+## Abhängigkeiten installieren
+
+Wir verwenden das OpenAI-Python-SDK, weil Venice eine OpenAI-kompatible API bereitstellt. Dazu nehmen wir Qdrants Python-Client mit FastEmbed-Support:
+
+```bash
+pip install "openai>=1.0.0" "qdrant-client[fastembed]>=1.14.1"
+```
+
+Wenn du Abhängigkeiten lieber in einer Datei pflegst, lege `requirements.txt` mit denselben Paketen an:
+
+```text
+openai>=1.0.0
+qdrant-client[fastembed]>=1.14.1
+```
+
+## Modelle auswählen
+
+Erstelle eine Datei `rag_bot.py` und beginne mit Imports, Datenstrukturen, API-URL und Modellnamen:
+
+```python
+import os
+import textwrap
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+from fastembed.rerank.cross_encoder import TextCrossEncoder
+from openai import OpenAI
+from qdrant_client import QdrantClient, models
+
+VENICE_BASE_URL = "https://api.venice.ai/api/v1"
+CHAT_MODEL = "kimi-k2-6"
+EMBEDDING_MODEL = "text-embedding-bge-m3"
+RERANKER_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
+COLLECTION_NAME = "private_rag_bot"
+
+
+@dataclass
+class SourceDocument:
+    content: str
+    metadata: dict
+
+
+@dataclass
+class RankedChunk:
+    content: str
+    metadata: dict
+    vector_score: float
+    rerank_score: float
+```
+
+Der Name des Embedding-Modells ist bewusst OpenAI-kompatibel. Venice mappt kompatible Embedding-Modellnamen auf Venice-gehostete Embedding-Modelle, sodass bestehender OpenAI-SDK-Code in der Regel durch Änderung von `base_url` und API-Schlüssel umziehen kann.
+
+Verfügbare Venice-Modelle kannst du so auflisten:
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=embedding" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+Für Chat-Modelle:
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=text" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+## Venice- und Qdrant-Clients erzeugen
+
+Erstelle einen OpenAI-kompatiblen Venice-Client für Embeddings und Chat-Completions:
+
+```python
+venice = OpenAI(
+    api_key=os.environ["VENICE_API_KEY"],
+    base_url=VENICE_BASE_URL,
+)
+```
+
+Für Qdrant hast du drei sinnvolle Modi:
+
+| Modus | Wann zu verwenden |
+| --- | --- |
+| `QdrantClient(":memory:")` | Schnelle lokale Demos und Tests |
+| `QdrantClient(path="./qdrant_data")` | Lokal persistierter Speicher |
+| `QdrantClient(url=..., api_key=...)` | Ein remoter oder managed Qdrant-Cluster |
+
+Für einen privaten lokalen Bot empfiehlt sich ein persistierter lokaler Pfad:
+
+```python
+qdrant = QdrantClient(path="./qdrant_data")
+```
+
+Für Produktion gibt es verschiedene Deployment-Optionen. Wenn du jedoch ein remotes Qdrant-Deployment nutzt, denke daran, dass dort deine Dokument-Chunks und Metadaten gespeichert werden. Venice kann die Inferenzschicht privat halten, aber du solltest dennoch ein passendes Qdrant-Deployment für deine Daten wählen.
+
+## Dokumente laden und chunken
+
+Für dieses Tutorial soll der Bot lokale Dateien oder Ordner einlesen. Starten wir mit `.md`-, `.rst`- und `.txt`-Dateien:
+
+```python
+TEXT_EXTENSIONS = {".md", ".rst", ".txt"}
+
+def expand_paths(paths: list[Path]) -> list[Path]:
+    files = []
+    for path in paths:
+        if path.is_dir():
+            files.extend(
+                sorted(
+                    file_path
+                    for file_path in path.rglob("*")
+                    if file_path.is_file()
+                    and file_path.suffix.lower() in TEXT_EXTENSIONS
+                )
+            )
+        elif path.is_file():
+            files.append(path)
+        else:
+            raise FileNotFoundError(f"Document path does not exist: {path}")
+    return files
+```
+
+Sobald die Dateien geladen sind, müssen wir den Text per „Chunking" splitten – also in Datenstücke aufteilen. Eine naive Strategie würde gleichmäßig splitten. Das verliert allerdings oft Information an semantischen Grenzen und kann die Effektivität deines RAG-Systems senken.
+
+Unsere Chunking-Strategie bevorzugt Absatz- oder Satzgrenzen, damit das Modell kohärenten Kontext bekommt:
+
+```python
+def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
+    clean_text = textwrap.dedent(text).strip()
+    if not clean_text:
+        return []
+    if len(clean_text) <= chunk_size:
+        return [clean_text]
+
+    chunks = []
+    start = 0
+    while start < len(clean_text):
+        end = min(start + chunk_size, len(clean_text))
+
+        if end < len(clean_text):
+            paragraph_break = clean_text.rfind("\n\n", start, end)
+            sentence_break = clean_text.rfind(". ", start, end)
+            split_at = max(paragraph_break, sentence_break)
+            if split_at > start + chunk_size // 2:
+                end = split_at + 1
+
+        chunk = clean_text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        if end >= len(clean_text):
+            break
+
+        start = max(end - chunk_overlap, start + 1)
+
+    return chunks
+```
+
+Eine Chunk-Größe von `1000` Zeichen mit `150` Zeichen Überlappung ist ein guter Default für gemischte Markdown- und Textdokumente. Kleinere Chunks können die Präzision erhöhen. Größere Chunks bewahren mehr Kontext. Die richtige Einstellung hängt oft von der Art deiner Dokumente ab.
+
+## Dokumente mit Venice embedden
+
+Sobald wir Chunks haben, embedden wir sie in Batches:
+
+```python
+def embed(texts: list[str]) -> list[list[float]]:
+    embeddings = []
+    for start in range(0, len(texts), 32):
+        batch = texts[start : start + 32]
+        response = venice.embeddings.create(
+            model="text-embedding-bge-m3",
+            input=batch,
+        )
+        embeddings.extend(
+            item.embedding
+            for item in sorted(response.data, key=lambda item: item.index)
+        )
+    return embeddings
+```
+
+Batching ist wichtig. Einzeln pro Chunk zu embedden ist einfach, aber bringt vermeidbare Latenz. Halte die Batch-Größe konfigurierbar, um den Durchsatz an dein Workload anzupassen.
+
+## Vektoren in Qdrant speichern
+
+Bevor du Punkte einfügst, erstelle eine Qdrant-Collection mit der richtigen Vektorgröße. Die Vektorgröße erfährst du am einfachsten, indem du den ersten Batch embeddest und `len(embeddings[0])` nutzt.
+
+```python
+qdrant.create_collection(
+    collection_name=COLLECTION_NAME,
+    vectors_config=models.VectorParams(
+        size=len(embeddings[0]),
+        distance=models.Distance.COSINE,
+    ),
+)
+```
+
+Jeder Point speichert den Vektor plus Payload-Metadaten. Das Payload enthält den Originaltext und einen Quellpfad, damit die Antwort zitieren kann, woher der Kontext kommt:
+
+```python
+points.append(
+    models.PointStruct(
+        id=chunk_id,
+        vector=embedding,
+        payload={
+            "text": chunk.content,
+            "source": source,
+            "chunk_index": chunk_index,
+        },
+    )
+)
+
+qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
+```
+
+Verwende deterministische UUIDs, abgeleitet aus `source`, `chunk_index` und Inhalt. So wird wiederholtes Ingesting für unveränderte Chunks idempotent.
+
+## Kandidaten-Chunks abrufen
+
+Zur Fragezeit embeddet der Bot die Nutzerfrage und fragt Qdrant nach den besten Vektortreffern:
+
+```python
+query_vector = embed([question])[0]
+hits = qdrant.query_points(
+    collection_name=COLLECTION_NAME,
+    query=query_vector,
+    with_payload=True,
+    limit=8,
+).points
+```
+
+`limit` ist hier die Kandidatenzahl. Sie sollte normalerweise höher sein als die Anzahl der Chunks, die du ans Modell schickst, weil der nächste Schritt sie neu rankt. Ein guter Default ist, `8` Kandidaten abzurufen und die besten `4` ans Chat-Modell zu senden.
+
+## Re-Ranking mit FastEmbed
+
+Jetzt fügen wir den Teil hinzu, der das Retrieval deutlich schlauer wirken lässt.
+
+```python
+from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+reranker = TextCrossEncoder(model_name="Xenova/ms-marco-MiniLM-L-6-v2")
+
+candidate_texts = [str((hit.payload or {}).get("text", "")) for hit in hits]
+rerank_scores = list(reranker.rerank(question, candidate_texts))
+reranked = sorted(
+    zip(hits, rerank_scores),
+    key=lambda hit_and_score: hit_and_score[1],
+    reverse=True,
+)
+```
+
+Der wichtige Unterschied zwischen Embedding-Suche und Cross-Encoder-Re-Ranking liegt in der Bewertung.
+
+Die Embedding-Suche vergleicht einen Vektor für die Frage mit je einem Vektor pro Chunk. Sie ist schnell und skalierbar. Ein Cross-Encoder bewertet Frage und Chunk zusammen. Er ist langsamer, kann Relevanz aber direkter beurteilen.
+
+Deshalb ist das übliche Muster:
+
+1. Mit Vektorsuche eine größere Kandidatenmenge abrufen.
+2. Nur diese Kandidaten lokal neu ranken.
+3. Die obersten Chunks an das Sprachmodell senden.
+
+Ein guter Startpunkt ist `candidate_k=8` und `top_k=4`. Erhöhe `candidate_k`, wenn die richtige Quelle oft in der Nähe ist, aber nicht in den finalen Kontext kommt.
+
+## Antworten mit Venice-Chat-Completions
+
+Sobald der Kontext gewählt ist, formatiere ihn mit Quellnummern:
+
+```python
+def format_context(chunks: list[RankedChunk]) -> str:
+    if not chunks:
+        return "No relevant context was retrieved."
+
+    context_parts = []
+    for index, chunk in enumerate(chunks, start=1):
+        source = chunk.metadata.get("source", "unknown")
+        context_parts.append(
+            f"[{index}] Source: {source} | "
+            f"Vector score: {chunk.vector_score:.4f} | "
+            f"Rerank score: {chunk.rerank_score:.4f}\n"
+            f"{chunk.content}"
+        )
+    return "\n\n---\n\n".join(context_parts)
+```
+
+Dann schick den Kontext an ein Venice-Chat-Modell:
+
+```python
+response = venice.chat.completions.create(
+    model="kimi-k2-6",
+    temperature=0.2,
+    messages=[
+        {
+            "role": "system",
+            "content": (
+                "You are a helpful RAG assistant. Answer using only the supplied "
+                "context. If the context does not answer the question, say that "
+                "you do not have enough information."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Retrieved context:\n{context}\n\n"
+                f"Question: {question}\n\n"
+                "Answer with citations like [1] when the context supports the answer:"
+            ),
+        },
+    ],
+)
+```
+
+Beachte den System-Prompt: Der Bot wird angewiesen, nur aus dem mitgelieferten Kontext zu antworten. Das ist eine einfache, aber wichtige Leitplanke. Ein RAG-Assistent sollte nicht selbstbewusst aus allgemeinem Modellwissen antworten, wenn die abgerufenen Dokumente das nicht stützen.
+
+## Den Bot ausführen
+
+Wenn du die Teile zu einem Skript zusammenbaust, speichere es als `rag_bot.py`. Ein einfacher erster Lauf kann ein paar eingebaute Beispieldokumente verwenden, damit du die Pipeline prüfen kannst, bevor du eigene Dateien einliest:
+
+```bash
+python rag_bot.py \
+  --question "What does reranking improve in a RAG pipeline?"
+```
+
+Eigene Dokumente einlesen:
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --question "What does this project do?"
+```
+
+Lokale Qdrant-Collection auf Disk halten und einen interaktiven Chat starten:
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --qdrant-path ./qdrant_data \
+  --chat
+```
+
+Das Skript gibt die Antwort aus und danach die Quellen mit Vektor- und Re-Ranking-Scores:
+
+```text
+Answer
+============================================================
+Reranking improves retrieval quality by rescoring the top
+vector-search candidates with a cross-encoder model [1].
+
+Sources
+============================================================
+1. sample-docs (vector=0.8123, rerank=0.7342)
+```
+
+Wenn du den tatsächlich an das Modell übergebenen Text inspizieren willst, ergänze:
+
+```bash
+--show-context
+```
+
+## Nützliche CLI-Optionen
+
+Mach die wichtigsten Retrieval-Stellschrauben als CLI-Optionen verfügbar, damit du den Bot ohne Code-Änderungen tunen kannst:
+
+| Option | Default | Was sie steuert |
+| --- | --- | --- |
+| `--candidate-k` | `8` | Anzahl der Vektorsuch-Ergebnisse, die neu gerankt werden |
+| `--top-k` | `4` | Anzahl der neu gerankten Chunks, die an das Chat-Modell gehen |
+| `--chunk-size` | `1000` | Maximale Chunk-Größe vor Überlappung |
+| `--chunk-overlap` | `150` | Zwischen benachbarten Chunks wiederholte Zeichen |
+| `--embedding-batch-size` | `32` | Anzahl der Chunks pro Venice-Embedding-Request |
+| `--qdrant-path` | nicht gesetzt | Lokaler persistenter Qdrant-Speicherpfad |
+| `--qdrant-url` | nicht gesetzt | Remote-Qdrant-URL |
+| `--skip-ingest` | `false` | Bestehende Collection abfragen, ohne Dokumente neu zu laden |
+| `--recreate-collection` | `false` | Qdrant-Collection löschen und neu aufbauen |
+
+Für wiederholte lokale Entwicklung ist ein üblicher Flow:
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --qdrant-path ./qdrant_data \
+  --recreate-collection \
+  --question "Summarize the most important setup steps."
+```
+
+Anschließend Folgefragen stellen, ohne erneut zu ingesten:
+
+```bash
+python rag_bot.py \
+  --qdrant-path ./qdrant_data \
+  --skip-ingest \
+  --question "Which file explains deployment?"
+```
+
+## Privacy-Hinweise
+
+Für ein privates RAG-Setup betrachte jede Schicht einzeln:
+
+| Schicht | Privacy-Überlegung |
+| --- | --- |
+| Venice-Embeddings | Dokument-Chunks gehen zur Vektorerzeugung an Venice |
+| Venice-Chat | Der abgerufene Kontext geht zur Beantwortung an Venice |
+| Qdrant lokal | Vektoren und Payloads bleiben auf deinem Rechner |
+| Qdrant remote | Vektoren und Payloads werden dort gespeichert, wo dein Qdrant-Server läuft |
+| FastEmbed-Re-Ranker | Re-Ranking läuft lokal, sobald das Modell verfügbar ist |
+
+Der privacy-freundlichste Default für dieses Tutorial ist Venice für Inferenz, lokales Qdrant auf Disk und lokales FastEmbed-Re-Ranking. Das ergibt einen praxistauglichen RAG-Bot, ohne deine Vector-DB-Payloads an einen Drittanbieter zu senden.
+
+## Häufige Fehler, auf die du vorbereitet sein solltest
+
+| Symptom | Was es meist bedeutet | Was tun |
+| --- | --- | --- |
+| `Set VENICE_API_KEY before running this example.` | Die Umgebungsvariable fehlt | `VENICE_API_KEY` vor dem Start exportieren |
+| `Document path does not exist` | Ein Pfad an `--docs` ist falsch | Datei-/Ordnerpfad prüfen |
+| Leere Retrieval-Ergebnisse | Nichts wurde ingestet oder falsche Collection wird abgefragt | `--skip-ingest` entfernen oder `--collection` und `--qdrant-path` prüfen |
+| Qdrant-Vektorgrößenfehler | Die Collection wurde mit einem anderen Embedding-Modell erstellt | Collection nach Modellwechsel neu erstellen |
+| Erster Re-Rank ist langsam | FastEmbed lädt oder initialisiert den Cross-Encoder evtl. | Ersten Lauf abwarten, danach ist es schneller |
+
+Wenn du Embedding-Modelle wechselst, erstelle die Qdrant-Collection neu. Verschiedene Embedding-Modelle können Vektoren unterschiedlicher Dimension liefern, und Qdrant-Collections erwarten eine feste Vektorgröße.
+
+## Wie es weitergeht
+
+Sobald die Basis läuft, sind die wirkungsvollsten Verbesserungen meist:
+
+- Dokumentspezifische Loader für PDFs, HTML, Tickets oder interne Wiki-Seiten ergänzen.
+- Reichere Metadaten speichern: Titel, Überschriften, Daten, Owner, URLs.
+- `candidate_k`, `top_k`, Chunk-Größe und Überlappung an echten Fragen tunen.
+- Bewertungsfragen anlegen, um Retrieval-Qualität vor und nach Änderungen zu messen.
+- Die finale Venice-Chat-Completion streamen für ein besseres interaktives Chat-Erlebnis.
+
+RAG-Systeme lassen sich leicht demoen und – überraschend leicht – mittelmäßig bauen. Das Muster „Vektorsuche plus Re-Ranking" ist eine solide Grundlage, weil es das Retrieval schnell hält und dem Bot zugleich bessere Chancen gibt, dem Sprachmodell den richtigen Kontext zu schicken.

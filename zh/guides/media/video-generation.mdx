@@ -1,0 +1,374 @@
+---
+title: 视频生成
+description: 使用 Venice 的异步队列系统从文本 prompt 或图像生成视频
+"og:title": "Video Generation | Venice API Docs"
+"og:description": "Learn how to generate videos from text prompts or images using Venice's async video generation API."
+---
+
+视频生成是异步的。提交作业，保存 `queue_id`，然后轮询 `/video/retrieve` 直到响应是 `video/mp4`。
+
+## 端点
+
+| 端点 | 用途 | 必需 |
+|----------|---------|----------|
+| `POST /video/quote` | 在生成前获取美元价格 | 否 |
+| `POST /video/queue` | 提交生成请求 | 是 |
+| `POST /video/retrieve` | 轮询状态或下载视频 | 是 |
+| `POST /video/complete` | 从存储中删除视频 | 否 |
+
+## 步骤 1：排队生成
+
+**请求：**
+```bash
+POST https://api.venice.ai/api/v1/video/queue
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "prompt": "A gondola gliding through Venice canals at sunset",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9"
+}
+```
+
+**响应（200）：**
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+对于 Grok Imagine Private 模型，队列响应包括一个额外的 `download_url` 字段：
+
+```json
+{
+  "model": "grok-imagine-text-to-video-private",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000",
+  "download_url": "https://private-share.venice.ai/v1/share/read/..."
+}
+```
+
+`download_url` 是一个预签名的 URL，用于下载完成的视频，而非从 retrieve 响应中读取它。它仅在队列响应中返回一次，因此请将其与 `queue_id` 一起持久化。这适用于所有四个 Grok Imagine Private 变体：
+
+- `grok-imagine-text-to-video-private`
+- `grok-imagine-image-to-video-private`
+- `grok-imagine-reference-to-video-private`
+- `grok-imagine-video-to-video-private`
+
+与公共 `grok-imagine-*-video` 变体不同，Grok Imagine Private 模型不会因内容审核拒绝而被计费，因此您只为成功生成付费。
+
+为所有后续调用保存 `model`、`queue_id` 和 `download_url`（如有）。
+
+### 私有下载链接
+
+对于 private 模型，`download_url` 是您在作业完成后获取已完成文件的方式。该链接是**短暂的且单用途的**：它的作用是向您交付 MP4，而不是作为长期或广泛共享的 URL。
+
+如果下载中断，您可以从同一环境**重试相同的 `GET` 几次**，直到文件完成。这些重试用于从网络抖动中恢复——而非用于无限期地轮询同一链接、跨多个客户端共享它，或像永久媒体 URL 那样嵌入它。这些模式通常会显示为 **`429`** 或 **`410`**，如果您期望链接像常规文件托管一样运行，这可能会令人惊讶。
+
+为了可靠性，**`GET` 请求应来自一个客户端网络**。如果您的 IP 变化一次（例如断开 VPN 后重试），有一些灵活性，但源 IP 的广泛变化通常不会工作。
+
+URL 最多保持有效 **24 小时**，或直到对象被移除。
+
+<Note>
+如果您需要稳定的 URL、公共播放或随时间反复访问，请先将文件保存到**您自己的存储**中并从那里提供。
+</Note>
+
+**隐私：使用 `DELETE` 撤销链接**
+
+当您完成获取文件后——或如果您决定不保留它——可以对同一个 `download_url` 调用 **`DELETE`**。该请求不需要 Venice API 密钥。这是可选的，但**在隐私重要时建议**，因为 Venice 之外的某些代理和中间件会保留完整 URL 的日志，删除链接是缩短预签名 URL 存在窗口的最简单方法。
+
+```bash
+curl -X DELETE "$DOWNLOAD_URL"
+```
+
+**流程：** 轮询 `/video/retrieve` 直到 `COMPLETED` → `GET` 该 `download_url`（如果传输中断，轻度重试） → 将文件保存到您需要的位置 → 如果您希望使链接失效，对 `download_url` 调用 `DELETE` → 如果您仍使用基于队列的清理，可选调用 `/video/complete`。
+
+## 步骤 2：轮询完成
+
+**请求：**
+```bash
+POST https://api.venice.ai/api/v1/video/retrieve
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+**响应取决于状态：**
+
+| Content-Type | 含义 | 操作 |
+|--------------|---------|--------|
+| `application/json` | 仍在处理 | 等待 5 秒，再次轮询 |
+| `video/mp4` | 完成 | 响应体是视频文件 |
+| 带 `"COMPLETED"` 的 `application/json` | 完成，视频未内联 | 从队列响应中 `GET` `download_url` |
+
+**处理中响应（200, application/json）：**
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 145000,
+  "execution_duration": 53200
+}
+```
+
+时间以毫秒为单位。使用 `average_execution_time` 估算剩余等待时间。
+
+**完成响应（200, video/mp4）：**
+响应体是原始二进制视频数据。保存到文件。
+
+**完成响应（200, 带 `"COMPLETED"` 的 application/json）：**
+对于在排队时返回 `download_url` 的模型，retrieve 始终返回 JSON。使用 `GET download_url`（无 auth 头）获取视频。请参阅[私有下载链接](#private-download-links)了解这些 URL 的工作方式、重试和可选的 `DELETE`。
+
+## 步骤 3：清理（可选）
+
+可以在 retrieve 时自动删除：
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000",
+  "delete_media_on_completion": true
+}
+```
+
+或在保存后调用 `/video/complete`：
+```bash
+POST https://api.venice.ai/api/v1/video/complete
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+**响应（200）：**
+```json
+{
+  "success": true
+}
+```
+
+---
+
+## 完整示例
+
+<CodeGroup>
+```python Python
+import os
+import time
+import requests
+
+API_KEY = os.environ.get("VENICE_API_KEY")
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+
+# Queue
+resp = requests.post(f"{BASE_URL}/video/queue", headers=HEADERS, json={
+    "model": "wan-2.5-preview-text-to-video",
+    "prompt": "A gondola gliding through Venice canals at sunset",
+    "duration": "5s",
+    "resolution": "720p",
+    "aspect_ratio": "16:9"
+})
+data = resp.json()
+model, queue_id = data["model"], data["queue_id"]
+download_url = data.get("download_url")
+
+# Poll
+while True:
+    resp = requests.post(f"{BASE_URL}/video/retrieve", headers=HEADERS,
+                         json={"model": model, "queue_id": queue_id})
+    if "video/mp4" in resp.headers.get("Content-Type", ""):
+        with open("output.mp4", "wb") as f:
+            f.write(resp.content)
+        break
+    if resp.json().get("status") == "COMPLETED" and download_url:
+        with open("output.mp4", "wb") as f:
+            f.write(requests.get(download_url).content)
+        break
+    time.sleep(5)
+
+# Cleanup
+requests.post(f"{BASE_URL}/video/complete", headers=HEADERS,
+              json={"model": model, "queue_id": queue_id})
+```
+
+```javascript Node.js
+const API_KEY = process.env.VENICE_API_KEY;
+const BASE_URL = "https://api.venice.ai/api/v1";
+const headers = {"Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json"};
+
+// Queue
+const queueResp = await fetch(`${BASE_URL}/video/queue`, {
+    method: "POST", headers,
+    body: JSON.stringify({
+        model: "wan-2.5-preview-text-to-video",
+        prompt: "A gondola gliding through Venice canals at sunset",
+        duration: "5s", resolution: "720p", aspect_ratio: "16:9"
+    })
+});
+const {model, queue_id, download_url} = await queueResp.json();
+
+// Poll
+while (true) {
+    const resp = await fetch(`${BASE_URL}/video/retrieve`, {
+        method: "POST", headers,
+        body: JSON.stringify({model, queue_id})
+    });
+    if (resp.headers.get("Content-Type")?.includes("video/mp4")) {
+        const fs = await import("fs");
+        fs.writeFileSync("output.mp4", Buffer.from(await resp.arrayBuffer()));
+        break;
+    }
+    const status = await resp.json();
+    if (status.status === "COMPLETED" && download_url) {
+        const fs = await import("fs");
+        const video = await fetch(download_url);
+        fs.writeFileSync("output.mp4", Buffer.from(await video.arrayBuffer()));
+        break;
+    }
+    await new Promise(r => setTimeout(r, 5000));
+}
+
+// Cleanup
+await fetch(`${BASE_URL}/video/complete`, {
+    method: "POST", headers,
+    body: JSON.stringify({model, queue_id})
+});
+```
+</CodeGroup>
+
+---
+
+## 请求参数
+
+### Queue 请求
+
+| 参数 | 类型 | 必需 | 默认 | 说明 |
+|-----------|------|----------|---------|-------------|
+| `model` | string | 是 | - | 模型 ID。text-to-video 使用 `wan-2.5-preview-text-to-video`，image-to-video 使用 `wan-2.5-preview-image-to-video` |
+| `prompt` | string | 是 | - | 要生成的内容。最多 2500 字符 |
+| `negative_prompt` | string | 否 | `"low resolution, error, worst quality, low quality, defects"` | 要避免的内容 |
+| `duration` | string | 是 | - | `"5s"` 或 `"10s"` |
+| `resolution` | string | 否 | `"720p"` | `"480p"`、`"720p"` 或 `"1080p"` |
+| `aspect_ratio` | string | 条件性 | - | 取决于模型。需要为暴露宽高比选项的模型提供；对于不支持宽高比选择的模型则省略 |
+| `audio` | boolean | 条件性 | `true`（支持时） | 仅对 `supportsAudioConfig: true` 的模型有效；对于无音频配置支持的模型则省略 |
+| `image_url` | string | 仅 image-to-video | - | 源图像的 URL 或 base64 data URL |
+| `audio_url` | string | 条件性 | - | 支持音频输入的模型的参考音频 URL 或 base64 data URL |
+
+队列验证是模型特定的。在调用 `/video/queue` 之前查看 `/models?type=video` 以了解每个模型支持的请求字段。
+
+### Quote 请求
+
+| 参数 | 类型 | 必需 | 默认 | 说明 |
+|-----------|------|----------|---------|-------------|
+| `model` | string | 是 | - | 要定价的模型 ID |
+| `duration` | string | 是 | - | `"5s"` 或 `"10s"` |
+| `resolution` | string | 否 | `"720p"` | `"480p"`、`"720p"` 或 `"1080p"` |
+| `aspect_ratio` | string | 条件性 | - | 当所选模型支持或需要宽高比选择时包含 |
+| `audio` | boolean | 条件性 | `true`（支持时） | 仅对 `supportsAudioConfig: true` 的模型有效 |
+
+### Retrieve 请求
+
+| 参数 | 类型 | 必需 | 默认 | 说明 |
+|-----------|------|----------|---------|-------------|
+| `model` | string | 是 | - | 来自队列响应 |
+| `queue_id` | string | 是 | - | 来自队列响应 |
+| `delete_media_on_completion` | boolean | 否 | `false` | 成功 retrieve 后删除视频 |
+
+### Complete 请求
+
+| 参数 | 类型 | 必需 | 说明 |
+|-----------|------|----------|-------------|
+| `model` | string | 是 | 来自队列响应 |
+| `queue_id` | string | 是 | 来自队列响应 |
+
+---
+
+## 图像到视频
+
+对于 image-to-video 模型，通过 `image_url` 传递源图像。prompt 描述所需的运动，而非图像内容。
+
+```json
+{
+  "model": "wan-2.5-preview-image-to-video",
+  "prompt": "Camera slowly zooms in as leaves rustle in the wind",
+  "image_url": "https://example.com/image.jpg",
+  "duration": "5s"
+}
+```
+
+或使用 base64：
+```json
+{
+  "model": "wan-2.5-preview-image-to-video",
+  "prompt": "Camera slowly zooms in as leaves rustle in the wind",
+  "image_url": "data:image/jpeg;base64,/9j/4AAQ...",
+  "duration": "5s"
+}
+```
+
+---
+
+## 价格报价
+
+在生成之前获取精确成本。仅发送定价输入（`model`、`duration` 以及可选的 `resolution`、`aspect_ratio`、`audio`）：
+
+**请求：**
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "duration": "10s",
+  "resolution": "1080p"
+}
+```
+
+**响应：**
+```json
+{
+  "quote": 0.085
+}
+```
+
+报价以美元为单位。
+
+---
+
+## 错误
+
+| 状态 | 返回自 | 含义 | 操作 |
+|--------|-------------|---------|--------|
+| 400 | `queue`、`quote`、`retrieve`、`complete` | 无效参数 | 根据 schema 检查请求体 |
+| 401 | `queue`、`retrieve`、`complete` | 认证失败 | 检查 API 密钥 |
+| 402 | `queue` | 余额不足 | 添加资金 |
+| 404 | `retrieve`、`download_url` | 找不到媒体（无效、过期或已删除） | 验证 `model`/`queue_id` 或重新排队 |
+| 410 | `download_url` | 预签名 URL 已过期、完全使用或已撤销（例如在 `DELETE` 之后） | 如果需要另一个文件，启动新的生成；每个链接故意是短暂的 |
+| 429 | `download_url` | 速率限制——通常来自同一链接的多次重试或反复获取 | 完成下载（连接中断时几次重试是可以的），保存本地副本，如果您希望清除链接则使用 `DELETE`；将持续访问保留在您自己的存储中 |
+| 413 | `queue` | 负载过大 | 减小图像/音频大小 |
+| 422 | `queue`、`retrieve` | 内容违规 | 修改 prompt |
+| 500 | `queue`、`retrieve`、`complete` | 推理/处理失败 | 使用退避重试；如果持续，联系支持 |
+| 503 | `retrieve` | 模型容量已满 | 使用退避重试 |
+
+---
+
+## 轮询策略
+
+1. 以一定间隔（例如每 5 秒）轮询 `/video/retrieve`
+2. 如果 `Content-Type` 为 `application/json` 且 `status` 为 `"PROCESSING"`，等待并再次轮询。使用 `average_execution_time` 和 `execution_duration`（毫秒）估算剩余时间
+3. 如果 `Content-Type` 为 `video/mp4`，将响应体保存为输出文件
+4. 如果 `Content-Type` 为 `application/json` 且 `status` 为 `"COMPLETED"`，从队列响应中 `GET` `download_url` 以获取视频（请参阅[私有下载链接](#private-download-links)）
+5. 如果使用了 `download_url`，请在完成后考虑对该 URL 调用 `DELETE` 以缩短预签名 URL 的存在时间；然后可选地在 retrieve 上设置 `delete_media_on_completion: true` 或调用 `/video/complete` 进行基于队列的清理
+6. 将 `404` 视为无效、过期或已删除的媒体；用重试/退避处理 `500/503`
+
+---
+
+## 可用模型
+
+请参阅[视频模型](/models/video)了解当前模型列表和定价。

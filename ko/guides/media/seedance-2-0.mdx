@@ -1,0 +1,422 @@
+---
+title: "Seedance 2.0"
+description: "Seedance 2.0 — Venice의 플래그십 멀티모달 비디오 모델. 하나의 endpoint에서 텍스트 / 이미지 / 레퍼런스-투-비디오를 처리하며, prompt 형태에서 추론되는 네 가지 워크플로(Reference, Edit, Extend, Stitch)를 제공합니다."
+'og:title': "Seedance 2.0 Guide | Venice API Docs"
+'og:description': "Venice API를 통해 Seedance 2.0으로 비디오를 생성, 편집, 확장, 스티치하세요. 워크플로 패턴, 멀티모달 한도, 가격, 실제 예시."
+---
+
+Seedance 2.0은 텍스트, 이미지, 레퍼런스 기반 비디오 생성을 위해 세 가지 변형 패밀리로 Venice에 노출된 플래그십 멀티모달 비디오 모델입니다. **reference-to-video** 변형은 특히 강력합니다: 단일 endpoint와 단일 모델 ID가 **네 가지 구분된 워크플로**(Reference, Edit, Extend, Stitch)를 처리합니다 — 워크플로는 **prompt 형태**에서 추론됩니다.
+
+이 가이드는 변형들, 표준 prompt와 함께 네 가지 워크플로, 멀티모달 input 한도, 가격, 완전한 `curl` 예시를 다룹니다.
+
+## 변형(Variants)
+
+| Model ID | Variant | Output resolutions | Notes |
+|---|---|---|---|
+| `seedance-2-0-text-to-video` | T2V | 480p / 720p / 1080p | 텍스트 prompt만 |
+| `seedance-2-0-image-to-video` | I2V | 480p / 720p / 1080p | First-frame(과 선택적으로 last-frame) 이미지 그라운딩 |
+| `seedance-2-0-reference-to-video` | R2V | 480p / 720p / 1080p | 최대 9장의 레퍼런스 이미지 + 3개의 레퍼런스 비디오 + 3개의 레퍼런스 오디오 도너. Reference / Edit / Extend / Stitch 구동 |
+| `seedance-2-0-fast-text-to-video` | Fast T2V | 480p / 720p | 더 빠르고, 더 낮은 충실도 등급 |
+| `seedance-2-0-fast-image-to-video` | Fast I2V | 480p / 720p | 더 빠르고, 더 낮은 충실도 등급 |
+| `seedance-2-0-fast-reference-to-video` | Fast R2V | 480p / 720p | 더 빠르고, 더 낮은 충실도 등급. 동일한 워크플로 세트 |
+
+모든 변형은 비동기입니다. `POST /api/v1/video/queue`로 제출한 다음, 응답 본문이 `video/mp4`가 될 때까지 `POST /api/v1/video/retrieve`로 폴링하세요. 일반적인 큐 흐름은 [Video Generation](/guides/media/video-generation)을 참고하세요.
+
+## "하나의 모델, 네 가지 워크플로" 모델
+
+reference-to-video 변형(`seedance-2-0-reference-to-video`와 그의 Fast 형제)은 네 가지 다른 작업을 처리하는 동일한 기반 모델입니다. **모델은 prompt prefix와 input 형태에서 작업을 추론합니다.** `task`나 `workflow` 필드가 없습니다 — prompt 문법이 라우팅입니다.
+
+| Workflow | What it does | Prompt prefix | Inputs |
+|---|---|---|---|
+| **Reference** | 업로드한 레퍼런스 파일을 피사체 / 모션 / 스타일 / 오디오의 도너로 사용해 새 비디오 생성 | `Refer to ... in <Image\|Video\|Audio N> to generate ...` | 텍스트 + 최소 1개의 이미지 또는 비디오 레퍼런스(이미지 0-9개, 비디오 0-3개), 선택적으로 최대 3개 오디오 도너 |
+| **Edit** | 나머지를 보존하면서 하나의 input 비디오를 수정 | `Strictly edit <Video 1>, changing its ...` | 1개의 input 비디오 + 텍스트(이미지 선택적 그라운딩) |
+| **Extend** | 한 클립의 앞으로 / 뒤로 확장 | `Extend <Video 1>, generate ...` | 1개의 input 비디오 + 텍스트 |
+| **Stitch** | 자동 생성 전환으로 2-3개 클립 연결 | `<Video 1> + <transition description> + followed by <Video 2> + ...` | 2-3개의 input 비디오 + 텍스트 |
+
+**Prompt 문법은 표준이며 대소문자 구분합니다**: 꺾쇠 괄호, 대문자 첫 글자, 숫자 앞 단일 공백 — `<Video 1>`, `<Image 1>`, `<Audio 1>`.
+
+---
+
+## 워크플로 패턴
+
+### Reference 워크플로
+
+업로드된 레퍼런스 파일을 **도너** — 피사체, 장면, 모션, 스타일, 목소리 음색 — 로 사용해 완전히 새로운 비디오를 생성합니다.
+
+**표준 prompt 패턴**:
+
+```
+Refer to <Subject N> in <Image N> to generate ...
+Refer to the [action | camera scene | style | sound effect] in <Video N> to generate ...
+Refer to the [tone | timbre] in <Audio N> to generate ...
+```
+
+**예시**:
+
+- `Refer to <Subject 1> in <Image 1> to generate a 5-second clip of the same character riding a horse through snow.`
+- `Refer to the camera scene in <Video 1> to generate a similar establishing shot of a futuristic city at dawn.`
+- `Refer to <Subject 1> in <Image 1> and use the timbre in <Audio 1> for the narrator describing the scene.` (오디오 도너는 최소 하나의 이미지 또는 비디오 레퍼런스와 짝지어져야 합니다 — 오디오 단독은 거부됩니다)
+
+### Edit 워크플로
+
+하나의 input 비디오를 수정합니다. **prompt에 명시되지 않은 것은 모두 보존됩니다.** 완전히 새로운 비디오가 아닌 국소적 변경(피사체 교체, 날씨/색상 변경, 요소 추가/제거)을 원할 때 사용하세요.
+
+**표준 prompt 패턴**:
+
+```
+Strictly edit <Video 1>, changing its [original feature] to [new feature] ...
+```
+
+**더 세밀한 제어를 위한 서브 패턴**:
+
+```
+요소 추가:
+  At [timestamp / timing] and [spatial location] of <Video 1>, add [description of intended element].
+
+요소 제거:
+  Remove [element to be deleted] from <Video 1>, keeping the rest of the video content unchanged.
+
+요소 수정:
+  Replace [description of element to be changed] in <Video 1> with [description of intended element].
+```
+
+**예시**:
+
+- `Strictly edit <Video 1>, changing its weather from sunny to a heavy rainstorm.`
+- `Add snacks such as fried chicken and pizza to the countertop in <Video 1>.`
+- `Remove the red car from <Video 1>, keeping the rest of the video content unchanged.`
+- `Replace the perfume featured in <Video 1> with the face cream from <Image 1>, with all original motions and camera work preserved.`
+
+마지막 예시는 Edit를 이미지 레퍼런스와 결합합니다 — 완전히 적법하며, 모델은 `<Image 1>`을 교체 대상의 시각적 도너로 사용합니다.
+
+### Extend 워크플로
+
+한 클립을 시간상 앞으로 또는 뒤로 이어갑니다. **기본적으로 Seedance는 새 콘텐츠만 반환합니다** — 원본 input이 확장과 함께 이어진 형태가 아닙니다. 이는 전환 연속성을 위한 의도된 동작입니다. input 클립을 확장과 함께 보존하고 싶다면 명시적으로 그렇게 말하세요:
+
+```
+Extend <Video 1>, generate [description of extended content]
+Extend <Video 1> backward, [description of extended content]
+Extend <Video 1>, start with <Video 1>, then [description of extended content]      ← 시작에 input 보존
+Extend <Video 1> backward, [description], and then end with <Video 1>               ← 끝에 input 보존
+```
+
+전환 처리: 모델이 매끄러운 블렌딩을 위해 전환 프레임을 자동으로 추출하며, input 비디오의 원본 세그먼트는 재생성되지 않습니다.
+
+**예시**:
+
+- `Extend <Video 1>, generate a dramatic chase scene through narrow alleys at dusk.`
+- `Extend <Video 1> backward, the same character walking toward the camera before the original shot begins.`
+- `Extend <Video 1>, start with <Video 1>, then the camera pulls back to reveal a vast landscape.`
+
+### Stitch 워크플로(Track Completion)
+
+2-3개의 input 클립을 AI 생성 전환으로 연결합니다. 결합된 input 총 길이는 15초 이하여야 합니다.
+
+**표준 prompt 패턴**:
+
+```
+<Video 1> + [transition description] + followed by <Video 2> [+ [transition description] + followed by <Video 3>]
+```
+
+**예시**:
+
+- `<Video 1> + a smooth seamless cut + followed by <Video 2>`
+- `<Video 1>. The moment a leaf falls to the ground, it sets off a special effect of golden particles. A gust of wind blows by, leading into <Video 2>.`
+- `<Video 1> + a wisp of smoke transforms into a flock of birds + followed by <Video 2> + a slow dolly-in + followed by <Video 3>`
+
+모델은 연속성을 위해 접합점에서 연결 세그먼트를 자동으로 트림합니다.
+
+---
+
+## 범용 prompt 공식
+
+네 가지 워크플로 모두에서 권장되는 작성 공식:
+
+```
+Subject + Motion + Environment (선택)
+       + Camera Movement / Cut (선택)
+       + Aesthetic Description (선택)
+       + Audio (선택)
+```
+
+- **Subject + Motion**: 논리적 기반 — "누가" "어떤 행동"을 하는지 정의
+- **Environment + Aesthetics**: 공간 배경, 조명, 시각 스타일
+- **Camera**: 명시적 샷 유형 또는 움직임
+- **Audio**: 몰입감 있는 출력을 위한 환경음 또는 보이스 디렉션
+
+이를 워크플로 prefix(예: `Strictly edit <Video 1>, changing its <subject + motion + environment + ...>`) 위에 레이어링하면 최고 품질의 출력을 만들어냅니다.
+
+---
+
+## 멀티모달 input 한도
+
+아래 값은 Venice API가 허용하는 값입니다. 이 범위를 벗어나는 요청은 추론에 도달하기 전 스키마 레이어에서 400으로 거부됩니다.
+
+### 이미지
+
+| Constraint | Value |
+|---|---|
+| Input 방식 | URL(`http://`, `https://`) 또는 Base64 data URL(`data:image/...`) |
+| 포맷 | `.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`, `.gif`, `.heic`, `.heif` |
+| 종횡비(W / H) | 배타적 `(0.4, 2.5)` |
+| 최소 변 | ≥ 300 px |
+| 이미지 수: I2V first-frame | 1 |
+| 이미지 수: I2V first + last frame | 2 |
+| **이미지 수: R2V (V2 / Fast)** | **1 – 9** |
+
+### 비디오
+
+| Constraint | Value |
+|---|---|
+| Input 방식 | URL(`http://`, `https://`) 또는 Base64 data URL(`data:video/...`) |
+| 포맷 | `.mp4`, `.mov` |
+| 비디오 코덱 | H.264 / AVC, H.265 / HEVC |
+| 오디오 코덱(컨테이너 내) | AAC, MP3 |
+| **클립당 길이** | `[2, 15]` 초(포함) |
+| **최대 클립 수** | 3 (R2V / Stitch / Extend) |
+| **결합 총 길이** | 모든 클립에 걸쳐 ≤ 15초 |
+| **클립당 크기** | ≤ 50 MB |
+
+### 오디오
+
+| Constraint | Value |
+|---|---|
+| Input 방식 | URL(`http://`, `https://`) 또는 Base64 data URL(`data:audio/...`) |
+| 포맷 | `.wav`, `.mp3` |
+| **클립당 길이** | `[2, 15]` 초 |
+| **최대 클립 수** | 3 |
+| **결합 총 길이** | 모든 클립에 걸쳐 ≤ 15초 |
+| **클립당 크기** | ≤ 15 MB |
+
+레퍼런스 오디오는 R2V 변형에서만 지원됩니다. 각 항목은 모델에 `role: "reference_audio"` 콘텐츠 항목으로 전달되며, prompt는 `<Audio 1>`, `<Audio 2>`, `<Audio 3>`으로 주소를 지정합니다 — 모델은 prompt가 그것을 어떻게 프레이밍하느냐에 따라 각 클립을 보이스 음색, 효과음, 배경 음악에 사용합니다. 레거시 단수 `audio_url` 필드는 같은 콘텐츠 형태로 매핑되며, 이제 한 개 요소 `reference_audio_urls`를 전달하는 것과 동등합니다.
+
+<Warning>
+**`reference_audio_urls`만 단독으로 레퍼런스 input일 수는 없습니다.** 모델은 모든 오디오 도너와 함께 최소 하나의 이미지 또는 비디오 레퍼런스가 있어야 합니다. `reference_audio_urls`를 `reference_image_urls`, `reference_video_urls`, `image_url`, `video_url`과 짝지으세요 — 오디오 전용 제출은 거부됩니다.
+</Warning>
+
+### 요청 크기
+
+queue endpoint는 최대 **35 MB**의 JSON 본문을 받습니다. 대용량 비디오의 인라인 data URL은 이를 초과할 수 있습니다 — 특히 멀티 클립 Stitch에서는 인라인 base64보다 URL을 선호하세요.
+
+---
+
+## 가격
+
+`/video/queue`에 제출하기 전에 주어진 요청 형태에 대한 견적을 받으려면 `POST /api/v1/video/quote`를 호출하세요. quote endpoint가 유일한 권위 있는 출처입니다. 가격 세부 사항은 변경될 수 있으며 클라이언트 측에서 캐시하거나 복제해서는 안 됩니다.
+
+레퍼런스 비디오가 요청에 포함되어 있으면, 견적이 `/video/queue`가 부과하는 금액과 일치하도록 `reference_video_total_duration`(모든 레퍼런스 클립 길이의 합, 초 단위)도 전달하세요:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/quote \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "duration": "5s",
+    "resolution": "1080p",
+    "aspect_ratio": "16:9",
+    "reference_video_total_duration": 5
+  }'
+```
+
+---
+
+## 완전한 예시
+
+모든 예시는 `VENICE_API_KEY`가 환경에 설정되어 있다고 가정합니다.
+
+### Text-to-video
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-text-to-video",
+    "prompt": "A golden retriever frolicking through a sunlit meadow at sunset, slow camera dolly-in, shallow depth of field, warm cinematic lighting.",
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Image-to-video(first frame)
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-image-to-video",
+    "prompt": "The lighthouse keeper turns toward the storm, lantern raised, waves crashing against the rocks.",
+    "image_url": "https://example.com/lighthouse.jpg",
+    "duration": "5s",
+    "resolution": "720p"
+  }'
+```
+
+<Note>
+`seedance-2-0-image-to-video`(와 그의 Fast 변형)는 **`aspect_ratio`를 받지 않습니다** — 출력 종횡비는 입력 이미지의 크기에서 자동 파생됩니다. 필드를 전달하면 *"This model does not support aspect_ratio"* 와 함께 400을 반환합니다. 명시적 종횡비 제어가 필요하면 T2V 또는 R2V 변형을 사용하세요.
+</Note>
+
+### Reference 워크플로 — 피사체 도너
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "prompt": "Refer to <Subject 1> in <Image 1> to generate a 5-second clip of the same character walking through a neon-lit Tokyo street at night.",
+    "reference_image_urls": ["https://example.com/character.png"],
+    "duration": "5s",
+    "aspect_ratio": "9:16",
+    "resolution": "1080p"
+  }'
+```
+
+### Reference 워크플로 — 피사체 + 오디오 도너
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "prompt": "Refer to <Subject 1> in <Image 1> to generate a 5-second clip of the same character walking through a neon-lit Tokyo street at night. Refer to the timbre in <Audio 1> for a soft female voiceover describing the scene.",
+    "reference_image_urls": ["https://example.com/character.png"],
+    "reference_audio_urls": ["https://example.com/voice-sample.mp3"],
+    "duration": "5s",
+    "aspect_ratio": "9:16",
+    "resolution": "1080p"
+  }'
+```
+
+### Edit 워크플로
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "prompt": "Strictly edit <Video 1>, changing its weather from sunny to a heavy rainstorm, with all original motions and camera work preserved.",
+    "reference_video_urls": ["https://example.com/sunny-scene.mp4"],
+    "reference_video_total_duration": 5,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### 이미지 그라운딩이 있는 Edit 워크플로
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "prompt": "Replace the perfume featured in <Video 1> with the face cream from <Image 1>, with all original motions and camera work preserved.",
+    "reference_video_urls": ["https://example.com/perfume-ad.mp4"],
+    "reference_image_urls": ["https://example.com/face-cream.png"],
+    "reference_video_total_duration": 4,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Extend forward
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "prompt": "Extend <Video 1>, generate a dramatic chase scene through narrow alleys at dusk, with neon signs flickering and rain on the pavement.",
+    "reference_video_urls": ["https://example.com/alley-intro.mp4"],
+    "reference_video_total_duration": 4,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Stitch(3개 클립)
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "prompt": "<Video 1> + a wisp of smoke transforms into a flock of birds + followed by <Video 2> + a slow dolly-in + followed by <Video 3>",
+    "reference_video_urls": [
+      "https://example.com/clip-1.mp4",
+      "https://example.com/clip-2.mp4",
+      "https://example.com/clip-3.mp4"
+    ],
+    "reference_video_total_duration": 12,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### 완료 폴링
+
+큐 제출 후 반환된 `queue_id`를 저장하고 응답 본문이 `video/mp4`가 될 때까지 `/video/retrieve`로 폴링하세요:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video",
+    "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+  }' \
+  -o output.mp4
+```
+
+응답은 작업이 완료될 때까지 JSON(`{ "status": "queued" | "running" | "failed", ... }`)이며, 완료되면 응답 본문이 `video/mp4` 바이트로 전환됩니다. 전체 폴링 패턴은 [Video Generation](/guides/media/video-generation)을 참고하세요.
+
+---
+
+## 문제 해결
+
+### `At least one reference is required for this model`
+
+Reference-to-video 제출에는 `reference_image_urls`, `reference_video_urls`, `image_references`, `video_references` 중 최소 하나가 포함되어야 합니다. 순수 텍스트만의 생성은 유효한 R2V 워크플로가 아닙니다 — 대신 `seedance-2-0-text-to-video`를 사용하세요. `reference_audio_urls`만으로는 충분하지 않습니다(위 Audio 섹션 참고).
+
+### `reference_video_urls must have at most 3 videos`
+
+모델은 레퍼런스 비디오를 3개로 제한합니다. 더 많은 클립이 필요하면 먼저 Stitch를 실행(3 → 1)한 다음 그 출력을 후속 작업의 레퍼런스로 사용하세요.
+
+### `Per clip must be 2–15s` / 합계 `> 15s`
+
+클립당 길이는 `[2, 15]` 초 **포함**이며, 모든 레퍼런스 비디오의 합도 15초로 제한됩니다. 제출 전 클라이언트 측에서 클립을 트림하세요.
+
+### Prompt가 잘못된 워크플로로 라우팅됨
+
+워크플로는 prompt 문법에서 추론됩니다. 흔한 잘못된 라우팅:
+
+- **Extend**를 원하지만 `Refer to ...`로 작성 → 모델이 비디오를 이어갈 *캔버스*가 아닌 *도너*로 취급
+- **Stitch**를 원하지만 `Refer to ...`로 작성 → 모델이 하나를 도너로 선택하고 나머지를 무시
+- **Edit**를 원하지만 `Generate a video based on <Video 1>`로 작성 → 모호함, 모델이 Reference로 기본 처리할 수 있음
+
+표준 prefix를 정확히 작성된 대로 사용하세요: `Strictly edit <Video 1>, ...`, `Extend <Video 1>, ...`, `<Video 1> + ... + followed by <Video 2>`.
+
+### 견적이 큐 금액과 일치하지 않음
+
+레퍼런스 비디오를 포함했지만 `reference_video_total_duration`을 `/video/quote`에 전달하지 않았다면 견적과 큐 금액이 다를 수 있습니다. 레퍼런스 비디오가 있을 때는 항상 `reference_video_total_duration`(모든 레퍼런스 클립 길이의 합, 초 단위)을 전달하세요.
+
+---
+
+## 참고 자료
+
+- Venice 비디오 큐 endpoint: [`POST /api/v1/video/queue`](/api-reference/endpoint/video/queue)
+- Venice 견적 endpoint: [`POST /api/v1/video/quote`](/api-reference/endpoint/video/quote)
+- 동반 가이드: [Reference to Video](/guides/media/reference-to-video)(Kling O3 + Grok Imagine R2V 다룸)
+- 동반 가이드: [Video Generation](/guides/media/video-generation)(큐 / 폴링 개요)

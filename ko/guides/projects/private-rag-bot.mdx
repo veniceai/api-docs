@@ -1,0 +1,468 @@
+---
+title: "프라이빗 RAG 봇 만들기"
+slug: private-rag-bot-venice-qdrant-reranking
+"og:title": "Venice, Qdrant, 재순위로 프라이빗 RAG 봇 만들기"
+"og:description": "Venice 임베딩, Qdrant 벡터 검색, FastEmbed 재순위, Venice chat completion으로 현대적인 프라이빗 RAG 봇을 만드는 실용 가이드."
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="29 April 2026"/>
+
+검색 증강 생성, 즉 RAG는 자체 문서로부터 답해야 하는 AI 애플리케이션을 만드는 데 가장 유용한 패턴 중 하나입니다. 모델이 기억만으로 답하게 하는 대신, 먼저 관련 원본 자료를 검색하고 그 context를 모델에 보내 인용과 함께 답하도록 합니다.
+
+이 튜토리얼에서는 Python, 임베딩과 chat completion을 위한 Venice, 벡터 검색을 위한 Qdrant, 로컬 재순위를 위한 FastEmbed로 프라이빗 RAG 봇을 만듭니다. 마지막에는 파일을 ingest하고, 관련 청크를 검색하고, 재순위하며, 인용과 함께 답하는 로컬 문서 비서의 핵심 부품이 갖춰집니다.
+
+![동작 중인 RAG 봇](/images/guides/private-rag-bot/screenshot.png)
+
+계속하기 전에: 이 글의 코드를 실행하려면 Venice API 키가 필요합니다. 환경 변수로 export하세요:
+
+```bash
+export VENICE_API_KEY=<my-key>
+```
+
+전체 코드 구현이 궁금하다면 [GitHub 레포](https://github.com/joshua-mo-143/venice-rag-bot-demo)를 확인하세요.
+
+## 현대적인 RAG 봇이 동작하는 방식
+
+좋은 RAG 파이프라인은 "문서를 벡터 데이터베이스에 넣는 것" 이상입니다. 기본 흐름은 다음과 같습니다:
+
+| Step | What happens |
+| --- | --- |
+| Load | 로컬 Markdown, 텍스트, reStructuredText 파일 읽기 |
+| Chunk | 긴 문서를 겹치는 섹션으로 분할 |
+| Embed | Venice 임베딩으로 청크를 벡터로 변환 |
+| Store | Qdrant에 벡터와 출처 메타데이터 저장 |
+| Retrieve | 사용자의 질문을 임베딩하고 벡터 검색 실행 |
+| Re-rank | cross-encoder로 최선의 후보를 재점수화 |
+| Answer | 인용 지침과 함께 최선의 context를 Venice chat 모델로 전송 |
+
+재순위 단계는 이를 기본 RAG 데모보다 훨씬 더 유용하게 만드는 업그레이드입니다. 벡터 검색은 빠르고 의미적으로 유사한 청크를 잘 찾지만, 주제에 인접하기만 하고 직접적으로 유용하지는 않은 구절을 반환할 수 있습니다. cross-encoder는 질문과 각 후보 청크를 함께 읽고, 그 청크가 실제로 질문에 얼마나 잘 답하는지를 점수화합니다.
+
+## 의존성 설치
+
+Venice가 OpenAI 호환 API를 노출하므로 OpenAI Python SDK를 사용합니다. FastEmbed 지원이 있는 Qdrant Python 클라이언트도 함께 사용합니다:
+
+```bash
+pip install "openai>=1.0.0" "qdrant-client[fastembed]>=1.14.1"
+```
+
+파일에 의존성을 두고 싶다면 같은 패키지로 `requirements.txt`를 만드세요:
+
+```text
+openai>=1.0.0
+qdrant-client[fastembed]>=1.14.1
+```
+
+## 모델 선택
+
+`rag_bot.py`라는 파일을 만들고, 임포트, 데이터 구조, API URL, 모델 이름을 추가해 시작하세요:
+
+```python
+import os
+import textwrap
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+from fastembed.rerank.cross_encoder import TextCrossEncoder
+from openai import OpenAI
+from qdrant_client import QdrantClient, models
+
+VENICE_BASE_URL = "https://api.venice.ai/api/v1"
+CHAT_MODEL = "kimi-k2-6"
+EMBEDDING_MODEL = "text-embedding-bge-m3"
+RERANKER_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
+COLLECTION_NAME = "private_rag_bot"
+
+
+@dataclass
+class SourceDocument:
+    content: str
+    metadata: dict
+
+
+@dataclass
+class RankedChunk:
+    content: str
+    metadata: dict
+    vector_score: float
+    rerank_score: float
+```
+
+임베딩 모델 이름은 의도적으로 OpenAI 호환입니다. Venice는 호환되는 임베딩 모델 이름을 Venice 호스팅 임베딩 모델에 매핑하므로, 기존 OpenAI SDK 코드는 보통 `base_url`과 API 키만 바꾸면 이전 가능합니다.
+
+다음으로 사용 가능한 Venice 모델을 나열할 수 있습니다:
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=embedding" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+채팅 모델의 경우:
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=text" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+## Venice와 Qdrant 클라이언트 생성
+
+임베딩과 chat completion 모두를 위한 하나의 OpenAI 호환 Venice 클라이언트를 만드세요:
+
+```python
+venice = OpenAI(
+    api_key=os.environ["VENICE_API_KEY"],
+    base_url=VENICE_BASE_URL,
+)
+```
+
+Qdrant의 경우 세 가지 유용한 모드가 있습니다:
+
+| Mode | When to use it |
+| --- | --- |
+| `QdrantClient(":memory:")` | 빠른 로컬 데모와 테스트 |
+| `QdrantClient(path="./qdrant_data")` | 로컬 영구 저장 |
+| `QdrantClient(url=..., api_key=...)` | 원격 또는 매니지드 Qdrant 클러스터 |
+
+프라이빗 로컬 봇은 디스크의 로컬 Qdrant 경로로 시작하세요:
+
+```python
+qdrant = QdrantClient(path="./qdrant_data")
+```
+
+프로덕션에서 배포를 처리하는 방법은 몇 가지가 있습니다. 다만 원격 Qdrant 배포를 사용한다면 문서 청크와 메타데이터가 거기에 저장된다는 점을 기억하세요. Venice는 추론 레이어를 프라이빗하게 유지할 수 있지만, 데이터에 맞는 Qdrant 배포를 선택하는 것은 여전히 사용자의 몫입니다.
+
+## 문서 로드 및 청킹
+
+이 튜토리얼에서는 봇이 로컬 파일이나 폴더를 ingest하게 합니다. `.md`, `.rst`, `.txt` 파일로 시작하세요:
+
+```python
+TEXT_EXTENSIONS = {".md", ".rst", ".txt"}
+
+def expand_paths(paths: list[Path]) -> list[Path]:
+    files = []
+    for path in paths:
+        if path.is_dir():
+            files.extend(
+                sorted(
+                    file_path
+                    for file_path in path.rglob("*")
+                    if file_path.is_file()
+                    and file_path.suffix.lower() in TEXT_EXTENSIONS
+                )
+            )
+        elif path.is_file():
+            files.append(path)
+        else:
+            raise FileNotFoundError(f"Document path does not exist: {path}")
+    return files
+```
+
+파일이 로드되면 텍스트를 "청킹"해서 분할해야 합니다 — 데이터 청크로 나누는 것입니다. 단순한 전략은 청크를 균등하게 분할할 수 있습니다. 그러나 대부분의 경우 주어진 의미 경계에서 정보를 잃을 수 있어 RAG 시스템의 효과가 떨어질 수 있습니다.
+
+여기서 사용할 청킹 전략은 모델이 일관된 context를 받도록 문단 또는 문장 경계를 선호합니다:
+
+```python
+def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
+    clean_text = textwrap.dedent(text).strip()
+    if not clean_text:
+        return []
+    if len(clean_text) <= chunk_size:
+        return [clean_text]
+
+    chunks = []
+    start = 0
+    while start < len(clean_text):
+        end = min(start + chunk_size, len(clean_text))
+
+        if end < len(clean_text):
+            paragraph_break = clean_text.rfind("\n\n", start, end)
+            sentence_break = clean_text.rfind(". ", start, end)
+            split_at = max(paragraph_break, sentence_break)
+            if split_at > start + chunk_size // 2:
+                end = split_at + 1
+
+        chunk = clean_text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        if end >= len(clean_text):
+            break
+
+        start = max(end - chunk_overlap, start + 1)
+
+    return chunks
+```
+
+청크 크기 `1000` 문자와 `150` 문자 오버랩으로 시작하는 것이 혼합 Markdown과 텍스트 문서에 좋은 기본값입니다. 더 작은 청크는 정밀도를 개선할 수 있습니다. 더 큰 청크는 더 많은 context를 보존할 수 있습니다. 올바른 설정은 종종 저장하는 문서의 종류에 따라 다릅니다.
+
+## Venice로 문서 임베딩
+
+청크가 있으면 배치로 임베딩합니다:
+
+```python
+def embed(texts: list[str]) -> list[list[float]]:
+    embeddings = []
+    for start in range(0, len(texts), 32):
+        batch = texts[start : start + 32]
+        response = venice.embeddings.create(
+            model="text-embedding-bge-m3",
+            input=batch,
+        )
+        embeddings.extend(
+            item.embedding
+            for item in sorted(response.data, key=lambda item: item.index)
+        )
+    return embeddings
+```
+
+배치 처리가 중요합니다. 한 번에 하나씩 청크를 임베딩하는 것은 단순하지만 피할 수 있는 지연 시간을 추가합니다. 작업 부하에 맞춰 처리량을 튜닝할 수 있도록 배치 크기를 구성 가능하게 유지하세요.
+
+## Qdrant에 벡터 저장
+
+포인트를 삽입하기 전에 올바른 벡터 크기로 Qdrant 컬렉션을 만드세요. 벡터 크기를 알기 가장 쉬운 방법은 첫 배치를 임베딩한 다음 `len(embeddings[0])`을 사용하는 것입니다.
+
+```python
+qdrant.create_collection(
+    collection_name=COLLECTION_NAME,
+    vectors_config=models.VectorParams(
+        size=len(embeddings[0]),
+        distance=models.Distance.COSINE,
+    ),
+)
+```
+
+각 포인트는 벡터와 페이로드 메타데이터를 저장합니다. 페이로드는 원본 텍스트와 답변이 context가 어디서 왔는지 인용할 수 있도록 출처 경로를 포함합니다:
+
+```python
+points.append(
+    models.PointStruct(
+        id=chunk_id,
+        vector=embedding,
+        payload={
+            "text": chunk.content,
+            "source": source,
+            "chunk_index": chunk_index,
+        },
+    )
+)
+
+qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
+```
+
+`source`, `chunk_index`, 콘텐츠에서 파생된 결정적 UUID를 사용하세요. 그러면 변경되지 않은 청크에 대해 반복 ingest가 멱등이 됩니다.
+
+## 후보 청크 검색
+
+질문 시점에 봇은 사용자의 질문을 임베딩하고 Qdrant에 상위 벡터 매칭을 요청합니다:
+
+```python
+query_vector = embed([question])[0]
+hits = qdrant.query_points(
+    collection_name=COLLECTION_NAME,
+    query=query_vector,
+    with_payload=True,
+    limit=8,
+).points
+```
+
+여기서 `limit`는 후보 수입니다. 다음 단계에서 재순위할 것이므로 보통 모델에 보낼 청크 수보다 더 높아야 합니다. 좋은 기본값은 `8`개 후보를 검색하고 상위 `4`개를 chat 모델로 보내는 것입니다.
+
+## FastEmbed로 재순위
+
+이제 검색이 훨씬 더 똑똑하게 느껴지게 만드는 부분을 추가합니다.
+
+```python
+from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+reranker = TextCrossEncoder(model_name="Xenova/ms-marco-MiniLM-L-6-v2")
+
+candidate_texts = [str((hit.payload or {}).get("text", "")) for hit in hits]
+rerank_scores = list(reranker.rerank(question, candidate_texts))
+reranked = sorted(
+    zip(hits, rerank_scores),
+    key=lambda hit_and_score: hit_and_score[1],
+    reverse=True,
+)
+```
+
+임베딩 검색과 cross-encoder 재순위의 중요한 차이는 점수화가 어떻게 일어나는가입니다.
+
+임베딩 검색은 질문의 벡터 하나를 각 청크의 벡터 하나와 비교합니다. 빠르고 확장 가능합니다. cross-encoder는 질문과 청크를 함께 평가합니다. 더 느리지만 관련성을 더 직접적으로 판단할 수 있습니다.
+
+그래서 보통의 패턴은 다음과 같습니다:
+
+1. 벡터 검색으로 더 큰 후보 집합 검색.
+2. 그 후보들을 로컬에서 재순위.
+3. 상위 몇 개 청크를 언어 모델로 전송.
+
+좋은 시작점은 `candidate_k=8`, `top_k=4`입니다. 올바른 출처가 종종 근처에 있지만 최종 context에 들어가지 못한다면 `candidate_k`를 늘리세요.
+
+## Venice Chat Completion으로 답변
+
+context가 선택되면 출처 번호로 포맷하세요:
+
+```python
+def format_context(chunks: list[RankedChunk]) -> str:
+    if not chunks:
+        return "No relevant context was retrieved."
+
+    context_parts = []
+    for index, chunk in enumerate(chunks, start=1):
+        source = chunk.metadata.get("source", "unknown")
+        context_parts.append(
+            f"[{index}] Source: {source} | "
+            f"Vector score: {chunk.vector_score:.4f} | "
+            f"Rerank score: {chunk.rerank_score:.4f}\n"
+            f"{chunk.content}"
+        )
+    return "\n\n---\n\n".join(context_parts)
+```
+
+그런 다음 context를 Venice chat 모델로 보내세요:
+
+```python
+response = venice.chat.completions.create(
+    model="kimi-k2-6",
+    temperature=0.2,
+    messages=[
+        {
+            "role": "system",
+            "content": (
+                "You are a helpful RAG assistant. Answer using only the supplied "
+                "context. If the context does not answer the question, say that "
+                "you do not have enough information."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Retrieved context:\n{context}\n\n"
+                f"Question: {question}\n\n"
+                "Answer with citations like [1] when the context supports the answer:"
+            ),
+        },
+    ],
+)
+```
+
+system prompt에 주목하세요: 봇은 제공된 context로만 답하라고 지시받습니다. 이는 단순하지만 중요한 가드레일입니다. 검색된 문서가 답을 뒷받침하지 않을 때 RAG 비서가 일반 모델 지식으로 자신 있게 답해서는 안 됩니다.
+
+## 봇 실행
+
+조각들을 스크립트로 조립한 다음 `rag_bot.py`로 저장하세요. 첫 번째 단순 실행은 자체 파일을 ingest하기 전에 파이프라인을 검증할 수 있도록 몇 가지 내장 샘플 문서를 사용할 수 있습니다:
+
+```bash
+python rag_bot.py \
+  --question "What does reranking improve in a RAG pipeline?"
+```
+
+자체 문서를 ingest하려면:
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --question "What does this project do?"
+```
+
+디스크에 로컬 Qdrant 컬렉션을 유지하고 대화형 채팅을 시작하려면:
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --qdrant-path ./qdrant_data \
+  --chat
+```
+
+스크립트는 답변을 출력한 다음, 벡터 및 재순위 점수와 함께 출처를 출력합니다:
+
+```text
+Answer
+============================================================
+Reranking improves retrieval quality by rescoring the top
+vector-search candidates with a cross-encoder model [1].
+
+Sources
+============================================================
+1. sample-docs (vector=0.8123, rerank=0.7342)
+```
+
+모델에 실제로 전달된 텍스트를 확인하고 싶다면 다음을 추가하세요:
+
+```bash
+--show-context
+```
+
+## 유용한 CLI 옵션
+
+코드 수정 없이 봇을 튜닝할 수 있도록 주요 검색 손잡이를 CLI 옵션으로 노출하세요:
+
+| Option | Default | What it controls |
+| --- | --- | --- |
+| `--candidate-k` | `8` | 재순위할 벡터 검색 결과 수 |
+| `--top-k` | `4` | chat 모델로 보낼 재순위된 청크 수 |
+| `--chunk-size` | `1000` | 오버랩 전 최대 청크 크기 |
+| `--chunk-overlap` | `150` | 인접 청크 사이에 반복되는 문자 수 |
+| `--embedding-batch-size` | `32` | Venice 임베딩 요청당 청크 수 |
+| `--qdrant-path` | 미설정 | 로컬 영구 Qdrant 저장 경로 |
+| `--qdrant-url` | 미설정 | 원격 Qdrant URL |
+| `--skip-ingest` | `false` | 문서를 다시 로드하지 않고 기존 컬렉션 쿼리 |
+| `--recreate-collection` | `false` | Qdrant 컬렉션 삭제 및 재빌드 |
+
+반복적인 로컬 개발에서 흔한 흐름:
+
+```bash
+python rag_bot.py \
+  --docs ./docs \
+  --qdrant-path ./qdrant_data \
+  --recreate-collection \
+  --question "Summarize the most important setup steps."
+```
+
+그런 다음 ingest 없이 후속 질문:
+
+```bash
+python rag_bot.py \
+  --qdrant-path ./qdrant_data \
+  --skip-ingest \
+  --question "Which file explains deployment?"
+```
+
+## 프라이버시 노트
+
+프라이빗 RAG 설정의 경우 각 레이어를 별도로 생각하세요:
+
+| Layer | Privacy consideration |
+| --- | --- |
+| Venice 임베딩 | 벡터 생성을 위해 문서 청크가 Venice로 전송 |
+| Venice 채팅 | 질문에 답하기 위해 검색된 context가 Venice로 전송 |
+| 로컬 Qdrant | 벡터와 페이로드가 머신에 남음 |
+| 원격 Qdrant | 벡터와 페이로드가 Qdrant 서버가 실행되는 어디에든 저장 |
+| FastEmbed 재순위기 | 모델이 사용 가능해진 뒤 재순위가 로컬에서 실행 |
+
+이 튜토리얼의 가장 프라이빗한 기본값은 추론에 Venice, 디스크의 로컬 Qdrant, 로컬 FastEmbed 재순위입니다. 그러면 벡터 데이터베이스 페이로드를 제3자 벡터 스토어로 보내지 않고 실용적인 RAG 봇을 얻을 수 있습니다.
+
+## 미리 처리할 흔한 에러
+
+| Symptom | What it usually means | What to do |
+| --- | --- | --- |
+| `Set VENICE_API_KEY before running this example.` | 환경 변수가 없음 | 스크립트 실행 전 `VENICE_API_KEY` export |
+| `Document path does not exist` | `--docs`에 전달된 경로가 잘못됨 | 파일 또는 폴더 경로 확인 |
+| 검색 결과 없음 | ingest되지 않았거나 잘못된 컬렉션을 쿼리 중 | `--skip-ingest` 제거 또는 `--collection`과 `--qdrant-path` 확인 |
+| Qdrant 벡터 크기 에러 | 컬렉션이 다른 임베딩 모델로 생성됨 | 임베딩 모델 변경 후 컬렉션 재생성 |
+| 첫 번째 재순위가 느림 | FastEmbed가 cross-encoder를 다운로드/초기화 중일 수 있음 | 첫 실행을 끝까지 진행, 이후 실행은 더 빠를 것 |
+
+임베딩 모델을 바꾸면 Qdrant 컬렉션을 재생성하세요. 서로 다른 임베딩 모델은 서로 다른 차원의 벡터를 생성할 수 있고, Qdrant 컬렉션은 고정된 벡터 크기를 기대합니다.
+
+## 다음으로 갈 곳
+
+베이스라인이 동작하면 가장 영향이 큰 개선은 보통 다음과 같습니다:
+
+- PDF, HTML, 티켓, 내부 위키 페이지를 위한 문서 전용 로더 추가.
+- 제목, 헤딩, 날짜, 소유자, URL 같은 더 풍부한 메타데이터 저장.
+- 실제 질문에 대해 `candidate_k`, `top_k`, 청크 크기, 오버랩 튜닝.
+- 변경 전후 검색 품질을 측정할 수 있도록 평가 질문 추가.
+- 더 나은 대화형 채팅 경험을 위해 최종 Venice chat completion 스트리밍.
+
+RAG 시스템은 데모하기는 쉽지만 평범하게 만들기도 놀랍도록 쉽습니다. 벡터 검색 + 재순위 패턴은 검색을 빠르게 유지하면서도 봇이 언어 모델에 올바른 context를 보낼 가능성을 높이는 강력한 기반입니다.
