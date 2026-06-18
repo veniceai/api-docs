@@ -52,13 +52,9 @@ The reference implementation is a small Rust service with a few clear parts:
 
 *A client sends an OpenAI-compatible request to the gateway. The gateway authenticates the caller, checks rate limits, forwards the request to Venice, and records telemetry along the way.*
 
-There are three design choices worth calling out before we start writing code.
+As part of the gateway, we'll be ensuring that this service remains horizontally scalable with the least amount of surface area covered when it comes to the API itself. There's a few reasons for this - one of them primarily being that if you have a very high amount of throughput for example, you will almost certainly want to use replicas (ie, spin up more than 1 of the same service). This means that if you aren't already, architecturally you'll want to put your original service and the replicas behind a load balancer so that if one container or service goes down, the entire service does not experience an outage.
 
-The first is **why the gateway keeps an OpenAI-compatible API**. If your internal clients already know how to call `/v1/chat/completions`, the gateway should not force every app to learn a new request shape. We only validate the fields the gateway needs for policy and telemetry, then pass the rest of the JSON through to Venice. That keeps the gateway useful without turning it into a second model API.
-
-The second is **why API keys live in Postgres**. A production gateway needs to revoke keys, change per-key limits, and attribute usage to a subject. Storing a keyed record gives us that control. Storing only a prefix and hash means the database is useful for lookup without becoming a plaintext credential store.
-
-The third is **why streaming is handled explicitly**. Non-streaming proxying can be as simple as "send JSON upstream, return JSON downstream." Streaming is different because clients expect server-sent events to arrive incrementally. The gateway has to relay chunks while still observing first-token latency, finish reasons, token usage, and billing metadata when those details appear.
+Additionally, we will also assume that we own API key creation in some manner, although the gateway service shouldn't be minting them in isolation. This will be represented as a Postgres table that we seed when used locally. In production, this would typically be handled by the authentication service. Although it is possible to handle creating an API key upstream for every user who uses your LLM gateway, in practice this is not generally advisable. By offloading this responsibility to the upstream service, you also offload any control you would normally have -  which means you can't fully enforce things like rate limiting and spend caps.
 
 The source tree stays intentionally small:
 
@@ -85,7 +81,7 @@ The source tree stays intentionally small:
     └── venice.rs
 ```
 
-Let's get building.
+Without any further ado, let's get building.
 
 ## Creating the Rust service
 
@@ -96,48 +92,50 @@ cargo new llm-gateway
 cd llm-gateway
 ```
 
-Add the dependencies we need in `Cargo.toml`:
+Add the dependencies we need in `Cargo.toml` - explanations added in the code snippet:
 
 ```toml
 [dependencies]
+# Web backend
 axum = "0.8.9"
-bytes = "1.11.1"
-futures-util = "0.3.32"
+tower = "0.5.3"
+tower-http = { version = "0.6.11", features = ["trace", "request-id", "sensitive-headers", "timeout", "limit"] }
+
+## Observability
 opentelemetry = "0.32.0"
 opentelemetry-otlp = "0.32.0"
 opentelemetry_sdk = "0.32.1"
-reqwest = { version = "0.12.28", default-features = false, features = ["json", "stream", "rustls-tls", "http2", "charset"] }
-reqwest-eventsource = "0.6.0"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-sha2 = "0.11.0"
-sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "macros", "migrate"] }
-subtle = "2.6.1"
-thiserror = "2.0.18"
-time = { version = "0.3.47", features = ["serde", "formatting", "macros"] }
-tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "signal", "net", "time"] }
-tower = "0.5.3"
-tower-http = { version = "0.6.11", features = ["trace", "request-id", "sensitive-headers", "timeout", "limit"] }
 tracing = "0.1.44"
 tracing-opentelemetry = "0.33.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+
+# HTTP request/response handling
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "stream", "rustls-tls", "http2", "charset"] }
+reqwest-eventsource = "0.6.0"
+bytes = "1.11.1"
+futures-util = "0.3.32"
+
+# Serialization
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+
+# Hashing/crypto
+sha2 = "0.11.0"
+subtle = "2.6.1"
+
+# SQL
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "macros", "migrate"] }
+
+# utils
+thiserror = "2.0.18" # a crate for writing ergonomic errors
+time = { version = "0.3.47", features = ["serde", "formatting", "macros"] } # time
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "signal", "net", "time"] } # the most popular async Rust runtime
 uuid = { version = "1.23.3", features = ["serde", "v4"] }
 ```
 
-There are a few choices worth calling out:
-
-- `axum` gives us a small, async HTTP server without hiding the request and response types we need for proxying.
-- `reqwest` calls the Venice API, and the `stream` feature lets us handle upstream responses without buffering everything first.
-- `reqwest-eventsource` lets us consume upstream server-sent events for streaming responses. That keeps the gateway compatible with SDKs that expect `stream: true` to behave like an OpenAI-style SSE stream.
-- `sqlx` handles Postgres migrations and queries. We want the database layer to be explicit because auth and rate limits are policy decisions, not incidental storage.
-- `sha2` and `subtle` let us store hashed API keys and compare them in constant time.
-- `opentelemetry` and `tracing-opentelemetry` give us provider-level observability without coupling the rest of the code to one tracing backend.
-
-This is more dependency-heavy than a minimal Axum "hello world", but each crate maps to a real gateway responsibility: HTTP serving, upstream proxying, persistent policy, streaming, and telemetry.
-
 ## Loading configuration
 
-The gateway reads everything from environment variables. For infrastructure code like this, environment variables are a good default because the same binary can run locally, in Docker Compose, or in a hosted environment without a separate config file format.
+The gateway reads everything from environment variables. For infrastructure code like this, environment variables are a good default because the same binary can run locally, in Docker Compose, or in a hosted environment without a separate config file format. Additionally, many providers will allow you to store your own environment variables as secrets in their own container runtime. This is often much safer than trying to use something like `dotenv` (or `dotenvy` in Rust, as the original `dotenv` crate is mostly deprecated). 
 
 Create `src/config.rs`:
 
@@ -178,9 +176,13 @@ impl Config {
 }
 ```
 
+While there are a lot of possible values being parsed here from environment variables, generally speaking you only need two:
+- The database URL
+- Your Venice API key
+
 Two defaults matter here. `VENICE_BASE_URL` points at `https://api.venice.ai/api/v1`, and `CAPTURE_GENAI_CONTENT` defaults to `false` so prompt content is not logged unless you intentionally enable it.
 
-That second default is the more important one. A gateway can see every prompt and response flowing through it, but observability should not automatically become content capture. In most production systems, token counts, latency, model names, status codes, and billing metadata are enough for operations. Prompt logging should be a deliberate product and privacy decision.
+That second default is the more important one. A gateway can see every prompt and response flowing through it, but observability should not automatically become content capture. In most production systems, token counts, latency, model names, status codes, and billing metadata are enough for operations. Generally speaking, logging prompts and conversations in production may not only be a privacy liability - it can also be a storage liability. Adding them means creating spans and traces with an extremely high level of cardinality (ie, the uniqueness of data within a dataset). This can make searching through your observability data very inexpensive, in addition to potentially hampering performance when searching through the data.
 
 ## Creating the database schema
 
@@ -248,9 +250,9 @@ Keeping those invariants in Postgres is useful because every caller has to pass 
 
 ## Building the Venice client
 
-Create `src/venice.rs`. The client only needs to know the upstream chat completions URL, the Venice API key, and how many times to retry transient failures.
+Next, we will create `src/venice.rs`. The client only needs to know the upstream chat completions URL, the Venice API key, and how many times to retry transient failures.
 
-Keeping this wrapper small is intentional. The gateway should not reimplement Venice's API surface. Its job is to attach the server-side credential, apply a timeout, retry requests that are safe to retry, and return the upstream response in a form the router can forward.
+Keeping this wrapper small is intentional - the gateway should not reimplement Venice's entire API. At a basic level, the gateway's job is to attach the server-side credential, apply a timeout, retry requests that are safe to retry, and return the upstream response in a form the router can forward.
 
 ```rust
 use std::time::Duration;
@@ -356,7 +358,7 @@ Venice's chat completions endpoint is OpenAI-compatible, so the gateway can acce
 
 ```json
 {
-  "model": "llama-3.3-70b",
+  "model": "zai-org-glm-5-1",
   "messages": [
     {
       "role": "user",
