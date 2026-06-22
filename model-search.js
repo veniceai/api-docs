@@ -149,6 +149,46 @@
 
   // Placeholder image for I2V quote requests (price is same regardless of image content)
   const PLACEHOLDER_IMAGE_URL = 'https://venice.ai/favicon.ico';
+  const MODEL_ICON_BASE_PATH = '/images/icons/models/';
+  const MODEL_TYPE_ICON_BY_TYPE = {
+    asr: 'text.svg',
+    embedding: 'text.svg',
+    image: 'image.svg',
+    inpaint: 'image.svg',
+    music: 'music.svg',
+    text: 'text.svg',
+    tts: 'music.svg',
+    upscale: 'image.svg',
+    video: 'video.svg'
+  };
+  // Mirrors the interface API catalog's best-effort provider/logo matching for
+  // API-only models whose public response does not include an assetPath.
+  const SYNTHETIC_PROVIDER_ASSET_RULES = [
+    ['openai.svg', ['openai', 'gpt-image', 'whisper']],
+    ['grok.svg', ['grok', 'x.ai']],
+    ['qwen.svg', ['qwen', 'wan-', 'tongyi']],
+    ['google.svg', ['google', 'gemini', 'veo', 'nano-banana']],
+    ['bytedance.svg', ['bytedance', 'seedance', 'seedream', 'doubao']],
+    ['BlackForestLabs.svg', ['black forest', 'blackforest', 'flux-']],
+    ['Zhipu.svg', ['zai-org', 'z-ai', 'glm', 'zhipu']],
+    ['nvidia.svg', ['nvidia', 'parakeet']],
+    ['minimax.svg', ['minimax', 'hailuo']],
+    ['elevenlabs.svg', ['elevenlabs']],
+    ['runway.svg', ['runway']],
+    ['pixversevideo.svg', ['pixverse']],
+    ['kling.svg', ['kling']],
+    ['vidu.svg', ['vidu']],
+    ['hunyuan.svg', ['hunyuan']],
+    ['imagineart.svg', ['imagineart']],
+    ['ltx.svg', ['ltx', 'lightricks']],
+    ['kimi.svg', ['moonshot', 'kimi']],
+    ['arcee-ai.svg', ['arcee']],
+    ['deepseek.svg', ['deepseek']],
+    ['HiDreamLogo.svg', ['hidream']],
+    ['aionlabs.svg', ['aionlabs']],
+    ['stable-audio.svg', ['stable-audio']],
+    ['venice-keys.svg', ['venice', 'firered', 'z-image', 'chroma', 'upscaler']]
+  ];
 
   // Circuit breaker: stop fetching video quotes after repeated CORS/network failures
   let videoQuoteFailures = 0;
@@ -370,6 +410,26 @@
   function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function getModelAssetFile(model) {
+    const spec = model.model_spec || {};
+    const haystack = [model.id, spec.name, spec.modelSource].filter(Boolean).join(' ').toLowerCase();
+    const match = SYNTHETIC_PROVIDER_ASSET_RULES.find(([, patterns]) => patterns.some(pattern => haystack.includes(pattern)));
+    return match?.[0] || MODEL_TYPE_ICON_BY_TYPE[model.type] || 'text.svg';
+  }
+
+  function getModelLogoHtml(model) {
+    const spec = model.model_spec || {};
+    const assetFile = getModelAssetFile(model);
+    const label = spec.name || model.id;
+    const assetPath = `${MODEL_ICON_BASE_PATH}${assetFile}`;
+    return `
+      <span class="vmb-model-avatar" aria-hidden="true">
+        <span class="vmb-model-avatar-mask" style="--vmb-model-icon: url('${escapeHtml(assetPath)}')"></span>
+      </span>
+      <span class="sr-only">${escapeHtml(label)} logo</span>
+    `;
   }
 
   function normalizeSearchText(value) {
@@ -2440,6 +2500,9 @@
       
       return `
         <div class="vmb-model" role="listitem">
+          <div class="vmb-model-shell">
+            ${getModelLogoHtml(model)}
+            <div class="vmb-model-body">
             <div class="vmb-model-row">
               <div class="vmb-model-left">
                 ${nameLink}${copyBtn}${dateInfo?.isNew ? '<span class="vmb-new-dot" title="Recently added">New</span>' : ''}
@@ -2453,6 +2516,8 @@
               <span class="vmb-info-left">${leftParts.join('<span class="vmb-dot">·</span>')}</span>
               <span class="vmb-info-right">${capIcons}${contextMobile}${releaseDateHtml}</span>
             </div>
+            </div>
+          </div>
           </div>
         `;
     }
