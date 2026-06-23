@@ -149,6 +149,59 @@
 
   // Placeholder image for I2V quote requests (price is same regardless of image content)
   const PLACEHOLDER_IMAGE_URL = 'https://venice.ai/favicon.ico';
+  const MODEL_ICON_BASE_PATH = '/images/icons/models/';
+  const MODEL_TYPE_ICON_BY_TYPE = {
+    asr: 'text.svg',
+    embedding: 'text.svg',
+    image: 'image.svg',
+    inpaint: 'image.svg',
+    music: 'music.svg',
+    text: 'text.svg',
+    tts: 'music.svg',
+    upscale: 'image.svg',
+    video: 'video.svg'
+  };
+  // Mirrors the interface API catalog's best-effort provider/logo matching for
+  // API-only models whose public response does not include an assetPath.
+  // Order matters: the first rule whose pattern is a substring of the haystack
+  // (id + name + modelSource, lowercased) wins. Keep broad provider prefixes
+  // ('google' before 'gemma', 'openai' before 'sora') ahead of narrower ones.
+  const SYNTHETIC_PROVIDER_ASSET_RULES = [
+    ['openai.svg', ['openai', 'gpt-image', 'whisper', 'sora']],
+    ['grok.svg', ['grok', 'x.ai', 'xai']],
+    ['qwen.svg', ['qwen', 'wan-', 'tongyi']],
+    ['google.svg', ['google', 'gemini', 'veo', 'nano-banana']],
+    ['gemma.svg', ['gemma']],
+    ['bytedance.svg', ['bytedance', 'seedance', 'seedream', 'doubao']],
+    ['BlackForestLabs.svg', ['black forest', 'blackforest', 'flux-']],
+    ['Zhipu.svg', ['zai-org', 'z-ai', 'glm', 'zhipu']],
+    ['nvidia.svg', ['nvidia', 'parakeet']],
+    ['minimax.svg', ['minimax', 'hailuo']],
+    ['elevenlabs.svg', ['elevenlabs']],
+    ['runway.svg', ['runway']],
+    ['pixversevideo.svg', ['pixverse']],
+    ['kling.svg', ['kling']],
+    ['vidu.svg', ['vidu']],
+    ['hunyuan.svg', ['hunyuan']],
+    ['imagineart.svg', ['imagineart']],
+    ['ltx.svg', ['ltx', 'lightricks']],
+    ['kimi.svg', ['moonshot', 'kimi']],
+    ['arcee-ai.svg', ['arcee']],
+    ['deepseek.svg', ['deepseek']],
+    ['HiDreamLogo.svg', ['hidream']],
+    ['aionlabs.svg', ['aionlabs', 'aion-labs']],
+    ['stable-audio.svg', ['stable-audio']],
+    ['opus.svg', ['claude', 'anthropic']],
+    ['mistral.svg', ['mistral']],
+    ['meta.svg', ['llama', 'meta-llama']],
+    ['ideogram.svg', ['ideogram']],
+    ['longcat.svg', ['longcat']],
+    ['topaz.svg', ['topaz']],
+    ['ovi.svg', ['ovi-']],
+    ['krea.svg', ['krea']],
+    ['inception.svg', ['mercury', 'inception']],
+    ['venice-keys.svg', ['venice', 'firered', 'z-image', 'chroma', 'upscaler']]
+  ];
 
   // Circuit breaker: stop fetching video quotes after repeated CORS/network failures
   let videoQuoteFailures = 0;
@@ -370,6 +423,25 @@
   function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function getModelAssetFile(model) {
+    const spec = model.model_spec || {};
+    const haystack = [model.id, spec.name, spec.modelSource].filter(Boolean).join(' ').toLowerCase();
+    const match = SYNTHETIC_PROVIDER_ASSET_RULES.find(([, patterns]) => patterns.some(pattern => haystack.includes(pattern)));
+    return match?.[0] || MODEL_TYPE_ICON_BY_TYPE[model.type] || 'text.svg';
+  }
+
+  function getModelLogoHtml(model) {
+    const assetFile = getModelAssetFile(model);
+    const assetPath = `${MODEL_ICON_BASE_PATH}${assetFile}`;
+    // Decorative only: the model name is already present as visible, announced
+    // text in the row, so the avatar is aria-hidden and carries no extra label.
+    return `
+      <span class="vmb-model-avatar" aria-hidden="true">
+        <span class="vmb-model-avatar-mask" style="--vmb-model-icon: url('${escapeHtml(assetPath)}')"></span>
+      </span>
+    `;
   }
 
   function normalizeSearchText(value) {
@@ -2440,6 +2512,9 @@
       
       return `
         <div class="vmb-model" role="listitem">
+          <div class="vmb-model-shell">
+            ${getModelLogoHtml(model)}
+            <div class="vmb-model-body">
             <div class="vmb-model-row">
               <div class="vmb-model-left">
                 ${nameLink}${copyBtn}${dateInfo?.isNew ? '<span class="vmb-new-dot" title="Recently added">New</span>' : ''}
@@ -2453,6 +2528,8 @@
               <span class="vmb-info-left">${leftParts.join('<span class="vmb-dot">·</span>')}</span>
               <span class="vmb-info-right">${capIcons}${contextMobile}${releaseDateHtml}</span>
             </div>
+            </div>
+          </div>
           </div>
         `;
     }
