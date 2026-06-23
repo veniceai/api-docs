@@ -163,11 +163,15 @@
   };
   // Mirrors the interface API catalog's best-effort provider/logo matching for
   // API-only models whose public response does not include an assetPath.
+  // Order matters: the first rule whose pattern is a substring of the haystack
+  // (id + name + modelSource, lowercased) wins. Keep broad provider prefixes
+  // ('google' before 'gemma', 'openai' before 'sora') ahead of narrower ones.
   const SYNTHETIC_PROVIDER_ASSET_RULES = [
-    ['openai.svg', ['openai', 'gpt-image', 'whisper']],
-    ['grok.svg', ['grok', 'x.ai']],
+    ['openai.svg', ['openai', 'gpt-image', 'whisper', 'sora']],
+    ['grok.svg', ['grok', 'x.ai', 'xai']],
     ['qwen.svg', ['qwen', 'wan-', 'tongyi']],
     ['google.svg', ['google', 'gemini', 'veo', 'nano-banana']],
+    ['gemma.svg', ['gemma']],
     ['bytedance.svg', ['bytedance', 'seedance', 'seedream', 'doubao']],
     ['BlackForestLabs.svg', ['black forest', 'blackforest', 'flux-']],
     ['Zhipu.svg', ['zai-org', 'z-ai', 'glm', 'zhipu']],
@@ -185,8 +189,17 @@
     ['arcee-ai.svg', ['arcee']],
     ['deepseek.svg', ['deepseek']],
     ['HiDreamLogo.svg', ['hidream']],
-    ['aionlabs.svg', ['aionlabs']],
+    ['aionlabs.svg', ['aionlabs', 'aion-labs']],
     ['stable-audio.svg', ['stable-audio']],
+    ['opus.svg', ['claude', 'anthropic']],
+    ['mistral.svg', ['mistral']],
+    ['meta.svg', ['llama', 'meta-llama']],
+    ['ideogram.svg', ['ideogram']],
+    ['longcat.svg', ['longcat']],
+    ['topaz.svg', ['topaz']],
+    ['ovi.svg', ['ovi-']],
+    ['krea.svg', ['krea']],
+    ['inception.svg', ['mercury', 'inception']],
     ['venice-keys.svg', ['venice', 'firered', 'z-image', 'chroma', 'upscaler']]
   ];
 
