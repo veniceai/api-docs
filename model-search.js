@@ -433,15 +433,14 @@
   }
 
   function getModelLogoHtml(model) {
-    const spec = model.model_spec || {};
     const assetFile = getModelAssetFile(model);
-    const label = spec.name || model.id;
     const assetPath = `${MODEL_ICON_BASE_PATH}${assetFile}`;
+    // Decorative only: the model name is already present as visible, announced
+    // text in the row, so the avatar is aria-hidden and carries no extra label.
     return `
       <span class="vmb-model-avatar" aria-hidden="true">
         <span class="vmb-model-avatar-mask" style="--vmb-model-icon: url('${escapeHtml(assetPath)}')"></span>
       </span>
-      <span class="sr-only">${escapeHtml(label)} logo</span>
     `;
   }
 
