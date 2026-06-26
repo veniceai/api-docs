@@ -1,0 +1,169 @@
+---
+title: Autonome Agenten-API-Schlüssel-Erstellung
+description: "Lassen Sie einen On-Chain-KI-Agenten autonom einen Venice-API-Schlüssel prägen, indem er VVV auf Base staked und einen von Venice ausgegebenen Validierungstoken mit einer Wallet signiert."
+'og:title': "Autonomous Agent API Key | Venice API Docs"
+'og:description': Wie ein autonomer KI-Agent seinen eigenen Venice-API-Schlüssel erstellen kann, indem er ein von Venice ausgestelltes Token mit einer Wallet signiert, die gestaktes VVV auf Base hält.
+---
+
+Ein KI-Agent, der eine Wallet auf Base kontrolliert, kann seinen eigenen Venice-API-Schlüssel ohne menschliches Zutun erstellen. Der Agent erwirbt VVV, staked es, signiert ein kurzlebiges von Venice ausgestelltes Validierungs-Token und sendet das signierte Token zurück, um einen frischen API-Schlüssel zu erhalten, der an die Staking-Wallet gebunden ist.
+
+Dieser Leitfaden führt Sie End-to-End durch den gesamten Ablauf und behandelt die Finanzierungsoptionen, mit denen Sie nach der Schlüsselerstellung tatsächlich für Inferenz bezahlen können.
+
+## Voraussetzungen
+
+* Eine EVM-Wallet auf Base, die vom Agenten kontrolliert wird (Private Key in einer Umgebungsvariablen oder einem Secret Manager).
+* Ein kleiner Betrag ETH auf Base für Gas (Staking sind zwei Transaktionen: `approve` und dann `stake`).
+* Ein beliebiger Nicht-Null-Betrag VVV zum Staken. Der Mint-Endpoint erfordert lediglich, dass die Wallet ein Nicht-Null-sVVV-Guthaben hat, sodass 1 VVV ausreicht, um einen Schlüssel zu erstellen. Siehe [Bezahlung für Inferenz](#paying-for-inference) für die Voraussetzungen, um bezahlte Endpoints tatsächlich aufzurufen.
+
+<Tip>
+  Verwenden Sie eine dedizierte Agenten-Wallet statt einer Treasury-Wallet. Der Private Key der Wallet signiert jede Venice-Token-Anfrage, daher sollte der Schaden im Falle einer Kompromittierung möglichst gering sein.
+</Tip>
+
+## Schritte
+
+<Steps>
+  <Step title="VVV erwerben">
+    Senden Sie VVV an die Wallet des Agenten oder lassen Sie den Agenten auf einem DEX wie [Aerodrome](https://aerodrome.finance/swap?from=eth\&to=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf\&chain0=8453\&chain1=8453) oder [Uniswap](https://app.uniswap.org/swap?chain=base\&inputCurrency=NATIVE\&outputCurrency=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf) tauschen.
+
+    VVV-Token-Vertrag auf Base: `0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf`
+  </Step>
+
+  <Step title="VVV bei Venice staken">
+    Staken Sie das VVV im [Venice Staking Smart Contract](https://basescan.org/address/0x321b7ff75154472b18edb199033ff4d116f340ff#code) unter `0x321b7ff75154472B18EDb199033fF4D116F340Ff`. Das sind zwei Transaktionen:
+
+    1. `approve(spender, amount)` auf dem VVV-Token, wobei `spender` der Staking-Contract ist.
+    2. `stake(amount)` auf dem Staking-Contract.
+
+    <Frame as="div">
+      <img src="/images/guides/SC-Stake.png" alt="Smart Contract Staking" />
+    </Frame>
+
+    Wenn die zweite Transaktion bestätigt ist, sinkt das VVV-Guthaben der Wallet, und ihr sVVV-Guthaben steigt um denselben Betrag. Der Mint-Endpoint liest das sVVV-Guthaben, um zu bestätigen, dass die Wallet gestaked ist.
+  </Step>
+
+  <Step title="Ein Validierungs-Token anfordern">
+    Rufen Sie `GET /api/v1/api_keys/generate_web3_key` auf, um ein kurzlebiges, von Venice signiertes Token zu erhalten. Der Endpoint ist unauthentifiziert.
+
+    ```bash
+    curl --request GET \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+    ```
+
+    Die Antwort enthält ein `token`-Feld. Das Token läuft 15 Minuten nach Ausstellung ab, also signieren und übermitteln Sie es deutlich vorher.
+  </Step>
+
+  <Step title="Das Token mit der Staking-Wallet signieren">
+    Signieren Sie den rohen Token-String mit der Wallet, die das gestakte VVV hält. Dies ist ein standardmäßiger `personal_sign` über die Token-Bytes. Sowohl `ethers.Wallet.signMessage(token)` als auch `account.signMessage({ message: token })` in `viem` erzeugen die korrekte Signatur.
+  </Step>
+
+  <Step title="Den API-Schlüssel erstellen">
+    `POST`en Sie die Adresse, die Signatur und das Token zusammen mit dem gewünschten Schlüsseltyp an denselben Endpoint.
+
+    ```bash
+    curl --request POST \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "address": "<wallet address>",
+        "signature": "<signed token>",
+        "token": "<unsigned token>",
+        "apiKeyType": "INFERENCE",
+        "description": "Agent key minted on <date>"
+      }'
+    ```
+
+    Erforderliche Felder: `address`, `signature`, `token`, `apiKeyType` (`INFERENCE` oder `ADMIN`).
+
+    Optionale Felder: `description`, `expiresAt`, `consumptionLimit` (begrenzt die Gesamtausgaben dieses Schlüssels, denominiert in `usd`, `vcu` oder `diem`).
+
+    Bei Erfolg enthält die Antwort den erstellten `apiKey`-String. Speichern Sie ihn im Secret-Store des Agenten und verwenden Sie ihn als normales Bearer-Token (`Authorization: Bearer <key>`).
+  </Step>
+</Steps>
+
+## End-to-End-Beispiel
+
+Das folgende Beispiel verwendet eine echte Wallet aus einer Umgebungsvariablen statt einer zufällig generierten. Eine zufällige Wallet hat kein gestaktes VVV, und der Mint wird mit dem Fehler `Wallet has no staked VVV on Base` abgelehnt.
+
+```typescript
+import { ethers } from "ethers"
+
+const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
+const address = wallet.address
+
+const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
+const { data: { token } } = await tokenResponse.json()
+
+const signature = await wallet.signMessage(token)
+
+const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    address,
+    signature,
+    token,
+    apiKeyType: "INFERENCE",
+    description: "Agent key",
+  }),
+})
+
+const result = await mintResponse.json()
+if (!mintResponse.ok) {
+  throw new Error(`Mint failed: ${result.error}`)
+}
+
+console.log("Minted key:", result.data.apiKey)
+```
+
+## Fehlerreferenz
+
+Der Endpoint gibt spezifische, umsetzbare Fehlermeldungen zurück. Mappen Sie diese im Agenten, damit er entscheiden kann, ob er es erneut versucht, ein neues Token anfordert oder abbricht.
+
+| Status | Fehlermeldung enthält | Bedeutung | Vorgehen |
+| --- | --- | --- | --- |
+| `400` | `Invalid wallet address` | Das `address`-Feld ist keine gültige EVM-Adresse. | Adresse korrigieren und erneut einreichen. |
+| `400` | `JWT has expired` | Das Validierungs-Token ist abgelaufen, bevor Sie es signiert und eingereicht haben. | Neues Token anfordern, signieren und sofort einreichen. |
+| `400` | `JWT signature is invalid` | Das Token wurde nicht von Venice signiert (wahrscheinlich manipuliert oder gefälscht). | Immer ein frisches Token vom `GET`-Endpoint verwenden. |
+| `400` | `JWT claims are invalid` | Aussteller oder Audience des Tokens entsprechen nicht dem, was Venice erwartet. | Verwenden Sie das unveränderte Token aus dem `GET`-Endpoint. |
+| `400` | `JWT is malformed` | Das eingereichte `token` ist kein JWT. | Stellen Sie sicher, dass Sie den exakten `token`-String aus dem `GET`-Endpoint senden. |
+| `400` | `Wallet signature does not match` | Die `signature` passt nicht zur `address` für das angegebene `token`. | Signieren Sie die rohen Token-Bytes mit der Wallet, die `address` besitzt. |
+| `400` | `Could not verify wallet signature` | Der RPC-Aufruf zur Verifizierung der Signatur ist fehlgeschlagen (transient). | Mit Backoff erneut versuchen. |
+| `400` | `Wallet has no staked VVV on Base` | Die Wallet hat ein sVVV-Guthaben von Null. | Zuerst VVV staken, dann erneut versuchen. |
+
+## Bezahlung für Inferenz
+
+Einen Schlüssel zu erstellen und damit bezahlte Endpoints aufrufen zu können sind zwei verschiedene Dinge. Ein frisch erstellter Schlüssel authentifiziert sich korrekt, kann aber keine bezahlten Endpoints (z. B. `/chat/completions`) aufrufen, bis das Konto der Wallet ein verfügbares Guthaben hat.
+
+Der erstellte Schlüssel kann vom Benutzerkonto in dieser Prioritätsreihenfolge ausgeben: DIEM, dann gebündelte Credits, dann USD.
+
+| Finanzierungsquelle | Autonom? | Wie |
+| --- | --- | --- |
+| **DIEM aus VVV-Staking** | Ja | Die tägliche DIEM-Zuteilung der Wallet ist proportional zu ihrem Anteil am Staking-Pool. Das Konto benötigt mindestens 0,1 gestakte DIEM, damit überhaupt DIEM ausgegeben werden können. Größere Stakes verdienen proportional mehr tägliches DIEM, das jede Epoche (00:00 UTC) erneuert wird. |
+| **USD über Stripe** | Nein (Browser) | Melden Sie sich auf venice.ai mit derselben Wallet an (Sign-In-With-Ethereum). Das Dashboard findet den vorhandenen Benutzerdatensatz. Credits unter Settings, API hinzufügen. |
+| **Coinbase Crypto Subscription** | Nein (Browser) | Gleiche Wallet-Anmeldung, dann über das Dashboard abonnieren. Der Flow leitet für die eigentliche Zahlung zu Coinbase Commerce um, daher kann er nicht aus einem Skript gesteuert werden. |
+| **Coinbase Onramp** | Nein (Browser) | Gleiche Wallet-Anmeldung, dann das Onramp-Widget im Dashboard verwenden. Wird auf der Coinbase-UI gehostet. |
+
+Wenn der Agent einen vollständig krypto-nativen, headless Finanzierungspfad benötigt, sind die saubersten Optionen:
+
+1. **Mehr VVV staken**, sodass die tägliche DIEM-Zuteilung die Ausgaben des Agenten abdeckt. Der erstellte Schlüssel verwendet dies automatisch.
+2. **Verwenden Sie den [x402-Wallet-Flow](/guides/integrations/x402-venice-api) anstelle des API-Schlüssels.** Bei x402 signiert der Agent pro Anfrage eine Sign-In-With-X-Nachricht, lädt direkt mit USDC auf Base oder Solana über `POST /api/v1/x402/top-up` auf und bezahlt pro Anfrage. Das x402-USDC-Guthaben ist wallet-gebunden, nicht benutzerbezogen, sodass es nicht als Guthaben für den erstellten Bearer-Schlüssel angezeigt wird, aber es ermöglicht es derselben Wallet, programmatisch für Inferenz zu bezahlen.
+
+## Verwandte Ressourcen
+
+<CardGroup cols={2}>
+  <Card title="Krypto und Agenten" icon="link" href="/guides/integrations/crypto-rpc-agents">
+    Verwenden Sie Venice sowohl als Modellanbieter als auch als Blockchain-RPC-Schicht für autonome Agenten.
+  </Card>
+
+  <Card title="x402-Wallet-Authentifizierung" icon="wallet" href="/guides/integrations/x402-venice-api">
+    Bezahlen Sie pro Anfrage mit USDC auf Base oder Solana, ohne API-Schlüssel.
+  </Card>
+
+  <Card title="Web3 API Key Endpoint generieren" icon="code" href="/api-reference/endpoint/api_keys/generate_web3_key/post">
+    Endpoint-Referenz für den Mint-Endpoint.
+  </Card>
+
+  <Card title="Standard-API-Schlüssel-Leitfaden" icon="key" href="/guides/getting-started/generating-api-key">
+    Für Nutzer, die einen Schlüssel über das Dashboard erstellen möchten.
+  </Card>
+</CardGroup>

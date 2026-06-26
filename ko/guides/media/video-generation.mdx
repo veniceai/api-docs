@@ -1,0 +1,374 @@
+---
+title: 비디오 생성
+description: "Venice의 비동기 큐 API에서 텍스트 프롬프트나 시작 이미지로 비디오를 생성하세요 — 작업을 제출하고, 상태를 폴링하고, 완성된 비디오를 다운로드하세요."
+"og:title": "Video Generation | Venice API Docs"
+"og:description": "Venice의 비동기 비디오 생성 API를 사용해 텍스트 prompt나 이미지로부터 비디오를 생성하는 방법을 알아보세요."
+---
+
+비디오 생성은 비동기입니다. 작업을 제출하고, `queue_id`를 저장한 다음, 응답이 `video/mp4`가 될 때까지 `/video/retrieve`로 폴링하세요.
+
+## Endpoint
+
+| Endpoint | Purpose | Required |
+|----------|---------|----------|
+| `POST /video/quote` | 생성 전 USD 가격 조회 | 아니오 |
+| `POST /video/queue` | 생성 요청 제출 | 예 |
+| `POST /video/retrieve` | 상태 폴링 또는 비디오 다운로드 | 예 |
+| `POST /video/complete` | 스토리지에서 비디오 삭제 | 아니오 |
+
+## 1단계: 생성 큐에 등록
+
+**요청:**
+```bash
+POST https://api.venice.ai/api/v1/video/queue
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "prompt": "A gondola gliding through Venice canals at sunset",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9"
+}
+```
+
+**응답(200):**
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+Grok Imagine Private 모델의 경우 큐 응답에 추가 `download_url` 필드가 포함됩니다:
+
+```json
+{
+  "model": "grok-imagine-text-to-video-private",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000",
+  "download_url": "https://private-share.venice.ai/v1/share/read/..."
+}
+```
+
+`download_url`은 retrieve 응답에서 비디오를 읽는 대신 완성된 비디오를 다운로드하는 데 사용하는 사전 서명된 URL입니다. 큐 응답에서 한 번만 반환되므로 `queue_id`와 함께 저장하세요. 이는 4가지 Grok Imagine Private 변형 모두에 적용됩니다:
+
+- `grok-imagine-text-to-video-private`
+- `grok-imagine-image-to-video-private`
+- `grok-imagine-reference-to-video-private`
+- `grok-imagine-video-to-video-private`
+
+공개 `grok-imagine-*-video` 변형과 달리, Grok Imagine Private 모델은 콘텐츠 모더레이션 거부에 대해 과금되지 않으므로 성공한 생성에 대해서만 지불합니다.
+
+이후 모든 호출을 위해 `model`, `queue_id`, `download_url`(있는 경우)을 저장하세요.
+
+### Private 다운로드 링크
+
+private 모델의 경우 `download_url`은 작업이 완료되면 완성된 파일을 가져오는 방법입니다. 이 링크는 **짧은 수명, 단일 목적**입니다: MP4를 전달하기 위한 것이지, 장기간 또는 광범위하게 공유되는 URL이 아닙니다.
+
+다운로드가 중단되면 같은 환경에서 **같은 `GET`을 몇 번 재시도**해 파일을 완성할 수 있습니다. 그런 재시도는 네트워크 일시 장애에서 복구하기 위한 것이지, 같은 링크를 무기한 폴링하거나 많은 클라이언트에 걸쳐 공유하거나 영구 미디어 URL처럼 임베드하기 위한 것이 아닙니다. 그런 패턴은 종종 **`429`** 또는 **`410`**으로 나타나며, 링크가 일반 파일 호스팅처럼 동작할 것이라 기대했다면 놀라울 수 있습니다.
+
+안정성을 위해 **`GET` 요청은 하나의 클라이언트 네트워크에서 발생**해야 합니다. IP가 한 번 바뀌는 정도(예: VPN 끊고 다시 시도)에는 유연성이 있지만, 소스 IP가 광범위하게 변하는 것은 대개 동작하지 않습니다.
+
+URL은 **24시간**까지, 또는 객체가 제거될 때까지 유효합니다.
+
+<Note>
+안정적인 URL, 공개 재생, 시간 경과에 따른 반복 접근이 필요하다면 먼저 **본인의 스토리지**에 파일을 저장하고 거기서 서비스하세요.
+</Note>
+
+**프라이버시: `DELETE`로 링크 무효화**
+
+파일을 가져오는 일을 마쳤거나 보관하지 않기로 결정한 경우 같은 `download_url`에 **`DELETE`**를 호출할 수 있습니다. 해당 요청에는 Venice API 키가 필요 없습니다. 선택 사항이지만 **프라이버시가 중요할 때 권장**됩니다. Venice 외부의 일부 프록시와 미들박스는 전체 URL의 로그를 보관하므로, 링크를 삭제하는 것이 사전 서명 URL이 존재하는 창을 좁히는 가장 단순한 방법입니다.
+
+```bash
+curl -X DELETE "$DOWNLOAD_URL"
+```
+
+**흐름:** `COMPLETED`가 될 때까지 `/video/retrieve` 폴링 → `download_url`에 `GET`(전송이 끊기면 가볍게 재시도) → 필요한 곳에 파일 저장 → 링크를 무효화하려면 `download_url`에 `DELETE` → 큐 기반 정리를 여전히 사용한다면 선택적으로 `/video/complete` 호출.
+
+## 2단계: 완료 폴링
+
+**요청:**
+```bash
+POST https://api.venice.ai/api/v1/video/retrieve
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+**응답은 상태에 따라 다릅니다:**
+
+| Content-Type | Meaning | Action |
+|--------------|---------|--------|
+| `application/json` | 아직 처리 중 | 5초 대기 후 다시 폴링 |
+| `video/mp4` | 완료 | 응답 본문이 비디오 파일 |
+| `"COMPLETED"`가 있는 `application/json` | 완료, 비디오 인라인 아님 | 큐 응답의 `download_url`에 `GET` |
+
+**처리 중 응답(200, application/json):**
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 145000,
+  "execution_duration": 53200
+}
+```
+
+시간은 밀리초입니다. 남은 대기 시간을 추정하려면 `average_execution_time`을 사용하세요.
+
+**완료 응답(200, video/mp4):**
+응답 본문은 raw 바이너리 비디오 데이터입니다. 파일에 저장하세요.
+
+**완료 응답(200, `"COMPLETED"` 가 있는 application/json):**
+큐 시점에 `download_url`을 반환한 모델은 retrieve가 항상 JSON을 반환합니다. `GET download_url`(인증 헤더 없음)로 비디오를 가져오세요. 이 URL의 동작 방식, 재시도, 선택적 `DELETE`는 [Private 다운로드 링크](#private-download-links)를 참고하세요.
+
+## 3단계: 정리(선택)
+
+retrieve 시 자동 삭제하거나:
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000",
+  "delete_media_on_completion": true
+}
+```
+
+저장 후 `/video/complete`를 호출하세요:
+```bash
+POST https://api.venice.ai/api/v1/video/complete
+Authorization: Bearer $VENICE_API_KEY
+Content-Type: application/json
+
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+**응답(200):**
+```json
+{
+  "success": true
+}
+```
+
+---
+
+## 완전한 예시
+
+<CodeGroup>
+```python Python
+import os
+import time
+import requests
+
+API_KEY = os.environ.get("VENICE_API_KEY")
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+
+# 큐 등록
+resp = requests.post(f"{BASE_URL}/video/queue", headers=HEADERS, json={
+    "model": "wan-2.5-preview-text-to-video",
+    "prompt": "A gondola gliding through Venice canals at sunset",
+    "duration": "5s",
+    "resolution": "720p",
+    "aspect_ratio": "16:9"
+})
+data = resp.json()
+model, queue_id = data["model"], data["queue_id"]
+download_url = data.get("download_url")
+
+# 폴링
+while True:
+    resp = requests.post(f"{BASE_URL}/video/retrieve", headers=HEADERS,
+                         json={"model": model, "queue_id": queue_id})
+    if "video/mp4" in resp.headers.get("Content-Type", ""):
+        with open("output.mp4", "wb") as f:
+            f.write(resp.content)
+        break
+    if resp.json().get("status") == "COMPLETED" and download_url:
+        with open("output.mp4", "wb") as f:
+            f.write(requests.get(download_url).content)
+        break
+    time.sleep(5)
+
+# 정리
+requests.post(f"{BASE_URL}/video/complete", headers=HEADERS,
+              json={"model": model, "queue_id": queue_id})
+```
+
+```javascript Node.js
+const API_KEY = process.env.VENICE_API_KEY;
+const BASE_URL = "https://api.venice.ai/api/v1";
+const headers = {"Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json"};
+
+// 큐 등록
+const queueResp = await fetch(`${BASE_URL}/video/queue`, {
+    method: "POST", headers,
+    body: JSON.stringify({
+        model: "wan-2.5-preview-text-to-video",
+        prompt: "A gondola gliding through Venice canals at sunset",
+        duration: "5s", resolution: "720p", aspect_ratio: "16:9"
+    })
+});
+const {model, queue_id, download_url} = await queueResp.json();
+
+// 폴링
+while (true) {
+    const resp = await fetch(`${BASE_URL}/video/retrieve`, {
+        method: "POST", headers,
+        body: JSON.stringify({model, queue_id})
+    });
+    if (resp.headers.get("Content-Type")?.includes("video/mp4")) {
+        const fs = await import("fs");
+        fs.writeFileSync("output.mp4", Buffer.from(await resp.arrayBuffer()));
+        break;
+    }
+    const status = await resp.json();
+    if (status.status === "COMPLETED" && download_url) {
+        const fs = await import("fs");
+        const video = await fetch(download_url);
+        fs.writeFileSync("output.mp4", Buffer.from(await video.arrayBuffer()));
+        break;
+    }
+    await new Promise(r => setTimeout(r, 5000));
+}
+
+// 정리
+await fetch(`${BASE_URL}/video/complete`, {
+    method: "POST", headers,
+    body: JSON.stringify({model, queue_id})
+});
+```
+</CodeGroup>
+
+---
+
+## 요청 파라미터
+
+### Queue 요청
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | 예 | - | 모델 ID. text-to-video는 `wan-2.5-preview-text-to-video`, image-to-video는 `wan-2.5-preview-image-to-video` |
+| `prompt` | string | 예 | - | 생성할 내용. 최대 2500자 |
+| `negative_prompt` | string | 아니오 | `"low resolution, error, worst quality, low quality, defects"` | 피할 내용 |
+| `duration` | string | 예 | - | `"5s"` 또는 `"10s"` |
+| `resolution` | string | 아니오 | `"720p"` | `"480p"`, `"720p"`, `"1080p"` |
+| `aspect_ratio` | string | 조건부 | - | 모델 의존적. 종횡비 옵션을 노출하는 모델에는 필요, 지원하지 않는 모델에는 생략 |
+| `audio` | boolean | 조건부 | `true`(지원 시) | `supportsAudioConfig: true`인 모델에만 유효, 오디오 구성을 지원하지 않는 모델에는 생략 |
+| `image_url` | string | image-to-video에만 | - | 원본 이미지의 URL 또는 base64 data URL |
+| `audio_url` | string | 조건부 | - | 오디오 input을 지원하는 모델의 레퍼런스 오디오 URL 또는 base64 data URL |
+
+큐 검증은 모델별입니다. `/video/queue`를 호출하기 전에 각 모델이 지원하는 요청 필드를 `/models?type=video`에서 확인하세요.
+
+### Quote 요청
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | 예 | - | 가격을 매길 모델 ID |
+| `duration` | string | 예 | - | `"5s"` 또는 `"10s"` |
+| `resolution` | string | 아니오 | `"720p"` | `"480p"`, `"720p"`, `"1080p"` |
+| `aspect_ratio` | string | 조건부 | - | 선택한 모델이 종횡비 선택을 지원하거나 요구할 때 포함 |
+| `audio` | boolean | 조건부 | `true`(지원 시) | `supportsAudioConfig: true`인 모델에만 유효 |
+
+### Retrieve 요청
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | 예 | - | 큐 응답에서 |
+| `queue_id` | string | 예 | - | 큐 응답에서 |
+| `delete_media_on_completion` | boolean | 아니오 | `false` | 성공적 retrieve 후 비디오 삭제 |
+
+### Complete 요청
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | string | 예 | 큐 응답에서 |
+| `queue_id` | string | 예 | 큐 응답에서 |
+
+---
+
+## Image to Video
+
+Image-to-video 모델의 경우 `image_url`을 통해 원본 이미지를 전달하세요. prompt는 이미지 내용이 아니라 원하는 모션을 설명합니다.
+
+```json
+{
+  "model": "wan-2.5-preview-image-to-video",
+  "prompt": "Camera slowly zooms in as leaves rustle in the wind",
+  "image_url": "https://example.com/image.jpg",
+  "duration": "5s"
+}
+```
+
+또는 base64로:
+```json
+{
+  "model": "wan-2.5-preview-image-to-video",
+  "prompt": "Camera slowly zooms in as leaves rustle in the wind",
+  "image_url": "data:image/jpeg;base64,/9j/4AAQ...",
+  "duration": "5s"
+}
+```
+
+---
+
+## 가격 견적
+
+생성 전에 정확한 비용을 받으세요. 가격 input(`model`, `duration`, 선택적 `resolution`, `aspect_ratio`, `audio`)만 보내세요:
+
+**요청:**
+```json
+{
+  "model": "wan-2.5-preview-text-to-video",
+  "duration": "10s",
+  "resolution": "1080p"
+}
+```
+
+**응답:**
+```json
+{
+  "quote": 0.085
+}
+```
+
+견적은 USD 단위입니다.
+
+---
+
+## 에러
+
+| Status | Returned By | Meaning | Action |
+|--------|-------------|---------|--------|
+| 400 | `queue`, `quote`, `retrieve`, `complete` | 잘못된 파라미터 | 스키마에 맞춰 요청 본문 확인 |
+| 401 | `queue`, `retrieve`, `complete` | 인증 실패 | API 키 확인 |
+| 402 | `queue` | 잔액 부족 | 자금 추가 |
+| 404 | `retrieve`, `download_url` | 미디어를 찾을 수 없음(잘못됨, 만료됨, 또는 삭제됨) | `model`/`queue_id` 확인 또는 재큐 |
+| 410 | `download_url` | 사전 서명 URL 만료, 완전히 사용됨, 또는 무효화(예: `DELETE` 이후) | 다른 파일이 필요하면 새 생성 시작. 각 링크는 의도적으로 짧은 수명 |
+| 429 | `download_url` | 같은 링크에 대한 다수의 재시도 또는 반복적 fetch로 인한 rate limit | 다운로드 마무리(연결 끊김 시 몇 번 재시도는 괜찮음), 로컬 복사본 저장, 링크 비우려면 `DELETE` 사용. 지속적 접근은 본인 스토리지에 유지 |
+| 413 | `queue` | 페이로드가 너무 큼 | 이미지/오디오 크기 축소 |
+| 422 | `queue`, `retrieve` | 콘텐츠 위반 | prompt 수정 |
+| 500 | `queue`, `retrieve`, `complete` | 추론/처리 실패 | 백오프와 함께 재시도, 지속되면 지원에 문의 |
+| 503 | `retrieve` | 모델 용량 초과 | 백오프와 함께 재시도 |
+
+---
+
+## 폴링 전략
+
+1. 일정 간격(예: 5초)으로 `/video/retrieve` 폴링
+2. `Content-Type`이 `application/json`이고 `status`가 `"PROCESSING"`이면 대기 후 다시 폴링. 남은 시간 추정에는 `average_execution_time`과 `execution_duration`(밀리초) 사용
+3. `Content-Type`이 `video/mp4`이면 응답 본문을 출력 파일로 저장
+4. `Content-Type`이 `application/json`이고 `status`가 `"COMPLETED"`이면 큐 응답의 `download_url`에 `GET`해서 비디오 가져오기([Private 다운로드 링크](#private-download-links) 참고)
+5. `download_url`을 사용했다면, 마쳤을 때 해당 URL에 `DELETE`를 고려해 사전 서명 URL이 존재하는 시간을 좁히세요. 그런 다음 retrieve에서 `delete_media_on_completion: true`를 설정하거나 큐 기반 정리를 위해 `/video/complete` 호출
+6. `404`는 잘못됨, 만료됨, 또는 삭제된 미디어로 처리. `500/503`은 재시도/백오프로 처리
+
+---
+
+## 사용 가능한 모델
+
+현재 모델 목록과 가격은 [Video Models](/models/video)를 참고하세요.

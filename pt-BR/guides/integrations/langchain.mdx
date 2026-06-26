@@ -1,0 +1,254 @@
+---
+title: "Integração com LangChain"
+description: "Conecte modelos da Venice ao LangChain para chains, agentes, uso de ferramentas e pipelines RAG usando o cliente ChatOpenAI compatível com OpenAI e os SDKs em Python ou JS."
+"og:title": "Integração com LangChain | Documentação da API Venice"
+"og:description": "Construa aplicações LangChain alimentadas pelos modelos privados e sem censura da Venice AI"
+---
+
+A Venice AI funciona perfeitamente com o [LangChain](https://python.langchain.com/) graças à total compatibilidade com o SDK da OpenAI. Construa chains, agentes e pipelines RAG com a infraestrutura privada da Venice.
+
+## Configuração
+
+```bash
+pip install langchain langchain-openai openai
+```
+
+## Modelos de chat
+
+Use `ChatOpenAI` com a base URL da Venice:
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    model="venice-uncensored-1-2",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    temperature=0.7,
+)
+
+response = llm.invoke("Explain privacy-preserving AI in 2 sentences.")
+print(response.content)
+```
+
+## Streaming
+
+```python
+for chunk in llm.stream("Write a haiku about decentralization."):
+    print(chunk.content, end="", flush=True)
+```
+
+## Embeddings
+
+```python
+from langchain_openai import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-bge-m3",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    check_embedding_ctx_length=False,  # Obrigatório para Venice
+)
+
+vectors = embeddings.embed_documents([
+    "Venice AI provides private inference.",
+    "No data is retained after processing.",
+])
+print(f"Embedding dimension: {len(vectors[0])}")
+```
+
+## Chains
+
+### Chain simples com prompt template
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a {role}. Answer concisely."),
+    ("user", "{question}"),
+])
+
+chain = prompt | llm
+response = chain.invoke({"role": "privacy expert", "question": "Why does zero data retention matter?"})
+print(response.content)
+```
+
+### Chain sequencial
+
+```python
+from langchain_core.output_parsers import StrOutputParser
+
+# Chain 1: Gerar resumo do tópico
+summarizer = ChatPromptTemplate.from_messages([
+    ("user", "Summarize this topic in 3 bullet points: {topic}")
+]) | llm | StrOutputParser()
+
+# Chain 2: Gerar perguntas a partir do resumo
+questioner = ChatPromptTemplate.from_messages([
+    ("user", "Based on this summary, generate 3 thought-provoking questions:\n{summary}")
+]) | llm | StrOutputParser()
+
+# Compor
+summary = summarizer.invoke({"topic": "decentralized AI inference"})
+questions = questioner.invoke({"summary": summary})
+print(questions)
+```
+
+## Pipeline RAG
+
+Construa um pipeline de geração aumentada por recuperação com a Venice:
+
+```python
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+
+# Inicializa modelos Venice
+llm = ChatOpenAI(
+    model="zai-org-glm-5-1",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+)
+
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-bge-m3",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    check_embedding_ctx_length=False,
+)
+
+# Carrega e divide documentos
+documents = [
+    "Venice AI provides private, uncensored AI inference with zero data retention.",
+    "The Venice API is OpenAI-compatible, supporting chat completions, images, audio, video, and embeddings.",
+    "Venice supports function calling, structured outputs, web search, and reasoning models.",
+    "Privacy levels include Private (zero retention) and Anonymized (third-party processed).",
+]
+
+# Cria o vector store
+vectorstore = FAISS.from_texts(documents, embeddings)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+
+# Prompt RAG
+rag_prompt = ChatPromptTemplate.from_messages([
+    ("system", "Answer the question based only on the following context:\n\n{context}"),
+    ("user", "{question}"),
+])
+
+# Chain RAG
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+rag_chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | rag_prompt
+    | llm
+    | StrOutputParser()
+)
+
+answer = rag_chain.invoke("What privacy levels does Venice offer?")
+print(answer)
+```
+
+## Function calling com agentes
+
+```python
+from langchain_core.tools import tool
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_core.prompts import ChatPromptTemplate
+
+# Use um modelo com suporte a function calling
+llm = ChatOpenAI(
+    model="zai-org-glm-5-1",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+)
+
+@tool
+def get_venice_model_price(model_id: str) -> str:
+    """Get the pricing for a Venice AI model."""
+    prices = {
+        "venice-uncensored-1-2": "Input: $0.20/1M, Output: $0.90/1M",
+        "zai-org-glm-5-1": "Input: $1.75/1M, Output: $5.50/1M",
+        "qwen3-5-9b": "Input: $0.10/1M, Output: $0.15/1M",
+    }
+    return prices.get(model_id, f"Model {model_id} not found in price list.")
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You help users find the right Venice AI model. Use tools when needed."),
+    ("placeholder", "{chat_history}"),
+    ("user", "{input}"),
+    ("placeholder", "{agent_scratchpad}"),
+])
+
+agent = create_tool_calling_agent(llm, [get_venice_model_price], prompt)
+executor = AgentExecutor(agent=agent, tools=[get_venice_model_price], verbose=True)
+
+result = executor.invoke({"input": "What's the cheapest Venice text model?", "chat_history": []})
+print(result["output"])
+```
+
+## Saída estruturada
+
+```python
+from pydantic import BaseModel, Field
+
+class MovieReview(BaseModel):
+    title: str = Field(description="Movie title")
+    rating: float = Field(description="Rating out of 10")
+    summary: str = Field(description="One-sentence summary")
+
+structured_llm = llm.with_structured_output(MovieReview)
+review = structured_llm.invoke("Review the movie Inception")
+print(f"{review.title}: {review.rating}/10 — {review.summary}")
+```
+
+## Integração de busca na web
+
+Use a busca na web integrada da Venice via `venice_parameters`:
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm_with_search = ChatOpenAI(
+    model="venice-uncensored",
+    api_key="your-venice-api-key",
+    base_url="https://api.venice.ai/api/v1",
+    extra_body={
+        "venice_parameters": {
+            "enable_web_search": "auto"
+        }
+    }
+)
+
+response = llm_with_search.invoke("What are the latest developments in AI this week?")
+print(response.content)
+```
+
+Ou passe por requisição:
+
+```python
+response = llm.invoke(
+    "What are the latest developments in AI this week?",
+    extra_body={"venice_parameters": {"enable_web_search": "auto"}}
+)
+```
+
+## Modelos recomendados para LangChain
+
+| Caso de uso | Modelo | Por quê |
+|----------|-------|-----|
+| Chains gerais | `venice-uncensored` | Rápido, barato, sem censura |
+| Raciocínio complexo | `zai-org-glm-5-1` | Melhor modelo flagship privado |
+| Function calling | `zai-org-glm-5-1` | Uso confiável de ferramentas |
+| Visão + texto | `qwen3-vl-235b-a22b` | Compreensão visual avançada |
+| Geração de código | `qwen3-coder-480b-a35b-instruct` | Otimizado para código |
+| Embeddings (RAG) | `text-embedding-bge-m3` | Embeddings privados |
+| Orçamento / alto volume | `qwen3-5-9b` | $0,10/1M de entrada |
+
+<Card title="Ver todos os modelos" icon="database" href="/models/overview">
+  Navegue por todos os modelos Venice com preços e capacidades
+</Card>

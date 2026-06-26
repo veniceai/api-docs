@@ -1,0 +1,169 @@
+---
+title: Creación autónoma de API Key por agente
+description: "Acuña una clave de API de Venice de forma autónoma desde un agente de IA on-chain haciendo staking de VVV en Base y firmando un token de validación emitido por Venice con un monedero."
+'og:title': "Autonomous Agent API Key | Venice API Docs"
+'og:description': Cómo un agente de IA autónomo puede acuñar su propia API key de Venice firmando un token emitido por Venice con un monedero que tiene VVV en staking en Base.
+---
+
+Un agente de IA que controla un monedero en Base puede acuñar su propia API key de Venice sin intervención humana. El agente adquiere VVV, lo pone en staking, firma un token de validación de corta duración emitido por Venice y envía el token firmado para recibir una API key nueva vinculada al monedero con staking.
+
+Esta guía recorre el flujo completo de extremo a extremo y cubre las opciones de financiación para pagar realmente la inferencia una vez que se ha acuñado la clave.
+
+## Requisitos previos
+
+* Un monedero EVM en Base controlado por el agente (clave privada en una variable de entorno o gestor de secretos).
+* Una pequeña cantidad de ETH en Base para gas (el staking son dos transacciones: `approve` y luego `stake`).
+* Cualquier cantidad no nula de VVV para hacer staking. El endpoint de minteo solo requiere que el monedero tenga un saldo de sVVV no nulo, por lo que 1 VVV es suficiente para acuñar una clave. Consulta [Pagar la inferencia](#paying-for-inference) para saber qué necesitas para llamar realmente a los endpoints de pago.
+
+<Tip>
+  Usa un monedero dedicado del agente en lugar de un monedero de tesorería. La clave privada del monedero firma cada solicitud de token de Venice, por lo que su radio de impacto debe ser pequeño.
+</Tip>
+
+## Pasos
+
+<Steps>
+  <Step title="Adquiere VVV">
+    Envía VVV al monedero del agente, o haz que el agente realice un swap en un DEX como [Aerodrome](https://aerodrome.finance/swap?from=eth\&to=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf\&chain0=8453\&chain1=8453) o [Uniswap](https://app.uniswap.org/swap?chain=base\&inputCurrency=NATIVE\&outputCurrency=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf).
+
+    Contrato del token VVV en Base: `0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf`
+  </Step>
+
+  <Step title="Haz staking de VVV con Venice">
+    Haz staking del VVV en el [Smart Contract de staking de Venice](https://basescan.org/address/0x321b7ff75154472b18edb199033ff4d116f340ff#code) en `0x321b7ff75154472B18EDb199033fF4D116F340Ff`. Son dos transacciones:
+
+    1. `approve(spender, amount)` en el token VVV, donde `spender` es el contrato de staking.
+    2. `stake(amount)` en el contrato de staking.
+
+    <Frame as="div">
+      <img src="/images/guides/SC-Stake.png" alt="Smart Contract Staking" />
+    </Frame>
+
+    Cuando se confirma la segunda transacción, el saldo de VVV del monedero disminuye y su saldo de sVVV aumenta en la misma cantidad. El endpoint de minteo lee el saldo de sVVV para confirmar que el monedero tiene staking.
+  </Step>
+
+  <Step title="Solicita un token de validación">
+    Llama a `GET /api/v1/api_keys/generate_web3_key` para obtener un token de corta duración firmado por Venice. El endpoint no está autenticado.
+
+    ```bash
+    curl --request GET \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+    ```
+
+    La respuesta contiene un campo `token`. El token expira 15 minutos después de su emisión, así que fírmalo y envíalo bastante antes.
+  </Step>
+
+  <Step title="Firma el token con el monedero de staking">
+    Firma la cadena del token sin procesar con el monedero que tiene el VVV en staking. Es un `personal_sign` estándar sobre los bytes del token. Tanto `ethers.Wallet.signMessage(token)` como `account.signMessage({ message: token })` de `viem` producen la firma correcta.
+  </Step>
+
+  <Step title="Acuña la API key">
+    Haz `POST` de la dirección, la firma y el token al mismo endpoint, junto con el tipo de clave que quieras.
+
+    ```bash
+    curl --request POST \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "address": "<wallet address>",
+        "signature": "<signed token>",
+        "token": "<unsigned token>",
+        "apiKeyType": "INFERENCE",
+        "description": "Agent key minted on <date>"
+      }'
+    ```
+
+    Campos obligatorios: `address`, `signature`, `token`, `apiKeyType` (`INFERENCE` o `ADMIN`).
+
+    Campos opcionales: `description`, `expiresAt`, `consumptionLimit` (limita el gasto total en esta clave, denominado en `usd`, `vcu` o `diem`).
+
+    En caso de éxito, la respuesta contiene la cadena `apiKey` acuñada. Guárdala en el almacén de secretos del agente y úsala como un token Bearer normal (`Authorization: Bearer <key>`).
+  </Step>
+</Steps>
+
+## Ejemplo de extremo a extremo
+
+El ejemplo siguiente usa un monedero real desde una variable de entorno en lugar de uno generado aleatoriamente. Un monedero aleatorio no tiene VVV en staking y el minteo se rechazará con el error `Wallet has no staked VVV on Base`.
+
+```typescript
+import { ethers } from "ethers"
+
+const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
+const address = wallet.address
+
+const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
+const { data: { token } } = await tokenResponse.json()
+
+const signature = await wallet.signMessage(token)
+
+const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    address,
+    signature,
+    token,
+    apiKeyType: "INFERENCE",
+    description: "Agent key",
+  }),
+})
+
+const result = await mintResponse.json()
+if (!mintResponse.ok) {
+  throw new Error(`Mint failed: ${result.error}`)
+}
+
+console.log("Minted key:", result.data.apiKey)
+```
+
+## Referencia de errores
+
+El endpoint devuelve mensajes de error específicos y accionables. Mapéalos en el agente para que pueda decidir si reintentar, solicitar un nuevo token o detenerse.
+
+| Estado | El mensaje de error contiene | Significado | Qué hacer |
+| --- | --- | --- | --- |
+| `400` | `Invalid wallet address` | El campo `address` no es una dirección EVM válida. | Corrige la dirección y reenvía. |
+| `400` | `JWT has expired` | El token de validación expiró antes de firmarlo y enviarlo. | Solicita un nuevo token, fírmalo y envíalo de inmediato. |
+| `400` | `JWT signature is invalid` | El token no fue firmado por Venice (probablemente alterado o fabricado). | Usa siempre un token nuevo del endpoint `GET`. |
+| `400` | `JWT claims are invalid` | El emisor o la audiencia del token no coinciden con lo que Venice espera. | Usa el token sin modificar devuelto por el endpoint `GET`. |
+| `400` | `JWT is malformed` | El `token` enviado no es un JWT. | Asegúrate de enviar la cadena `token` exacta devuelta por el endpoint `GET`. |
+| `400` | `Wallet signature does not match` | La `signature` no coincide con la `address` para el `token` dado. | Firma los bytes del token sin procesar con el monedero propietario de `address`. |
+| `400` | `Could not verify wallet signature` | La llamada RPC para verificar la firma falló (transitorio). | Reintenta con backoff. |
+| `400` | `Wallet has no staked VVV on Base` | El monedero tiene saldo de sVVV cero. | Haz staking de VVV primero y reintenta. |
+
+## Pagar la inferencia
+
+Acuñar una clave y poder llamar a endpoints de pago con ella son dos cosas distintas. Una clave recién acuñada se autentica correctamente, pero no puede llamar a endpoints de pago (como `/chat/completions`) hasta que la cuenta del monedero tenga un saldo gastable.
+
+La clave acuñada puede gastar de la cuenta de usuario en este orden de prioridad: DIEM, luego créditos incluidos y luego USD.
+
+| Fuente de financiación | ¿Autónoma? | Cómo |
+| --- | --- | --- |
+| **DIEM por staking de VVV** | Sí | La asignación diaria de DIEM del monedero es proporcional a su parte en la piscina de staking. La cuenta necesita al menos 0,1 DIEM en staking para que cualquier DIEM sea gastable. Cantidades mayores en staking obtienen proporcionalmente más DIEM diario, renovado cada época (00:00 UTC). |
+| **USD vía Stripe** | No (navegador) | Inicia sesión en venice.ai con el mismo monedero (Sign-In-With-Ethereum). El dashboard encuentra el registro de usuario existente. Añade créditos en Settings, API. |
+| **Suscripción cripto de Coinbase** | No (navegador) | Inicio de sesión con el mismo monedero y luego suscríbete a través del dashboard. El flujo redirige a Coinbase Commerce para el pago real, por lo que no se puede automatizar por script. |
+| **Onramp de Coinbase** | No (navegador) | Inicio de sesión con el mismo monedero y luego usa el widget de onramp en el dashboard. Alojado en la UI de Coinbase. |
+
+Si el agente necesita una ruta de financiación totalmente nativa de cripto y sin interfaz, las opciones más limpias son:
+
+1. **Hacer más staking de VVV** para que la asignación diaria de DIEM cubra el gasto del agente. La clave acuñada lo recoge automáticamente.
+2. **Usa el [flujo de monedero x402](/guides/integrations/x402-venice-api) en lugar de la API key.** Con x402, el agente firma un mensaje Sign-In-With-X por solicitud, recarga directamente con USDC en Base o Solana mediante `POST /api/v1/x402/top-up` y paga por solicitud. El saldo de USDC x402 está vinculado al monedero, no al usuario, por lo que no aparece como saldo para la clave Bearer acuñada, pero sí permite que el mismo monedero pague la inferencia de forma programática.
+
+## Recursos relacionados
+
+<CardGroup cols={2}>
+  <Card title="Cripto y agentes" icon="link" href="/guides/integrations/crypto-rpc-agents">
+    Usa Venice tanto como proveedor de modelos como capa RPC de blockchain para agentes autónomos.
+  </Card>
+
+  <Card title="Autenticación de monedero x402" icon="wallet" href="/guides/integrations/x402-venice-api">
+    Paga por solicitud con USDC en Base o Solana, sin necesidad de API key.
+  </Card>
+
+  <Card title="Endpoint Generate Web3 API Key" icon="code" href="/api-reference/endpoint/api_keys/generate_web3_key/post">
+    Referencia del endpoint de minteo.
+  </Card>
+
+  <Card title="Guía estándar de API Key" icon="key" href="/guides/getting-started/generating-api-key">
+    Para los usuarios que prefieren acuñar una clave desde el dashboard.
+  </Card>
+</CardGroup>

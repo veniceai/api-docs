@@ -1,0 +1,169 @@
+---
+title: 自主代理 API 密钥创建
+description: "通过在 Base 上质押 VVV 并用钱包签署 Venice 颁发的验证 token，让链上 AI agent 自主铸造 Venice API 密钥。"
+'og:title': "Autonomous Agent API Key | Venice API Docs"
+'og:description': How an autonomous AI agent can mint its own Venice API key by signing a Venice-issued token with a wallet that holds staked VVV on Base.
+---
+
+控制 Base 上钱包的 AI agent 可以在无需人类参与的情况下铸造自己的 Venice API 密钥。agent 获取 VVV、质押它、用钱包签署 Venice 发布的短期验证 token，然后将签名后的 token 回传以获得绑定到质押钱包的全新 API 密钥。
+
+本指南从端到端介绍整个流程，并涵盖密钥铸造后用于实际支付推理的资金选项。
+
+## 前置条件
+
+* agent 控制的 Base 上的 EVM 钱包（私钥保存在环境变量或密钥管理器中）。
+* Base 上少量 ETH 用于 gas（质押需要两笔交易：`approve` 然后 `stake`）。
+* 任意非零数量的 VVV 用于质押。铸造端点仅要求钱包具备非零 sVVV 余额，因此 1 VVV 足以铸造密钥。请参阅[为推理付费](#paying-for-inference)了解实际调用付费端点需要什么。
+
+<Tip>
+  使用专用的 agent 钱包，而不是金库钱包。该钱包的私钥会签署每个 Venice token 请求，因此其影响范围应保持最小。
+</Tip>
+
+## 步骤
+
+<Steps>
+  <Step title="获取 VVV">
+    将 VVV 发送到 agent 的钱包，或让 agent 在 DEX（如 [Aerodrome](https://aerodrome.finance/swap?from=eth\&to=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf\&chain0=8453\&chain1=8453) 或 [Uniswap](https://app.uniswap.org/swap?chain=base\&inputCurrency=NATIVE\&outputCurrency=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf)）上兑换。
+
+    Base 上的 VVV 代币合约：`0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf`
+  </Step>
+
+  <Step title="向 Venice 质押 VVV">
+    将 VVV 质押到 [Venice 质押智能合约](https://basescan.org/address/0x321b7ff75154472b18edb199033ff4d116f340ff#code) `0x321b7ff75154472B18EDb199033fF4D116F340Ff`。这需要两笔交易：
+
+    1. 在 VVV 代币上调用 `approve(spender, amount)`，其中 `spender` 是质押合约。
+    2. 在质押合约上调用 `stake(amount)`。
+
+    <Frame as="div">
+      <img src="/images/guides/SC-Stake.png" alt="Smart Contract Staking" />
+    </Frame>
+
+    当第二笔交易确认时，钱包的 VVV 余额减少，其 sVVV 余额相应增加。铸造端点读取 sVVV 余额以确认钱包已质押。
+  </Step>
+
+  <Step title="请求验证 token">
+    调用 `GET /api/v1/api_keys/generate_web3_key` 以获取由 Venice 签发的短期 token。此端点无需身份验证。
+
+    ```bash
+    curl --request GET \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+    ```
+
+    响应包含 `token` 字段。该 token 在签发 15 分钟后过期，因此请尽早签名并提交。
+  </Step>
+
+  <Step title="用质押钱包签署 token">
+    用持有质押 VVV 的钱包签署原始 token 字符串。这是对 token 字节的标准 `personal_sign`。`ethers.Wallet.signMessage(token)` 和 `viem` 的 `account.signMessage({ message: token })` 都会产生正确的签名。
+  </Step>
+
+  <Step title="铸造 API 密钥">
+    将地址、签名和 token 以及您想要的密钥类型 `POST` 到同一端点。
+
+    ```bash
+    curl --request POST \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "address": "<wallet address>",
+        "signature": "<signed token>",
+        "token": "<unsigned token>",
+        "apiKeyType": "INFERENCE",
+        "description": "Agent key minted on <date>"
+      }'
+    ```
+
+    必填字段：`address`、`signature`、`token`、`apiKeyType`（`INFERENCE` 或 `ADMIN`）。
+
+    可选字段：`description`、`expiresAt`、`consumptionLimit`（限制此密钥的总支出，以 `usd`、`vcu` 或 `diem` 计）。
+
+    成功时响应包含铸造的 `apiKey` 字符串。将其存储在 agent 的密钥存储中，并作为正常的 Bearer token（`Authorization: Bearer <key>`）使用。
+  </Step>
+</Steps>
+
+## 端到端示例
+
+下面的示例使用来自环境变量的真实钱包，而不是随机生成的钱包。随机钱包没有质押的 VVV，铸造将被 `Wallet has no staked VVV on Base` 错误拒绝。
+
+```typescript
+import { ethers } from "ethers"
+
+const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
+const address = wallet.address
+
+const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
+const { data: { token } } = await tokenResponse.json()
+
+const signature = await wallet.signMessage(token)
+
+const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    address,
+    signature,
+    token,
+    apiKeyType: "INFERENCE",
+    description: "Agent key",
+  }),
+})
+
+const result = await mintResponse.json()
+if (!mintResponse.ok) {
+  throw new Error(`Mint failed: ${result.error}`)
+}
+
+console.log("Minted key:", result.data.apiKey)
+```
+
+## 错误参考
+
+端点返回具体、可操作的错误消息。在 agent 中映射这些错误，以便它可以决定是重试、请求新 token 还是停止。
+
+| 状态 | 错误消息包含 | 含义 | 应对方式 |
+| --- | --- | --- | --- |
+| `400` | `Invalid wallet address` | `address` 字段不是有效的 EVM 地址。 | 修正地址并重新提交。 |
+| `400` | `JWT has expired` | 验证 token 在您签名并提交之前已过期。 | 请求新 token，签名并立即提交。 |
+| `400` | `JWT signature is invalid` | 该 token 不是由 Venice 签发的（可能被篡改或伪造）。 | 始终使用 `GET` 端点返回的新鲜 token。 |
+| `400` | `JWT claims are invalid` | token 的签发者或受众与 Venice 期望的不匹配。 | 使用 `GET` 端点返回的未修改 token。 |
+| `400` | `JWT is malformed` | 提交的 `token` 不是 JWT。 | 确保发送 `GET` 端点返回的确切 `token` 字符串。 |
+| `400` | `Wallet signature does not match` | 给定 `token` 的 `signature` 与 `address` 不匹配。 | 用拥有 `address` 的钱包签署原始 token 字节。 |
+| `400` | `Could not verify wallet signature` | 验证签名的 RPC 调用失败（瞬态）。 | 退避后重试。 |
+| `400` | `Wallet has no staked VVV on Base` | 钱包的 sVVV 余额为零。 | 先质押 VVV，然后重试。 |
+
+## 为推理付费
+
+铸造密钥与能够用它调用付费端点是两回事。新铸造的密钥可以正确认证，但在钱包的账户具有可花费余额之前，无法调用付费端点（如 `/chat/completions`）。
+
+铸造的密钥按以下优先顺序从用户账户花费：DIEM，然后是捆绑额度，然后是 USD。
+
+| 资金来源 | 自主？ | 方法 |
+| --- | --- | --- |
+| **来自 VVV 质押的 DIEM** | 是 | 钱包的每日 DIEM 分配与其在质押池中的份额成比例。账户需要至少 0.1 个质押 DIEM 才能让任何 DIEM 可花费。质押越多，按比例获得更多每日 DIEM，每个 epoch（00:00 UTC）刷新。 |
+| **通过 Stripe 的 USD** | 否（浏览器） | 使用相同的钱包登录 venice.ai（Sign-In-With-Ethereum）。仪表板会找到现有的用户记录。在 Settings、API 中添加额度。 |
+| **Coinbase 加密订阅** | 否（浏览器） | 相同的钱包登录，然后通过仪表板订阅。流程会重定向到 Coinbase Commerce 进行实际付款，因此无法通过脚本驱动。 |
+| **Coinbase onramp** | 否（浏览器） | 相同的钱包登录，然后在仪表板中使用 onramp 小部件。托管在 Coinbase 的 UI 上。 |
+
+如果 agent 需要完全 crypto 原生、无头的资金路径，最干净的选项是：
+
+1. **质押更多 VVV**，使每日 DIEM 分配覆盖 agent 的支出。铸造的密钥会自动接入。
+2. **使用 [x402 钱包流程](/guides/integrations/x402-venice-api) 代替 API 密钥。** 通过 x402，agent 每个请求签署一个 Sign-In-With-X 消息，通过 `POST /api/v1/x402/top-up` 在 Base 或 Solana 上直接用 USDC 充值，并按请求付费。x402 USDC 余额绑定到钱包，而非用户，因此它不会以余额形式出现在铸造的 Bearer 密钥下，但它确实让同一钱包以编程方式为推理付费。
+
+## 相关资源
+
+<CardGroup cols={2}>
+  <Card title="Crypto 与 Agents" icon="link" href="/guides/integrations/crypto-rpc-agents">
+    将 Venice 同时用作自主 agent 的模型提供商和区块链 RPC 层。
+  </Card>
+
+  <Card title="x402 钱包身份验证" icon="wallet" href="/guides/integrations/x402-venice-api">
+    在 Base 或 Solana 上用 USDC 按请求付费，无需 API 密钥。
+  </Card>
+
+  <Card title="生成 Web3 API 密钥端点" icon="code" href="/api-reference/endpoint/api_keys/generate_web3_key/post">
+    铸造端点的端点参考。
+  </Card>
+
+  <Card title="标准 API 密钥指南" icon="key" href="/guides/getting-started/generating-api-key">
+    适用于希望通过仪表板铸造密钥的用户。
+  </Card>
+</CardGroup>

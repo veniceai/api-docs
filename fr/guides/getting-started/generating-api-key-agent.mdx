@@ -1,0 +1,169 @@
+---
+title: Création de clé API pour agent autonome
+description: "Générez une clé d'API Venice de manière autonome depuis un agent IA on-chain en stakant des VVV sur Base et en signant un token de validation émis par Venice avec un wallet."
+'og:title': "Clé API pour agent autonome | Venice API Docs"
+'og:description': Comment un agent IA autonome peut générer sa propre clé API Venice en signant un token émis par Venice avec un portefeuille qui détient du VVV staké sur Base.
+---
+
+Un agent IA qui contrôle un portefeuille sur Base peut générer sa propre clé API Venice sans intervention humaine. L'agent acquiert du VVV, le stake, signe un token de validation à courte durée de vie émis par Venice, et renvoie le token signé pour recevoir une nouvelle clé API liée au portefeuille de staking.
+
+Ce guide parcourt l'ensemble du flux de bout en bout et couvre les options de financement pour effectivement payer l'inférence une fois la clé créée.
+
+## Prérequis
+
+* Un portefeuille EVM sur Base contrôlé par l'agent (clé privée dans une variable d'environnement ou un gestionnaire de secrets).
+* Une petite quantité d'ETH sur Base pour les frais de gas (le staking est constitué de deux transactions : `approve` puis `stake`).
+* Une quantité non nulle de VVV à staker. L'endpoint de création requiert seulement que le portefeuille ait un solde sVVV non nul, donc 1 VVV suffit pour générer une clé. Voir [Payer pour l'inférence](#paying-for-inference) pour ce dont vous avez réellement besoin pour appeler les endpoints payants.
+
+<Tip>
+  Utilisez un portefeuille agent dédié plutôt qu'un portefeuille de trésorerie. La clé privée du portefeuille signe chaque demande de token Venice, son rayon d'impact doit donc être limité.
+</Tip>
+
+## Étapes
+
+<Steps>
+  <Step title="Acquérir du VVV">
+    Envoyez du VVV au portefeuille de l'agent, ou faites en sorte que l'agent le swap sur un DEX comme [Aerodrome](https://aerodrome.finance/swap?from=eth\&to=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf\&chain0=8453\&chain1=8453) ou [Uniswap](https://app.uniswap.org/swap?chain=base\&inputCurrency=NATIVE\&outputCurrency=0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf).
+
+    Contrat du token VVV sur Base : `0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf`
+  </Step>
+
+  <Step title="Staker du VVV avec Venice">
+    Stakez le VVV dans le [Smart Contract de Staking Venice](https://basescan.org/address/0x321b7ff75154472b18edb199033ff4d116f340ff#code) à l'adresse `0x321b7ff75154472B18EDb199033fF4D116F340Ff`. Il s'agit de deux transactions :
+
+    1. `approve(spender, amount)` sur le token VVV, où `spender` est le contrat de staking.
+    2. `stake(amount)` sur le contrat de staking.
+
+    <Frame as="div">
+      <img src="/images/guides/SC-Stake.png" alt="Smart Contract Staking" />
+    </Frame>
+
+    Lorsque la deuxième transaction est confirmée, le solde VVV du portefeuille diminue et son solde sVVV augmente du même montant. L'endpoint de création lit le solde sVVV pour confirmer que le portefeuille est staké.
+  </Step>
+
+  <Step title="Demander un token de validation">
+    Appelez `GET /api/v1/api_keys/generate_web3_key` pour obtenir un token à courte durée de vie signé par Venice. L'endpoint n'est pas authentifié.
+
+    ```bash
+    curl --request GET \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+    ```
+
+    La réponse contient un champ `token`. Le token expire 15 minutes après son émission, signez-le donc et soumettez-le bien avant.
+  </Step>
+
+  <Step title="Signer le token avec le portefeuille de staking">
+    Signez la chaîne brute du token avec le portefeuille qui détient le VVV staké. Il s'agit d'un `personal_sign` standard sur les octets du token. À la fois `ethers.Wallet.signMessage(token)` et `account.signMessage({ message: token })` de `viem` produisent la signature correcte.
+  </Step>
+
+  <Step title="Créer la clé API">
+    Faites un `POST` de l'adresse, de la signature et du token au même endpoint, avec le type de clé que vous souhaitez.
+
+    ```bash
+    curl --request POST \
+      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "address": "<wallet address>",
+        "signature": "<signed token>",
+        "token": "<unsigned token>",
+        "apiKeyType": "INFERENCE",
+        "description": "Agent key minted on <date>"
+      }'
+    ```
+
+    Champs requis : `address`, `signature`, `token`, `apiKeyType` (`INFERENCE` ou `ADMIN`).
+
+    Champs optionnels : `description`, `expiresAt`, `consumptionLimit` (plafonne la dépense totale sur cette clé, libellée en `usd`, `vcu` ou `diem`).
+
+    En cas de succès, la réponse contient la chaîne `apiKey` créée. Stockez-la dans le secret store de l'agent et utilisez-la comme un token Bearer normal (`Authorization: Bearer <key>`).
+  </Step>
+</Steps>
+
+## Exemple de bout en bout
+
+L'exemple ci-dessous utilise un vrai portefeuille depuis une variable d'environnement plutôt qu'un portefeuille généré aléatoirement. Un portefeuille aléatoire n'a pas de VVV staké et la création sera rejetée avec l'erreur `Wallet has no staked VVV on Base`.
+
+```typescript
+import { ethers } from "ethers"
+
+const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
+const address = wallet.address
+
+const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
+const { data: { token } } = await tokenResponse.json()
+
+const signature = await wallet.signMessage(token)
+
+const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    address,
+    signature,
+    token,
+    apiKeyType: "INFERENCE",
+    description: "Agent key",
+  }),
+})
+
+const result = await mintResponse.json()
+if (!mintResponse.ok) {
+  throw new Error(`Mint failed: ${result.error}`)
+}
+
+console.log("Minted key:", result.data.apiKey)
+```
+
+## Référence des erreurs
+
+L'endpoint renvoie des messages d'erreur spécifiques et exploitables. Mappez-les dans l'agent pour qu'il puisse décider de réessayer, demander un nouveau token ou s'arrêter.
+
+| Statut | Le message d'erreur contient | Ce que cela signifie | Que faire |
+| --- | --- | --- | --- |
+| `400` | `Invalid wallet address` | Le champ `address` n'est pas une adresse EVM valide. | Corrigez l'adresse et resoumettez. |
+| `400` | `JWT has expired` | Le token de validation a expiré avant que vous ne le signiez et le soumettiez. | Demandez un nouveau token, signez-le et soumettez-le immédiatement. |
+| `400` | `JWT signature is invalid` | Le token n'a pas été signé par Venice (probablement modifié ou fabriqué). | Utilisez toujours un nouveau token de l'endpoint `GET`. |
+| `400` | `JWT claims are invalid` | L'émetteur ou l'audience du token ne correspond pas à ce que Venice attend. | Utilisez le token non modifié renvoyé par l'endpoint `GET`. |
+| `400` | `JWT is malformed` | Le `token` soumis n'est pas un JWT. | Assurez-vous d'envoyer exactement la chaîne `token` renvoyée par l'endpoint `GET`. |
+| `400` | `Wallet signature does not match` | La `signature` ne correspond pas à l'`address` pour le `token` donné. | Signez les octets bruts du token avec le portefeuille qui possède `address`. |
+| `400` | `Could not verify wallet signature` | L'appel RPC pour vérifier la signature a échoué (transitoire). | Réessayez avec backoff. |
+| `400` | `Wallet has no staked VVV on Base` | Le portefeuille a un solde sVVV nul. | Stakez d'abord du VVV, puis réessayez. |
+
+## Payer pour l'inférence
+
+Générer une clé et pouvoir appeler des endpoints payants avec elle sont deux choses distinctes. Une clé fraîchement créée s'authentifie correctement mais ne peut pas appeler les endpoints payants (comme `/chat/completions`) tant que le compte du portefeuille n'a pas un solde dépensable.
+
+La clé créée peut dépenser depuis le compte utilisateur dans cet ordre de priorité : DIEM, puis crédits groupés, puis USD.
+
+| Source de financement | Autonome ? | Comment |
+| --- | --- | --- |
+| **DIEM depuis le staking VVV** | Oui | L'allocation quotidienne de DIEM du portefeuille est proportionnelle à sa part dans le pool de staking. Le compte a besoin d'au moins 0,1 DIEM staké pour que tout DIEM soit dépensable. Les enjeux plus importants rapportent proportionnellement plus de DIEM quotidiens, rafraîchis à chaque epoch (00:00 UTC). |
+| **USD via Stripe** | Non (navigateur) | Connectez-vous à venice.ai avec le même portefeuille (Sign-In-With-Ethereum). Le tableau de bord trouve l'enregistrement utilisateur existant. Ajoutez des crédits dans Settings, API. |
+| **Abonnement crypto Coinbase** | Non (navigateur) | Même connexion par portefeuille, puis abonnez-vous via le tableau de bord. Le flux redirige vers Coinbase Commerce pour le paiement effectif, il ne peut donc pas être piloté depuis un script. |
+| **Onramp Coinbase** | Non (navigateur) | Même connexion par portefeuille, puis utilisez le widget onramp dans le tableau de bord. Hébergé sur l'UI de Coinbase. |
+
+Si l'agent a besoin d'un chemin de financement entièrement crypto-natif et headless, les options les plus propres sont :
+
+1. **Staker plus de VVV** pour que l'allocation quotidienne de DIEM couvre la dépense de l'agent. La clé créée le récupère automatiquement.
+2. **Utiliser le [flux portefeuille x402](/guides/integrations/x402-venice-api) au lieu de la clé API.** Avec x402, l'agent signe un message Sign-In-With-X par requête, recharge directement avec de l'USDC sur Base ou Solana via `POST /api/v1/x402/top-up`, et paie par requête. Le solde USDC x402 est lié au portefeuille, pas à l'utilisateur, donc il n'apparaît pas comme solde pour la clé Bearer créée, mais cela permet au même portefeuille de payer l'inférence de manière programmatique.
+
+## Ressources connexes
+
+<CardGroup cols={2}>
+  <Card title="Crypto et agents" icon="link" href="/guides/integrations/crypto-rpc-agents">
+    Utilisez Venice à la fois comme fournisseur de modèle et comme couche RPC blockchain pour les agents autonomes.
+  </Card>
+
+  <Card title="Authentification par portefeuille x402" icon="wallet" href="/guides/integrations/x402-venice-api">
+    Payez par requête avec de l'USDC sur Base ou Solana, sans clé API requise.
+  </Card>
+
+  <Card title="Endpoint de génération de clé API Web3" icon="code" href="/api-reference/endpoint/api_keys/generate_web3_key/post">
+    Référence de l'endpoint pour l'endpoint de création.
+  </Card>
+
+  <Card title="Guide de clé API standard" icon="key" href="/guides/getting-started/generating-api-key">
+    Pour les utilisateurs qui préfèrent générer une clé depuis le tableau de bord.
+  </Card>
+</CardGroup>

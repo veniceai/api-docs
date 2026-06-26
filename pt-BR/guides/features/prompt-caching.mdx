@@ -1,0 +1,372 @@
+---
+title: Prompt caching
+description: "Reduza custos e latência da Venice API armazenando em cache conteúdo de prompt repetido, como prompts de sistema, histórico de conversas e contexto de documentos entre requisições."
+"og:title": "Prompt caching | Documentação da API Venice"
+"og:description": "Aprenda como usar prompt caching para reduzir custos e latência para conteúdo repetido em suas requisições de API."
+---
+
+Prompt caching armazena tokens de entrada processados para que requisições subsequentes com prefixos idênticos possam reutilizá-los em vez de reprocessá-los. Isso reduz a latência (até 80% para prompts longos) e custos (até 90% de desconto em tokens em cache).
+
+A Venice trata o cache automaticamente para modelos compatíveis, mas entender como cada provedor implementa o cache ajuda a maximizar as taxas de acerto e a minimizar custos.
+
+## Como o cache funciona
+
+O cache opera por **correspondência de prefixo**: o sistema armazena tokens processados e os reutiliza quando requisições subsequentes começam com o mesmo conteúdo.
+
+Considere um chatbot com um prompt de sistema de 2.000 tokens:
+
+<Steps>
+  <Step title="Requisição 1">
+    Prompt de sistema (2.000 tokens) + mensagem do usuário (50 tokens)
+
+    **Processados**: 2.050 tokens · **Do cache**: 0 tokens
+
+    Prefixo gravado no cache.
+  </Step>
+  <Step title="Requisição 2">
+    Prompt de sistema (2.000 tokens) + mensagem do usuário (80 tokens)
+
+    **Processados**: 80 tokens · **Do cache**: 2.000 tokens
+  </Step>
+  <Step title="Requisição 3">
+    Prompt de sistema (2.000 tokens) + mensagem do usuário (120 tokens)
+
+    **Processados**: 120 tokens · **Do cache**: 2.000 tokens
+  </Step>
+</Steps>
+
+**Total sem cache**: 2.050 + 2.080 + 2.120 = 6.250 tokens ao preço cheio
+
+**Total com cache**: 2.050 + 80 + 120 = 2.250 tokens ao preço cheio, 4.000 tokens com desconto
+
+<Warning>
+O cache só funciona no **prefixo**. Qualquer mudança no início do seu prompt invalida o cache para tudo que vem depois. Sempre coloque conteúdo estático (prompt de sistema, documentos, exemplos) antes de conteúdo dinâmico (mensagens do usuário).
+</Warning>
+
+## Modelos compatíveis e preços
+
+<div id="cache-pricing-placeholder">Loading...</div>
+
+<Note>
+Claude Opus 4.5 cobra uma **tarifa premium** para cache writes (\$7,50/1M de tokens vs. \$6,00 do input regular). A primeira requisição que popula o cache custa mais, mas os acertos subsequentes economizam 90%. Outros modelos não cobram extra por cache writes.
+</Note>
+
+## Comportamento específico por provedor
+
+A Venice normaliza o cache entre provedores. Para a maioria dos modelos, o cache é automático. Basta enviar suas requisições e verificar a resposta em busca de estatísticas de cache. O **Claude** exige marcadores explícitos de cache no nível do protocolo, mas a Venice os adiciona automaticamente para prompts de sistema e histórico de conversa.
+
+O comportamento de cache é, em última análise, controlado por cada provedor e pode mudar, então confira a documentação do provedor para os detalhes mais recentes.
+
+| Modelo | Provedor | Tokens mínimos | Vida útil do cache | Custo de write | Desconto de read | Marcadores explícitos |
+|--------|----------|----------------|--------------------|----------------|-------------------|------------------------|
+| Claude Opus 4.5 | Anthropic | ~4.000 | 5 min | +25% | 90% | Obrigatórios |
+| GPT-5.2 | OpenAI | 1.024 | 5-10 min | Nenhum | 90% | Não necessários |
+| Gemini | Google | ~1.024 | 1 hora | Nenhum | 75-90% | Não necessários |
+| Grok | xAI | ~1.024 | 5 min | Nenhum | 75-88% | Não necessários |
+| DeepSeek | DeepSeek | ~1.024 | 5 min | Nenhum | 50% | Não necessários |
+| MiniMax | MiniMax | ~1.024 | 5 min | Nenhum | 90% | Não necessários |
+| Kimi | Moonshot | ~1.024 | 5 min | Nenhum | 50% | Não necessários |
+
+### Claude Opus 4.5 (Anthropic)
+
+O Claude exige breakpoints explícitos de cache no nível do protocolo. A Venice lida com isso automaticamente:
+
+- **Prompts de sistema** são cacheados automaticamente
+- **Histórico de conversa** é cacheado colocando um breakpoint na penúltima mensagem do usuário
+
+Isso significa que seu histórico de conversa é lido do cache e apenas o último turno é processado como nova entrada:
+
+| Turno | Tokens de prompt | Cache read | Cache write | Economia |
+|-------|------------------|------------|-------------|----------|
+| 1 | 10.979 | 0 | 10.938 | Primeira gravação |
+| 2 | 11.031 | 10.938 | 31 | 99,7% cacheado |
+| 3 | 11.062 | 10.969 | 52 | 99,5% cacheado |
+
+**Detalhes adicionais:**
+
+- **Até 4 breakpoints por requisição**: O sistema usa o prefixo correspondente mais longo
+- **Chave do cache é byte-exata**: Mudanças de espaço em branco, codificações de imagem diferentes ou ferramentas reordenadas quebram acertos de cache
+- **Limites de taxa com consciência de cache**: Tokens cacheados não contam contra seu limite ITPM, permitindo maior throughput efetivo
+- **Premium de 25% no write**: A primeira requisição custa mais, mas há 90% de economia em leituras subsequentes
+
+#### Controle manual de cache
+
+Para casos especiais, como cachear um documento grande no primeiro turno, você pode adicionar breakpoints explícitos:
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": [{
+        "type": "text",
+        "text": "You are a legal assistant...",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    {
+      "role": "user", 
+      "content": [{
+        "type": "text",
+        "text": "[Long contract document...]",
+        "cache_control": { "type": "ephemeral" }
+      }]
+    },
+    { "role": "assistant", "content": "I've reviewed the contract." },
+    { "role": "user", "content": "What are the termination clauses?" }
+  ]
+}
+```
+
+Isso garante que tanto o prompt de sistema quanto o documento sejam cacheados desde a primeira requisição. Para conversas típicas, você não precisa de marcadores manuais.
+
+### Todos os outros modelos
+
+O cache é **automático**. Não são necessários parâmetros especiais. Apenas garanta que seus prompts excedam ~1.024 tokens e use `prompt_cache_key` para roteamento consistente.
+
+## Parâmetros de requisição
+
+| Parâmetro | Tipo | Modelos | Descrição |
+|-----------|------|---------|-----------|
+| `prompt_cache_key` | string | Todos | Dica de roteamento para afinidade de cache. Requisições com a mesma chave têm maior probabilidade de atingir o mesmo servidor com cache aquecido. |
+| `cache_control` | object | Claude | Marca blocos de conteúdo para cache. Veja a seção do Claude Opus 4.5. |
+
+### prompt_cache_key
+
+Para conversas ou fluxos agênticos, use um `prompt_cache_key` consistente para melhorar as taxas de acerto:
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "prompt_cache_key": "session-abc-123",
+  "messages": [...]
+}
+```
+
+Isso roteia requisições para servidores que provavelmente já têm seu contexto em cache. Use um ID de sessão, ID de conversa ou ID de usuário como chave.
+
+## Campos da resposta
+
+O objeto `usage` da resposta inclui estatísticas de cache:
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 5500,
+    "completion_tokens": 200,
+    "total_tokens": 5700,
+    "prompt_tokens_details": {
+      "cached_tokens": 5000,
+      "cache_creation_input_tokens": 0
+    }
+  }
+}
+```
+
+| Campo | Descrição |
+|-------|-----------|
+| `prompt_tokens` | Total de tokens de entrada na requisição |
+| `prompt_tokens_details.cached_tokens` | Tokens servidos do cache (cobrados com desconto) |
+| `prompt_tokens_details.cache_creation_input_tokens` | Tokens gravados no cache (podem incorrer em premium no Claude) |
+
+**Detalhamento da cobrança** (usando Claude Opus 4.5 como exemplo):
+- 5.000 tokens cacheados × \$0,60/1M = \$0,003
+- 500 tokens não cacheados × \$6,00/1M = \$0,003
+- Total: \$0,006 (vs. \$0,033 sem cache, 82% de economia)
+
+## Melhores práticas
+
+### Estruture prompts para cache
+
+Coloque conteúdo estático no início e conteúdo dinâmico no final.
+
+**Boa estrutura**
+
+| Posição | Conteúdo | Cacheado? |
+|---------|----------|-----------|
+| 1 | Instruções do sistema | Sim |
+| 2 | Documentos de referência | Sim |
+| 3 | Exemplos few-shot | Sim |
+| 4 | Consulta do usuário | Não |
+
+**Má estrutura**
+
+| Posição | Conteúdo | Cacheado? |
+|---------|----------|-----------|
+| 1 | Timestamp atual | Não (invalida tudo depois) |
+| 2 | Instruções do sistema | Não |
+| 3 | Consulta do usuário | Não |
+
+### Mantenha prefixos byte-idênticos
+
+Chaves de cache são calculadas a partir de sequências de bytes exatas. Mesmo diferenças triviais quebram acertos:
+
+- Espaços em branco ou novas linhas diferentes
+- Timestamps ou IDs de requisição em prompts
+- Ordenação aleatória de exemplos few-shot
+- Formatação diferente do mesmo conteúdo
+
+### Atinja os limites mínimos de tokens
+
+Se seus prompts ficarem abaixo do mínimo (tipicamente 1.024 tokens), o cache não será ativado. Para prompts pequenos, considere:
+
+- Adicionar mais contexto ou exemplos para atingir o limite
+- Agrupar várias requisições pequenas em prompts em lote
+- Aceitar que o cache não se aplica para consultas simples
+
+### Use prompt_cache_key para conversas
+
+Para conversas em andamento, defina um `prompt_cache_key` consistente:
+
+```json
+// Turn 1
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Turn 2
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+
+// Turn 3
+{ "prompt_cache_key": "conv-xyz", "messages": [...] }
+```
+
+Isso aumenta a probabilidade de todos os turnos atingirem o mesmo servidor com cache aquecido.
+
+### Monitore o desempenho do cache
+
+Acompanhe estas métricas:
+- **Taxa de acerto do cache**: `cached_tokens / prompt_tokens`
+- **Economia de custo**: Compare custo real vs. custo sem cache
+- **Redução de latência**: Tempo até o primeiro token com vs. sem acertos de cache
+
+Se `cached_tokens` for consistentemente 0:
+1. Os prompts podem estar abaixo do limite mínimo de tokens
+2. Os prompts podem estar mudando entre requisições
+3. As requisições podem estar atingindo servidores diferentes (use `prompt_cache_key`)
+4. O cache pode ter expirado (requisições muito esparsas)
+
+### Considere a economia do cache
+
+**Premium de write do Claude Opus 4.5**: A primeira requisição custa 25% mais, mas há 90% de economia em leituras subsequentes.
+
+| Cenário | O premium de write vale a pena? |
+|---------|----------------------------------|
+| 1 requisição com este prompt | Não (paga 25% a mais, sem benefício) |
+| 2+ requisições com o mesmo prefixo | Sim (empate na 2ª requisição) |
+| Prompts mudando rapidamente | Não (custos constantes de write) |
+| Prompt de sistema estável, muitas queries | Sim (amortizado em muitas leituras) |
+
+## Vida útil do cache
+
+Os caches expiram após um período de inatividade (tipicamente 5-10 minutos). Isso significa:
+
+| Padrão de tráfego | Benefício do cache |
+|-------------------|--------------------|
+| Requisições contínuas (gaps < 5 min) | Alto: o cache fica aquecido |
+| Tráfego em rajadas (gaps > 10 min) | Limitado: o cache expira entre rajadas |
+| Requisições esporádicas (com horas de intervalo) | Nenhum: o cache está sempre frio |
+
+## Cache com tools e functions
+
+Definições de função podem ser cacheadas junto com prompts de sistema:
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search_database",
+        "description": "Search the product database",
+        "parameters": { ... }
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "You are a shopping assistant...",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    ...
+  ]
+}
+```
+
+As definições de tools tornam-se parte do prefixo cacheado. Se você tiver muitas tools, isso pode reduzir significativamente os custos por requisição.
+
+## Cache com imagens e documentos
+
+Para modelos de visão, imagens podem ser incluídas no conteúdo cacheado:
+
+```json
+{
+  "model": "claude-opus-4-5",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image_url",
+          "image_url": { "url": "data:image/png;base64,..." }
+        },
+        {
+          "type": "text",
+          "text": "This is the floor plan. I'll ask several questions about it.",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "I can see the floor plan. What would you like to know?"
+    },
+    {
+      "role": "user",
+      "content": "How many bedrooms are there?"
+    }
+  ]
+}
+```
+
+A imagem e o contexto inicial são cacheados, então perguntas de acompanhamento sobre a mesma imagem não a reprocessam.
+
+## Solução de problemas
+
+<Accordion title="cached_tokens é sempre 0">
+
+| Causa | Solução |
+|-------|---------|
+| Prompt muito curto | Garanta que o prompt excede ~1.024 tokens (4.000 para Claude) |
+| Prefixo mudou | Verifique se há conteúdo dinâmico no início do seu prompt |
+| Primeira requisição | Esperado: a primeira requisição grava no cache, requisições subsequentes leem |
+| Cache expirou | Reduza o tempo entre requisições para menos de 5 minutos |
+| Servidores diferentes | Adicione `prompt_cache_key` para rotear requisições de forma consistente |
+
+</Accordion>
+
+<Accordion title="cache_creation_input_tokens em toda requisição">
+
+| Causa | Solução |
+|-------|---------|
+| Prompt mudando | Remova timestamps, IDs de requisição ou outro conteúdo dinâmico do prefixo |
+| cache_control ausente | Para Claude, garanta que o marcador `cache_control` esteja presente nos blocos de conteúdo |
+| Abaixo do limite | Prompts abaixo da contagem mínima de tokens não acionam o cache |
+| Mensagem única do usuário | Esperado para o primeiro turno. O cache cresce com o histórico da conversa. |
+
+</Accordion>
+
+<Accordion title="Custos mais altos que o esperado">
+
+| Causa | Solução |
+|-------|---------|
+| Premium de cache write | O Claude cobra 25% a mais por writes. Só vale a pena se você reutilizar o prompt. |
+| Baixo reuso | Se cada prompt é único, você paga custos de write sem benefícios de read |
+| Estrutura ruim de prompt | Mova conteúdo dinâmico para o final para que o prefixo permaneça estável |
+
+</Accordion>
