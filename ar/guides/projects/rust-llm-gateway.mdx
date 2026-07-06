@@ -1,0 +1,1240 @@
+---
+title: "بناء بوابة LLM بلغة Rust"
+slug: rust-llm-gateway-venice
+"og:title": "بناء بوابة LLM بلغة Rust مع Venice AI"
+"og:description": "دليل عملي لبناء بوابة LLM بلغة Rust متوافقة مع OpenAI باستخدام Axum و Postgres و SQLx مع استجابات البث ومحددات المعدل و OpenTelemetry."
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="3 July 2026"/>
+
+تبدأ معظم تطبيقات الذكاء الاصطناعي باستدعاء واجهة برمجة تطبيقات نموذج مباشرةً. يعمل ذلك جيدًا للنماذج الأولية، ولكن بمجرد أن تحتاج تطبيقات أو خدمات أو عملاء متعددون إلى الوصول، تصبح استدعاءات المزود المباشرة أصعب في الإدارة. تحتاج كل خدمة إلى مفتاح مزود، ويحتاج كل عميل إلى تعلم السلوك الخاص بالمزود، وينتهي الأمر بكل فريق إلى حل المصادقة والحدود والقابلية للمراقبة بطرق مختلفة قليلاً.
+
+توفر بوابة LLM مكانًا واحدًا لمصادقة المستدعين، وفرض حدود المعدل، وإخفاء مفاتيح المزود العلوي، وتسجيل القياس عن بُعد، والحفاظ على واجهة برمجة تطبيقات مستقرة لتطبيقاتنا الخاصة. في هذا البرنامج التعليمي، سنبني واحدة بلغة Rust باستخدام Axum و Postgres و SQLx وواجهة برمجة تطبيقات Venice AI.
+
+في النهاية، سيكون لديك بوابة تعرض نقطة النهاية `/v1/chat/completions` المتوافقة مع OpenAI، وتقبل رموز حاملك الخاصة، وتعيد توجيه الطلبات إلى Venice، وتدعم استجابات البث، وتصدر امتدادات ومقاييس OpenTelemetry مفيدة.
+
+هل أنت مهتم بتنفيذ الكود الكامل؟ اطلع على [مستودع GitHub.](https://github.com/joshua-mo-143/venice-llm-gateway-demo)
+
+## المتطلبات المسبقة
+
+- Rust 1.92+
+- Docker و Docker Compose
+- مفتاح Venice API
+- `curl`
+- إلمام أساسي بخدمات ويب Rust
+
+قبل أن نبدأ، قم بتصدير مفتاح Venice API الخاص بك:
+
+```bash
+export VENICE_API_KEY="your-venice-api-key"
+```
+
+لن نكشف هذا المفتاح أبدًا لتطبيقات العميل. ستحتفظ البوابة به من جانب الخادم وسيقوم العملاء بالمصادقة باستخدام مفاتيح API خاصة بالبوابة بدلاً من ذلك.
+
+## ما الذي نبنيه
+
+التنفيذ المرجعي هو خدمة Rust صغيرة مع بعض الأجزاء الواضحة:
+
+
+| الجزء              | ما يقوم به                                                                              |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| موجه Axum          | يخدم `/healthz` و `/v1/chat/completions`                                                |
+| مستخرج المصادقة    | يتحقق من رموز حامل البوابة مقابل المفاتيح المُجزَّأة في Postgres                          |
+| محدد المعدل        | يستخدم نوافذ ثابتة مخزنة في Postgres                                                     |
+| عميل Venice        | يقوم بالوكيل لطلبات إكمال الدردشة غير المتدفقة والمتدفقة                                  |
+| القياس عن بُعد      | يسجل امتدادات GenAI واستخدام الرموز وتكلفة الفوترة في Venice والزمن وتوقيتات البث         |
+| Docker Compose     | يشغل Postgres والبوابة محليًا                                                             |
+
+
+![مخطط معماري يوضح عميلًا يستدعي بوابة Rust و Postgres و Venice AI و OpenTelemetry](/images/guides/llm-gateway-architecture.png)
+
+*يرسل العميل طلبًا متوافقًا مع OpenAI إلى البوابة. تقوم البوابة بمصادقة المستدعي، وتحقق من حدود المعدل، وتعيد توجيه الطلب إلى Venice، وتسجل القياس عن بُعد على طول الطريق.*
+
+كجزء من البوابة، سنضمن أن تظل هذه الخدمة قابلة للتوسع أفقيًا مع تغطية أقل قدر من مساحة السطح فيما يتعلق بواجهة برمجة التطبيقات نفسها. هناك عدة أسباب لذلك - أحدها بشكل أساسي هو أنه إذا كان لديك قدر كبير جدًا من الإنتاجية على سبيل المثال، فمن المؤكد تقريبًا أنك سترغب في استخدام النسخ المتماثلة (أي تشغيل أكثر من نسخة واحدة من نفس الخدمة). هذا يعني أنه إذا لم تكن قد فعلت ذلك بالفعل، فمن الناحية المعمارية سترغب في وضع خدمتك الأصلية والنسخ المتماثلة خلف موازن أحمال بحيث إذا تعطلت حاوية أو خدمة واحدة، فلن تتعرض الخدمة بأكملها لانقطاع.
+
+بالإضافة إلى ذلك، سنفترض أيضًا أننا نمتلك إنشاء مفاتيح API بطريقة ما، على الرغم من أن خدمة البوابة لا ينبغي أن تصنعها بمعزل عن غيرها. سيتم تمثيل هذا كجدول Postgres نقوم بتعبئته عند استخدامه محليًا. في الإنتاج، سيتم عادةً التعامل مع هذا بواسطة خدمة المصادقة. على الرغم من أنه من الممكن التعامل مع إنشاء مفتاح API في المنبع لكل مستخدم يستخدم بوابة LLM الخاصة بك، إلا أنه من الناحية العملية لا يُنصح بذلك بشكل عام. من خلال تفريغ هذه المسؤولية إلى الخدمة العلوية، فإنك تفرغ أيضًا أي تحكم قد يكون لديك عادةً - مما يعني أنك لا تستطيع تطبيق أشياء مثل تحديد المعدل وحدود الإنفاق بالكامل.
+
+تبقى شجرة المصدر صغيرة عن قصد:
+
+```text
+.
+├── Cargo.toml
+├── Dockerfile
+├── docker-compose.yml
+├── migrations/
+│   └── 0001_api_keys.sql
+├── scripts/
+│   ├── seed_api_key.sh
+│   └── smoke_chat.sh
+└── src/
+    ├── auth.rs
+    ├── config.rs
+    ├── error.rs
+    ├── main.rs
+    ├── rate_limit.rs
+    ├── router.rs
+    ├── sse.rs
+    ├── state.rs
+    ├── telemetry.rs
+    └── venice.rs
+```
+
+دون مزيد من التأخير، لنبدأ في البناء.
+
+## إنشاء خدمة Rust
+
+ابدأ بمشروع Rust ثنائي جديد:
+
+```bash
+cargo new llm-gateway
+cd llm-gateway
+```
+
+أضف الاعتماديات التي نحتاجها في `Cargo.toml` - تمت إضافة الشروحات في مقتطف الكود:
+
+```toml
+[dependencies]
+# Web backend
+axum = "0.8.9"
+tower = "0.5.3"
+tower-http = { version = "0.6.11", features = ["trace", "request-id", "sensitive-headers", "timeout", "limit"] }
+
+## Observability
+opentelemetry = "0.32.0"
+opentelemetry-otlp = "0.32.0"
+opentelemetry_sdk = "0.32.1"
+tracing = "0.1.44"
+tracing-opentelemetry = "0.33.0"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+
+# HTTP request/response handling
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "stream", "rustls-tls", "http2", "charset"] }
+reqwest-eventsource = "0.6.0"
+bytes = "1.11.1"
+futures-util = "0.3.32"
+
+# Serialization
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+
+# Hashing/crypto
+sha2 = "0.11.0"
+subtle = "2.6.1"
+
+# SQL
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "macros", "migrate"] }
+
+# utils
+thiserror = "2.0.18" # a crate for writing ergonomic errors
+time = { version = "0.3.47", features = ["serde", "formatting", "macros"] } # time
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "signal", "net", "time"] } # the most popular async Rust runtime
+uuid = { version = "1.23.3", features = ["serde", "v4"] }
+```
+
+## تحميل التكوين
+
+تقرأ البوابة كل شيء من متغيرات البيئة. بالنسبة لكود البنية التحتية مثل هذا، تُعد متغيرات البيئة افتراضًا جيدًا لأنه يمكن تشغيل نفس الملف الثنائي محليًا، أو في Docker Compose، أو في بيئة مستضافة دون تنسيق ملف تكوين منفصل. بالإضافة إلى ذلك، سيسمح لك العديد من المزودين بتخزين متغيرات البيئة الخاصة بك كأسرار في وقت تشغيل الحاوية الخاص بهم. غالبًا ما يكون هذا أكثر أمانًا من محاولة استخدام شيء مثل `dotenv` (أو `dotenvy` في Rust، حيث أن صندوق `dotenv` الأصلي مهجور في الغالب).
+
+قم بإنشاء `src/config.rs`:
+
+```rust
+use std::{env, net::SocketAddr, str::FromStr, time::Duration};
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub bind_addr: SocketAddr,
+    pub database_url: String,
+    pub venice_api_key: String,
+    pub venice_base_url: String,
+    pub service_name: String,
+    pub otlp_endpoint: Option<String>,
+    pub request_timeout: Duration,
+    pub request_body_limit_bytes: usize,
+    pub venice_max_retries: u32,
+    pub capture_genai_content: bool,
+}
+
+impl Config {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Ok(Self {
+            bind_addr: parse_env("BIND_ADDR", "0.0.0.0:3000")?,
+            database_url: required_env("DATABASE_URL")?,
+            venice_api_key: required_env("VENICE_API_KEY")?,
+            venice_base_url: env::var("VENICE_BASE_URL")
+                .unwrap_or_else(|_| "https://api.venice.ai/api/v1".to_owned()),
+            service_name: env::var("OTEL_SERVICE_NAME")
+                .unwrap_or_else(|_| "llm-gateway".to_owned()),
+            otlp_endpoint: optional_nonempty_env("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            request_timeout: Duration::from_secs(parse_env("REQUEST_TIMEOUT_SECONDS", "120")?),
+            request_body_limit_bytes: parse_env("REQUEST_BODY_LIMIT_BYTES", "1048576")?,
+            venice_max_retries: parse_env("VENICE_MAX_RETRIES", "2")?,
+            capture_genai_content: parse_env("CAPTURE_GENAI_CONTENT", "false")?,
+        })
+    }
+}
+```
+
+بينما هناك الكثير من القيم المحتملة التي يتم تحليلها هنا من متغيرات البيئة، بشكل عام تحتاج فقط إلى اثنين:
+- رابط قاعدة البيانات
+- مفتاح Venice API الخاص بك
+
+يهم افتراضيان هنا. `VENICE_BASE_URL` يشير إلى `https://api.venice.ai/api/v1`، و `CAPTURE_GENAI_CONTENT` يكون افتراضيًا `false` بحيث لا يتم تسجيل محتوى المطالبة إلا إذا قمت بتمكينه عن قصد.
+
+هذا الافتراضي الثاني هو الأكثر أهمية. يمكن للبوابة أن ترى كل مطالبة واستجابة تتدفق من خلالها، لكن قابلية المراقبة يجب ألا تصبح تلقائيًا التقاطًا للمحتوى. في معظم أنظمة الإنتاج، تُعد أعداد الرموز، والزمن، وأسماء النماذج، ورموز الحالة، وبيانات الفوترة الوصفية كافية للعمليات. بشكل عام، قد لا يكون تسجيل المطالبات والمحادثات في الإنتاج مسؤولية خصوصية فحسب - بل يمكن أن يكون أيضًا مسؤولية تخزين. تضيف إضافتها إنشاء امتدادات وآثار بمستوى عالٍ للغاية من التعدد (أي تفرد البيانات داخل مجموعة البيانات). يمكن أن يجعل هذا البحث في بيانات المراقبة الخاصة بك مكلفًا للغاية، بالإضافة إلى احتمال إعاقة الأداء عند البحث في البيانات.
+
+## إنشاء مخطط قاعدة البيانات
+
+بعد ذلك، قم بإنشاء `migrations/0001_api_keys.sql`.
+
+سنقوم بتخزين أول 12 حرفًا فقط من كل مفتاح API للبوابة كبادئة بحث، بالإضافة إلى تجزئة SHA-256 للمفتاح الكامل. يتيح ذلك للبوابة العثور على صف مرشح بسرعة دون تخزين بيانات الاعتماد الأولية.
+
+البادئة ليست سرية. وهي موجودة للفهرسة. التجزئة هي ما يثبت أن المستدعي قدم المفتاح الكامل. هذا هو نفس الشكل الأساسي الذي تستخدمه العديد من أنظمة مفاتيح API: عرض المفتاح الأولي مرة واحدة، وتخزين تمثيل غير قابل للعكس، والاحتفاظ ببادئة قصيرة للبحث وسير عمل الدعم.
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE api_keys
+  ( api_key_id uuid PRIMARY KEY DEFAULT gen_random_uuid()
+  , subject_id uuid NOT NULL
+  , name text NOT NULL
+  , key_prefix text NOT NULL
+  , key_hash bytea NOT NULL
+  , rate_limit_requests integer NOT NULL DEFAULT 60
+  , rate_limit_window_seconds integer NOT NULL DEFAULT 60
+  , is_active boolean NOT NULL DEFAULT true
+  , created_at timestamptz NOT NULL DEFAULT now()
+  , last_used_at timestamptz
+  , revoked_at timestamptz
+  , CONSTRAINT api_keys_prefix_length CHECK (length(key_prefix) = 12)
+  , CONSTRAINT api_keys_hash_sha256 CHECK (length(key_hash) = 32)
+  , CONSTRAINT api_keys_rate_limit_requests_positive CHECK (rate_limit_requests > 0)
+  , CONSTRAINT api_keys_rate_limit_window_positive CHECK (rate_limit_window_seconds > 0)
+  , CONSTRAINT api_keys_revoked_inactive CHECK (revoked_at IS NULL OR NOT is_active)
+  );
+
+CREATE UNIQUE INDEX api_keys_key_prefix_key
+ON api_keys (key_prefix);
+
+CREATE UNIQUE INDEX api_keys_key_hash_key
+ON api_keys (key_hash);
+```
+
+أضف الآن جدولًا لتحديد المعدل بنافذة ثابتة:
+
+```sql
+CREATE TABLE api_key_rate_limit_windows
+  ( api_key_id uuid NOT NULL
+      REFERENCES api_keys (api_key_id)
+      ON DELETE RESTRICT
+      ON UPDATE RESTRICT
+  , window_start_at timestamptz NOT NULL
+  , window_seconds integer NOT NULL
+  , request_count integer NOT NULL
+  , updated_at timestamptz NOT NULL DEFAULT now()
+  , PRIMARY KEY (api_key_id, window_start_at, window_seconds)
+  , CONSTRAINT api_key_rate_limit_windows_window_positive CHECK (window_seconds > 0)
+  , CONSTRAINT api_key_rate_limit_windows_request_count_nonnegative CHECK (request_count >= 0)
+  );
+```
+
+هذا المخطط صغير، لكنه يمنحنا الثوابت المهمة:
+
+- لا يتم تخزين مفاتيح API أبدًا بنص عادي.
+- يجب أن تكون إعدادات حد المعدل موجبة.
+- لا يمكن أن تظل المفاتيح المُبطلة نشطة.
+- يتم تحديد نافذة حد المعدل بشكل فريد بواسطة المفتاح ووقت البدء وطول النافذة.
+
+الاحتفاظ بهذه الثوابت في Postgres مفيد لأن كل مستدعي يجب أن يمر عبر حالة قاعدة البيانات هذه. حتى لو أضفنا لاحقًا واجهة برمجة تطبيقات إدارية، أو مهمة تدوير مفاتيح في الخلفية، أو ترحيلًا يستورد المفاتيح من نظام آخر، فإن قاعدة البيانات لا تزال ترفض الحالات المستحيلة مثل مفتاح نشط بطابع زمني للإبطال.
+
+## بناء عميل Venice
+
+بعد ذلك، سنقوم بإنشاء `src/venice.rs`. يحتاج العميل فقط إلى معرفة رابط إكمال الدردشة العلوي، ومفتاح Venice API، وعدد مرات إعادة محاولة الإخفاقات العابرة.
+
+الحفاظ على هذا الغلاف صغيرًا أمر مقصود - يجب ألا تعيد البوابة تنفيذ واجهة برمجة تطبيقات Venice بالكامل. على المستوى الأساسي، تتمثل مهمة البوابة في إرفاق بيانات الاعتماد من جانب الخادم، وتطبيق مهلة، وإعادة محاولة الطلبات الآمنة للإعادة، وإرجاع الاستجابة العلوية في شكل يمكن للموجه إعادة توجيهه.
+
+```rust
+use std::time::Duration;
+
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
+use reqwest_eventsource::{EventSource, RequestBuilderExt};
+use serde_json::Value;
+use tokio::time::sleep;
+
+use crate::{config::Config, error::AppError};
+
+#[derive(Clone)]
+pub struct VeniceClient {
+    http: Client,
+    api_key: String,
+    chat_completions_url: String,
+    max_retries: u32,
+}
+
+impl VeniceClient {
+    pub fn new(config: &Config) -> Result<Self, AppError> {
+        let http = Client::builder()
+            .timeout(config.request_timeout)
+            .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+
+        Ok(Self {
+            http,
+            api_key: config.venice_api_key.clone(),
+            chat_completions_url: format!(
+                "{}/chat/completions",
+                config.venice_base_url.trim_end_matches('/')
+            ),
+            max_retries: config.venice_max_retries,
+        })
+    }
+}
+```
+
+بالنسبة للطلبات غير المتدفقة، يمكننا إعادة محاولة أخطاء الاتصال، والمهلات، ورموز حالة HTTP العابرة:
+
+```rust
+impl VeniceClient {
+    pub async fn chat_completions(&self, payload: &Value) -> Result<Response, AppError> {
+        let mut attempt = 0;
+
+        loop {
+            let result = self.chat_request(payload).send().await;
+
+            match result {
+                Ok(response)
+                    if should_retry_status(response.status()) && attempt < self.max_retries =>
+                {
+                    attempt += 1;
+                    sleep(retry_delay(attempt)).await;
+                }
+                Ok(response) => return Ok(response),
+                Err(error) if should_retry_error(&error) && attempt < self.max_retries => {
+                    attempt += 1;
+                    sleep(retry_delay(attempt)).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+}
+
+fn should_retry_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    )
+}
+```
+
+يتم تطبيق إعادة المحاولة فقط على المسار غير المتدفق. بمجرد أن تبدأ استجابة البث، يمكن أن تؤدي إعادة المحاولة داخل البوابة إلى تكرار المخرجات الجزئية أو إرباك العملاء الذين تلقوا بالفعل قطعًا. بالنسبة للبث، فإن الافتراضي الأفضل هو إظهار الخطأ والسماح للمستدعي بتحديد ما إذا كان سيعيد محاولة الطلب بأكمله.
+
+للبث، ننشئ `EventSource` من نفس الطلب:
+
+```rust
+impl VeniceClient {
+    pub fn chat_completions_eventsource(&self, payload: &Value) -> Result<EventSource, AppError> {
+        self.chat_request(payload)
+            .eventsource()
+            .map_err(|error| AppError::EventSourceSetup(error.to_string()))
+    }
+
+    fn chat_request(&self, payload: &Value) -> RequestBuilder {
+        self.http
+            .post(&self.chat_completions_url)
+            .bearer_auth(&self.api_key)
+            .json(payload)
+    }
+}
+```
+
+نقطة نهاية إكمال الدردشة في Venice متوافقة مع OpenAI، لذلك يمكن للبوابة قبول جسم مألوف:
+
+```json
+{
+  "model": "zai-org-glm-5-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Say hello from behind a Rust gateway."
+    }
+  ]
+}
+```
+
+يمكنك استبدال النموذج بأي نموذج قادر على الدردشة متاح لحساب Venice الخاص بك.
+
+لاحظ أن جسم الطلب لا يزال `serde_json::Value`. هذا اختيار توافق متعمد. إذا قمنا بنمذجة كل حقل إكمال دردشة ممكن في Rust، فعلينا الاستمرار في تحديث البوابة في كل مرة تضيف فيها واجهة برمجة التطبيقات العلوية خيارًا مفيدًا. من خلال تحليل ما نحتاجه فقط في مكان آخر، نسمح لمعلمات Venice الأحدث بالمرور دون إصدار بوابة.
+
+## مشاركة حالة التطبيق
+
+قم بإنشاء `src/state.rs`:
+
+```rust
+use std::sync::Arc;
+
+use sqlx::PgPool;
+
+use crate::{config::Config, error::AppError, venice::VeniceClient};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub config: Arc<Config>,
+    pub db: PgPool,
+    pub venice: VeniceClient,
+}
+
+impl AppState {
+    pub fn new(config: Config, db: PgPool) -> Result<Self, AppError> {
+        let venice = VeniceClient::new(&config)?;
+
+        Ok(Self {
+            config: Arc::new(config),
+            db,
+            venice,
+        })
+    }
+}
+```
+
+يقوم Axum باستنساخ الحالة في المعالجات، لذلك يجب أن تكون الحالة نفسها رخيصة الاستنساخ. `PgPool` هو بالفعل مقبض تجمع مشترك، و `Arc<Config>` يبقي التكوين رخيصًا أيضًا.
+
+يمنح هذا كل معالج الوصول إلى نفس الأشياء الثلاثة: التكوين غير القابل للتغيير، واتصالات قاعدة البيانات المجمعة، وعميل Venice. يسهل الاحتفاظ بها في `AppState` واحد الاختبار لاحقًا لأن المعالجات تتلقى تبعياتها من خلال حالة Axum بدلاً من قراءة المتغيرات العامة.
+
+## مصادقة مفاتيح API للبوابة
+
+يرسل العميل مفتاح البوابة الخاص به على النحو التالي:
+
+```http
+Authorization: Bearer llmg_dev_0123456789abcdef
+```
+
+قم بإنشاء `src/auth.rs` وتنفيذ مستخرج Axum. يتيح المستخرج للمعالجات المحمية أن تصرح بأنها تتطلب مفتاحًا مصادقًا عليه:
+
+```rust
+use axum::{
+    extract::FromRequestParts,
+    http::{HeaderMap, header, request::Parts},
+};
+use sha2::{Digest, Sha256};
+use sqlx::{FromRow, PgPool};
+use subtle::ConstantTimeEq;
+use uuid::Uuid;
+
+use crate::{error::AppError, state::AppState};
+
+const KEY_PREFIX_BYTES: usize = 12;
+
+#[derive(Clone, Debug)]
+pub struct AuthenticatedApiKey {
+    pub api_key_id: Uuid,
+    pub subject_id: Uuid,
+    pub rate_limit_requests: i32,
+    pub rate_limit_window_seconds: i32,
+}
+
+impl FromRequestParts<AppState> for AuthenticatedApiKey {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        authenticate(&state.db, &parts.headers).await
+    }
+}
+```
+
+تدفق المصادقة الفعلي هو:
+
+1. تحليل رمز الحامل.
+2. أخذ أول 12 بايت كبادئة مفتاح.
+3. تجزئة الرمز المرشح الكامل باستخدام SHA-256.
+4. تحميل صف المفتاح النشط بواسطة البادئة.
+5. مقارنة التجزئة المخزنة والتجزئة المرشحة في وقت ثابت.
+
+```rust
+async fn authenticate(db: &PgPool, headers: &HeaderMap) -> Result<AuthenticatedApiKey, AppError> {
+    let token = bearer_token(headers)?;
+    let key_prefix = token
+        .get(..KEY_PREFIX_BYTES)
+        .ok_or(AppError::Unauthorized)?;
+    let candidate_hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+
+    let stored = sqlx::query_as::<_, StoredApiKey>(
+        r#"
+        SELECT api_key_id, subject_id, key_hash, rate_limit_requests, rate_limit_window_seconds
+        FROM api_keys
+        WHERE key_prefix = $1
+          AND is_active
+          AND revoked_at IS NULL
+        "#,
+    )
+    .bind(key_prefix)
+    .fetch_optional(db)
+    .await?;
+
+    let stored = stored.ok_or(AppError::Unauthorized)?;
+
+    if stored.key_hash.ct_eq(candidate_hash.as_slice()).unwrap_u8() != 1 {
+        return Err(AppError::Unauthorized);
+    }
+
+    Ok(AuthenticatedApiKey {
+        api_key_id: stored.api_key_id,
+        subject_id: stored.subject_id,
+        rate_limit_requests: stored.rate_limit_requests,
+        rate_limit_window_seconds: stored.rate_limit_window_seconds,
+    })
+}
+```
+
+يحافظ هذا على فصل بيانات اعتماد المنبع والبوابة. يمكن لتطبيقات الإنتاج الخاصة بك تدوير مفاتيح البوابة دون تغيير مفتاح Venice API، ولا يحتاج مفتاح Venice أبدًا إلى مغادرة الخادم.
+
+نمط المستخرج مفيد لأن المصادقة تصبح جزءًا من توقيع نوع المعالج. لا يمكن للمسار الذي يقبل `AuthenticatedApiKey` تخطي المصادقة عن طريق الخطأ داخل جسم الوظيفة؛ يجب على Axum بناء هذه القيمة قبل تشغيل المعالج. هذا يجعل المسار المحمي سهل التدقيق.
+
+## إضافة حدود معدل النافذة الثابتة
+
+قم بإنشاء `src/rate_limit.rs`. يستخدم محدد المعدل عبارة SQL واحدة لإدراج نافذة جديدة أو زيادة النافذة الموجودة:
+
+```rust
+pub async fn check(db: &PgPool, api_key: &AuthenticatedApiKey) -> Result<(), AppError> {
+    let window = sqlx::query_as::<_, RateLimitWindow>(
+        r#"
+        WITH current_window AS
+          ( SELECT
+              to_timestamp(
+                floor(extract(epoch FROM now()) / $2::double precision) * $2
+              )::timestamptz AS window_start_at
+          )
+        INSERT INTO api_key_rate_limit_windows
+          (api_key_id, window_start_at, window_seconds, request_count)
+        SELECT $1, current_window.window_start_at, $2, 1
+        FROM current_window
+        ON CONFLICT (api_key_id, window_start_at, window_seconds)
+        DO UPDATE
+        SET request_count = api_key_rate_limit_windows.request_count + 1,
+            updated_at = now()
+        WHERE api_key_rate_limit_windows.request_count < $3
+        RETURNING request_count, window_start_at
+        "#,
+    )
+    .bind(api_key.api_key_id)
+    .bind(api_key.rate_limit_window_seconds)
+    .bind(api_key.rate_limit_requests)
+    .fetch_optional(db)
+    .await?;
+
+    let _window = window.ok_or_else(|| AppError::RateLimited {
+            retry_after: retry_after(api_key.rate_limit_window_seconds),
+    })?;
+
+    Ok(())
+}
+```
+
+جملة `WHERE api_key_rate_limit_windows.request_count < $3` هي الجزء المهم. عندما تكون النافذة ممتلئة بالفعل، لا يقوم Postgres بتحديث الصف ولا ينتج `RETURNING` أي صف. يمكن للمعالج تحويل ذلك إلى استجابة `429 Too Many Requests` مع رأس `Retry-After`.
+
+النافذة الثابتة ليست أكثر محددات المعدل تطورًا، لكنها سهلة الشرح، وسهلة الفحص، وجيدة بما يكفي لبرنامج تعليمي عن البوابة. المفاضلة هي أن حركة المرور يمكن أن تتراكم حول حدود النافذة. إذا كنت بحاجة إلى سلوك أكثر سلاسة على نطاق واسع، فإن محدد سلة الرموز أو محدد النافذة المنزلقة المدعوم بـ Redis هو خطوة تالية طبيعية.
+
+## إرجاع أخطاء بأسلوب OpenAI
+
+قم بإنشاء `src/error.rs` واجعل أخطاء التطبيق تنفذ `IntoResponse`:
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum AppError {
+    #[error("missing or invalid bearer token")]
+    Unauthorized,
+    #[error("rate limit exceeded")]
+    RateLimited { retry_after: Duration },
+    #[error("bad request: {0}")]
+    BadRequest(String),
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("upstream request failed: {0}")]
+    UpstreamTransport(#[from] reqwest::Error),
+    #[error("failed to create upstream event source: {0}")]
+    EventSourceSetup(String),
+    #[error("upstream event source failed: {0}")]
+    EventSource(String),
+    #[error("upstream returned an error")]
+    Upstream {
+        status: StatusCode,
+        body: serde_json::Value,
+    },
+}
+```
+
+بالنسبة للأخطاء التي يتم إنشاؤها بواسطة البوابة، قم بإرجاع جسم JSON بشكل يشبه أخطاء واجهة برمجة تطبيقات النموذج الشائعة:
+
+```json
+{
+  "error": {
+    "message": "rate limit exceeded",
+    "type": "rate_limit_error",
+    "code": null
+  }
+}
+```
+
+بالنسبة لأخطاء Venice العلوية، احتفظ برمز الحالة والجسم العلوي. هذا يجعل تصحيح الأخطاء أسهل بكثير للعملاء لأن أخطاء التحقق من الصحة على مستوى المزود لا تزال تبدو مثل أخطاء التحقق من الصحة على مستوى المزود.
+
+يبقي هذا التقسيم البوابة صادقة بشأن مصدر الخطأ. إذا رفضت البوابة طلبًا لأن رمز الحامل مفقود أو أن المستدعي تجاوز الحد، فإنها ترجع خطأً بشكل البوابة. إذا رفض Venice طلب النموذج، فإننا نحتفظ بالجسم العلوي حتى يتمكن مطورو العميل من رؤية رسالة التحقق من صحة المزود بدلاً من فشل وكيل عام.
+
+## بناء الموجه
+
+الآن يمكننا توصيل مسارات HTTP في `src/router.rs`:
+
+```rust
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{DefaultBodyLimit, State},
+    http::{StatusCode, header::{CACHE_CONTROL, CONTENT_TYPE}},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use serde::Serialize;
+use serde_json::Value;
+use tower::ServiceBuilder;
+use tower_http::trace::TraceLayer;
+
+use crate::{
+    auth,
+    error::AppError,
+    rate_limit, sse,
+    state::AppState,
+    telemetry::{self, GenAiRequest},
+};
+
+pub fn build(state: AppState) -> Router {
+    let body_limit = state.config.request_body_limit_bytes;
+
+    Router::new()
+        .route("/healthz", get(healthz))
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(state)
+        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()))
+}
+
+async fn healthz() -> impl IntoResponse {
+    Json(Health { status: "ok" })
+}
+
+#[derive(Serialize)]
+struct Health {
+    status: &'static str,
+}
+```
+
+يبدأ معالج الدردشة بطلب `AuthenticatedApiKey`. إذا فشلت المصادقة، فلن يدخل Axum جسم المعالج أبدًا:
+
+```rust
+async fn chat_completions(
+    api_key: auth::AuthenticatedApiKey,
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Result<Response, AppError> {
+    rate_limit::check(&state.db, &api_key).await?;
+
+    let request = GenAiRequest::from_payload(&payload).map_err(AppError::BadRequest)?;
+    let span = telemetry::span_for_request(&request);
+
+    if request.stream {
+        let eventsource = state.venice.chat_completions_eventsource(&payload)?;
+        let stream = sse::observe_eventsource(
+            eventsource,
+            request,
+            span,
+            None,
+            api_key.api_key_id,
+        );
+
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "text/event-stream")
+            .header(CACHE_CONTROL, "no-cache")
+            .body(Body::from_stream(stream))
+            .expect("static streaming response headers are valid"));
+    }
+
+    let upstream = state.venice.chat_completions(&payload).await?;
+    let status = upstream.status();
+
+    if !status.is_success() {
+        let bytes = upstream.bytes().await?;
+        return Err(AppError::Upstream {
+            status,
+            body: upstream_body_from_bytes(&bytes),
+        });
+    }
+
+    let bytes = upstream.bytes().await?;
+    let metadata = telemetry::metadata_from_bytes(&bytes);
+    span.in_scope(|| {
+        telemetry::record_response(&request, &span, &metadata, None);
+        telemetry::record_billing(api_key.api_key_id, &metadata);
+    });
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(bytes))
+        .expect("static json response headers are valid"))
+}
+```
+
+تتحقق البوابة فقط من الحقول التي تحتاجها لسلوك البوابة: `model` و `messages` و `stream`. يمر كل شيء آخر في جسم JSON إلى Venice. هذا يبقي البوابة متوافقة مع ميزات المزود التي قد ترغب في استخدامها لاحقًا.
+
+يجعل المعالج أيضًا وضعي الاستجابة صريحين. تنتظر الطلبات غير المتدفقة أن يقوم Venice بإرجاع استجابة JSON كاملة، ثم تسجل بيانات الاستجابة الوصفية قبل إرسال البايتات إلى المصدر. تعيد طلبات البث فورًا مع جسم `text/event-stream` مدعومًا بتدفق غير متزامن. يبقي هذا التقسيم المسار غير المتدفق بسيطًا مع إعطاء مسار البث تحكمًا كافيًا لمراقبة القطع أثناء مرورها.
+
+## دعم استجابات البث
+
+تستخدم إكمالات دردشة البث الأحداث المرسلة من الخادم. يرسل Venice بيانات SSE، وتقوم البوابة بترحيل تلك البيانات إلى العميل.
+
+يجب على البوابة تجنب تخزين البث بالكامل مؤقتًا لأن ذلك سيهزم الغرض من البث. يهتم المستخدمون بالوقت اللازم للحصول على الرمز الأول، وليس فقط بالوقت اللازم للرمز النهائي. من خلال إعادة توجيه كل حدث علوي عند وصوله، يمكن للعملاء عرض المخرجات الجزئية بينما لا يزال النموذج يولد.
+
+قم بإنشاء `src/sse.rs`:
+
+```rust
+use bytes::Bytes;
+use futures_util::{Stream, StreamExt, stream};
+use reqwest_eventsource::{Event, EventSource};
+use uuid::Uuid;
+
+use crate::{
+    error::AppError,
+    telemetry::{self, GenAiRequest, GenAiResponseMetadata},
+};
+
+pub fn observe_eventsource(
+    eventsource: EventSource,
+    request: GenAiRequest,
+    span: tracing::Span,
+    pending_event: Option<Event>,
+    api_key_id: Uuid,
+) -> impl Stream<Item = Result<Bytes, AppError>> + Send + 'static {
+    let state = StreamState {
+        eventsource,
+        pending_event,
+        request,
+        span,
+        api_key_id,
+        metadata: GenAiResponseMetadata::default(),
+        first_chunk_at: None,
+        previous_chunk_at: None,
+    };
+
+    stream::unfold(state, |mut state| async move {
+        loop {
+            let event = match state.pending_event.take() {
+                Some(event) => Some(Ok(event)),
+                None => state.eventsource.next().await,
+            };
+
+            match event {
+                Some(Ok(Event::Open)) => continue,
+                Some(Ok(Event::Message(message))) => {
+                    let bytes = state.observe_message(&message.data);
+                    if message.data == "[DONE]" {
+                        state.eventsource.close();
+                    }
+                    return Some((Ok(bytes), state));
+                }
+                Some(Err(error)) => {
+                    return Some((Err(AppError::EventSource(error.to_string())), state));
+                }
+                None => {
+                    telemetry::record_response(&state.request, &state.span, &state.metadata, None);
+                    telemetry::record_billing(state.api_key_id, &state.metadata);
+                    return None;
+                }
+            }
+        }
+    })
+}
+```
+
+يتم ترميز كل رسالة مرة أخرى إلى تنسيق SSE:
+
+```rust
+fn encode_sse_data(data: &str) -> Bytes {
+    let mut encoded = String::new();
+    for line in data.lines() {
+        encoded.push_str("data: ");
+        encoded.push_str(line);
+        encoded.push('\n');
+    }
+    if data.is_empty() {
+        encoded.push_str("data: \n");
+    }
+    encoded.push('\n');
+    Bytes::from(encoded)
+}
+```
+
+هذا يحافظ على تجربة العميل التي تتوقعها SDKs المتوافقة مع OpenAI: تصل القطع كأحداث `data: ...`، وينتهي البث بـ `data: [DONE]`.
+
+مراقب البث هو أيضًا المكان الذي يمكننا فيه جمع البيانات الوصفية دون تغيير ما يراه العميل. يتم إعادة توجيه كل قطعة بتنسيق SSE، ولكن لا يزال بإمكان البوابة مراقبة معرفات الاستجابة، وأسباب الإنهاء، واستخدام الرموز، وحقول التكلفة، ومعلومات التوقيت أثناء مرور تلك القطع.
+
+## تسجيل قياسات GenAI عن بُعد
+
+البوابات مفيدة لأن كل طلب يمر عبر مكان واحد. هذا يجعلها مكانًا رائعًا لتسجيل النموذج، والزمن، واستخدام الرموز، وأسباب الإنهاء، وتكلفة الفوترة، وتوقيتات البث.
+
+قم بإنشاء `src/telemetry.rs` وابدأ بتحليل الطلب:
+
+```rust
+#[derive(Clone, Debug)]
+pub struct GenAiRequest {
+    pub model: String,
+    pub stream: bool,
+    pub started_at: Instant,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GenAiResponseMetadata {
+    pub response_id: Option<String>,
+    pub response_model: Option<String>,
+    pub finish_reasons: Vec<String>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cost_diem: Option<f64>,
+    pub cost_usd: Option<f64>,
+}
+
+impl GenAiRequest {
+    pub fn from_payload(payload: &Value) -> Result<Self, String> {
+        let model = payload
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|model| !model.trim().is_empty())
+            .ok_or_else(|| "request body must include a non-empty model".to_owned())?;
+
+        let messages = payload
+            .get("messages")
+            .and_then(Value::as_array)
+            .filter(|messages| !messages.is_empty())
+            .ok_or_else(|| "request body must include at least one message".to_owned())?;
+
+        if messages
+            .iter()
+            .any(|message| message.get("role").and_then(Value::as_str).is_none())
+        {
+            return Err("every message must include a role".to_owned());
+        }
+
+        Ok(Self {
+            model: model.to_owned(),
+            stream: payload
+                .get("stream")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            started_at: Instant::now(),
+        })
+    }
+}
+```
+
+ثم أنشئ امتدادًا باستخدام سمات GenAI الدلالية:
+
+```rust
+pub fn span_for_request(request: &GenAiRequest) -> Span {
+    tracing::info_span!(
+        "gen_ai.client",
+        "otel.name" = %format!("chat {}", request.model),
+        "otel.kind" = "client",
+        "gen_ai.operation.name" = "chat",
+        "gen_ai.provider.name" = "venice",
+        "gen_ai.request.model" = %request.model,
+        "gen_ai.request.stream" = request.stream,
+        "server.address" = "api.venice.ai",
+        "gen_ai.response.id" = tracing::field::Empty,
+        "gen_ai.response.model" = tracing::field::Empty,
+        "gen_ai.response.finish_reasons" = tracing::field::Empty,
+        "gen_ai.response.time_to_first_chunk" = tracing::field::Empty,
+        "gen_ai.usage.input_tokens" = tracing::field::Empty,
+        "gen_ai.usage.output_tokens" = tracing::field::Empty,
+        "venice.cost.diem" = tracing::field::Empty,
+        "venice.cost.usd" = tracing::field::Empty,
+        "error.type" = tracing::field::Empty,
+        "otel.status_code" = tracing::field::Empty,
+    )
+}
+```
+
+عندما تعود استجابة غير متدفقة، قم بإلغاء تسلسل حقول بيانات الاستجابة الوصفية المعروفة إلى بنى. لا تزال البوابة تعيد توجيه البايتات الأصلية إلى العميل، لكن القياس عن بُعد لا يحتاج إلى المرور عبر JSON عشوائي. يستخدم سجل الفوترة UUID لمفتاح البوابة بدلاً من رمز الحامل بنص عادي، ويأتي معرف الطلب من `id` استجابة Venice:
+
+```rust
+#[derive(Debug, Default, Deserialize)]
+struct ChatCompletionResponse {
+    id: Option<String>,
+    model: Option<String>,
+    #[serde(default)]
+    choices: Vec<ChatCompletionChoice>,
+    usage: Option<ChatCompletionUsage>,
+    cost: Option<VeniceCost>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionChoice {
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionUsage {
+    prompt_tokens: Option<u64>,
+    input_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VeniceCost {
+    #[serde(default, deserialize_with = "optional_finite_f64")]
+    diem: Option<f64>,
+    #[serde(default, deserialize_with = "optional_finite_f64")]
+    usd: Option<f64>,
+}
+
+pub fn metadata_from_bytes(bytes: &[u8]) -> GenAiResponseMetadata {
+    serde_json::from_slice::<ChatCompletionResponse>(bytes)
+        .map(GenAiResponseMetadata::from)
+        .unwrap_or_default()
+}
+
+pub fn record_billing(api_key_id: Uuid, metadata: &GenAiResponseMetadata) {
+    let (Some(cost_diem), Some(cost_usd)) = (metadata.cost_diem, metadata.cost_usd) else {
+        return;
+    };
+
+    tracing::info!(
+        api_key_id = %api_key_id,
+        request_id = metadata.response_id.as_deref().unwrap_or("unknown"),
+        cost_diem,
+        cost_usd,
+        "venice.billing"
+    );
+}
+```
+
+بالنسبة لاستجابات البث، سجل الوقت اللازم للقطعة الأولى والوقت بين قطع المخرجات أثناء ترحيل بث SSE. تكون هذه المقاييس مفيدة بشكل خاص عندما تهتم بالزمن المُدرك، وليس فقط بإجمالي وقت الطلب.
+
+القياس عن بُعد هو المكان الذي تصبح فيه البوابة أكثر من مجرد وكيل. بمجرد أن تتضمن الامتدادات النموذج المطلوب، والنموذج العلوي، وأعداد الرموز، وأسباب الإنهاء، والحالة، وسجلات الفوترة لكل مفتاح، يمكنك الإجابة على أسئلة تشغيلية عملية: أي العملاء ينفقون الأكثر، وأي النماذج أبطأ، وما إذا كان البث يحسن الزمن المُدرك، وما إذا كانت الأخطاء تأتي من المصادقة أو حدود المعدل أو النقل أو مزود النموذج.
+
+## بدء تشغيل الخادم
+
+الآن قم بتوصيل كل شيء معًا في `src/main.rs`:
+
+```rust
+mod auth;
+mod config;
+mod error;
+mod rate_limit;
+mod router;
+mod sse;
+mod state;
+mod telemetry;
+mod venice;
+
+use sqlx::postgres::PgPoolOptions;
+use tokio::net::TcpListener;
+use tracing::info;
+
+use crate::{config::Config, state::AppState};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let config = Config::from_env()?;
+    let _telemetry = telemetry::init(&config)?;
+
+    let db = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&config.database_url)
+        .await?;
+
+    sqlx::migrate!("./migrations").run(&db).await?;
+
+    let bind_addr = config.bind_addr;
+    let state = AppState::new(config, db)?;
+    let app = router::build(state);
+    let listener = TcpListener::bind(bind_addr).await?;
+
+    info!(%bind_addr, "starting gateway");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    Ok(())
+}
+```
+
+عند بدء التشغيل، تقوم البوابة بما يلي:
+
+1. قراءة التكوين.
+2. تهيئة القياس عن بُعد.
+3. الاتصال بـ Postgres.
+4. تشغيل ترحيلات SQLx.
+5. بناء حالة التطبيق المشتركة.
+6. بدء تشغيل خادم Axum.
+
+يعد تشغيل الترحيلات عند بدء التشغيل مناسبًا لهذا البرنامج التعليمي لأن `docker compose up` يمكنه إحضار المكدس بأكمله إلى حالة عمل. في نشر إنتاج أكبر، قد تفضل تشغيل الترحيلات كخطوة إصدار منفصلة بحيث تتم مراجعة تغييرات المخطط وتطبيقها قبل بدء تشغيل مثيلات بوابة جديدة.
+
+## زرع مفتاح بوابة محلي
+
+للتطوير المحلي، قم بإنشاء `scripts/seed_api_key.sh`. يقوم البرنامج النصي بإدراج مفتاح API للبوابة في Postgres عن طريق تخزين بادئته وتجزئة SHA-256 الخاصة به:
+
+```sh
+#!/bin/sh
+set -eu
+
+DATABASE_URL="${DATABASE_URL:-postgres://llm_gateway:llm_gateway@localhost:5432/llm_gateway}"
+GATEWAY_API_KEY="${GATEWAY_API_KEY:-llmg_dev_0123456789abcdef}"
+SUBJECT_ID="${SUBJECT_ID:-00000000-0000-0000-0000-000000000001}"
+
+psql "$DATABASE_URL" \
+  -v ON_ERROR_STOP=1 \
+  -v gateway_api_key="$GATEWAY_API_KEY" \
+  -v subject_id="$SUBJECT_ID" <<'SQL'
+INSERT INTO api_keys
+  (subject_id, name, key_prefix, key_hash, rate_limit_requests, rate_limit_window_seconds)
+VALUES
+  ( :'subject_id'::uuid
+  , 'local development key'
+  , left(:'gateway_api_key', 12)
+  , digest(:'gateway_api_key', 'sha256')
+  , 60
+  , 60
+  )
+ON CONFLICT (key_prefix)
+DO UPDATE
+SET key_hash = EXCLUDED.key_hash,
+    is_active = true,
+    revoked_at = NULL;
+SQL
+```
+
+المفتاح المحلي الافتراضي هو:
+
+```text
+llmg_dev_0123456789abcdef
+```
+
+للنشر الحقيقي، قم بإنشاء مفاتيح عشوائية أطول، وأظهرها مرة واحدة للمستدعي، وقم بتخزين التجزئة فقط.
+
+البرنامج النصي للزرع ممل عمدًا لأن بيانات الاعتماد المحلية يجب أن تكون سهلة إعادة إنشائها. الإصدار الإنتاجي هو المكان الذي ستضيف فيه إنشاء مفاتيح أقوى، وتسجيل تدقيق، وانتهاء صلاحية، وتدفق عرض لمرة واحدة.
+
+## التشغيل محليًا
+
+للتشغيل محليًا، سنستخدم Docker Compose لبدء كل من البوابة و Postgres. يبقي هذا البرنامج التعليمي قابلاً للتكرار: لا يحتاج القراء إلى قاعدة بيانات مُهيأة يدويًا، ويمكن للبوابة استخدام نفس شكل `DATABASE_URL` الذي ستستخدمه في نشر حاوي.
+
+```yaml
+name: llm-gateway
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: llm_gateway
+      POSTGRES_USER: llm_gateway
+      POSTGRES_PASSWORD: llm_gateway
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llm_gateway -d llm_gateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  gateway:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      BIND_ADDR: 0.0.0.0:3000
+      DATABASE_URL: postgres://llm_gateway:llm_gateway@postgres:5432/llm_gateway
+      OTEL_SERVICE_NAME: llm-gateway
+      VENICE_API_KEY: ${VENICE_API_KEY:?set VENICE_API_KEY in your shell or .env}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+```
+
+سنحتاج أيضًا إلى Dockerfile صغير يقوم ببناء ملف Rust الثنائي ونسخه إلى صورة وقت تشغيل أصغر:
+
+```dockerfile
+FROM rust:1.92-bookworm AS builder
+
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY migrations ./migrations
+COPY src ./src
+
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/llm-gateway /usr/local/bin/llm-gateway
+
+EXPOSE 3000
+
+CMD ["llm-gateway"]
+```
+
+لتشغيل المكدس، استخدم الأمر التالي:
+
+```bash
+docker compose up --build
+```
+
+لا تنسَ أنه يمكنك أيضًا تشغيل هذا منفصلاً بعلامة `-d` إذا كنت تريد استخدام الطرفية الخاصة بك لأشياء أخرى بعد ذلك (ثم استخدم `docker compose down` لإزالته).
+
+في طرفية أخرى، قم بزرع مفتاح بوابة التطوير:
+
+```bash
+docker compose --profile seed run --rm seed
+```
+
+إذا كانت آلتك تشغل بالفعل Postgres على المنفذ `5432`، فقم بإزالة تعيين منفذ المضيف لخدمة Postgres في Compose. تحتاج البوابة فقط إلى الوصول إلى Postgres على شبكة Docker الداخلية.
+
+الشيء المهم الذي يجب مراعاته هو أن مفتاح Venice API ينتمي فقط إلى بيئة البوابة. يجب أن تستخدم طلبات العميل مفتاح البوابة المزروع. هذا الفصل هو الهدف الكامل من وضع بوابة أمام مزود النموذج.
+
+## اختبار البوابة
+
+أولاً، تحقق من الحالة الصحية:
+
+```bash
+curl http://localhost:3000/healthz
+```
+
+يجب أن ترى:
+
+```json
+{"status":"ok"}
+```
+
+الآن أرسل طلب إكمال دردشة غير متدفق:
+
+```bash
+curl http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer llmg_dev_0123456789abcdef" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.3-70b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply with one short sentence saying the gateway works."
+      }
+    ]
+  }'
+```
+
+يجب أن تبدو الاستجابة مثل إكمال دردشة متوافق مع OpenAI:
+
+```json
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "model": "llama-3.3-70b",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "The gateway is working."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 123,
+    "completion_tokens": 5,
+    "total_tokens": 128
+  },
+  "cost": {
+    "diem": 0.42,
+    "usd": 0.0012
+  }
+}
+```
+
+للبث:
+
+```bash
+curl -N http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer llmg_dev_0123456789abcdef" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.3-70b",
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write one short sentence confirming streaming works."
+      }
+    ]
+  }'
+```
+
+يجب أن ترى قطع SSE:
+
+```text
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk",...}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk",...}
+
+data: [DONE]
+```
+
+يتضمن المستودع أيضًا برنامجًا نصيًا لاختبار الدخان:
+
+```bash
+sh ./scripts/smoke_chat.sh
+```
+
+لفحوصات جودة الكود المحلية، قم بتشغيل:
+
+```bash
+cargo fmt --check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+اختبار وضعي الاستجابة مهم لأنهما يمارسان مسارات وكيل مختلفة. يثبت الاختبار غير المتدفق أن المصادقة، وتحديد المعدل، وإعادة التوجيه العلوي، وقياس استجابة JSON عن بُعد كلها تعمل. يثبت اختبار البث أن البوابة يمكنها الحفاظ على اتصال SSE مفتوحًا وإعادة توجيه القطع دون تخزين الإجابة النهائية مؤقتًا أولاً.
+
+## توسيع هذه البوابة
+
+هذه البوابة صغيرة عن قصد، لكنها تمنحك أساسًا صلبًا. تشمل الخطوات التالية الجيدة:
+
+- إضافة ميزانيات لكل موضوع وحدود إنفاق شهرية.
+- دعم مزودين علويين متعددين خلف نفس واجهة برمجة التطبيقات المتوافقة مع OpenAI.
+- تخزين البيانات الوصفية للطلب لسجلات التدقيق مع إبقاء تسجيل المطالبات معطلاً افتراضيًا.
+- إضافة واجهة برمجة تطبيقات إدارية لإنشاء مفاتيح البوابة وإبطالها وتدويرها.
+- إضافة قوائم النماذج المسموح بها لكل مفتاح API.
+- إضافة Redis أو مخزن مشترك آخر إذا كنت بحاجة إلى تحديد معدل بزمن أقل عبر العديد من مثيلات البوابة.
+
+الفكرة التصميمية الرئيسية هي الحفاظ على السياسة في البوابة والاستدلال في Venice. يتيح ذلك لتطبيقات العميل استخدام واجهة برمجة تطبيقات مألوفة بينما تحتفظ منصتك بالتحكم في المفاتيح والاستخدام والحدود وقابلية المراقبة.
+
+## الانتهاء
+
+شكرًا للقراءة! نأمل أن يكون هذا قد ساعدك في رؤية كيفية بناء بوابة LLM عملية بلغة Rust دون تحويلها إلى مشروع منصة ضخم.
+
+من خلال الجمع بين Axum و Postgres و SQLx و OpenTelemetry وواجهة برمجة تطبيقات إكمالات الدردشة المتوافقة مع OpenAI من Venice، يمكننا بناء بوابة صغيرة بما يكفي لفهمها ومفيدة بما يكفي للجلوس أمام تطبيقات حقيقية.
