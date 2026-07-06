@@ -1,0 +1,1240 @@
+---
+title: "Costruire un gateway LLM in Rust"
+slug: rust-llm-gateway-venice
+"og:title": "Costruire un gateway LLM in Rust con Venice AI"
+"og:description": "Una guida pratica per costruire un gateway LLM in Rust compatibile con OpenAI, usando Axum, Postgres, SQLx, risposte in streaming, rate limit e OpenTelemetry."
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="3 July 2026"/>
+
+La maggior parte delle app basate su IA inizia chiamando direttamente un'API di un modello. Funziona bene per i prototipi, ma quando più applicazioni, servizi o clienti hanno bisogno di accesso, le chiamate dirette al provider diventano più difficili da gestire. Ogni servizio ha bisogno di una chiave del provider, ogni client deve imparare comportamenti specifici del provider e ogni team finisce per risolvere autenticazione, limiti e osservabilità in modo leggermente diverso.
+
+Un gateway LLM ci offre un unico luogo in cui autenticare i chiamanti, applicare i rate limit, nascondere le chiavi dei provider a monte, registrare la telemetria e mantenere un'API stabile per le nostre applicazioni. In questo tutorial ne costruiremo uno in Rust con Axum, Postgres, SQLx e l'API di Venice AI.
+
+Alla fine avrai un gateway che espone un endpoint `/v1/chat/completions` compatibile con OpenAI, accetta i tuoi bearer token, inoltra le richieste a Venice, supporta risposte in streaming ed emette utili span e metriche OpenTelemetry.
+
+Ti interessa l'implementazione completa del codice? Dai un'occhiata a [il repository GitHub.](https://github.com/joshua-mo-143/venice-llm-gateway-demo)
+
+## Prerequisiti
+
+- Rust 1.92+
+- Docker e Docker Compose
+- Una chiave API Venice
+- `curl`
+- Familiarità di base con i servizi web in Rust
+
+Prima di iniziare, esporta la tua chiave API Venice:
+
+```bash
+export VENICE_API_KEY="your-venice-api-key"
+```
+
+Non esporremo mai questa chiave alle app client. Il gateway la manterrà lato server e i client si autenticheranno invece con chiavi API specifiche del gateway.
+
+## Cosa costruiremo
+
+L'implementazione di riferimento è un piccolo servizio Rust con alcune parti ben distinte:
+
+
+| Parte           | Cosa fa                                                                                        |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| Router Axum     | Serve `/healthz` e `/v1/chat/completions`                                                      |
+| Estrattore di auth | Valida i bearer token del gateway confrontandoli con le chiavi hashate in Postgres           |
+| Rate limiter    | Usa finestre fisse memorizzate in Postgres                                                     |
+| Client Venice   | Fa da proxy per le richieste di chat completion, sia in streaming che non                      |
+| Telemetria      | Registra span GenAI, uso dei token, costo di fatturazione Venice, latenza e tempi di streaming |
+| Docker Compose  | Esegue Postgres e il gateway in locale                                                         |
+
+
+![Diagramma dell'architettura che mostra un client che chiama il gateway Rust, Postgres, Venice AI e OpenTelemetry](/images/guides/llm-gateway-architecture.png)
+
+*Un client invia una richiesta compatibile con OpenAI al gateway. Il gateway autentica il chiamante, controlla i rate limit, inoltra la richiesta a Venice e registra la telemetria lungo il percorso.*
+
+Come parte del gateway, ci assicureremo che questo servizio rimanga scalabile orizzontalmente con la minor superficie possibile per quanto riguarda l'API stessa. Ci sono diverse ragioni per questo — una delle principali è che se, ad esempio, hai un throughput molto elevato, quasi certamente vorrai usare delle repliche (cioè avviare più di un'istanza dello stesso servizio). Ciò significa che, se non l'hai già fatto, dal punto di vista architetturale vorrai mettere il servizio originale e le repliche dietro un load balancer così che, se un container o un servizio va giù, l'intero servizio non subisca un'interruzione.
+
+Inoltre, assumeremo anche di gestire in qualche modo la creazione delle chiavi API, sebbene il servizio gateway non dovrebbe crearle in isolamento. Questo verrà rappresentato come una tabella Postgres che popoleremo con dati di seed quando usata in locale. In produzione, questo sarebbe tipicamente gestito dal servizio di autenticazione. Sebbene sia possibile gestire la creazione di una chiave API a monte per ogni utente che usa il tuo gateway LLM, in pratica ciò non è generalmente consigliabile. Delegando questa responsabilità al servizio a monte, deleghi anche qualsiasi controllo che avresti normalmente — il che significa che non puoi far rispettare pienamente cose come i rate limit e i tetti di spesa.
+
+L'albero dei sorgenti resta volutamente piccolo:
+
+```text
+.
+├── Cargo.toml
+├── Dockerfile
+├── docker-compose.yml
+├── migrations/
+│   └── 0001_api_keys.sql
+├── scripts/
+│   ├── seed_api_key.sh
+│   └── smoke_chat.sh
+└── src/
+    ├── auth.rs
+    ├── config.rs
+    ├── error.rs
+    ├── main.rs
+    ├── rate_limit.rs
+    ├── router.rs
+    ├── sse.rs
+    ├── state.rs
+    ├── telemetry.rs
+    └── venice.rs
+```
+
+Senza ulteriori indugi, iniziamo a costruire.
+
+## Creazione del servizio Rust
+
+Inizia con un nuovo progetto binario Rust:
+
+```bash
+cargo new llm-gateway
+cd llm-gateway
+```
+
+Aggiungi le dipendenze necessarie in `Cargo.toml` — le spiegazioni sono inserite nello snippet:
+
+```toml
+[dependencies]
+# Web backend
+axum = "0.8.9"
+tower = "0.5.3"
+tower-http = { version = "0.6.11", features = ["trace", "request-id", "sensitive-headers", "timeout", "limit"] }
+
+## Observability
+opentelemetry = "0.32.0"
+opentelemetry-otlp = "0.32.0"
+opentelemetry_sdk = "0.32.1"
+tracing = "0.1.44"
+tracing-opentelemetry = "0.33.0"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+
+# HTTP request/response handling
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "stream", "rustls-tls", "http2", "charset"] }
+reqwest-eventsource = "0.6.0"
+bytes = "1.11.1"
+futures-util = "0.3.32"
+
+# Serialization
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+
+# Hashing/crypto
+sha2 = "0.11.0"
+subtle = "2.6.1"
+
+# SQL
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "macros", "migrate"] }
+
+# utils
+thiserror = "2.0.18" # a crate for writing ergonomic errors
+time = { version = "0.3.47", features = ["serde", "formatting", "macros"] } # time
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "signal", "net", "time"] } # the most popular async Rust runtime
+uuid = { version = "1.23.3", features = ["serde", "v4"] }
+```
+
+## Caricamento della configurazione
+
+Il gateway legge tutto dalle variabili d'ambiente. Per codice infrastrutturale come questo, le variabili d'ambiente sono una buona scelta predefinita perché lo stesso binario può essere eseguito in locale, in Docker Compose o in un ambiente hosted senza un formato di file di configurazione separato. Inoltre, molti provider ti permettono di memorizzare le tue variabili d'ambiente come secret nel loro runtime container. Questo è spesso molto più sicuro rispetto a usare qualcosa come `dotenv` (o `dotenvy` in Rust, dato che il crate originale `dotenv` è per lo più deprecato).
+
+Crea `src/config.rs`:
+
+```rust
+use std::{env, net::SocketAddr, str::FromStr, time::Duration};
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub bind_addr: SocketAddr,
+    pub database_url: String,
+    pub venice_api_key: String,
+    pub venice_base_url: String,
+    pub service_name: String,
+    pub otlp_endpoint: Option<String>,
+    pub request_timeout: Duration,
+    pub request_body_limit_bytes: usize,
+    pub venice_max_retries: u32,
+    pub capture_genai_content: bool,
+}
+
+impl Config {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Ok(Self {
+            bind_addr: parse_env("BIND_ADDR", "0.0.0.0:3000")?,
+            database_url: required_env("DATABASE_URL")?,
+            venice_api_key: required_env("VENICE_API_KEY")?,
+            venice_base_url: env::var("VENICE_BASE_URL")
+                .unwrap_or_else(|_| "https://api.venice.ai/api/v1".to_owned()),
+            service_name: env::var("OTEL_SERVICE_NAME")
+                .unwrap_or_else(|_| "llm-gateway".to_owned()),
+            otlp_endpoint: optional_nonempty_env("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            request_timeout: Duration::from_secs(parse_env("REQUEST_TIMEOUT_SECONDS", "120")?),
+            request_body_limit_bytes: parse_env("REQUEST_BODY_LIMIT_BYTES", "1048576")?,
+            venice_max_retries: parse_env("VENICE_MAX_RETRIES", "2")?,
+            capture_genai_content: parse_env("CAPTURE_GENAI_CONTENT", "false")?,
+        })
+    }
+}
+```
+
+Anche se qui vengono analizzati molti valori possibili dalle variabili d'ambiente, in generale te ne servono solo due:
+- L'URL del database
+- La tua chiave API Venice
+
+Due valori predefiniti sono importanti qui. `VENICE_BASE_URL` punta a `https://api.venice.ai/api/v1`, e `CAPTURE_GENAI_CONTENT` ha come default `false`, in modo che il contenuto dei prompt non venga registrato a meno che tu non lo abiliti intenzionalmente.
+
+Il secondo default è quello più importante. Un gateway può vedere ogni prompt e risposta che vi transita, ma l'osservabilità non dovrebbe diventare automaticamente cattura di contenuti. Nella maggior parte dei sistemi in produzione, conteggi dei token, latenza, nomi dei modelli, codici di stato e metadati di fatturazione sono sufficienti per le operazioni. In generale, registrare prompt e conversazioni in produzione potrebbe non essere solo un problema di privacy — può essere anche un problema di storage. Aggiungerli significa creare span e trace con un livello di cardinalità estremamente alto (cioè l'unicità dei dati all'interno di un dataset). Ciò può rendere la ricerca nei tuoi dati di osservabilità molto costosa, oltre a potenzialmente compromettere le prestazioni durante la ricerca nei dati.
+
+## Creazione dello schema del database
+
+Poi, crea `migrations/0001_api_keys.sql`.
+
+Memorizzeremo solo i primi 12 caratteri di ogni chiave API del gateway come prefisso di lookup, più l'hash SHA-256 della chiave completa. Ciò permette al gateway di trovare rapidamente una riga candidata senza memorizzare credenziali in chiaro.
+
+Il prefisso non è segreto. Esiste per l'indicizzazione. L'hash è ciò che dimostra che il chiamante ha presentato la chiave completa. Questa è la stessa forma di base usata da molti sistemi di chiavi API: mostrare la chiave in chiaro una sola volta, memorizzarne una rappresentazione non reversibile e conservare un breve prefisso per il lookup e i flussi di supporto.
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE api_keys
+  ( api_key_id uuid PRIMARY KEY DEFAULT gen_random_uuid()
+  , subject_id uuid NOT NULL
+  , name text NOT NULL
+  , key_prefix text NOT NULL
+  , key_hash bytea NOT NULL
+  , rate_limit_requests integer NOT NULL DEFAULT 60
+  , rate_limit_window_seconds integer NOT NULL DEFAULT 60
+  , is_active boolean NOT NULL DEFAULT true
+  , created_at timestamptz NOT NULL DEFAULT now()
+  , last_used_at timestamptz
+  , revoked_at timestamptz
+  , CONSTRAINT api_keys_prefix_length CHECK (length(key_prefix) = 12)
+  , CONSTRAINT api_keys_hash_sha256 CHECK (length(key_hash) = 32)
+  , CONSTRAINT api_keys_rate_limit_requests_positive CHECK (rate_limit_requests > 0)
+  , CONSTRAINT api_keys_rate_limit_window_positive CHECK (rate_limit_window_seconds > 0)
+  , CONSTRAINT api_keys_revoked_inactive CHECK (revoked_at IS NULL OR NOT is_active)
+  );
+
+CREATE UNIQUE INDEX api_keys_key_prefix_key
+ON api_keys (key_prefix);
+
+CREATE UNIQUE INDEX api_keys_key_hash_key
+ON api_keys (key_hash);
+```
+
+Ora aggiungi una tabella per il rate limiting a finestra fissa:
+
+```sql
+CREATE TABLE api_key_rate_limit_windows
+  ( api_key_id uuid NOT NULL
+      REFERENCES api_keys (api_key_id)
+      ON DELETE RESTRICT
+      ON UPDATE RESTRICT
+  , window_start_at timestamptz NOT NULL
+  , window_seconds integer NOT NULL
+  , request_count integer NOT NULL
+  , updated_at timestamptz NOT NULL DEFAULT now()
+  , PRIMARY KEY (api_key_id, window_start_at, window_seconds)
+  , CONSTRAINT api_key_rate_limit_windows_window_positive CHECK (window_seconds > 0)
+  , CONSTRAINT api_key_rate_limit_windows_request_count_nonnegative CHECK (request_count >= 0)
+  );
+```
+
+Questo schema è piccolo, ma ci dà gli invarianti importanti:
+
+- Le chiavi API non vengono mai memorizzate in chiaro.
+- Le impostazioni di rate limit devono essere positive.
+- Le chiavi revocate non possono rimanere attive.
+- Una finestra di rate limit è identificata univocamente da chiave, ora di inizio e durata della finestra.
+
+Mantenere questi invarianti in Postgres è utile perché ogni chiamante deve passare attraverso questo stato del database. Anche se in seguito aggiungiamo un'API di amministrazione, un job in background di rotazione delle chiavi o una migrazione che importa chiavi da un altro sistema, il database rifiuterà comunque stati impossibili come una chiave attiva con un timestamp di revoca.
+
+## Costruire il client Venice
+
+Poi, creeremo `src/venice.rs`. Il client deve conoscere solo l'URL delle chat completions a monte, la chiave API Venice e quante volte riprovare in caso di errori transitori.
+
+Mantenere questo wrapper piccolo è intenzionale — il gateway non dovrebbe reimplementare l'intera API di Venice. A livello base, il compito del gateway è collegare la credenziale lato server, applicare un timeout, riprovare le richieste che è sicuro riprovare e restituire la risposta upstream in una forma che il router può inoltrare.
+
+```rust
+use std::time::Duration;
+
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
+use reqwest_eventsource::{EventSource, RequestBuilderExt};
+use serde_json::Value;
+use tokio::time::sleep;
+
+use crate::{config::Config, error::AppError};
+
+#[derive(Clone)]
+pub struct VeniceClient {
+    http: Client,
+    api_key: String,
+    chat_completions_url: String,
+    max_retries: u32,
+}
+
+impl VeniceClient {
+    pub fn new(config: &Config) -> Result<Self, AppError> {
+        let http = Client::builder()
+            .timeout(config.request_timeout)
+            .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+
+        Ok(Self {
+            http,
+            api_key: config.venice_api_key.clone(),
+            chat_completions_url: format!(
+                "{}/chat/completions",
+                config.venice_base_url.trim_end_matches('/')
+            ),
+            max_retries: config.venice_max_retries,
+        })
+    }
+}
+```
+
+Per le richieste non in streaming, possiamo riprovare in caso di errori di connessione, timeout e codici di stato HTTP transitori:
+
+```rust
+impl VeniceClient {
+    pub async fn chat_completions(&self, payload: &Value) -> Result<Response, AppError> {
+        let mut attempt = 0;
+
+        loop {
+            let result = self.chat_request(payload).send().await;
+
+            match result {
+                Ok(response)
+                    if should_retry_status(response.status()) && attempt < self.max_retries =>
+                {
+                    attempt += 1;
+                    sleep(retry_delay(attempt)).await;
+                }
+                Ok(response) => return Ok(response),
+                Err(error) if should_retry_error(&error) && attempt < self.max_retries => {
+                    attempt += 1;
+                    sleep(retry_delay(attempt)).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+}
+
+fn should_retry_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    )
+}
+```
+
+I retry vengono applicati solo al percorso non in streaming. Una volta che una risposta in streaming è iniziata, riprovare all'interno del gateway potrebbe duplicare l'output parziale o confondere i client che hanno già ricevuto dei chunk. Per lo streaming, il default migliore è far emergere l'errore e lasciare che sia il chiamante a decidere se riprovare l'intera richiesta.
+
+Per lo streaming, creiamo un `EventSource` a partire dalla stessa richiesta:
+
+```rust
+impl VeniceClient {
+    pub fn chat_completions_eventsource(&self, payload: &Value) -> Result<EventSource, AppError> {
+        self.chat_request(payload)
+            .eventsource()
+            .map_err(|error| AppError::EventSourceSetup(error.to_string()))
+    }
+
+    fn chat_request(&self, payload: &Value) -> RequestBuilder {
+        self.http
+            .post(&self.chat_completions_url)
+            .bearer_auth(&self.api_key)
+            .json(payload)
+    }
+}
+```
+
+L'endpoint di chat completions di Venice è compatibile con OpenAI, quindi il gateway può accettare un corpo familiare:
+
+```json
+{
+  "model": "zai-org-glm-5-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Say hello from behind a Rust gateway."
+    }
+  ]
+}
+```
+
+Puoi sostituire il modello con qualsiasi modello capace di chat disponibile per il tuo account Venice.
+
+Nota che il corpo della richiesta è ancora un `serde_json::Value`. Questa è una scelta di compatibilità intenzionale. Se modellassimo in Rust ogni possibile campo di chat completion, dovremmo mantenere aggiornato il gateway ogni volta che l'API upstream aggiunge un'opzione utile. Analizzando altrove solo ciò di cui abbiamo bisogno, permettiamo ai parametri più recenti di Venice di passare senza rilasciare una nuova versione del gateway.
+
+## Condivisione dello stato dell'applicazione
+
+Crea `src/state.rs`:
+
+```rust
+use std::sync::Arc;
+
+use sqlx::PgPool;
+
+use crate::{config::Config, error::AppError, venice::VeniceClient};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub config: Arc<Config>,
+    pub db: PgPool,
+    pub venice: VeniceClient,
+}
+
+impl AppState {
+    pub fn new(config: Config, db: PgPool) -> Result<Self, AppError> {
+        let venice = VeniceClient::new(&config)?;
+
+        Ok(Self {
+            config: Arc::new(config),
+            db,
+            venice,
+        })
+    }
+}
+```
+
+Axum clona lo stato negli handler, quindi lo stato stesso dovrebbe essere economico da clonare. `PgPool` è già un handle di pool condiviso, e `Arc<Config>` mantiene la configurazione altrettanto economica.
+
+Questo dà a ogni handler accesso alle stesse tre cose: configurazione immutabile, connessioni al database in pool e il client Venice. Tenerli in un unico `AppState` semplifica anche i test in seguito, perché gli handler ricevono le loro dipendenze tramite lo state di Axum invece di leggere delle globali.
+
+## Autenticazione delle chiavi API del gateway
+
+Il client invia la sua chiave gateway in questo modo:
+
+```http
+Authorization: Bearer llmg_dev_0123456789abcdef
+```
+
+Crea `src/auth.rs` e implementa un estrattore di Axum. L'estrattore permette agli handler protetti di dichiarare che richiedono una chiave autenticata:
+
+```rust
+use axum::{
+    extract::FromRequestParts,
+    http::{HeaderMap, header, request::Parts},
+};
+use sha2::{Digest, Sha256};
+use sqlx::{FromRow, PgPool};
+use subtle::ConstantTimeEq;
+use uuid::Uuid;
+
+use crate::{error::AppError, state::AppState};
+
+const KEY_PREFIX_BYTES: usize = 12;
+
+#[derive(Clone, Debug)]
+pub struct AuthenticatedApiKey {
+    pub api_key_id: Uuid,
+    pub subject_id: Uuid,
+    pub rate_limit_requests: i32,
+    pub rate_limit_window_seconds: i32,
+}
+
+impl FromRequestParts<AppState> for AuthenticatedApiKey {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        authenticate(&state.db, &parts.headers).await
+    }
+}
+```
+
+Il flusso di autenticazione vero e proprio è:
+
+1. Analizzare il bearer token.
+2. Prendere i primi 12 byte come prefisso della chiave.
+3. Calcolare l'hash SHA-256 del token candidato completo.
+4. Caricare la riga della chiave attiva tramite il prefisso.
+5. Confrontare l'hash memorizzato e l'hash candidato in tempo costante.
+
+```rust
+async fn authenticate(db: &PgPool, headers: &HeaderMap) -> Result<AuthenticatedApiKey, AppError> {
+    let token = bearer_token(headers)?;
+    let key_prefix = token
+        .get(..KEY_PREFIX_BYTES)
+        .ok_or(AppError::Unauthorized)?;
+    let candidate_hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+
+    let stored = sqlx::query_as::<_, StoredApiKey>(
+        r#"
+        SELECT api_key_id, subject_id, key_hash, rate_limit_requests, rate_limit_window_seconds
+        FROM api_keys
+        WHERE key_prefix = $1
+          AND is_active
+          AND revoked_at IS NULL
+        "#,
+    )
+    .bind(key_prefix)
+    .fetch_optional(db)
+    .await?;
+
+    let stored = stored.ok_or(AppError::Unauthorized)?;
+
+    if stored.key_hash.ct_eq(candidate_hash.as_slice()).unwrap_u8() != 1 {
+        return Err(AppError::Unauthorized);
+    }
+
+    Ok(AuthenticatedApiKey {
+        api_key_id: stored.api_key_id,
+        subject_id: stored.subject_id,
+        rate_limit_requests: stored.rate_limit_requests,
+        rate_limit_window_seconds: stored.rate_limit_window_seconds,
+    })
+}
+```
+
+Ciò mantiene separate le credenziali upstream e quelle del gateway. Le tue app in produzione possono ruotare le chiavi del gateway senza cambiare la chiave API di Venice, e la chiave di Venice non deve mai lasciare il server.
+
+Il pattern dell'estrattore è utile perché l'autenticazione diventa parte della firma del tipo dell'handler. Una route che accetta `AuthenticatedApiKey` non può accidentalmente saltare l'autenticazione all'interno del corpo della funzione; Axum deve costruire quel valore prima che l'handler venga eseguito. Questo rende il percorso protetto facile da auditare.
+
+## Aggiungere rate limit a finestra fissa
+
+Crea `src/rate_limit.rs`. Il rate limiter usa una singola istruzione SQL per inserire una nuova finestra o incrementare quella esistente:
+
+```rust
+pub async fn check(db: &PgPool, api_key: &AuthenticatedApiKey) -> Result<(), AppError> {
+    let window = sqlx::query_as::<_, RateLimitWindow>(
+        r#"
+        WITH current_window AS
+          ( SELECT
+              to_timestamp(
+                floor(extract(epoch FROM now()) / $2::double precision) * $2
+              )::timestamptz AS window_start_at
+          )
+        INSERT INTO api_key_rate_limit_windows
+          (api_key_id, window_start_at, window_seconds, request_count)
+        SELECT $1, current_window.window_start_at, $2, 1
+        FROM current_window
+        ON CONFLICT (api_key_id, window_start_at, window_seconds)
+        DO UPDATE
+        SET request_count = api_key_rate_limit_windows.request_count + 1,
+            updated_at = now()
+        WHERE api_key_rate_limit_windows.request_count < $3
+        RETURNING request_count, window_start_at
+        "#,
+    )
+    .bind(api_key.api_key_id)
+    .bind(api_key.rate_limit_window_seconds)
+    .bind(api_key.rate_limit_requests)
+    .fetch_optional(db)
+    .await?;
+
+    let _window = window.ok_or_else(|| AppError::RateLimited {
+            retry_after: retry_after(api_key.rate_limit_window_seconds),
+    })?;
+
+    Ok(())
+}
+```
+
+La clausola `WHERE api_key_rate_limit_windows.request_count < $3` è la parte importante. Quando la finestra è già piena, Postgres non aggiorna la riga e `RETURNING` non produce alcuna riga. L'handler può trasformarla in una risposta `429 Too Many Requests` con un header `Retry-After`.
+
+Una finestra fissa non è il rate limiter più sofisticato, ma è facile da spiegare, facile da ispezionare ed è abbastanza buono per un tutorial su un gateway. Il compromesso è che il traffico può accumularsi attorno ai confini della finestra. Se hai bisogno di un comportamento più uniforme su larga scala, un token bucket o un limiter a finestra scorrevole supportato da Redis è il passo successivo naturale.
+
+## Restituire errori in stile OpenAI
+
+Crea `src/error.rs` e fai in modo che gli errori dell'applicazione implementino `IntoResponse`:
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum AppError {
+    #[error("missing or invalid bearer token")]
+    Unauthorized,
+    #[error("rate limit exceeded")]
+    RateLimited { retry_after: Duration },
+    #[error("bad request: {0}")]
+    BadRequest(String),
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("upstream request failed: {0}")]
+    UpstreamTransport(#[from] reqwest::Error),
+    #[error("failed to create upstream event source: {0}")]
+    EventSourceSetup(String),
+    #[error("upstream event source failed: {0}")]
+    EventSource(String),
+    #[error("upstream returned an error")]
+    Upstream {
+        status: StatusCode,
+        body: serde_json::Value,
+    },
+}
+```
+
+Per gli errori generati dal gateway, restituisci un corpo JSON simile a quello degli errori comuni delle API dei modelli:
+
+```json
+{
+  "error": {
+    "message": "rate limit exceeded",
+    "type": "rate_limit_error",
+    "code": null
+  }
+}
+```
+
+Per gli errori upstream di Venice, preserva lo status code e il corpo upstream. Questo rende il debug molto più semplice per i client, perché gli errori di validazione a livello di provider continuano a sembrare errori di validazione a livello di provider.
+
+Questa separazione mantiene il gateway onesto riguardo alla provenienza di un errore. Se il gateway rifiuta una richiesta perché il bearer token è mancante o il chiamante è oltre il limite, restituisce un errore in forma di gateway. Se Venice rifiuta la richiesta del modello, preserviamo il corpo upstream in modo che gli sviluppatori client possano vedere il messaggio di validazione del provider invece di un generico errore di proxy.
+
+## Costruire il router
+
+Ora possiamo cablare le route HTTP in `src/router.rs`:
+
+```rust
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{DefaultBodyLimit, State},
+    http::{StatusCode, header::{CACHE_CONTROL, CONTENT_TYPE}},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use serde::Serialize;
+use serde_json::Value;
+use tower::ServiceBuilder;
+use tower_http::trace::TraceLayer;
+
+use crate::{
+    auth,
+    error::AppError,
+    rate_limit, sse,
+    state::AppState,
+    telemetry::{self, GenAiRequest},
+};
+
+pub fn build(state: AppState) -> Router {
+    let body_limit = state.config.request_body_limit_bytes;
+
+    Router::new()
+        .route("/healthz", get(healthz))
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(state)
+        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()))
+}
+
+async fn healthz() -> impl IntoResponse {
+    Json(Health { status: "ok" })
+}
+
+#[derive(Serialize)]
+struct Health {
+    status: &'static str,
+}
+```
+
+L'handler della chat inizia richiedendo un `AuthenticatedApiKey`. Se l'autenticazione fallisce, Axum non entra mai nel corpo dell'handler:
+
+```rust
+async fn chat_completions(
+    api_key: auth::AuthenticatedApiKey,
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Result<Response, AppError> {
+    rate_limit::check(&state.db, &api_key).await?;
+
+    let request = GenAiRequest::from_payload(&payload).map_err(AppError::BadRequest)?;
+    let span = telemetry::span_for_request(&request);
+
+    if request.stream {
+        let eventsource = state.venice.chat_completions_eventsource(&payload)?;
+        let stream = sse::observe_eventsource(
+            eventsource,
+            request,
+            span,
+            None,
+            api_key.api_key_id,
+        );
+
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "text/event-stream")
+            .header(CACHE_CONTROL, "no-cache")
+            .body(Body::from_stream(stream))
+            .expect("static streaming response headers are valid"));
+    }
+
+    let upstream = state.venice.chat_completions(&payload).await?;
+    let status = upstream.status();
+
+    if !status.is_success() {
+        let bytes = upstream.bytes().await?;
+        return Err(AppError::Upstream {
+            status,
+            body: upstream_body_from_bytes(&bytes),
+        });
+    }
+
+    let bytes = upstream.bytes().await?;
+    let metadata = telemetry::metadata_from_bytes(&bytes);
+    span.in_scope(|| {
+        telemetry::record_response(&request, &span, &metadata, None);
+        telemetry::record_billing(api_key.api_key_id, &metadata);
+    });
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(bytes))
+        .expect("static json response headers are valid"))
+}
+```
+
+Il gateway valida solo i campi di cui ha bisogno per il comportamento del gateway: `model`, `messages` e `stream`. Tutto il resto nel corpo JSON viene passato a Venice. Questo mantiene il gateway compatibile con le funzionalità del provider che potresti voler usare in seguito.
+
+L'handler rende anche esplicite le due modalità di risposta. Le richieste non in streaming aspettano che Venice restituisca una risposta JSON completa, poi registrano i metadati della risposta prima di inviare i byte al client. Le richieste in streaming ritornano immediatamente con un corpo `text/event-stream` supportato da uno stream asincrono. Questa separazione mantiene semplice il percorso non-streaming, dando allo stesso tempo al percorso di streaming abbastanza controllo per osservare i chunk mentre passano.
+
+## Supportare le risposte in streaming
+
+Le chat completions in streaming usano server-sent events. Venice invia dati SSE, e il gateway ritrasmette quei dati al client.
+
+Il gateway dovrebbe evitare di bufferizzare l'intero stream, perché ciò vanificherebbe lo scopo dello streaming. Agli utenti interessa il tempo al primo token, non solo il tempo al token finale. Inoltrando ogni evento upstream mentre arriva, i client possono renderizzare l'output parziale mentre il modello sta ancora generando.
+
+Crea `src/sse.rs`:
+
+```rust
+use bytes::Bytes;
+use futures_util::{Stream, StreamExt, stream};
+use reqwest_eventsource::{Event, EventSource};
+use uuid::Uuid;
+
+use crate::{
+    error::AppError,
+    telemetry::{self, GenAiRequest, GenAiResponseMetadata},
+};
+
+pub fn observe_eventsource(
+    eventsource: EventSource,
+    request: GenAiRequest,
+    span: tracing::Span,
+    pending_event: Option<Event>,
+    api_key_id: Uuid,
+) -> impl Stream<Item = Result<Bytes, AppError>> + Send + 'static {
+    let state = StreamState {
+        eventsource,
+        pending_event,
+        request,
+        span,
+        api_key_id,
+        metadata: GenAiResponseMetadata::default(),
+        first_chunk_at: None,
+        previous_chunk_at: None,
+    };
+
+    stream::unfold(state, |mut state| async move {
+        loop {
+            let event = match state.pending_event.take() {
+                Some(event) => Some(Ok(event)),
+                None => state.eventsource.next().await,
+            };
+
+            match event {
+                Some(Ok(Event::Open)) => continue,
+                Some(Ok(Event::Message(message))) => {
+                    let bytes = state.observe_message(&message.data);
+                    if message.data == "[DONE]" {
+                        state.eventsource.close();
+                    }
+                    return Some((Ok(bytes), state));
+                }
+                Some(Err(error)) => {
+                    return Some((Err(AppError::EventSource(error.to_string())), state));
+                }
+                None => {
+                    telemetry::record_response(&state.request, &state.span, &state.metadata, None);
+                    telemetry::record_billing(state.api_key_id, &state.metadata);
+                    return None;
+                }
+            }
+        }
+    })
+}
+```
+
+Ogni messaggio viene ricodificato nel formato SSE:
+
+```rust
+fn encode_sse_data(data: &str) -> Bytes {
+    let mut encoded = String::new();
+    for line in data.lines() {
+        encoded.push_str("data: ");
+        encoded.push_str(line);
+        encoded.push('\n');
+    }
+    if data.is_empty() {
+        encoded.push_str("data: \n");
+    }
+    encoded.push('\n');
+    Bytes::from(encoded)
+}
+```
+
+Questo preserva l'esperienza client che gli SDK compatibili con OpenAI si aspettano: i chunk arrivano come eventi `data: ...`, e lo stream termina con `data: [DONE]`.
+
+L'osservatore dello stream è anche il punto in cui possiamo raccogliere metadati senza cambiare ciò che il client vede. Ogni chunk viene inoltrato in formato SSE, ma il gateway può comunque osservare gli ID di risposta, i motivi di terminazione, l'uso dei token, i campi di costo e le informazioni sui tempi mentre quei chunk passano.
+
+## Registrazione della telemetria GenAI
+
+I gateway sono utili perché ogni richiesta passa attraverso un unico punto. Questo li rende un ottimo posto per registrare modello, latenza, uso dei token, motivi di terminazione, costo di fatturazione e tempi di streaming.
+
+Crea `src/telemetry.rs` e inizia analizzando la richiesta:
+
+```rust
+#[derive(Clone, Debug)]
+pub struct GenAiRequest {
+    pub model: String,
+    pub stream: bool,
+    pub started_at: Instant,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GenAiResponseMetadata {
+    pub response_id: Option<String>,
+    pub response_model: Option<String>,
+    pub finish_reasons: Vec<String>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cost_diem: Option<f64>,
+    pub cost_usd: Option<f64>,
+}
+
+impl GenAiRequest {
+    pub fn from_payload(payload: &Value) -> Result<Self, String> {
+        let model = payload
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|model| !model.trim().is_empty())
+            .ok_or_else(|| "request body must include a non-empty model".to_owned())?;
+
+        let messages = payload
+            .get("messages")
+            .and_then(Value::as_array)
+            .filter(|messages| !messages.is_empty())
+            .ok_or_else(|| "request body must include at least one message".to_owned())?;
+
+        if messages
+            .iter()
+            .any(|message| message.get("role").and_then(Value::as_str).is_none())
+        {
+            return Err("every message must include a role".to_owned());
+        }
+
+        Ok(Self {
+            model: model.to_owned(),
+            stream: payload
+                .get("stream")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            started_at: Instant::now(),
+        })
+    }
+}
+```
+
+Poi crea uno span usando gli attributi semantici GenAI:
+
+```rust
+pub fn span_for_request(request: &GenAiRequest) -> Span {
+    tracing::info_span!(
+        "gen_ai.client",
+        "otel.name" = %format!("chat {}", request.model),
+        "otel.kind" = "client",
+        "gen_ai.operation.name" = "chat",
+        "gen_ai.provider.name" = "venice",
+        "gen_ai.request.model" = %request.model,
+        "gen_ai.request.stream" = request.stream,
+        "server.address" = "api.venice.ai",
+        "gen_ai.response.id" = tracing::field::Empty,
+        "gen_ai.response.model" = tracing::field::Empty,
+        "gen_ai.response.finish_reasons" = tracing::field::Empty,
+        "gen_ai.response.time_to_first_chunk" = tracing::field::Empty,
+        "gen_ai.usage.input_tokens" = tracing::field::Empty,
+        "gen_ai.usage.output_tokens" = tracing::field::Empty,
+        "venice.cost.diem" = tracing::field::Empty,
+        "venice.cost.usd" = tracing::field::Empty,
+        "error.type" = tracing::field::Empty,
+        "otel.status_code" = tracing::field::Empty,
+    )
+}
+```
+
+Quando torna una risposta non in streaming, deserializza in struct i campi noti dei metadati di risposta. Il gateway inoltra comunque i byte originali al client, ma la telemetria non ha bisogno di percorrere JSON arbitrario. Il log di fatturazione usa l'UUID della chiave del gateway invece del bearer token in chiaro, e l'ID di richiesta proviene dall'`id` della risposta di Venice:
+
+```rust
+#[derive(Debug, Default, Deserialize)]
+struct ChatCompletionResponse {
+    id: Option<String>,
+    model: Option<String>,
+    #[serde(default)]
+    choices: Vec<ChatCompletionChoice>,
+    usage: Option<ChatCompletionUsage>,
+    cost: Option<VeniceCost>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionChoice {
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionUsage {
+    prompt_tokens: Option<u64>,
+    input_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VeniceCost {
+    #[serde(default, deserialize_with = "optional_finite_f64")]
+    diem: Option<f64>,
+    #[serde(default, deserialize_with = "optional_finite_f64")]
+    usd: Option<f64>,
+}
+
+pub fn metadata_from_bytes(bytes: &[u8]) -> GenAiResponseMetadata {
+    serde_json::from_slice::<ChatCompletionResponse>(bytes)
+        .map(GenAiResponseMetadata::from)
+        .unwrap_or_default()
+}
+
+pub fn record_billing(api_key_id: Uuid, metadata: &GenAiResponseMetadata) {
+    let (Some(cost_diem), Some(cost_usd)) = (metadata.cost_diem, metadata.cost_usd) else {
+        return;
+    };
+
+    tracing::info!(
+        api_key_id = %api_key_id,
+        request_id = metadata.response_id.as_deref().unwrap_or("unknown"),
+        cost_diem,
+        cost_usd,
+        "venice.billing"
+    );
+}
+```
+
+Per le risposte in streaming, registra il tempo al primo chunk e il tempo tra i chunk di output mentre lo stream SSE viene ritrasmesso. Queste metriche sono particolarmente utili quando ti interessa la latenza percepita, non solo il tempo totale di richiesta.
+
+La telemetria è ciò che rende un gateway più di un semplice proxy. Una volta che gli span includono il modello richiesto, il modello upstream, i conteggi dei token, i motivi di terminazione, lo stato e i log di fatturazione per chiave, puoi rispondere a domande operative pratiche: quali client stanno spendendo di più, quali modelli sono i più lenti, se lo streaming sta migliorando la latenza percepita e se gli errori provengono da auth, rate limit, trasporto o dal provider del modello.
+
+## Avvio del server
+
+Ora colleghiamo tutto in `src/main.rs`:
+
+```rust
+mod auth;
+mod config;
+mod error;
+mod rate_limit;
+mod router;
+mod sse;
+mod state;
+mod telemetry;
+mod venice;
+
+use sqlx::postgres::PgPoolOptions;
+use tokio::net::TcpListener;
+use tracing::info;
+
+use crate::{config::Config, state::AppState};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let config = Config::from_env()?;
+    let _telemetry = telemetry::init(&config)?;
+
+    let db = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&config.database_url)
+        .await?;
+
+    sqlx::migrate!("./migrations").run(&db).await?;
+
+    let bind_addr = config.bind_addr;
+    let state = AppState::new(config, db)?;
+    let app = router::build(state);
+    let listener = TcpListener::bind(bind_addr).await?;
+
+    info!(%bind_addr, "starting gateway");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    Ok(())
+}
+```
+
+All'avvio, il gateway:
+
+1. Legge la configurazione.
+2. Inizializza la telemetria.
+3. Si connette a Postgres.
+4. Esegue le migrazioni SQLx.
+5. Costruisce lo stato condiviso dell'app.
+6. Avvia il server Axum.
+
+Eseguire le migrazioni all'avvio è comodo per questo tutorial perché `docker compose up` può portare l'intero stack a uno stato funzionante. In un deployment di produzione più grande, potresti preferire eseguire le migrazioni come passo di rilascio separato, in modo che i cambiamenti di schema vengano revisionati e applicati prima che le nuove istanze del gateway partano.
+
+## Popolare una chiave gateway locale
+
+Per lo sviluppo locale, crea `scripts/seed_api_key.sh`. Lo script inserisce una chiave API del gateway in Postgres memorizzando il suo prefisso e l'hash SHA-256:
+
+```sh
+#!/bin/sh
+set -eu
+
+DATABASE_URL="${DATABASE_URL:-postgres://llm_gateway:llm_gateway@localhost:5432/llm_gateway}"
+GATEWAY_API_KEY="${GATEWAY_API_KEY:-llmg_dev_0123456789abcdef}"
+SUBJECT_ID="${SUBJECT_ID:-00000000-0000-0000-0000-000000000001}"
+
+psql "$DATABASE_URL" \
+  -v ON_ERROR_STOP=1 \
+  -v gateway_api_key="$GATEWAY_API_KEY" \
+  -v subject_id="$SUBJECT_ID" <<'SQL'
+INSERT INTO api_keys
+  (subject_id, name, key_prefix, key_hash, rate_limit_requests, rate_limit_window_seconds)
+VALUES
+  ( :'subject_id'::uuid
+  , 'local development key'
+  , left(:'gateway_api_key', 12)
+  , digest(:'gateway_api_key', 'sha256')
+  , 60
+  , 60
+  )
+ON CONFLICT (key_prefix)
+DO UPDATE
+SET key_hash = EXCLUDED.key_hash,
+    is_active = true,
+    revoked_at = NULL;
+SQL
+```
+
+La chiave locale predefinita è:
+
+```text
+llmg_dev_0123456789abcdef
+```
+
+Per un deployment reale, genera chiavi casuali più lunghe, mostrale una sola volta al chiamante e memorizza solo l'hash.
+
+Lo script di seed è volutamente noioso perché le credenziali locali dovrebbero essere facili da ricreare. La versione di produzione è quella in cui aggiungeresti una generazione delle chiavi più forte, l'audit logging, la scadenza e un flusso di visualizzazione una tantum.
+
+## Esecuzione in locale
+
+Per l'esecuzione in locale, useremo Docker Compose per avviare sia il gateway che Postgres. Questo mantiene il tutorial riproducibile: i lettori non hanno bisogno di un database configurato manualmente, e il gateway può usare la stessa forma di `DATABASE_URL` che userebbe in un deployment containerizzato.
+
+```yaml
+name: llm-gateway
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: llm_gateway
+      POSTGRES_USER: llm_gateway
+      POSTGRES_PASSWORD: llm_gateway
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llm_gateway -d llm_gateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  gateway:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      BIND_ADDR: 0.0.0.0:3000
+      DATABASE_URL: postgres://llm_gateway:llm_gateway@postgres:5432/llm_gateway
+      OTEL_SERVICE_NAME: llm-gateway
+      VENICE_API_KEY: ${VENICE_API_KEY:?set VENICE_API_KEY in your shell or .env}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+```
+
+Avremo bisogno anche di un piccolo Dockerfile che compili il binario Rust e lo copi in un'immagine runtime più piccola:
+
+```dockerfile
+FROM rust:1.92-bookworm AS builder
+
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY migrations ./migrations
+COPY src ./src
+
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/llm-gateway /usr/local/bin/llm-gateway
+
+EXPOSE 3000
+
+CMD ["llm-gateway"]
+```
+
+Per avviare lo stack, usa il seguente comando:
+
+```bash
+docker compose up --build
+```
+
+Non dimenticare che puoi eseguirlo anche in modalità detached con il flag `-d` se vuoi poi usare il terminale per altro (e poi usare `docker compose down` per rimuoverlo).
+
+In un altro terminale, popola la chiave gateway di sviluppo:
+
+```bash
+docker compose --profile seed run --rm seed
+```
+
+Se sulla tua macchina è già in esecuzione Postgres sulla porta `5432`, rimuovi il mapping della porta host per il servizio Postgres di Compose. Il gateway deve solo raggiungere Postgres sulla rete interna di Docker.
+
+La cosa importante da tenere a mente è che la chiave API di Venice appartiene solo all'ambiente del gateway. Le richieste dei client dovrebbero usare la chiave gateway seedata. Questa separazione è l'intero punto di mettere un gateway davanti al provider del modello.
+
+## Testare il gateway
+
+Prima, controlla lo stato di salute:
+
+```bash
+curl http://localhost:3000/healthz
+```
+
+Dovresti vedere:
+
+```json
+{"status":"ok"}
+```
+
+Ora invia una richiesta di chat completion non in streaming:
+
+```bash
+curl http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer llmg_dev_0123456789abcdef" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.3-70b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply with one short sentence saying the gateway works."
+      }
+    ]
+  }'
+```
+
+La risposta dovrebbe assomigliare a una chat completion compatibile con OpenAI:
+
+```json
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "model": "llama-3.3-70b",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "The gateway is working."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 123,
+    "completion_tokens": 5,
+    "total_tokens": 128
+  },
+  "cost": {
+    "diem": 0.42,
+    "usd": 0.0012
+  }
+}
+```
+
+Per lo streaming:
+
+```bash
+curl -N http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer llmg_dev_0123456789abcdef" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.3-70b",
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write one short sentence confirming streaming works."
+      }
+    ]
+  }'
+```
+
+Dovresti vedere chunk SSE:
+
+```text
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk",...}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk",...}
+
+data: [DONE]
+```
+
+Il repository include anche uno script di smoke test:
+
+```bash
+sh ./scripts/smoke_chat.sh
+```
+
+Per i controlli di qualità del codice in locale, esegui:
+
+```bash
+cargo fmt --check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+Testare entrambe le modalità di risposta è importante perché mettono alla prova percorsi di proxy diversi. Il test non in streaming dimostra che auth, rate limit, inoltro upstream e telemetria della risposta JSON funzionano. Il test di streaming dimostra che il gateway può mantenere aperta una connessione SSE e inoltrare i chunk senza prima bufferizzare la risposta finale.
+
+## Estendere questo gateway
+
+Questo gateway è volutamente piccolo, ma ti dà una base solida. Buoni prossimi passi includono:
+
+- Aggiungere budget per soggetto e tetti di spesa mensili.
+- Supportare più provider upstream dietro la stessa API compatibile con OpenAI.
+- Memorizzare i metadati delle richieste per gli audit log mantenendo il logging dei prompt disabilitato di default.
+- Aggiungere un'API di amministrazione per creare, revocare e ruotare le chiavi del gateway.
+- Aggiungere allowlist di modelli per chiave API.
+- Aggiungere Redis o un altro store condiviso se hai bisogno di rate limit a latenza più bassa tra molte istanze del gateway.
+
+L'idea di design principale è mantenere la policy nel gateway e l'inferenza in Venice. Ciò permette alle app client di usare un'API familiare mentre la tua piattaforma mantiene il controllo su chiavi, uso, limiti e osservabilità.
+
+## Per concludere
+
+Grazie per aver letto! Speriamo che questo ti abbia aiutato a capire come costruire un gateway LLM pratico in Rust senza trasformarlo in un enorme progetto di piattaforma.
+
+Combinando Axum, Postgres, SQLx, OpenTelemetry e l'API di chat completions compatibile con OpenAI di Venice, possiamo costruire un gateway abbastanza piccolo da comprendere e abbastanza utile da stare davanti ad applicazioni reali.

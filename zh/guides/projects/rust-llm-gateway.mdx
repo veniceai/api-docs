@@ -1,0 +1,1240 @@
+---
+title: "构建一个 Rust LLM 网关"
+slug: rust-llm-gateway-venice
+"og:title": "使用 Venice AI 构建 Rust LLM 网关"
+"og:description": "一份实用指南，教你使用 Axum、Postgres、SQLx、流式响应、限流以及 OpenTelemetry 构建一个兼容 OpenAI 的 Rust LLM 网关。"
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="3 July 2026"/>
+
+大多数 AI 应用一开始都是直接调用模型 API。这对原型开发来说效果不错，但一旦有多个应用、服务或客户需要访问，直接调用提供商就会变得难以管理。每个服务都需要一个提供商密钥，每个客户端都需要了解提供商特有的行为，而每个团队最终解决身份验证、限流和可观测性的方式都会略有不同。
+
+LLM 网关为我们提供了一个统一的地方来对调用方进行身份验证、执行限流、隐藏上游提供商密钥、记录遥测数据，并为我们自己的应用保持稳定的 API。在本教程中，我们将使用 Rust、Axum、Postgres、SQLx 和 Venice AI API 来构建一个这样的网关。
+
+到最后，你将拥有一个网关，它暴露一个兼容 OpenAI 的 `/v1/chat/completions` 端点，接受你自己的 bearer token，将请求转发到 Venice，支持流式响应，并发出有用的 OpenTelemetry span 和指标。
+
+对完整的代码实现感兴趣？请查看 [GitHub 仓库。](https://github.com/joshua-mo-143/venice-llm-gateway-demo)
+
+## 前置条件
+
+- Rust 1.92+
+- Docker 和 Docker Compose
+- 一个 Venice API 密钥
+- `curl`
+- 对 Rust Web 服务的基本熟悉
+
+在开始之前，导出你的 Venice API 密钥：
+
+```bash
+export VENICE_API_KEY="your-venice-api-key"
+```
+
+我们绝不会将这个密钥暴露给客户端应用。网关会将其保存在服务器端，客户端则使用网关专属的 API 密钥来进行身份验证。
+
+## 我们要构建什么
+
+参考实现是一个小型 Rust 服务，它由几个清晰的部分组成：
+
+
+| 部分           | 功能                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------- |
+| Axum 路由    | 提供 `/healthz` 和 `/v1/chat/completions`                                          |
+| 认证提取器 | 使用 Postgres 中的哈希密钥验证网关的 bearer token                       |
+| 限流器   | 使用存储在 Postgres 中的固定窗口                                                 |
+| Venice 客户端  | 代理非流式和流式的 chat completion 请求                          |
+| 遥测       | 记录 GenAI span、token 使用量、Venice 计费成本、延迟以及流式时序 |
+| Docker Compose | 在本地运行 Postgres 和网关                                                  |
+
+
+![显示客户端调用 Rust 网关、Postgres、Venice AI 和 OpenTelemetry 的架构图](/images/guides/llm-gateway-architecture.png)
+
+*客户端向网关发送兼容 OpenAI 的请求。网关对调用方进行身份验证、检查限流、将请求转发到 Venice，并在整个过程中记录遥测数据。*
+
+作为网关的一部分，我们要确保这个服务保持水平可扩展性，同时让 API 本身覆盖的攻击面最小。这样做有几个原因——其中一个主要原因是，如果你的吞吐量非常大，你几乎肯定会想要使用副本（也就是启动同一个服务的多个实例）。这意味着，如果你还没有这么做，那么从架构上你会希望将原始服务和副本放在负载均衡器后面，这样如果某个容器或服务宕机，整个服务不会出现全面停机。
+
+此外，我们还会假设我们以某种方式拥有 API 密钥的创建权限，尽管网关服务不应该独立地铸造它们。这将表现为一个 Postgres 表，我们在本地使用时会向其中填充种子数据。在生产环境中，这通常由身份验证服务来处理。虽然可以在上游为每个使用你 LLM 网关的用户创建 API 密钥，但在实践中通常不建议这样做。将这个职责交给上游服务，也就等于交出了你原本会有的控制权——这意味着你无法完全强制执行诸如限流和消费上限之类的策略。
+
+源代码树刻意保持得很小：
+
+```text
+.
+├── Cargo.toml
+├── Dockerfile
+├── docker-compose.yml
+├── migrations/
+│   └── 0001_api_keys.sql
+├── scripts/
+│   ├── seed_api_key.sh
+│   └── smoke_chat.sh
+└── src/
+    ├── auth.rs
+    ├── config.rs
+    ├── error.rs
+    ├── main.rs
+    ├── rate_limit.rs
+    ├── router.rs
+    ├── sse.rs
+    ├── state.rs
+    ├── telemetry.rs
+    └── venice.rs
+```
+
+废话不多说，我们开始动手构建吧。
+
+## 创建 Rust 服务
+
+从一个新的 Rust 二进制项目开始：
+
+```bash
+cargo new llm-gateway
+cd llm-gateway
+```
+
+在 `Cargo.toml` 中添加我们需要的依赖——代码片段中带有说明：
+
+```toml
+[dependencies]
+# Web backend
+axum = "0.8.9"
+tower = "0.5.3"
+tower-http = { version = "0.6.11", features = ["trace", "request-id", "sensitive-headers", "timeout", "limit"] }
+
+## Observability
+opentelemetry = "0.32.0"
+opentelemetry-otlp = "0.32.0"
+opentelemetry_sdk = "0.32.1"
+tracing = "0.1.44"
+tracing-opentelemetry = "0.33.0"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+
+# HTTP request/response handling
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "stream", "rustls-tls", "http2", "charset"] }
+reqwest-eventsource = "0.6.0"
+bytes = "1.11.1"
+futures-util = "0.3.32"
+
+# Serialization
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+
+# Hashing/crypto
+sha2 = "0.11.0"
+subtle = "2.6.1"
+
+# SQL
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "macros", "migrate"] }
+
+# utils
+thiserror = "2.0.18" # a crate for writing ergonomic errors
+time = { version = "0.3.47", features = ["serde", "formatting", "macros"] } # time
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "signal", "net", "time"] } # the most popular async Rust runtime
+uuid = { version = "1.23.3", features = ["serde", "v4"] }
+```
+
+## 加载配置
+
+网关从环境变量中读取一切配置。对于这样的基础设施代码，环境变量是一个不错的默认选择，因为同一个二进制文件可以在本地、Docker Compose 或托管环境中运行，而无需单独的配置文件格式。此外，许多提供商允许你在其容器运行时中将你自己的环境变量存储为密钥。这通常比使用类似 `dotenv`（在 Rust 中是 `dotenvy`，因为原始的 `dotenv` crate 大部分已经被弃用）之类的东西要安全得多。
+
+创建 `src/config.rs`：
+
+```rust
+use std::{env, net::SocketAddr, str::FromStr, time::Duration};
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub bind_addr: SocketAddr,
+    pub database_url: String,
+    pub venice_api_key: String,
+    pub venice_base_url: String,
+    pub service_name: String,
+    pub otlp_endpoint: Option<String>,
+    pub request_timeout: Duration,
+    pub request_body_limit_bytes: usize,
+    pub venice_max_retries: u32,
+    pub capture_genai_content: bool,
+}
+
+impl Config {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Ok(Self {
+            bind_addr: parse_env("BIND_ADDR", "0.0.0.0:3000")?,
+            database_url: required_env("DATABASE_URL")?,
+            venice_api_key: required_env("VENICE_API_KEY")?,
+            venice_base_url: env::var("VENICE_BASE_URL")
+                .unwrap_or_else(|_| "https://api.venice.ai/api/v1".to_owned()),
+            service_name: env::var("OTEL_SERVICE_NAME")
+                .unwrap_or_else(|_| "llm-gateway".to_owned()),
+            otlp_endpoint: optional_nonempty_env("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            request_timeout: Duration::from_secs(parse_env("REQUEST_TIMEOUT_SECONDS", "120")?),
+            request_body_limit_bytes: parse_env("REQUEST_BODY_LIMIT_BYTES", "1048576")?,
+            venice_max_retries: parse_env("VENICE_MAX_RETRIES", "2")?,
+            capture_genai_content: parse_env("CAPTURE_GENAI_CONTENT", "false")?,
+        })
+    }
+}
+```
+
+虽然这里从环境变量中解析了许多可能的值，但一般来说你只需要两个：
+- 数据库 URL
+- 你的 Venice API 密钥
+
+这里有两个默认值很重要。`VENICE_BASE_URL` 指向 `https://api.venice.ai/api/v1`，而 `CAPTURE_GENAI_CONTENT` 默认为 `false`，这样除非你有意启用，否则不会记录 prompt 内容。
+
+第二个默认值更重要。网关可以看到流经它的每一条 prompt 和响应，但可观测性不应自动变成内容捕获。在大多数生产系统中，token 数量、延迟、模型名称、状态码和计费元数据对于运维来说已经足够。一般来说，在生产环境中记录 prompt 和对话不仅可能带来隐私责任——它还可能带来存储上的负担。加入这些内容意味着创建具有极高基数（即数据集中数据的唯一性程度）的 span 和 trace。这可能会让你在可观测性数据中的搜索变得非常昂贵，同时在检索数据时也可能拖累性能。
+
+## 创建数据库 schema
+
+接下来，创建 `migrations/0001_api_keys.sql`。
+
+我们只将每个网关 API 密钥的前 12 个字符作为查找前缀存储，再加上完整密钥的 SHA-256 哈希。这样网关可以快速找到候选行，而无需存储原始凭证。
+
+前缀不是秘密。它的存在是为了建立索引。哈希才是证明调用方提供了完整密钥的东西。这与许多 API 密钥系统采用的基本形式相同：向调用方一次性展示原始密钥、存储一个不可逆的表示形式，并保留一个短前缀用于查找和支持工作流。
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE api_keys
+  ( api_key_id uuid PRIMARY KEY DEFAULT gen_random_uuid()
+  , subject_id uuid NOT NULL
+  , name text NOT NULL
+  , key_prefix text NOT NULL
+  , key_hash bytea NOT NULL
+  , rate_limit_requests integer NOT NULL DEFAULT 60
+  , rate_limit_window_seconds integer NOT NULL DEFAULT 60
+  , is_active boolean NOT NULL DEFAULT true
+  , created_at timestamptz NOT NULL DEFAULT now()
+  , last_used_at timestamptz
+  , revoked_at timestamptz
+  , CONSTRAINT api_keys_prefix_length CHECK (length(key_prefix) = 12)
+  , CONSTRAINT api_keys_hash_sha256 CHECK (length(key_hash) = 32)
+  , CONSTRAINT api_keys_rate_limit_requests_positive CHECK (rate_limit_requests > 0)
+  , CONSTRAINT api_keys_rate_limit_window_positive CHECK (rate_limit_window_seconds > 0)
+  , CONSTRAINT api_keys_revoked_inactive CHECK (revoked_at IS NULL OR NOT is_active)
+  );
+
+CREATE UNIQUE INDEX api_keys_key_prefix_key
+ON api_keys (key_prefix);
+
+CREATE UNIQUE INDEX api_keys_key_hash_key
+ON api_keys (key_hash);
+```
+
+现在添加一个用于固定窗口限流的表：
+
+```sql
+CREATE TABLE api_key_rate_limit_windows
+  ( api_key_id uuid NOT NULL
+      REFERENCES api_keys (api_key_id)
+      ON DELETE RESTRICT
+      ON UPDATE RESTRICT
+  , window_start_at timestamptz NOT NULL
+  , window_seconds integer NOT NULL
+  , request_count integer NOT NULL
+  , updated_at timestamptz NOT NULL DEFAULT now()
+  , PRIMARY KEY (api_key_id, window_start_at, window_seconds)
+  , CONSTRAINT api_key_rate_limit_windows_window_positive CHECK (window_seconds > 0)
+  , CONSTRAINT api_key_rate_limit_windows_request_count_nonnegative CHECK (request_count >= 0)
+  );
+```
+
+这个 schema 虽然很小，但它给了我们重要的不变量：
+
+- API 密钥永远不会以明文形式存储。
+- 限流设置必须为正。
+- 已撤销的密钥不能保持激活状态。
+- 一个限流窗口通过密钥、起始时间和窗口长度被唯一标识。
+
+将这些不变量保留在 Postgres 中很有用，因为每个调用方都必须经过这个数据库状态。即使我们之后添加了管理 API、后台密钥轮换任务，或者从其他系统导入密钥的迁移，数据库依然会拒绝像"已激活的密钥同时带有撤销时间戳"这种不可能的状态。
+
+## 构建 Venice 客户端
+
+接下来，我们将创建 `src/venice.rs`。客户端只需要知道上游的 chat completions URL、Venice API 密钥，以及要对瞬时故障重试多少次。
+
+让这个封装保持精简是有意为之——网关不应该重新实现 Venice 的整个 API。从基本层面来说，网关的工作是附加服务器端凭证、应用超时、对可以安全重试的请求进行重试，并以路由器可以转发的形式返回上游响应。
+
+```rust
+use std::time::Duration;
+
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
+use reqwest_eventsource::{EventSource, RequestBuilderExt};
+use serde_json::Value;
+use tokio::time::sleep;
+
+use crate::{config::Config, error::AppError};
+
+#[derive(Clone)]
+pub struct VeniceClient {
+    http: Client,
+    api_key: String,
+    chat_completions_url: String,
+    max_retries: u32,
+}
+
+impl VeniceClient {
+    pub fn new(config: &Config) -> Result<Self, AppError> {
+        let http = Client::builder()
+            .timeout(config.request_timeout)
+            .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+
+        Ok(Self {
+            http,
+            api_key: config.venice_api_key.clone(),
+            chat_completions_url: format!(
+                "{}/chat/completions",
+                config.venice_base_url.trim_end_matches('/')
+            ),
+            max_retries: config.venice_max_retries,
+        })
+    }
+}
+```
+
+对于非流式请求，我们可以重试连接错误、超时以及瞬时的 HTTP 状态码：
+
+```rust
+impl VeniceClient {
+    pub async fn chat_completions(&self, payload: &Value) -> Result<Response, AppError> {
+        let mut attempt = 0;
+
+        loop {
+            let result = self.chat_request(payload).send().await;
+
+            match result {
+                Ok(response)
+                    if should_retry_status(response.status()) && attempt < self.max_retries =>
+                {
+                    attempt += 1;
+                    sleep(retry_delay(attempt)).await;
+                }
+                Ok(response) => return Ok(response),
+                Err(error) if should_retry_error(&error) && attempt < self.max_retries => {
+                    attempt += 1;
+                    sleep(retry_delay(attempt)).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+}
+
+fn should_retry_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    )
+}
+```
+
+重试仅适用于非流式路径。一旦流式响应已经开始，在网关内部进行重试可能会导致部分输出重复，或者让已经收到片段的客户端感到困惑。对于流式响应，更好的默认做法是把错误抛出，让调用方来决定是否重试整个请求。
+
+对于流式响应，我们从同一个请求中创建一个 `EventSource`：
+
+```rust
+impl VeniceClient {
+    pub fn chat_completions_eventsource(&self, payload: &Value) -> Result<EventSource, AppError> {
+        self.chat_request(payload)
+            .eventsource()
+            .map_err(|error| AppError::EventSourceSetup(error.to_string()))
+    }
+
+    fn chat_request(&self, payload: &Value) -> RequestBuilder {
+        self.http
+            .post(&self.chat_completions_url)
+            .bearer_auth(&self.api_key)
+            .json(payload)
+    }
+}
+```
+
+Venice 的 chat completions 端点兼容 OpenAI，所以网关可以接受一个熟悉的请求体：
+
+```json
+{
+  "model": "zai-org-glm-5-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Say hello from behind a Rust gateway."
+    }
+  ]
+}
+```
+
+你可以将 model 换成你 Venice 账户可用的任何支持对话的模型。
+
+请注意，请求体仍然是一个 `serde_json::Value`。这是一个有意的兼容性选择。如果我们在 Rust 中对每个可能的 chat-completion 字段建模，那么每次上游 API 添加一个有用的选项，我们都必须更新网关。通过只在别处解析我们需要的部分，我们让更新的 Venice 参数可以无需网关发布即可透传。
+
+## 共享应用状态
+
+创建 `src/state.rs`：
+
+```rust
+use std::sync::Arc;
+
+use sqlx::PgPool;
+
+use crate::{config::Config, error::AppError, venice::VeniceClient};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub config: Arc<Config>,
+    pub db: PgPool,
+    pub venice: VeniceClient,
+}
+
+impl AppState {
+    pub fn new(config: Config, db: PgPool) -> Result<Self, AppError> {
+        let venice = VeniceClient::new(&config)?;
+
+        Ok(Self {
+            config: Arc::new(config),
+            db,
+            venice,
+        })
+    }
+}
+```
+
+Axum 会把 state 克隆到每个 handler 中，所以 state 本身的克隆成本应该很低。`PgPool` 本身就是一个共享的连接池句柄，`Arc<Config>` 也让配置的克隆成本很低。
+
+这让每个 handler 都能访问同样的三样东西：不可变的配置、池化的数据库连接以及 Venice 客户端。把它们放在一个 `AppState` 中，也让后续的测试更简单，因为 handler 通过 Axum state 而不是读取全局变量来接收依赖。
+
+## 对网关 API 密钥进行身份验证
+
+客户端像这样发送它的网关密钥：
+
+```http
+Authorization: Bearer llmg_dev_0123456789abcdef
+```
+
+创建 `src/auth.rs` 并实现一个 Axum 提取器。提取器允许受保护的 handler 声明它需要一个已经过身份验证的密钥：
+
+```rust
+use axum::{
+    extract::FromRequestParts,
+    http::{HeaderMap, header, request::Parts},
+};
+use sha2::{Digest, Sha256};
+use sqlx::{FromRow, PgPool};
+use subtle::ConstantTimeEq;
+use uuid::Uuid;
+
+use crate::{error::AppError, state::AppState};
+
+const KEY_PREFIX_BYTES: usize = 12;
+
+#[derive(Clone, Debug)]
+pub struct AuthenticatedApiKey {
+    pub api_key_id: Uuid,
+    pub subject_id: Uuid,
+    pub rate_limit_requests: i32,
+    pub rate_limit_window_seconds: i32,
+}
+
+impl FromRequestParts<AppState> for AuthenticatedApiKey {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        authenticate(&state.db, &parts.headers).await
+    }
+}
+```
+
+实际的身份验证流程是：
+
+1. 解析 bearer token。
+2. 取前 12 个字节作为密钥前缀。
+3. 用 SHA-256 对完整的候选 token 进行哈希。
+4. 通过前缀加载激活的密钥行。
+5. 以恒定时间比较存储的哈希与候选哈希。
+
+```rust
+async fn authenticate(db: &PgPool, headers: &HeaderMap) -> Result<AuthenticatedApiKey, AppError> {
+    let token = bearer_token(headers)?;
+    let key_prefix = token
+        .get(..KEY_PREFIX_BYTES)
+        .ok_or(AppError::Unauthorized)?;
+    let candidate_hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+
+    let stored = sqlx::query_as::<_, StoredApiKey>(
+        r#"
+        SELECT api_key_id, subject_id, key_hash, rate_limit_requests, rate_limit_window_seconds
+        FROM api_keys
+        WHERE key_prefix = $1
+          AND is_active
+          AND revoked_at IS NULL
+        "#,
+    )
+    .bind(key_prefix)
+    .fetch_optional(db)
+    .await?;
+
+    let stored = stored.ok_or(AppError::Unauthorized)?;
+
+    if stored.key_hash.ct_eq(candidate_hash.as_slice()).unwrap_u8() != 1 {
+        return Err(AppError::Unauthorized);
+    }
+
+    Ok(AuthenticatedApiKey {
+        api_key_id: stored.api_key_id,
+        subject_id: stored.subject_id,
+        rate_limit_requests: stored.rate_limit_requests,
+        rate_limit_window_seconds: stored.rate_limit_window_seconds,
+    })
+}
+```
+
+这让上游凭证和网关凭证保持分离。你的生产应用可以在不更改 Venice API 密钥的情况下轮换网关密钥，而 Venice 密钥永远不需要离开服务器。
+
+提取器模式很有帮助，因为身份验证成为了 handler 类型签名的一部分。接受 `AuthenticatedApiKey` 的路由不可能在函数体内意外跳过身份验证；Axum 必须在 handler 运行之前构造出这个值。这让受保护的路径易于审计。
+
+## 添加固定窗口限流
+
+创建 `src/rate_limit.rs`。限流器使用一条 SQL 语句来插入一个新窗口或递增现有窗口：
+
+```rust
+pub async fn check(db: &PgPool, api_key: &AuthenticatedApiKey) -> Result<(), AppError> {
+    let window = sqlx::query_as::<_, RateLimitWindow>(
+        r#"
+        WITH current_window AS
+          ( SELECT
+              to_timestamp(
+                floor(extract(epoch FROM now()) / $2::double precision) * $2
+              )::timestamptz AS window_start_at
+          )
+        INSERT INTO api_key_rate_limit_windows
+          (api_key_id, window_start_at, window_seconds, request_count)
+        SELECT $1, current_window.window_start_at, $2, 1
+        FROM current_window
+        ON CONFLICT (api_key_id, window_start_at, window_seconds)
+        DO UPDATE
+        SET request_count = api_key_rate_limit_windows.request_count + 1,
+            updated_at = now()
+        WHERE api_key_rate_limit_windows.request_count < $3
+        RETURNING request_count, window_start_at
+        "#,
+    )
+    .bind(api_key.api_key_id)
+    .bind(api_key.rate_limit_window_seconds)
+    .bind(api_key.rate_limit_requests)
+    .fetch_optional(db)
+    .await?;
+
+    let _window = window.ok_or_else(|| AppError::RateLimited {
+            retry_after: retry_after(api_key.rate_limit_window_seconds),
+    })?;
+
+    Ok(())
+}
+```
+
+`WHERE api_key_rate_limit_windows.request_count < $3` 这一子句是关键。当窗口已经满时，Postgres 不会更新该行，`RETURNING` 也不会产生任何行。handler 可以将其转换为带有 `Retry-After` 响应头的 `429 Too Many Requests` 响应。
+
+固定窗口不是最复杂的限流器，但它易于讲解、易于查看，对于一个网关教程来说也足够好用。它的取舍在于流量可能会在窗口边界附近聚集。如果你需要在大规模下更平滑的行为，令牌桶或由 Redis 支持的滑动窗口限流器是很自然的下一步。
+
+## 返回 OpenAI 风格的错误
+
+创建 `src/error.rs`，并让应用错误实现 `IntoResponse`：
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum AppError {
+    #[error("missing or invalid bearer token")]
+    Unauthorized,
+    #[error("rate limit exceeded")]
+    RateLimited { retry_after: Duration },
+    #[error("bad request: {0}")]
+    BadRequest(String),
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("upstream request failed: {0}")]
+    UpstreamTransport(#[from] reqwest::Error),
+    #[error("failed to create upstream event source: {0}")]
+    EventSourceSetup(String),
+    #[error("upstream event source failed: {0}")]
+    EventSource(String),
+    #[error("upstream returned an error")]
+    Upstream {
+        status: StatusCode,
+        body: serde_json::Value,
+    },
+}
+```
+
+对于由网关生成的错误，返回一个形式类似常见模型 API 错误的 JSON 体：
+
+```json
+{
+  "error": {
+    "message": "rate limit exceeded",
+    "type": "rate_limit_error",
+    "code": null
+  }
+}
+```
+
+对于上游 Venice 的错误，保留上游的状态码和响应体。这让客户端调试起来容易得多，因为提供商级别的校验错误看起来仍然是提供商级别的校验错误。
+
+这种拆分让网关对错误的来源保持诚实。如果网关因为缺少 bearer token 或调用方超出限额而拒绝了请求，就返回一个网关形状的错误。如果 Venice 拒绝了模型请求，我们保留上游响应体，这样客户端开发者就能看到提供商的校验消息，而不是一个通用的代理失败。
+
+## 构建路由
+
+现在我们可以在 `src/router.rs` 中把 HTTP 路由连接起来：
+
+```rust
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{DefaultBodyLimit, State},
+    http::{StatusCode, header::{CACHE_CONTROL, CONTENT_TYPE}},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use serde::Serialize;
+use serde_json::Value;
+use tower::ServiceBuilder;
+use tower_http::trace::TraceLayer;
+
+use crate::{
+    auth,
+    error::AppError,
+    rate_limit, sse,
+    state::AppState,
+    telemetry::{self, GenAiRequest},
+};
+
+pub fn build(state: AppState) -> Router {
+    let body_limit = state.config.request_body_limit_bytes;
+
+    Router::new()
+        .route("/healthz", get(healthz))
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(state)
+        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(ServiceBuilder::new().layer(TraceLayer::new_for_http()))
+}
+
+async fn healthz() -> impl IntoResponse {
+    Json(Health { status: "ok" })
+}
+
+#[derive(Serialize)]
+struct Health {
+    status: &'static str,
+}
+```
+
+chat handler 首先要求一个 `AuthenticatedApiKey`。如果身份验证失败，Axum 根本不会进入 handler 主体：
+
+```rust
+async fn chat_completions(
+    api_key: auth::AuthenticatedApiKey,
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Result<Response, AppError> {
+    rate_limit::check(&state.db, &api_key).await?;
+
+    let request = GenAiRequest::from_payload(&payload).map_err(AppError::BadRequest)?;
+    let span = telemetry::span_for_request(&request);
+
+    if request.stream {
+        let eventsource = state.venice.chat_completions_eventsource(&payload)?;
+        let stream = sse::observe_eventsource(
+            eventsource,
+            request,
+            span,
+            None,
+            api_key.api_key_id,
+        );
+
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "text/event-stream")
+            .header(CACHE_CONTROL, "no-cache")
+            .body(Body::from_stream(stream))
+            .expect("static streaming response headers are valid"));
+    }
+
+    let upstream = state.venice.chat_completions(&payload).await?;
+    let status = upstream.status();
+
+    if !status.is_success() {
+        let bytes = upstream.bytes().await?;
+        return Err(AppError::Upstream {
+            status,
+            body: upstream_body_from_bytes(&bytes),
+        });
+    }
+
+    let bytes = upstream.bytes().await?;
+    let metadata = telemetry::metadata_from_bytes(&bytes);
+    span.in_scope(|| {
+        telemetry::record_response(&request, &span, &metadata, None);
+        telemetry::record_billing(api_key.api_key_id, &metadata);
+    });
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(bytes))
+        .expect("static json response headers are valid"))
+}
+```
+
+网关只校验它进行网关行为所需的字段：`model`、`messages` 和 `stream`。JSON 请求体中的其他所有内容都会透传到 Venice。这让网关与你之后可能要使用的提供商功能保持兼容。
+
+handler 也让两种响应模式变得明确。非流式请求等待 Venice 返回完整的 JSON 响应，然后在把字节发送给下游之前记录响应元数据。流式请求会立即返回一个 `text/event-stream` 响应体，其背后是一个异步流。这种拆分让非流式路径保持简单，同时又让流式路径有足够的控制力，可以在数据块经过时对其进行观测。
+
+## 支持流式响应
+
+流式的 chat completion 使用 server-sent events。Venice 发送 SSE 数据，网关再把这些数据转发回客户端。
+
+网关应当避免缓冲整个流，因为那样会违背流式的初衷。用户关心的是首个 token 的到达时间，而不仅仅是最终 token 的到达时间。通过在上游事件到达时逐个转发，客户端可以在模型还在生成时就渲染部分输出。
+
+创建 `src/sse.rs`：
+
+```rust
+use bytes::Bytes;
+use futures_util::{Stream, StreamExt, stream};
+use reqwest_eventsource::{Event, EventSource};
+use uuid::Uuid;
+
+use crate::{
+    error::AppError,
+    telemetry::{self, GenAiRequest, GenAiResponseMetadata},
+};
+
+pub fn observe_eventsource(
+    eventsource: EventSource,
+    request: GenAiRequest,
+    span: tracing::Span,
+    pending_event: Option<Event>,
+    api_key_id: Uuid,
+) -> impl Stream<Item = Result<Bytes, AppError>> + Send + 'static {
+    let state = StreamState {
+        eventsource,
+        pending_event,
+        request,
+        span,
+        api_key_id,
+        metadata: GenAiResponseMetadata::default(),
+        first_chunk_at: None,
+        previous_chunk_at: None,
+    };
+
+    stream::unfold(state, |mut state| async move {
+        loop {
+            let event = match state.pending_event.take() {
+                Some(event) => Some(Ok(event)),
+                None => state.eventsource.next().await,
+            };
+
+            match event {
+                Some(Ok(Event::Open)) => continue,
+                Some(Ok(Event::Message(message))) => {
+                    let bytes = state.observe_message(&message.data);
+                    if message.data == "[DONE]" {
+                        state.eventsource.close();
+                    }
+                    return Some((Ok(bytes), state));
+                }
+                Some(Err(error)) => {
+                    return Some((Err(AppError::EventSource(error.to_string())), state));
+                }
+                None => {
+                    telemetry::record_response(&state.request, &state.span, &state.metadata, None);
+                    telemetry::record_billing(state.api_key_id, &state.metadata);
+                    return None;
+                }
+            }
+        }
+    })
+}
+```
+
+每条消息都会被重新编码回 SSE 格式：
+
+```rust
+fn encode_sse_data(data: &str) -> Bytes {
+    let mut encoded = String::new();
+    for line in data.lines() {
+        encoded.push_str("data: ");
+        encoded.push_str(line);
+        encoded.push('\n');
+    }
+    if data.is_empty() {
+        encoded.push_str("data: \n");
+    }
+    encoded.push('\n');
+    Bytes::from(encoded)
+}
+```
+
+这保留了兼容 OpenAI 的 SDK 所期望的客户端体验：数据块以 `data: ...` 事件到达，流以 `data: [DONE]` 结束。
+
+流观察器也是我们可以在不改变客户端所见内容的情况下收集元数据的地方。每个数据块都以 SSE 格式转发，但网关仍然可以在这些数据块经过时监视响应 ID、finish 原因、token 使用量、成本字段和时序信息。
+
+## 记录 GenAI 遥测
+
+网关很有用，因为每个请求都会经过一个地方。这让它成为记录模型、延迟、token 使用量、finish 原因、计费成本和流式时序的绝佳位置。
+
+创建 `src/telemetry.rs`，从解析请求开始：
+
+```rust
+#[derive(Clone, Debug)]
+pub struct GenAiRequest {
+    pub model: String,
+    pub stream: bool,
+    pub started_at: Instant,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GenAiResponseMetadata {
+    pub response_id: Option<String>,
+    pub response_model: Option<String>,
+    pub finish_reasons: Vec<String>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cost_diem: Option<f64>,
+    pub cost_usd: Option<f64>,
+}
+
+impl GenAiRequest {
+    pub fn from_payload(payload: &Value) -> Result<Self, String> {
+        let model = payload
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|model| !model.trim().is_empty())
+            .ok_or_else(|| "request body must include a non-empty model".to_owned())?;
+
+        let messages = payload
+            .get("messages")
+            .and_then(Value::as_array)
+            .filter(|messages| !messages.is_empty())
+            .ok_or_else(|| "request body must include at least one message".to_owned())?;
+
+        if messages
+            .iter()
+            .any(|message| message.get("role").and_then(Value::as_str).is_none())
+        {
+            return Err("every message must include a role".to_owned());
+        }
+
+        Ok(Self {
+            model: model.to_owned(),
+            stream: payload
+                .get("stream")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            started_at: Instant::now(),
+        })
+    }
+}
+```
+
+然后使用 GenAI 语义属性创建一个 span：
+
+```rust
+pub fn span_for_request(request: &GenAiRequest) -> Span {
+    tracing::info_span!(
+        "gen_ai.client",
+        "otel.name" = %format!("chat {}", request.model),
+        "otel.kind" = "client",
+        "gen_ai.operation.name" = "chat",
+        "gen_ai.provider.name" = "venice",
+        "gen_ai.request.model" = %request.model,
+        "gen_ai.request.stream" = request.stream,
+        "server.address" = "api.venice.ai",
+        "gen_ai.response.id" = tracing::field::Empty,
+        "gen_ai.response.model" = tracing::field::Empty,
+        "gen_ai.response.finish_reasons" = tracing::field::Empty,
+        "gen_ai.response.time_to_first_chunk" = tracing::field::Empty,
+        "gen_ai.usage.input_tokens" = tracing::field::Empty,
+        "gen_ai.usage.output_tokens" = tracing::field::Empty,
+        "venice.cost.diem" = tracing::field::Empty,
+        "venice.cost.usd" = tracing::field::Empty,
+        "error.type" = tracing::field::Empty,
+        "otel.status_code" = tracing::field::Empty,
+    )
+}
+```
+
+当非流式响应返回时，把已知的响应元数据字段反序列化成结构体。网关仍然将原始字节转发给客户端，但遥测不需要遍历任意 JSON。计费日志使用的是网关密钥的 UUID，而不是明文 bearer token，请求 ID 则来自 Venice 响应中的 `id`：
+
+```rust
+#[derive(Debug, Default, Deserialize)]
+struct ChatCompletionResponse {
+    id: Option<String>,
+    model: Option<String>,
+    #[serde(default)]
+    choices: Vec<ChatCompletionChoice>,
+    usage: Option<ChatCompletionUsage>,
+    cost: Option<VeniceCost>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionChoice {
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionUsage {
+    prompt_tokens: Option<u64>,
+    input_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VeniceCost {
+    #[serde(default, deserialize_with = "optional_finite_f64")]
+    diem: Option<f64>,
+    #[serde(default, deserialize_with = "optional_finite_f64")]
+    usd: Option<f64>,
+}
+
+pub fn metadata_from_bytes(bytes: &[u8]) -> GenAiResponseMetadata {
+    serde_json::from_slice::<ChatCompletionResponse>(bytes)
+        .map(GenAiResponseMetadata::from)
+        .unwrap_or_default()
+}
+
+pub fn record_billing(api_key_id: Uuid, metadata: &GenAiResponseMetadata) {
+    let (Some(cost_diem), Some(cost_usd)) = (metadata.cost_diem, metadata.cost_usd) else {
+        return;
+    };
+
+    tracing::info!(
+        api_key_id = %api_key_id,
+        request_id = metadata.response_id.as_deref().unwrap_or("unknown"),
+        cost_diem,
+        cost_usd,
+        "venice.billing"
+    );
+}
+```
+
+对于流式响应，在 SSE 流被转发的过程中记录首个数据块的到达时间以及输出数据块之间的时间。当你关心的是感知延迟而不仅仅是总请求时间时，这些指标特别有用。
+
+遥测是让网关不仅仅是一个代理的关键所在。一旦 span 中包含了请求的模型、上游模型、token 数量、finish 原因、状态以及按密钥的计费日志，你就可以回答实际的运维问题：哪些客户端花费最多、哪些模型最慢、流式是否改善了感知延迟，以及错误是来自身份验证、限流、传输还是模型提供商。
+
+## 启动服务器
+
+现在在 `src/main.rs` 中把所有内容连接起来：
+
+```rust
+mod auth;
+mod config;
+mod error;
+mod rate_limit;
+mod router;
+mod sse;
+mod state;
+mod telemetry;
+mod venice;
+
+use sqlx::postgres::PgPoolOptions;
+use tokio::net::TcpListener;
+use tracing::info;
+
+use crate::{config::Config, state::AppState};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let config = Config::from_env()?;
+    let _telemetry = telemetry::init(&config)?;
+
+    let db = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&config.database_url)
+        .await?;
+
+    sqlx::migrate!("./migrations").run(&db).await?;
+
+    let bind_addr = config.bind_addr;
+    let state = AppState::new(config, db)?;
+    let app = router::build(state);
+    let listener = TcpListener::bind(bind_addr).await?;
+
+    info!(%bind_addr, "starting gateway");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    Ok(())
+}
+```
+
+启动时，网关会：
+
+1. 读取配置。
+2. 初始化遥测。
+3. 连接 Postgres。
+4. 运行 SQLx 迁移。
+5. 构建共享的应用状态。
+6. 启动 Axum 服务器。
+
+在启动时运行迁移对本教程来说很方便，因为 `docker compose up` 可以让整个技术栈进入可用状态。在更大的生产部署中，你可能更愿意把迁移作为独立的发布步骤来运行，这样在新的网关实例启动之前，schema 变更可以先经过审核并被应用。
+
+## 为本地环境填充网关密钥种子数据
+
+对于本地开发，创建 `scripts/seed_api_key.sh`。这个脚本会通过存储前缀和 SHA-256 哈希，将一个网关 API 密钥插入到 Postgres 中：
+
+```sh
+#!/bin/sh
+set -eu
+
+DATABASE_URL="${DATABASE_URL:-postgres://llm_gateway:llm_gateway@localhost:5432/llm_gateway}"
+GATEWAY_API_KEY="${GATEWAY_API_KEY:-llmg_dev_0123456789abcdef}"
+SUBJECT_ID="${SUBJECT_ID:-00000000-0000-0000-0000-000000000001}"
+
+psql "$DATABASE_URL" \
+  -v ON_ERROR_STOP=1 \
+  -v gateway_api_key="$GATEWAY_API_KEY" \
+  -v subject_id="$SUBJECT_ID" <<'SQL'
+INSERT INTO api_keys
+  (subject_id, name, key_prefix, key_hash, rate_limit_requests, rate_limit_window_seconds)
+VALUES
+  ( :'subject_id'::uuid
+  , 'local development key'
+  , left(:'gateway_api_key', 12)
+  , digest(:'gateway_api_key', 'sha256')
+  , 60
+  , 60
+  )
+ON CONFLICT (key_prefix)
+DO UPDATE
+SET key_hash = EXCLUDED.key_hash,
+    is_active = true,
+    revoked_at = NULL;
+SQL
+```
+
+默认的本地密钥是：
+
+```text
+llmg_dev_0123456789abcdef
+```
+
+在真实部署中，请生成更长的随机密钥，只向调用方展示一次，并只存储哈希值。
+
+种子脚本刻意保持得很朴素，因为本地凭证应该易于重建。生产版本才是你要添加更强的密钥生成、审计日志、过期机制以及一次性展示流程的地方。
+
+## 本地运行
+
+要在本地运行，我们将使用 Docker Compose 同时启动网关和 Postgres。这让教程具有可复现性：读者不需要手动配置数据库，而网关可以使用与容器化部署中相同形状的 `DATABASE_URL`。
+
+```yaml
+name: llm-gateway
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: llm_gateway
+      POSTGRES_USER: llm_gateway
+      POSTGRES_PASSWORD: llm_gateway
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llm_gateway -d llm_gateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  gateway:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      BIND_ADDR: 0.0.0.0:3000
+      DATABASE_URL: postgres://llm_gateway:llm_gateway@postgres:5432/llm_gateway
+      OTEL_SERVICE_NAME: llm-gateway
+      VENICE_API_KEY: ${VENICE_API_KEY:?set VENICE_API_KEY in your shell or .env}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+```
+
+我们还需要一个小型的 Dockerfile，它用来构建 Rust 二进制文件并把它复制到一个更小的运行时镜像中：
+
+```dockerfile
+FROM rust:1.92-bookworm AS builder
+
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY migrations ./migrations
+COPY src ./src
+
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/llm-gateway /usr/local/bin/llm-gateway
+
+EXPOSE 3000
+
+CMD ["llm-gateway"]
+```
+
+要运行整个技术栈，使用以下命令：
+
+```bash
+docker compose up --build
+```
+
+别忘了你也可以通过 `-d` 标志以分离模式运行它（如果你想在之后使用终端做其他事），然后使用 `docker compose down` 来移除它。
+
+在另一个终端中，为开发用的网关密钥填充种子数据：
+
+```bash
+docker compose --profile seed run --rm seed
+```
+
+如果你的机器上已经有 Postgres 运行在 `5432` 端口，请移除 Compose 中 Postgres 服务的主机端口映射。网关只需要在 Docker 的内部网络上访问到 Postgres 即可。
+
+需要牢记的重点是：Venice API 密钥只应存在于网关环境中。客户端请求应该使用填充的网关密钥。这种分离正是把网关放在模型提供商前面的全部意义所在。
+
+## 测试网关
+
+首先，检查健康状态：
+
+```bash
+curl http://localhost:3000/healthz
+```
+
+你应该会看到：
+
+```json
+{"status":"ok"}
+```
+
+现在发送一个非流式的 chat completion 请求：
+
+```bash
+curl http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer llmg_dev_0123456789abcdef" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.3-70b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Reply with one short sentence saying the gateway works."
+      }
+    ]
+  }'
+```
+
+响应应该看起来像一个兼容 OpenAI 的 chat completion：
+
+```json
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "model": "llama-3.3-70b",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "The gateway is working."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 123,
+    "completion_tokens": 5,
+    "total_tokens": 128
+  },
+  "cost": {
+    "diem": 0.42,
+    "usd": 0.0012
+  }
+}
+```
+
+对于流式：
+
+```bash
+curl -N http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer llmg_dev_0123456789abcdef" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.3-70b",
+    "stream": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write one short sentence confirming streaming works."
+      }
+    ]
+  }'
+```
+
+你应该会看到 SSE 数据块：
+
+```text
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk",...}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk",...}
+
+data: [DONE]
+```
+
+仓库中还包含一个冒烟测试脚本：
+
+```bash
+sh ./scripts/smoke_chat.sh
+```
+
+要进行本地代码质量检查，请运行：
+
+```bash
+cargo fmt --check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+对两种响应模式都进行测试很重要，因为它们会走不同的代理路径。非流式测试证明身份验证、限流、上游转发以及 JSON 响应遥测都能正常工作。流式测试则证明网关可以保持一个 SSE 连接开启，并在不先缓冲最终答案的情况下转发数据块。
+
+## 扩展这个网关
+
+这个网关刻意做得很小，但它给了你一个坚实的基础。好的下一步包括：
+
+- 添加按主体的预算和每月消费上限。
+- 在同一个兼容 OpenAI 的 API 后面支持多个上游提供商。
+- 存储请求元数据用于审计日志，同时默认关闭 prompt 日志记录。
+- 添加一个管理 API，用于创建、撤销和轮换网关密钥。
+- 为每个 API 密钥添加模型白名单。
+- 如果你需要在多个网关实例间进行低延迟的限流，添加 Redis 或其他共享存储。
+
+主要的设计思路是把策略放在网关中，把推理留在 Venice 中。这让客户端应用可以使用熟悉的 API，同时你的平台仍然掌控着密钥、使用量、限额和可观测性。
+
+## 收尾
+
+感谢阅读！希望这篇教程能帮助你看到如何在 Rust 中构建一个实用的 LLM 网关，而不必让它变成一个庞大的平台项目。
+
+通过结合 Axum、Postgres、SQLx、OpenTelemetry 以及 Venice 兼容 OpenAI 的 chat completions API，我们可以构建一个足够小巧易懂、又足够有用、能够部署在真实应用之前的网关。
