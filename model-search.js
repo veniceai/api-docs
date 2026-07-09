@@ -348,6 +348,40 @@
     return category === 'all' || category === 'text';
   }
 
+  // ========== I18N (filter/sort UI chrome) ==========
+  // The model browser UI is rendered by JS, so its labels can't be localized by
+  // Mintlify's per-language content. We detect the locale from the URL prefix
+  // (e.g. /es/models/...) and translate the visible chrome. Keys are the English
+  // source strings; unknown keys fall back to English.
+  const SUPPORTED_LOCALES = ['pt-BR', 'ar', 'it', 'de', 'es', 'fr', 'zh', 'ko'];
+  function detectLocale() {
+    try {
+      const seg = (location.pathname.split('/')[1] || '').toLowerCase();
+      const hit = SUPPORTED_LOCALES.find(l => l.toLowerCase() === seg);
+      if (hit) return hit;
+      const htmlLang = (document.documentElement.getAttribute('lang') || '').trim();
+      const byLang = SUPPORTED_LOCALES.find(l => l.toLowerCase() === htmlLang.toLowerCase());
+      if (byLang) return byLang;
+    } catch (e) {}
+    return 'en';
+  }
+  const LOCALE = detectLocale();
+  const I18N = {
+    'pt-BR': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Recurso', 'Privacy': 'Privacidade', 'All types': 'Todos os tipos', 'Text': 'Texto', 'Image': 'Imagem', 'Video': 'Vídeo', 'Audio': 'Áudio', 'Embedding': 'Embedding', 'Generation': 'Geração', 'Upscale': 'Ampliação', 'Edit': 'Edição', 'Uncensored': 'Sem censura', 'Text to Video': 'Texto para vídeo', 'Image to Video': 'Imagem para vídeo', 'Reasoning': 'Raciocínio', 'Vision': 'Visão', 'Function Calling': 'Chamada de funções', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Mais recentes', 'Oldest': 'Mais antigos', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Preço: menor para maior', 'Price: High to Low': 'Preço: maior para menor', 'Clear filters': 'Limpar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'correspondências mais próximas', 'No close model matches': 'Nenhum modelo próximo encontrado', 'No models match your filters': 'Nenhum modelo corresponde aos seus filtros' },
+    'ar': { 'Type': 'النوع', 'Kind': 'الفئة', 'Capability': 'القدرة', 'Privacy': 'الخصوصية', 'All types': 'كل الأنواع', 'Text': 'نص', 'Image': 'صورة', 'Video': 'فيديو', 'Audio': 'صوت', 'Embedding': 'تضمين', 'Generation': 'توليد', 'Upscale': 'تحسين الدقة', 'Edit': 'تحرير', 'Uncensored': 'بدون رقابة', 'Text to Video': 'نص إلى فيديو', 'Image to Video': 'صورة إلى فيديو', 'Reasoning': 'استدلال', 'Vision': 'رؤية', 'Function Calling': 'استدعاء الدوال', 'Code': 'برمجة', 'Private': 'خاص', 'Anonymized': 'مجهول الهوية', 'Sort': 'ترتيب', 'Sort models': 'ترتيب النماذج', 'Search models': 'بحث في النماذج', 'Recommended': 'موصى به', 'Newest': 'الأحدث', 'Oldest': 'الأقدم', 'Name (A–Z)': 'الاسم (أ–ي)', 'Price: Low to High': 'السعر: من الأقل إلى الأعلى', 'Price: High to Low': 'السعر: من الأعلى إلى الأقل', 'Clear filters': 'مسح عوامل التصفية', 'Search models...': 'بحث في النماذج...', 'models': 'نماذج', 'closest matches': 'أقرب النتائج', 'No close model matches': 'لا توجد نماذج قريبة', 'No models match your filters': 'لا توجد نماذج تطابق عوامل التصفية' },
+    'it': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Capacità', 'Privacy': 'Privacy', 'All types': 'Tutti i tipi', 'Text': 'Testo', 'Image': 'Immagine', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generazione', 'Upscale': 'Upscaling', 'Edit': 'Modifica', 'Uncensored': 'Senza censura', 'Text to Video': 'Testo in video', 'Image to Video': 'Immagine in video', 'Reasoning': 'Ragionamento', 'Vision': 'Visione', 'Function Calling': 'Chiamata di funzioni', 'Code': 'Codice', 'Private': 'Privato', 'Anonymized': 'Anonimizzato', 'Sort': 'Ordina', 'Sort models': 'Ordina modelli', 'Search models': 'Cerca modelli', 'Recommended': 'Consigliati', 'Newest': 'Più recenti', 'Oldest': 'Meno recenti', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Prezzo: dal più basso', 'Price: High to Low': 'Prezzo: dal più alto', 'Clear filters': 'Cancella filtri', 'Search models...': 'Cerca modelli...', 'models': 'modelli', 'closest matches': 'corrispondenze più vicine', 'No close model matches': 'Nessun modello simile trovato', 'No models match your filters': 'Nessun modello corrisponde ai filtri' },
+    'de': { 'Type': 'Typ', 'Kind': 'Art', 'Capability': 'Fähigkeit', 'Privacy': 'Datenschutz', 'All types': 'Alle Typen', 'Text': 'Text', 'Image': 'Bild', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generierung', 'Upscale': 'Hochskalierung', 'Edit': 'Bearbeiten', 'Uncensored': 'Unzensiert', 'Text to Video': 'Text zu Video', 'Image to Video': 'Bild zu Video', 'Reasoning': 'Reasoning', 'Vision': 'Vision', 'Function Calling': 'Function Calling', 'Code': 'Code', 'Private': 'Privat', 'Anonymized': 'Anonymisiert', 'Sort': 'Sortieren', 'Sort models': 'Modelle sortieren', 'Search models': 'Modelle suchen', 'Recommended': 'Empfohlen', 'Newest': 'Neueste', 'Oldest': 'Älteste', 'Name (A–Z)': 'Name (A–Z)', 'Price: Low to High': 'Preis: aufsteigend', 'Price: High to Low': 'Preis: absteigend', 'Clear filters': 'Filter zurücksetzen', 'Search models...': 'Modelle suchen...', 'models': 'Modelle', 'closest matches': 'nächste Treffer', 'No close model matches': 'Keine ähnlichen Modelle gefunden', 'No models match your filters': 'Keine Modelle entsprechen deinen Filtern' },
+    'es': { 'Type': 'Tipo', 'Kind': 'Categoría', 'Capability': 'Capacidad', 'Privacy': 'Privacidad', 'All types': 'Todos los tipos', 'Text': 'Texto', 'Image': 'Imagen', 'Video': 'Vídeo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generación', 'Upscale': 'Escalado', 'Edit': 'Edición', 'Uncensored': 'Sin censura', 'Text to Video': 'Texto a vídeo', 'Image to Video': 'Imagen a vídeo', 'Reasoning': 'Razonamiento', 'Vision': 'Visión', 'Function Calling': 'Llamada de funciones', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Más recientes', 'Oldest': 'Más antiguos', 'Name (A–Z)': 'Nombre (A–Z)', 'Price: Low to High': 'Precio: de menor a mayor', 'Price: High to Low': 'Precio: de mayor a menor', 'Clear filters': 'Borrar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'coincidencias más cercanas', 'No close model matches': 'No hay modelos parecidos', 'No models match your filters': 'Ningún modelo coincide con tus filtros' },
+    'fr': { 'Type': 'Type', 'Kind': 'Catégorie', 'Capability': 'Capacité', 'Privacy': 'Confidentialité', 'All types': 'Tous les types', 'Text': 'Texte', 'Image': 'Image', 'Video': 'Vidéo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Génération', 'Upscale': 'Agrandissement', 'Edit': 'Édition', 'Uncensored': 'Sans censure', 'Text to Video': 'Texte vers vidéo', 'Image to Video': 'Image vers vidéo', 'Reasoning': 'Raisonnement', 'Vision': 'Vision', 'Function Calling': 'Appel de fonctions', 'Code': 'Code', 'Private': 'Privé', 'Anonymized': 'Anonymisé', 'Sort': 'Trier', 'Sort models': 'Trier les modèles', 'Search models': 'Rechercher des modèles', 'Recommended': 'Recommandé', 'Newest': 'Plus récents', 'Oldest': 'Plus anciens', 'Name (A–Z)': 'Nom (A–Z)', 'Price: Low to High': 'Prix : croissant', 'Price: High to Low': 'Prix : décroissant', 'Clear filters': 'Effacer les filtres', 'Search models...': 'Rechercher des modèles...', 'models': 'modèles', 'closest matches': 'correspondances les plus proches', 'No close model matches': 'Aucun modèle proche', 'No models match your filters': 'Aucun modèle ne correspond à vos filtres' },
+    'zh': { 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
+    'ko': { 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
+  };
+  function t(s) {
+    if (LOCALE === 'en') return s;
+    const table = I18N[LOCALE];
+    return (table && table[s] != null) ? table[s] : s;
+  }
+
   // ========== FILTER DROPDOWNS ==========
   // The model browser filters are grouped into focused dropdowns instead of a
   // flat wall of pills. Type/Kind/Privacy are single-select; Capability is
@@ -419,15 +453,15 @@
   function renderSortDropdown() {
     const opts = SORT_OPTIONS.map(o =>
       `<button type="button" class="vmb-dd-option" role="option" aria-selected="false" data-value="${o.value}">` +
-        `<span class="vmb-dd-option-label">${o.label}</span>${FILTER_CHECK}` +
+        `<span class="vmb-dd-option-label">${t(o.label)}</span>${FILTER_CHECK}` +
       `</button>`
     ).join('');
     return (
       `<div class="vmb-dd vmb-sort-dd">` +
-        `<button type="button" class="vmb-dd-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="Sort models">` +
-          `${SORT_ICON}<span class="vmb-dd-label">Sort</span>${FILTER_CHEVRON}` +
+        `<button type="button" class="vmb-dd-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="${t('Sort models')}">` +
+          `${SORT_ICON}<span class="vmb-dd-label">${t('Sort')}</span>${FILTER_CHEVRON}` +
         `</button>` +
-        `<div class="vmb-dd-panel" role="listbox" aria-label="Sort models" hidden>${opts}</div>` +
+        `<div class="vmb-dd-panel" role="listbox" aria-label="${t('Sort models')}" hidden>${opts}</div>` +
       `</div>`
     );
   }
@@ -435,15 +469,15 @@
   function renderFilterDropdown(key, group) {
     const opts = group.options.map(o =>
       `<button type="button" class="vmb-dd-option" role="option" aria-selected="false" data-group="${key}" data-value="${o.value}">` +
-        `<span class="vmb-dd-option-label">${o.label}</span>${FILTER_CHECK}` +
+        `<span class="vmb-dd-option-label">${t(o.label)}</span>${FILTER_CHECK}` +
       `</button>`
     ).join('');
     return (
       `<div class="vmb-dd" data-group="${key}" data-mode="${group.mode}">` +
         `<button type="button" class="vmb-dd-trigger" aria-haspopup="listbox" aria-expanded="false">` +
-          `<span class="vmb-dd-label">${group.label}</span>${FILTER_CHEVRON}` +
+          `<span class="vmb-dd-label">${t(group.label)}</span>${FILTER_CHEVRON}` +
         `</button>` +
-        `<div class="vmb-dd-panel" role="listbox" aria-label="${group.label}" hidden>${opts}</div>` +
+        `<div class="vmb-dd-panel" role="listbox" aria-label="${t(group.label)}" hidden>${opts}</div>` +
       `</div>`
     );
   }
@@ -2178,7 +2212,7 @@
     container.innerHTML = `
       <div class="vmb-toolbar">
         <div class="vmb-toolbar-left">
-          <input type="text" class="vmb-search" placeholder="Search models..." aria-label="Search models" />
+          <input type="text" class="vmb-search" placeholder="${t('Search models...')}" aria-label="${t('Search models')}" />
         </div>
       </div>
       <div class="vmb-controls">
@@ -2192,7 +2226,7 @@
             ${ENABLE_VIDEO ? renderFilterDropdown('video', FILTER_GROUPS.video) : ''}
             ${renderFilterDropdown('capability', FILTER_GROUPS.capability)}
             ${renderFilterDropdown('privacy', FILTER_GROUPS.privacy)}
-            <button type="button" class="vmb-dd-clear" hidden>Clear filters</button>
+            <button type="button" class="vmb-dd-clear" hidden>${t('Clear filters')}</button>
           </div>
         </div>
       </div>
@@ -2265,15 +2299,15 @@
       const group = FILTER_GROUPS[key];
       const labelEl = ddEl.querySelector('.vmb-dd-label');
       let active = false;
-      let text = group.label;
+      let text = t(group.label);
 
       if (group.mode === 'multi') {
         active = activeCapabilities.size > 0;
         if (activeCapabilities.size === 1) {
           const v = [...activeCapabilities][0];
-          text = (group.options.find(o => o.value === v) || {}).label || group.label;
+          text = t((group.options.find(o => o.value === v) || {}).label || group.label);
         } else if (activeCapabilities.size > 1) {
-          text = `${group.label} · ${activeCapabilities.size}`;
+          text = `${t(group.label)} · ${activeCapabilities.size}`;
         }
         ddEl.querySelectorAll('.vmb-dd-option').forEach(o => {
           const on = activeCapabilities.has(o.dataset.value);
@@ -2286,7 +2320,7 @@
         active = cur != null && cur !== def;
         if (active) {
           const o = group.options.find(op => op.value === cur);
-          if (o) text = o.label;
+          if (o) text = t(o.label);
         }
         ddEl.querySelectorAll('.vmb-dd-option').forEach(o => {
           const on = o.dataset.value === cur;
@@ -2431,7 +2465,7 @@
     // (highlighted whenever the sort differs from the page's natural default).
     function updateSortUI() {
       const opt = SORT_OPTIONS.find(o => o.value === activeSort);
-      sortDd.querySelector('.vmb-dd-label').textContent = opt ? opt.label : 'Sort';
+      sortDd.querySelector('.vmb-dd-label').textContent = opt ? t(opt.label) : t('Sort');
       sortDd.querySelectorAll('.vmb-dd-option').forEach(o => {
         const on = o.dataset.value === activeSort;
         o.classList.toggle('selected', on);
@@ -2572,11 +2606,17 @@
         sorted = visibleScored.map(item => item.model);
       }
 
-      const countLabel = sorted.length + ' model' + (sorted.length !== 1 ? 's' : '');
-      countDisplay.textContent = showingClosestMatches ? `${countLabel} closest match${sorted.length !== 1 ? 'es' : ''}` : countLabel;
+      const n = sorted.length;
+      const countLabel = (LOCALE === 'en')
+        ? (n + ' model' + (n !== 1 ? 's' : ''))
+        : (n + ' ' + t('models'));
+      const closestSuffix = (LOCALE === 'en')
+        ? ('closest match' + (n !== 1 ? 'es' : ''))
+        : t('closest matches');
+      countDisplay.textContent = showingClosestMatches ? `${countLabel} ${closestSuffix}` : countLabel;
 
       if (sorted.length === 0) {
-        modelsContainer.innerHTML = `<div class="vmb-loading">${query ? 'No close model matches' : 'No models match your filters'}</div>`;
+        modelsContainer.innerHTML = `<div class="vmb-loading">${query ? t('No close model matches') : t('No models match your filters')}</div>`;
         return;
       }
 
