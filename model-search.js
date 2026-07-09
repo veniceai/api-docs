@@ -1,3 +1,74 @@
+// Scroll-position safeguard for the Demos landing page.
+//
+// This site runs with history.scrollRestoration === "auto", so on SPA
+// navigation the browser can asynchronously restore a prior scroll offset onto
+// the newly rendered page. The Demos overview page is short and has its sidebar
+// and "On this page" column hidden, so any restored offset from a taller source
+// page is very visible (the page lands scrolled down). We watch the
+// data-current-path attribute Mintlify sets on <html> and force the window back
+// to the top whenever we land on that route, beating the browser's async
+// restoration. Scoped to this one route so it can't affect anchor links or
+// scroll behavior anywhere else.
+(function() {
+  var DEMOS_PATH = '/guides/projects/overview';
+
+  function resetIfDemos() {
+    if (document.documentElement.getAttribute('data-current-path') === DEMOS_PATH) {
+      window.scrollTo(0, 0);
+      // Re-assert across a few ticks to beat late async browser scroll
+      // restoration, which can fire after the route attribute updates.
+      requestAnimationFrame(function() { window.scrollTo(0, 0); });
+      setTimeout(function() { window.scrollTo(0, 0); }, 60);
+    }
+  }
+
+  new MutationObserver(resetIfDemos).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-current-path'],
+  });
+
+  resetIfDemos();
+})();
+
+// Relocate the language selector into the right-hand header actions cluster.
+//
+// Mintlify natively renders the language selector in the left group (next to the
+// logo). We want it on the right, just left of the search / Ask AI / theme icon
+// group. Rather than absolutely positioning it -- which collides whenever
+// Mintlify adds another header button (e.g. the AI assistant) -- we move the
+// node into the right actions cluster so it lays out in natural flex flow. The
+// header is re-rendered on SPA navigation, so we re-run on DOM changes,
+// idempotently and coalesced via requestAnimationFrame to avoid churn.
+(function() {
+  function relocate() {
+    const trigger = document.querySelector('#localization-select-trigger');
+    const search = document.querySelector('#search-bar-entry');
+    if (!trigger || !search) return;
+    const langWrapper = trigger.parentElement;   // <div> wrapping the trigger
+    const iconGroup = search.parentElement;      // <div> holding search + Ask AI
+    const cluster = iconGroup ? iconGroup.parentElement : null; // right actions cluster
+    if (!langWrapper || !iconGroup || !cluster) return;
+    // Already placed immediately before the icon group -> nothing to do (this
+    // guard also stops our own DOM mutation from causing a relocate loop).
+    if (langWrapper.parentElement === cluster && langWrapper.nextElementSibling === iconGroup) return;
+    cluster.insertBefore(langWrapper, iconGroup);
+  }
+
+  let scheduled = false;
+  function schedule() {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(function() { scheduled = false; relocate(); });
+  }
+
+  new MutationObserver(schedule).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
+  relocate();
+})();
+
 // Venice AI Model Browser & Pricing Tables - Fetches from API
 (function() {
 
@@ -272,16 +343,144 @@
     }
   }
 
-  // Filter categories
-  const CAPABILITY_FILTERS = ['reasoning', 'vision', 'function', 'code'];
-
+  // Capability filters only apply to text/chat models.
   function categoryAllowsCapabilityFilters(category) {
     return category === 'all' || category === 'text';
   }
 
-  const VIDEO_FILTERS = ['text-to-video', 'image-to-video'];
-  const IMAGE_FILTERS = ['image-gen', 'image-upscale', 'image-edit', 'image-uncensored'];
-  const PRIVACY_FILTERS = ['e2ee', 'tee', 'private', 'anonymized'];
+  // ========== I18N (filter/sort UI chrome) ==========
+  // The model browser UI is rendered by JS, so its labels can't be localized by
+  // Mintlify's per-language content. We detect the locale from the URL prefix
+  // (e.g. /es/models/...) and translate the visible chrome. Keys are the English
+  // source strings; unknown keys fall back to English.
+  const SUPPORTED_LOCALES = ['pt-BR', 'ar', 'it', 'de', 'es', 'fr', 'zh', 'ko'];
+  function detectLocale() {
+    try {
+      const seg = (location.pathname.split('/')[1] || '').toLowerCase();
+      const hit = SUPPORTED_LOCALES.find(l => l.toLowerCase() === seg);
+      if (hit) return hit;
+      const htmlLang = (document.documentElement.getAttribute('lang') || '').trim();
+      const byLang = SUPPORTED_LOCALES.find(l => l.toLowerCase() === htmlLang.toLowerCase());
+      if (byLang) return byLang;
+    } catch (e) {}
+    return 'en';
+  }
+  const LOCALE = detectLocale();
+  const I18N = {
+    'pt-BR': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Recurso', 'Privacy': 'Privacidade', 'All types': 'Todos os tipos', 'Text': 'Texto', 'Image': 'Imagem', 'Video': 'Vídeo', 'Audio': 'Áudio', 'Embedding': 'Embedding', 'Generation': 'Geração', 'Upscale': 'Ampliação', 'Edit': 'Edição', 'Uncensored': 'Sem censura', 'Text to Video': 'Texto para vídeo', 'Image to Video': 'Imagem para vídeo', 'Reasoning': 'Raciocínio', 'Vision': 'Visão', 'Function Calling': 'Chamada de funções', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Mais recentes', 'Oldest': 'Mais antigos', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Preço: menor para maior', 'Price: High to Low': 'Preço: maior para menor', 'Clear filters': 'Limpar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'correspondências mais próximas', 'No close model matches': 'Nenhum modelo próximo encontrado', 'No models match your filters': 'Nenhum modelo corresponde aos seus filtros' },
+    'ar': { 'Type': 'النوع', 'Kind': 'الفئة', 'Capability': 'القدرة', 'Privacy': 'الخصوصية', 'All types': 'كل الأنواع', 'Text': 'نص', 'Image': 'صورة', 'Video': 'فيديو', 'Audio': 'صوت', 'Embedding': 'تضمين', 'Generation': 'توليد', 'Upscale': 'تحسين الدقة', 'Edit': 'تحرير', 'Uncensored': 'بدون رقابة', 'Text to Video': 'نص إلى فيديو', 'Image to Video': 'صورة إلى فيديو', 'Reasoning': 'استدلال', 'Vision': 'رؤية', 'Function Calling': 'استدعاء الدوال', 'Code': 'برمجة', 'Private': 'خاص', 'Anonymized': 'مجهول الهوية', 'Sort': 'ترتيب', 'Sort models': 'ترتيب النماذج', 'Search models': 'بحث في النماذج', 'Recommended': 'موصى به', 'Newest': 'الأحدث', 'Oldest': 'الأقدم', 'Name (A–Z)': 'الاسم (أ–ي)', 'Price: Low to High': 'السعر: من الأقل إلى الأعلى', 'Price: High to Low': 'السعر: من الأعلى إلى الأقل', 'Clear filters': 'مسح عوامل التصفية', 'Search models...': 'بحث في النماذج...', 'models': 'نماذج', 'closest matches': 'أقرب النتائج', 'No close model matches': 'لا توجد نماذج قريبة', 'No models match your filters': 'لا توجد نماذج تطابق عوامل التصفية' },
+    'it': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Capacità', 'Privacy': 'Privacy', 'All types': 'Tutti i tipi', 'Text': 'Testo', 'Image': 'Immagine', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generazione', 'Upscale': 'Upscaling', 'Edit': 'Modifica', 'Uncensored': 'Senza censura', 'Text to Video': 'Testo in video', 'Image to Video': 'Immagine in video', 'Reasoning': 'Ragionamento', 'Vision': 'Visione', 'Function Calling': 'Chiamata di funzioni', 'Code': 'Codice', 'Private': 'Privato', 'Anonymized': 'Anonimizzato', 'Sort': 'Ordina', 'Sort models': 'Ordina modelli', 'Search models': 'Cerca modelli', 'Recommended': 'Consigliati', 'Newest': 'Più recenti', 'Oldest': 'Meno recenti', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Prezzo: dal più basso', 'Price: High to Low': 'Prezzo: dal più alto', 'Clear filters': 'Cancella filtri', 'Search models...': 'Cerca modelli...', 'models': 'modelli', 'closest matches': 'corrispondenze più vicine', 'No close model matches': 'Nessun modello simile trovato', 'No models match your filters': 'Nessun modello corrisponde ai filtri' },
+    'de': { 'Type': 'Typ', 'Kind': 'Art', 'Capability': 'Fähigkeit', 'Privacy': 'Datenschutz', 'All types': 'Alle Typen', 'Text': 'Text', 'Image': 'Bild', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generierung', 'Upscale': 'Hochskalierung', 'Edit': 'Bearbeiten', 'Uncensored': 'Unzensiert', 'Text to Video': 'Text zu Video', 'Image to Video': 'Bild zu Video', 'Reasoning': 'Reasoning', 'Vision': 'Vision', 'Function Calling': 'Function Calling', 'Code': 'Code', 'Private': 'Privat', 'Anonymized': 'Anonymisiert', 'Sort': 'Sortieren', 'Sort models': 'Modelle sortieren', 'Search models': 'Modelle suchen', 'Recommended': 'Empfohlen', 'Newest': 'Neueste', 'Oldest': 'Älteste', 'Name (A–Z)': 'Name (A–Z)', 'Price: Low to High': 'Preis: aufsteigend', 'Price: High to Low': 'Preis: absteigend', 'Clear filters': 'Filter zurücksetzen', 'Search models...': 'Modelle suchen...', 'models': 'Modelle', 'closest matches': 'nächste Treffer', 'No close model matches': 'Keine ähnlichen Modelle gefunden', 'No models match your filters': 'Keine Modelle entsprechen deinen Filtern' },
+    'es': { 'Type': 'Tipo', 'Kind': 'Categoría', 'Capability': 'Capacidad', 'Privacy': 'Privacidad', 'All types': 'Todos los tipos', 'Text': 'Texto', 'Image': 'Imagen', 'Video': 'Vídeo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generación', 'Upscale': 'Escalado', 'Edit': 'Edición', 'Uncensored': 'Sin censura', 'Text to Video': 'Texto a vídeo', 'Image to Video': 'Imagen a vídeo', 'Reasoning': 'Razonamiento', 'Vision': 'Visión', 'Function Calling': 'Llamada de funciones', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Más recientes', 'Oldest': 'Más antiguos', 'Name (A–Z)': 'Nombre (A–Z)', 'Price: Low to High': 'Precio: de menor a mayor', 'Price: High to Low': 'Precio: de mayor a menor', 'Clear filters': 'Borrar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'coincidencias más cercanas', 'No close model matches': 'No hay modelos parecidos', 'No models match your filters': 'Ningún modelo coincide con tus filtros' },
+    'fr': { 'Type': 'Type', 'Kind': 'Catégorie', 'Capability': 'Capacité', 'Privacy': 'Confidentialité', 'All types': 'Tous les types', 'Text': 'Texte', 'Image': 'Image', 'Video': 'Vidéo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Génération', 'Upscale': 'Agrandissement', 'Edit': 'Édition', 'Uncensored': 'Sans censure', 'Text to Video': 'Texte vers vidéo', 'Image to Video': 'Image vers vidéo', 'Reasoning': 'Raisonnement', 'Vision': 'Vision', 'Function Calling': 'Appel de fonctions', 'Code': 'Code', 'Private': 'Privé', 'Anonymized': 'Anonymisé', 'Sort': 'Trier', 'Sort models': 'Trier les modèles', 'Search models': 'Rechercher des modèles', 'Recommended': 'Recommandé', 'Newest': 'Plus récents', 'Oldest': 'Plus anciens', 'Name (A–Z)': 'Nom (A–Z)', 'Price: Low to High': 'Prix : croissant', 'Price: High to Low': 'Prix : décroissant', 'Clear filters': 'Effacer les filtres', 'Search models...': 'Rechercher des modèles...', 'models': 'modèles', 'closest matches': 'correspondances les plus proches', 'No close model matches': 'Aucun modèle proche', 'No models match your filters': 'Aucun modèle ne correspond à vos filtres' },
+    'zh': { 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
+    'ko': { 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
+  };
+  function t(s) {
+    if (LOCALE === 'en') return s;
+    const table = I18N[LOCALE];
+    return (table && table[s] != null) ? table[s] : s;
+  }
+
+  // ========== FILTER DROPDOWNS ==========
+  // The model browser filters are grouped into focused dropdowns instead of a
+  // flat wall of pills. Type/Kind/Privacy are single-select; Capability is
+  // multi-select (AND semantics, e.g. Reasoning + Vision).
+  const FILTER_GROUPS = {
+    type: {
+      label: 'Type', mode: 'single', default: 'all',
+      options: [
+        { value: 'all', label: 'All types' },
+        { value: 'text', label: 'Text' },
+        { value: 'image', label: 'Image' },
+        ...(ENABLE_VIDEO ? [{ value: 'video', label: 'Video' }] : []),
+        { value: 'audio', label: 'Audio' },
+        { value: 'embedding', label: 'Embedding' },
+      ],
+    },
+    image: {
+      label: 'Kind', mode: 'single', default: null,
+      options: [
+        { value: 'image-gen', label: 'Generation' },
+        { value: 'image-upscale', label: 'Upscale' },
+        { value: 'image-edit', label: 'Edit' },
+        { value: 'image-uncensored', label: 'Uncensored' },
+      ],
+    },
+    video: {
+      label: 'Kind', mode: 'single', default: null,
+      options: [
+        { value: 'text-to-video', label: 'Text to Video' },
+        { value: 'image-to-video', label: 'Image to Video' },
+      ],
+    },
+    capability: {
+      label: 'Capability', mode: 'multi', default: null,
+      options: [
+        { value: 'reasoning', label: 'Reasoning' },
+        { value: 'vision', label: 'Vision' },
+        { value: 'function', label: 'Function Calling' },
+        { value: 'code', label: 'Code' },
+      ],
+    },
+    privacy: {
+      label: 'Privacy', mode: 'single', default: null,
+      options: [
+        { value: 'e2ee', label: 'E2EE' },
+        { value: 'tee', label: 'TEE' },
+        { value: 'private', label: 'Private' },
+        { value: 'anonymized', label: 'Anonymized' },
+      ],
+    },
+  };
+
+  const FILTER_CHEVRON = '<svg class="vmb-dd-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+  const FILTER_CHECK = '<svg class="vmb-dd-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+  const SORT_ICON = '<svg class="vmb-dd-sort-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"/></svg>';
+
+  // Sort options (single-select). `default` preserves the API's curated order and
+  // is the natural resting state on preset pages; the overview page defaults to
+  // newest. All values are handled by sortModels().
+  const SORT_OPTIONS = [
+    { value: 'default', label: 'Recommended' },
+    { value: 'newest', label: 'Newest' },
+    { value: 'oldest', label: 'Oldest' },
+    { value: 'name', label: 'Name (A–Z)' },
+    { value: 'price-low', label: 'Price: Low to High' },
+    { value: 'price-high', label: 'Price: High to Low' },
+  ];
+
+  function renderSortDropdown() {
+    const opts = SORT_OPTIONS.map(o =>
+      `<button type="button" class="vmb-dd-option" role="option" aria-selected="false" data-value="${o.value}">` +
+        `<span class="vmb-dd-option-label">${t(o.label)}</span>${FILTER_CHECK}` +
+      `</button>`
+    ).join('');
+    return (
+      `<div class="vmb-dd vmb-sort-dd">` +
+        `<button type="button" class="vmb-dd-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="${t('Sort models')}">` +
+          `${SORT_ICON}<span class="vmb-dd-label">${t('Sort')}</span>${FILTER_CHEVRON}` +
+        `</button>` +
+        `<div class="vmb-dd-panel" role="listbox" aria-label="${t('Sort models')}" hidden>${opts}</div>` +
+      `</div>`
+    );
+  }
+
+  function renderFilterDropdown(key, group) {
+    const opts = group.options.map(o =>
+      `<button type="button" class="vmb-dd-option" role="option" aria-selected="false" data-group="${key}" data-value="${o.value}">` +
+        `<span class="vmb-dd-option-label">${t(o.label)}</span>${FILTER_CHECK}` +
+      `</button>`
+    ).join('');
+    return (
+      `<div class="vmb-dd" data-group="${key}" data-mode="${group.mode}">` +
+        `<button type="button" class="vmb-dd-trigger" aria-haspopup="listbox" aria-expanded="false">` +
+          `<span class="vmb-dd-label">${t(group.label)}</span>${FILTER_CHEVRON}` +
+        `</button>` +
+        `<div class="vmb-dd-panel" role="listbox" aria-label="${t(group.label)}" hidden>${opts}</div>` +
+      `</div>`
+    );
+  }
   const MODEL_SEARCH_ALIASES = {
     gpt4: ['gpt-4', 'gpt 4', 'openai gpt-4'],
     gpt4o: ['gpt-4o', 'gpt 4o', 'openai gpt-4o'],
@@ -2013,50 +2212,23 @@
     container.innerHTML = `
       <div class="vmb-toolbar">
         <div class="vmb-toolbar-left">
-          <input type="text" class="vmb-search" placeholder="Search models..." aria-label="Search models" />
-        </div>
-        <div class="vmb-toolbar-right">
-          <button class="vmb-sort-toggle" aria-label="Sort by date" title="Sort by date">
-            <svg class="vmb-sort-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"/>
-            </svg>
-          </button>
+          <input type="text" class="vmb-search" placeholder="${t('Search models...')}" aria-label="${t('Search models')}" />
         </div>
       </div>
-      <div class="vmb-filters" role="toolbar" aria-label="Model filters">
-        <span class="vmb-category-filters" role="group" aria-label="Category filters">
-          <button class="vmb-filter active" data-filter="all" aria-pressed="true">All</button>
-          <button class="vmb-filter" data-filter="text" aria-pressed="false">Text</button>
-          <button class="vmb-filter" data-filter="image" aria-pressed="false">Image</button>
-          ${ENABLE_VIDEO ? '<button class="vmb-filter" data-filter="video" aria-pressed="false">Video</button>' : ''}
-          <button class="vmb-filter" data-filter="audio" aria-pressed="false">Audio</button>
-          <button class="vmb-filter" data-filter="embedding" aria-pressed="false">Embedding</button>
-        </span>
-        <span class="vmb-privacy-filters" role="group" aria-label="Privacy filters">
-          <button class="vmb-filter" data-filter="e2ee" aria-pressed="false">E2EE</button>
-          <button class="vmb-filter" data-filter="tee" aria-pressed="false">TEE</button>
-          <button class="vmb-filter" data-filter="private" aria-pressed="false">Private</button>
-          <button class="vmb-filter" data-filter="anonymized" aria-pressed="false">Anonymized</button>
-        </span>
-        <span class="vmb-capability-filters" role="group" aria-label="Capability filters">
-          <button class="vmb-filter" data-filter="reasoning" aria-pressed="false">Reasoning</button>
-          <button class="vmb-filter" data-filter="vision" aria-pressed="false" title="Chat models that accept image input">Vision</button>
-          <button class="vmb-filter vmb-text-only" data-filter="function" aria-pressed="false">Function Calling</button>
-          <button class="vmb-filter vmb-text-only" data-filter="code" aria-pressed="false">Code</button>
-        </span>
-        ${ENABLE_VIDEO ? `<span class="vmb-video-filters" role="group" aria-label="Video type filters">
-          <button class="vmb-filter" data-filter="text-to-video" aria-pressed="false">Text to Video</button>
-          <button class="vmb-filter" data-filter="image-to-video" aria-pressed="false">Image to Video</button>
-        </span>` : ''}
-        <span class="vmb-image-filters" role="group" aria-label="Image type filters">
-          <button class="vmb-filter" data-filter="image-gen" aria-pressed="false">Generation</button>
-          <button class="vmb-filter" data-filter="image-upscale" aria-pressed="false">Upscale</button>
-          <button class="vmb-filter" data-filter="image-edit" aria-pressed="false">Edit</button>
-          <button class="vmb-filter" data-filter="image-uncensored" aria-pressed="false">Uncensored</button>
-        </span>
-      </div>
-      <div class="vmb-results-bar">
+      <div class="vmb-controls">
         <span class="vmb-count" aria-live="polite">${hasCachedData ? '' : 'Loading...'}</span>
+        <div class="vmb-controls-group">
+          ${renderSortDropdown()}
+          <div class="vmb-controls-divider" aria-hidden="true"></div>
+          <div class="vmb-filters" role="toolbar" aria-label="Model filters">
+            ${renderFilterDropdown('type', FILTER_GROUPS.type)}
+            ${renderFilterDropdown('image', FILTER_GROUPS.image)}
+            ${ENABLE_VIDEO ? renderFilterDropdown('video', FILTER_GROUPS.video) : ''}
+            ${renderFilterDropdown('capability', FILTER_GROUPS.capability)}
+            ${renderFilterDropdown('privacy', FILTER_GROUPS.privacy)}
+            <button type="button" class="vmb-dd-clear" hidden>${t('Clear filters')}</button>
+          </div>
+        </div>
       </div>
       <div class="vmb-models" role="list" aria-label="Model list">
         ${hasCachedData ? '' : '<div class="vmb-loading">Loading models...</div>'}
@@ -2067,80 +2239,241 @@
 
     // Get elements
     const searchInput = container.querySelector('.vmb-search');
-    const filterButtons = container.querySelectorAll('.vmb-filter');
     const countDisplay = container.querySelector('.vmb-count');
     const modelsContainer = container.querySelector('.vmb-models');
-    const categoryFilters = container.querySelector('.vmb-category-filters');
-    const capabilityFilters = container.querySelector('.vmb-capability-filters');
-    const videoFilters = ENABLE_VIDEO ? container.querySelector('.vmb-video-filters') : null;
-    const imageFilters = container.querySelector('.vmb-image-filters');
-    const privacyFilters = container.querySelector('.vmb-privacy-filters');
-    
-    // Configure filter visibility based on page context
-    if (presetFilter) {
-      categoryFilters.style.display = 'none';
-      const filterVisibility = {
-        text: { capability: true, video: false, image: false },
-        video: { capability: false, video: true, image: false },
-        image: { capability: false, video: false, image: true }
-      };
-      const config = filterVisibility[presetFilter] || { capability: false, video: false, image: false };
-      capabilityFilters.style.display = config.capability ? 'contents' : 'none';
-      if (videoFilters) videoFilters.style.display = config.video ? 'contents' : 'none';
-      imageFilters.style.display = config.image ? 'contents' : 'none';
-    } else {
-      capabilityFilters.style.display = 'contents';
-      if (videoFilters) videoFilters.style.display = 'none';
-      imageFilters.style.display = 'none';
-    }
+    const filtersBar = container.querySelector('.vmb-filters');
+    const clearBtn = container.querySelector('.vmb-dd-clear');
+
+    // Map each dropdown group key to its root element.
+    const dd = {};
+    container.querySelectorAll('.vmb-dd').forEach(el => { dd[el.dataset.group] = el; });
+    const showDd = (key, show) => { if (dd[key]) dd[key].style.display = show ? '' : 'none'; };
 
     let allModels = [];
     let activeFilter = presetFilter || 'all';
-    let activeCapability = null;
+    const activeCapabilities = new Set(); // multi-select
     let activeVideoType = null;
     let activeImageType = null;
     let activePrivacy = null;
     // On overview page (no preset filter), default to newest first
     let activeSort = presetFilter ? 'default' : 'newest';
 
-    function updateAriaPressed(btn, isActive) {
-      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    // Configure which dropdowns are visible for the current page context.
+    if (presetFilter) {
+      const filterVisibility = {
+        text: { capability: true, video: false, image: false },
+        video: { capability: false, video: true, image: false },
+        image: { capability: false, video: false, image: true },
+      };
+      const config = filterVisibility[presetFilter] || { capability: false, video: false, image: false };
+      showDd('type', false);
+      showDd('capability', config.capability);
+      showDd('video', config.video);
+      showDd('image', config.image);
+    } else {
+      showDd('type', true);
+      showDd('capability', true);
+      showDd('video', false);
+      showDd('image', false);
+    }
+    // Privacy dropdown is always available.
+
+    // ----- Dropdown state <-> UI helpers -----
+    function getSingleState(key) {
+      if (key === 'type') return activeFilter;
+      if (key === 'image') return activeImageType;
+      if (key === 'video') return activeVideoType;
+      if (key === 'privacy') return activePrivacy;
+      return null;
+    }
+    function setSingleState(key, value) {
+      if (key === 'type') activeFilter = value;
+      else if (key === 'image') activeImageType = value;
+      else if (key === 'video') activeVideoType = value;
+      else if (key === 'privacy') activePrivacy = value;
     }
 
-    function syncCapabilityFilterControls() {
-      const allow = categoryAllowsCapabilityFilters(activeFilter);
-      if (!allow && activeCapability) {
-        activeCapability = null;
-        capabilityFilters.querySelectorAll('.vmb-filter').forEach(b => {
-          b.classList.remove('active');
-          updateAriaPressed(b, false);
+    function updateDropdownUI(key) {
+      const ddEl = dd[key];
+      if (!ddEl) return;
+      const group = FILTER_GROUPS[key];
+      const labelEl = ddEl.querySelector('.vmb-dd-label');
+      let active = false;
+      let text = t(group.label);
+
+      if (group.mode === 'multi') {
+        active = activeCapabilities.size > 0;
+        if (activeCapabilities.size === 1) {
+          const v = [...activeCapabilities][0];
+          text = t((group.options.find(o => o.value === v) || {}).label || group.label);
+        } else if (activeCapabilities.size > 1) {
+          text = `${t(group.label)} · ${activeCapabilities.size}`;
+        }
+        ddEl.querySelectorAll('.vmb-dd-option').forEach(o => {
+          const on = activeCapabilities.has(o.dataset.value);
+          o.classList.toggle('selected', on);
+          o.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+      } else {
+        const cur = getSingleState(key);
+        const def = key === 'type' ? 'all' : null;
+        active = cur != null && cur !== def;
+        if (active) {
+          const o = group.options.find(op => op.value === cur);
+          if (o) text = t(o.label);
+        }
+        ddEl.querySelectorAll('.vmb-dd-option').forEach(o => {
+          const on = o.dataset.value === cur;
+          o.classList.toggle('selected', on);
+          o.setAttribute('aria-selected', on ? 'true' : 'false');
         });
       }
-      capabilityFilters.querySelectorAll('.vmb-filter').forEach(b => {
-        b.disabled = !allow;
-        b.setAttribute('aria-disabled', allow ? 'false' : 'true');
-        if (!allow) {
-          b.title = 'Available when viewing All or Text models';
-        } else {
-          const f = b.dataset.filter;
-          if (f === 'vision') {
-            b.title = 'Chat models that accept image input';
-          } else {
-            b.removeAttribute('title');
-          }
-        }
+
+      labelEl.textContent = text;
+      ddEl.classList.toggle('vmb-dd-active', active);
+    }
+
+    function updateAllDropdownUI() {
+      Object.keys(FILTER_GROUPS).forEach(updateDropdownUI);
+    }
+
+    function updateClearVisibility() {
+      const any = activeCapabilities.size > 0 || activeVideoType || activeImageType ||
+        activePrivacy || (!presetFilter && activeFilter !== 'all');
+      clearBtn.hidden = !any;
+    }
+
+    function closeAllPanels(except) {
+      container.querySelectorAll('.vmb-dd').forEach(el => {
+        if (el === except) return;
+        el.classList.remove('open');
+        const t = el.querySelector('.vmb-dd-trigger');
+        if (t) t.setAttribute('aria-expanded', 'false');
+        const p = el.querySelector('.vmb-dd-panel');
+        if (p) p.hidden = true;
       });
     }
 
-    syncCapabilityFilterControls();
-
-    const sortToggle = container.querySelector('.vmb-sort-toggle');
-    
-    // Set initial sort toggle UI state for overview page
-    if (!presetFilter) {
-      sortToggle.classList.add('active');
-      sortToggle.title = 'Newest first (click for oldest)';
+    function togglePanel(ddEl) {
+      const trigger = ddEl.querySelector('.vmb-dd-trigger');
+      const panel = ddEl.querySelector('.vmb-dd-panel');
+      const willOpen = !ddEl.classList.contains('open');
+      closeAllPanels(willOpen ? ddEl : null);
+      ddEl.classList.toggle('open', willOpen);
+      trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      panel.hidden = !willOpen;
     }
+
+    function syncCapabilityFilterControls() {
+      const capDd = dd.capability;
+      if (!capDd) return;
+      const allow = categoryAllowsCapabilityFilters(activeFilter);
+      if (!allow && activeCapabilities.size) {
+        activeCapabilities.clear();
+        updateDropdownUI('capability');
+      }
+      capDd.classList.toggle('vmb-dd-disabled', !allow);
+      const trigger = capDd.querySelector('.vmb-dd-trigger');
+      trigger.disabled = !allow;
+      trigger.setAttribute('aria-disabled', allow ? 'false' : 'true');
+      trigger.title = allow ? '' : 'Available when viewing All or Text models';
+      if (!allow) {
+        capDd.classList.remove('open');
+        trigger.setAttribute('aria-expanded', 'false');
+        capDd.querySelector('.vmb-dd-panel').hidden = true;
+      }
+    }
+
+    function handleOptionSelect(option) {
+      const key = option.dataset.group;
+      const value = option.dataset.value;
+      const group = FILTER_GROUPS[key];
+
+      if (group.mode === 'multi') {
+        if (activeCapabilities.has(value)) activeCapabilities.delete(value);
+        else activeCapabilities.add(value);
+        // Selecting a capability on the main page implies text models.
+        if (activeCapabilities.size > 0 && !presetFilter && activeFilter === 'all') {
+          activeFilter = 'text';
+          updateDropdownUI('type');
+        }
+        updateDropdownUI('capability');
+        // Keep the panel open for multi-select.
+      } else {
+        const cur = getSingleState(key);
+        const def = key === 'type' ? 'all' : null;
+        const next = cur === value ? def : value;
+        setSingleState(key, next);
+        // Changing type resets the type-dependent filters.
+        if (key === 'type') {
+          activeCapabilities.clear();
+          activeVideoType = null;
+          activeImageType = null;
+          updateDropdownUI('capability');
+          updateDropdownUI('video');
+          updateDropdownUI('image');
+        }
+        updateDropdownUI(key);
+        closeAllPanels(null);
+      }
+      syncCapabilityFilterControls();
+      updateClearVisibility();
+      renderModels();
+    }
+
+    function clearAllFilters() {
+      activeCapabilities.clear();
+      activeVideoType = null;
+      activeImageType = null;
+      activePrivacy = null;
+      if (!presetFilter) activeFilter = 'all';
+      updateAllDropdownUI();
+      syncCapabilityFilterControls();
+      updateClearVisibility();
+      closeAllPanels(null);
+      renderModels();
+    }
+
+    // ----- Dropdown events -----
+    filtersBar.addEventListener('click', (e) => {
+      const trigger = e.target.closest('.vmb-dd-trigger');
+      if (trigger) {
+        if (trigger.disabled) return;
+        togglePanel(trigger.closest('.vmb-dd'));
+        return;
+      }
+      if (e.target.closest('.vmb-dd-clear')) { clearAllFilters(); return; }
+      const option = e.target.closest('.vmb-dd-option');
+      if (option) { handleOptionSelect(option); return; }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.vmb-dd')) closeAllPanels(null);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeAllPanels(null);
+    });
+
+    updateAllDropdownUI();
+    syncCapabilityFilterControls();
+    updateClearVisibility();
+
+    const sortDd = container.querySelector('.vmb-sort-dd');
+    const sortDefault = presetFilter ? 'default' : 'newest';
+
+    // Sync the sort dropdown's trigger label, selected option, and active accent
+    // (highlighted whenever the sort differs from the page's natural default).
+    function updateSortUI() {
+      const opt = SORT_OPTIONS.find(o => o.value === activeSort);
+      sortDd.querySelector('.vmb-dd-label').textContent = opt ? t(opt.label) : t('Sort');
+      sortDd.querySelectorAll('.vmb-dd-option').forEach(o => {
+        const on = o.dataset.value === activeSort;
+        o.classList.toggle('selected', on);
+        o.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      sortDd.classList.toggle('vmb-dd-active', activeSort !== sortDefault);
+    }
+    updateSortUI();
 
     // Always render static data immediately for instant display
     allModels = STATIC_MODELS;
@@ -2174,14 +2507,16 @@
     }
 
     function matchesCapability(model) {
-      if (!activeCapability) return true;
+      if (activeCapabilities.size === 0) return true;
       const spec = model.model_spec || {};
       const caps = spec.capabilities || {};
-      
-      if (activeCapability === 'reasoning') return caps.supportsReasoning;
-      if (activeCapability === 'vision') return caps.supportsVision;
-      if (activeCapability === 'function') return caps.supportsFunctionCalling;
-      if (activeCapability === 'code') return matchesCodeFilter(model);
+      // AND semantics: the model must satisfy every selected capability.
+      for (const cap of activeCapabilities) {
+        if (cap === 'reasoning' && !caps.supportsReasoning) return false;
+        if (cap === 'vision' && !caps.supportsVision) return false;
+        if (cap === 'function' && !caps.supportsFunctionCalling) return false;
+        if (cap === 'code' && !matchesCodeFilter(model)) return false;
+      }
       return true;
     }
 
@@ -2271,11 +2606,17 @@
         sorted = visibleScored.map(item => item.model);
       }
 
-      const countLabel = sorted.length + ' model' + (sorted.length !== 1 ? 's' : '');
-      countDisplay.textContent = showingClosestMatches ? `${countLabel} closest match${sorted.length !== 1 ? 'es' : ''}` : countLabel;
+      const n = sorted.length;
+      const countLabel = (LOCALE === 'en')
+        ? (n + ' model' + (n !== 1 ? 's' : ''))
+        : (n + ' ' + t('models'));
+      const closestSuffix = (LOCALE === 'en')
+        ? ('closest match' + (n !== 1 ? 'es' : ''))
+        : t('closest matches');
+      countDisplay.textContent = showingClosestMatches ? `${countLabel} ${closestSuffix}` : countLabel;
 
       if (sorted.length === 0) {
-        modelsContainer.innerHTML = `<div class="vmb-loading">${query ? 'No close model matches' : 'No models match your filters'}</div>`;
+        modelsContainer.innerHTML = `<div class="vmb-loading">${query ? t('No close model matches') : t('No models match your filters')}</div>`;
         return;
       }
 
@@ -2541,118 +2882,16 @@
       searchTimeout = setTimeout(renderModels, 100);
     });
 
-    // Event: Sort toggle - cycles through: default → newest → oldest → default
-    sortToggle.addEventListener('click', () => {
-      const cycle = ['default', 'newest', 'oldest'];
-      const currentIndex = cycle.indexOf(activeSort);
-      const nextIndex = (currentIndex + 1) % cycle.length;
-      activeSort = cycle[nextIndex];
-      
-      // Update icon direction and active state
-      sortToggle.classList.toggle('active', activeSort !== 'default');
-      sortToggle.classList.toggle('asc', activeSort === 'oldest');
-      sortToggle.title = activeSort === 'default' ? 'Sort by date' : 
-                         activeSort === 'newest' ? 'Newest first (click for oldest)' : 
-                         'Oldest first (click to reset)';
-      renderModels();
-    });
-
-    // Event: Filter buttons
-    filterButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const filter = btn.dataset.filter;
-        const isCapability = CAPABILITY_FILTERS.includes(filter);
-        const isVideoType = VIDEO_FILTERS.includes(filter);
-        const isImageType = IMAGE_FILTERS.includes(filter);
-        const isPrivacy = PRIVACY_FILTERS.includes(filter);
-        
-        if (isPrivacy) {
-          if (activePrivacy === filter) {
-            activePrivacy = null;
-            btn.classList.remove('active');
-            updateAriaPressed(btn, false);
-          } else {
-            privacyFilters.querySelectorAll('.vmb-filter').forEach(b => {
-              b.classList.remove('active');
-              updateAriaPressed(b, false);
-            });
-            activePrivacy = filter;
-            btn.classList.add('active');
-            updateAriaPressed(btn, true);
-          }
-        } else if (isCapability) {
-          if (activeCapability === filter) {
-            activeCapability = null;
-            btn.classList.remove('active');
-            updateAriaPressed(btn, false);
-          } else {
-            capabilityFilters.querySelectorAll('.vmb-filter').forEach(b => {
-              b.classList.remove('active');
-              updateAriaPressed(b, false);
-            });
-            activeCapability = filter;
-            btn.classList.add('active');
-            updateAriaPressed(btn, true);
-
-            if (!presetFilter) {
-              activeFilter = 'text';
-              categoryFilters.querySelectorAll('.vmb-filter').forEach(b => {
-                b.classList.remove('active');
-                updateAriaPressed(b, false);
-              });
-              const textCategoryBtn = categoryFilters.querySelector('[data-filter="text"]');
-              if (textCategoryBtn) {
-                textCategoryBtn.classList.add('active');
-                updateAriaPressed(textCategoryBtn, true);
-              }
-            }
-          }
-        } else if (isVideoType && videoFilters) {
-          if (activeVideoType === filter) {
-            activeVideoType = null;
-            btn.classList.remove('active');
-            updateAriaPressed(btn, false);
-          } else {
-            videoFilters.querySelectorAll('.vmb-filter').forEach(b => {
-              b.classList.remove('active');
-              updateAriaPressed(b, false);
-            });
-            activeVideoType = filter;
-            btn.classList.add('active');
-            updateAriaPressed(btn, true);
-          }
-        } else if (isImageType) {
-          if (activeImageType === filter) {
-            activeImageType = null;
-            btn.classList.remove('active');
-            updateAriaPressed(btn, false);
-          } else {
-            imageFilters.querySelectorAll('.vmb-filter').forEach(b => {
-              b.classList.remove('active');
-              updateAriaPressed(b, false);
-            });
-            activeImageType = filter;
-            btn.classList.add('active');
-            updateAriaPressed(btn, true);
-          }
-        } else {
-          // Category filter (main page only) - preserve privacy filter state
-          activeFilter = filter;
-          activeCapability = null;
-          activeVideoType = null;
-          activeImageType = null;
-          filterButtons.forEach(b => {
-            if (!PRIVACY_FILTERS.includes(b.dataset.filter)) {
-              b.classList.remove('active');
-              updateAriaPressed(b, false);
-            }
-          });
-          btn.classList.add('active');
-          updateAriaPressed(btn, true);
-        }
-        syncCapabilityFilterControls();
+    // Event: Sort dropdown (single-select, reuses the shared popover behavior).
+    sortDd.addEventListener('click', (e) => {
+      if (e.target.closest('.vmb-dd-trigger')) { togglePanel(sortDd); return; }
+      const option = e.target.closest('.vmb-dd-option');
+      if (option) {
+        activeSort = option.dataset.value;
+        updateSortUI();
+        closeAllPanels(null);
         renderModels();
-      });
+      }
     });
 
     // Event: Copy button (delegated) - handles both name and ID copy buttons
