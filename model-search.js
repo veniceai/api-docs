@@ -30,6 +30,45 @@
   resetIfDemos();
 })();
 
+// Relocate the language selector into the right-hand header actions cluster.
+//
+// Mintlify natively renders the language selector in the left group (next to the
+// logo). We want it on the right, just left of the search / Ask AI / theme icon
+// group. Rather than absolutely positioning it -- which collides whenever
+// Mintlify adds another header button (e.g. the AI assistant) -- we move the
+// node into the right actions cluster so it lays out in natural flex flow. The
+// header is re-rendered on SPA navigation, so we re-run on DOM changes,
+// idempotently and coalesced via requestAnimationFrame to avoid churn.
+(function() {
+  function relocate() {
+    const trigger = document.querySelector('#localization-select-trigger');
+    const search = document.querySelector('#search-bar-entry');
+    if (!trigger || !search) return;
+    const langWrapper = trigger.parentElement;   // <div> wrapping the trigger
+    const iconGroup = search.parentElement;      // <div> holding search + Ask AI
+    const cluster = iconGroup ? iconGroup.parentElement : null; // right actions cluster
+    if (!langWrapper || !iconGroup || !cluster) return;
+    // Already placed immediately before the icon group -> nothing to do (this
+    // guard also stops our own DOM mutation from causing a relocate loop).
+    if (langWrapper.parentElement === cluster && langWrapper.nextElementSibling === iconGroup) return;
+    cluster.insertBefore(langWrapper, iconGroup);
+  }
+
+  let scheduled = false;
+  function schedule() {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(function() { scheduled = false; relocate(); });
+  }
+
+  new MutationObserver(schedule).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
+  relocate();
+})();
+
 // Venice AI Model Browser & Pricing Tables - Fetches from API
 (function() {
 
