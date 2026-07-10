@@ -1277,6 +1277,7 @@
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
       const editPrice = spec.pricing?.inpaint?.usd ?? spec.pricing?.generation?.usd ?? 0.04;
+      const extraInputUsd = spec.pricing?.inputImages?.additional?.usd;
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
 
       return `<div class="vpt-row">
@@ -1289,6 +1290,7 @@
         </div>
         <div class="vpt-row-bottom">
           <span class="vpt-price-item"><span class="vpt-price-label">Per Edit</span><span class="vpt-price-value">${formatPrice(editPrice)}</span></span>
+          ${extraInputUsd ? `<span class="vpt-price-item vpt-tooltip" data-tooltip="Charged per input image beyond the first, added on top of the per-edit price."><span class="vpt-price-label">Extra Input Image</span><span class="vpt-price-value">${formatPrice(extraInputUsd)}</span></span>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -2702,6 +2704,9 @@
           priceStr = `${formatPrice(pricing.generation.usd)}/image`;
         } else if (model.type === 'inpaint' && pricing.inpaint) {
           priceStr = `${formatPrice(pricing.inpaint.usd)}/edit`;
+          if (pricing.inputImages?.additional?.usd) {
+            priceStr += ` <span class="vmb-pipe">|</span> ${formatPrice(pricing.inputImages.additional.usd)}/extra image`;
+          }
         } else if (model.type === 'embedding' && pricing.input) {
           priceStr = `${formatPrice(pricing.input.usd)}/M tokens`;
         } else if (pricing.input && pricing.output) {

@@ -190,14 +190,15 @@ function renderPricingEditTable(models) {
   const editModels = models.filter(m => m.id === 'qwen-image' || m.type === 'inpaint').filter(m => !isDeprecatedModel(m));
   if (editModels.length === 0) return 'No models available.';
 
-  const header = `| Model | ID | Per Edit |\n|---|---|---|`;
+  const header = `| Model | ID | Per Edit | Extra Input Image |\n|---|---|---|---|`;
   const rows = editModels.map(model => {
     const spec = model.model_spec || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
     const editPrice = spec.pricing?.inpaint?.usd ?? 0.04;
+    const extraInputUsd = spec.pricing?.inputImages?.additional?.usd;
 
-    return `| ${name} | ${modelId} | ${formatPrice(editPrice)} |`;
+    return `| ${name} | ${modelId} | ${formatPrice(editPrice)} | ${formatPrice(extraInputUsd)} |`;
   }).join('\n');
 
   return header + '\n' + rows + '\n';
