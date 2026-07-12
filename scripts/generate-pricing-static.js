@@ -404,6 +404,8 @@ function generatePricingMdx() {
   sections.push('#### Editing');
   sections.push('');
   sections.push(editHtml);
+  sections.push('> **Editing with multiple input images:** The **Per Edit** price includes the first input image. Models that list an **Extra Input Image** price charge that fee for each additional input image beyond the first. Example: editing with 3 input images on a model priced at $0.11 per edit with a $0.0035 extra-image fee costs $0.11 + 2 \u00d7 $0.0035 = $0.117.');
+  sections.push('');
   sections.push('</div>');
   sections.push('');
   sections.push('### Audio');

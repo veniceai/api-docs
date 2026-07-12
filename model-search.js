@@ -2121,6 +2121,7 @@
         ${renderPricingUpscaleTable(models)}
         <h4>Editing</h4>
         ${renderPricingEditTable(models)}
+        <p class="vpt-video-note">The <strong>Per Edit</strong> price includes the first input image. Models that list an <strong>Extra Input Image</strong> price charge that fee for each additional input image beyond the first. Example: editing with 3 input images on a model priced at $0.11 per edit with a $0.0035 extra-image fee costs $0.11 + 2 × $0.0035 = $0.117.</p>
       `;
     }
 
