@@ -1,0 +1,310 @@
+---
+title: "PydanticAI 集成"
+description: "使用 PydanticAI 结合 Venice 的私有、OpenAI 兼容聊天模型，构建带类型的 Python agent，支持工具调用、结构化输出与流式响应。"
+"og:title": "PydanticAI Integration | Venice API Docs"
+"og:description": "Build PydanticAI agents powered by Venice AI's private, uncensored models"
+---
+
+[PydanticAI](https://ai.pydantic.dev/) 是来自 Pydantic 团队的 Python agent 框架。它在 LLM 提供商之上提供了带类型的依赖、工具调用、结构化输出和流式响应能力。Venice 可作为 OpenAI 兼容后端使用 —— 将 `OpenAIChatModel` 指向 Venice，然后照常使用 PydanticAI 的其余 API。
+
+## 前提条件
+
+- Python 3.9 或更高版本
+- 一个 [Venice API 密钥](/guides/getting-started/generating-api-key)
+
+## 设置
+
+安装带 OpenAI 支持的 PydanticAI：
+
+<CodeGroup>
+```bash pip
+pip install "pydantic-ai-slim[openai]"
+```
+
+```bash uv
+uv add "pydantic-ai-slim[openai]"
+```
+</CodeGroup>
+
+您也可以安装完整的 `pydantic-ai` 包，它已包含 OpenAI 扩展。
+
+将您的 Venice API 密钥添加到环境变量：
+
+```bash
+export VENICE_API_KEY=your-venice-api-key
+```
+
+<Warning>
+不要将 API 密钥提交到源代码管理。在生产环境中优先使用环境变量或密钥管理器。
+</Warning>
+
+## 将 Venice 配置为模型提供商
+
+Venice 使用 OpenAI Chat Completions API。使用 `OpenAIChatModel` 搭配 `OpenAIProvider` 和 Venice 的 base URL：
+
+```python
+import os
+
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+model = OpenAIChatModel(
+    "venice-uncensored",
+    provider=OpenAIProvider(
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+)
+
+agent = Agent(
+    model,
+    instructions="你是一个简洁、尊重隐私的助手。",
+)
+```
+
+<Note>
+请使用 `OpenAIChatModel`（Chat Completions），而不是 `OpenAIResponsesModel` / `openai:` 简写。Venice 的主要兼容路径是 `/chat/completions`。显式使用 Chat Completions 可以避免较新版本 PydanticAI 中 OpenAI 默认模型所采用的 Responses-only 行为。
+</Note>
+
+### 环境变量
+
+`OpenAIProvider` 同样会读取 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`。您可以通过这种方式配置 Venice，而无需在代码中传入参数：
+
+```bash
+export OPENAI_API_KEY=your-venice-api-key
+export OPENAI_BASE_URL=https://api.venice.ai/api/v1
+```
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+
+agent = Agent(
+    OpenAIChatModel("venice-uncensored"),
+    instructions="你是一个简洁、尊重隐私的助手。",
+)
+```
+
+## 运行 agent
+
+```python
+result = agent.run_sync("用两句话解释零数据保留。")
+print(result.output)
+print(result.usage)
+```
+
+异步用法遵循相同的模式，使用 `await agent.run(...)`：
+
+```python
+import asyncio
+
+async def main() -> None:
+    result = await agent.run("Venice 提供哪些隐私等级？")
+    print(result.output)
+
+asyncio.run(main())
+```
+
+## 流式响应
+
+当您希望在 token 到达时即时获取，可使用 `run_stream`：
+
+```python
+import asyncio
+
+async def main() -> None:
+    async with agent.run_stream("写一首关于私有 AI 的短诗。") as response:
+        async for text in response.stream_text():
+            print(text, end="", flush=True)
+
+asyncio.run(main())
+```
+
+## 结构化输出
+
+将一个 Pydantic 模型作为 `output_type` 传入，以校验 agent 的最终结果：
+
+```python
+import os
+
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+
+class PrivacySummary(BaseModel):
+    summary: str = Field(description="一句话概述")
+    benefits: list[str] = Field(description="关键的隐私优势")
+    recommendation: str = Field(description="何时选择这种方式")
+
+
+model = OpenAIChatModel(
+    "zai-org-glm-5-1",
+    provider=OpenAIProvider(
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+)
+
+agent = Agent(
+    model,
+    output_type=PrivacySummary,
+    instructions="从用户请求中提取一份结构化摘要。",
+)
+
+result = agent.run_sync("将私有推理与会保留聊天日志的提供商进行对比。")
+print(result.output.summary)
+print(result.output.benefits)
+```
+
+在生产环境中依赖基于工具的结构化输出之前，请先浏览支持[结构化响应](/guides/features/structured-responses)和[函数调用](/guides/features/function-calling)的模型。
+
+## 工具
+
+使用 `@agent.tool_plain`（无 agent 上下文）或 `@agent.tool`（需要 `RunContext`）注册工具：
+
+```python
+import os
+from dataclasses import dataclass
+
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+
+@dataclass
+class SupportDeps:
+    user_id: str
+
+
+model = OpenAIChatModel(
+    "zai-org-glm-5-1",
+    provider=OpenAIProvider(
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+)
+
+agent = Agent(
+    model,
+    deps_type=SupportDeps,
+    instructions="帮助用户挑选 Venice 模型。需要事实依据时请使用工具。",
+)
+
+
+@agent.tool_plain
+def list_budget_models() -> list[str]:
+    """返回性价比高的 Venice 文本模型 ID。"""
+    return ["venice-uncensored", "qwen3-5-9b"]
+
+
+@agent.tool
+def get_user_tier(ctx: RunContext[SupportDeps]) -> str:
+    """返回调用方的账户等级。"""
+    return "pro" if ctx.deps.user_id.startswith("pro_") else "standard"
+
+
+result = agent.run_sync(
+    "我应该尝试哪些便宜的 Venice 模型，我处于哪个等级？",
+    deps=SupportDeps(user_id="pro_42"),
+)
+print(result.output)
+```
+
+## Venice 专有参数
+
+通过 `ModelSettings.extra_body` 传递 Venice 专属选项。例如，使用 `venice_parameters` 启用内置的 web 搜索：
+
+```python
+import os
+
+from pydantic_ai import Agent, ModelSettings
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+model = OpenAIChatModel(
+    "venice-uncensored",
+    provider=OpenAIProvider(
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+)
+
+agent = Agent(
+    model,
+    model_settings=ModelSettings(
+        extra_body={
+            "venice_parameters": {
+                "enable_web_search": "auto",
+            }
+        }
+    ),
+)
+
+result = agent.run_sync("本周有哪些值得关注的 AI 隐私进展？")
+print(result.output)
+```
+
+您也可以按单次运行覆盖设置：
+
+```python
+result = agent.run_sync(
+    "总结今天关于去中心化 AI 的头条新闻。",
+    model_settings=ModelSettings(
+        extra_body={"venice_parameters": {"enable_web_search": "on"}}
+    ),
+)
+```
+
+完整的 `venice_parameters` 列表（web 抓取、引用、character、思考控制以及 E2EE 开关）请参见 [API 规范](/api-reference/api-spec)。
+
+## 推荐模型
+
+| 用例 | 模型 | 原因 |
+| --- | --- | --- |
+| 通用 agent | `venice-uncensored` | 快速、便宜、无审查 |
+| 工具调用 / 结构化输出 | `zai-org-glm-5-1` | 适合 agent 的强大私有旗舰模型 |
+| 复杂推理 | `zai-org-glm-5-1` | 多步规划能力更强 |
+| 预算 / 大流量 | `qwen3-5-9b` | 每 token 成本低 |
+| 代码类 agent | `qwen3-coder-480b-a35b-instruct` | 针对代码优化 |
+
+模型 ID 会随时间更新 —— 请通过 [`GET /models`](/api-reference/endpoint/models/list) 或[模型概览](/models/overview)确认当前 ID。
+
+## 隐私优势
+
+PydanticAI 常用于会接触应用数据、用户上下文或内部工具的 agent。将其与 Venice 搭配可让整个工作流保持在私有、无审查的推理之上：
+
+- **零数据保留** —— 私有模型在请求完成后不会保留 prompt 与工具负载
+- **无审查分析** —— 当 agent 需要直白批评或红队测试时
+- **OpenAI 兼容的底层** —— 您可以通过更改提供商的 base URL 和 API 密钥来迁移现有 PydanticAI 应用
+
+## 故障排查
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized">
+    请确认 `VENICE_API_KEY`（或 `OPENAI_API_KEY`）已在运行 agent 的进程中设置。修改环境变量后请重启 shell 或进程。
+  </Accordion>
+
+  <Accordion title="模型未找到或出现意外的 endpoint 错误">
+    请使用[模型页面](/models/overview)中的当前模型 ID。将 `base_url` 设置为 `https://api.venice.ai/api/v1`，末尾不要带其他路径 —— PydanticAI 会自动追加 `/chat/completions`。
+  </Accordion>
+
+  <Accordion title="Responses API / openai: 前缀失败">
+    请优先使用 `OpenAIChatModel` 并显式传入 `OpenAIProvider`。避免使用裸的 `openai:` agent 简写，它可能会指向 OpenAI 的 Responses API 而不是 Chat Completions。
+  </Accordion>
+
+  <Accordion title="工具或结构化输出被忽略">
+    请选择支持[函数调用](/guides/features/function-calling)的模型，在 `instructions` 中描述何时应调用工具，并保持工具 docstring 的精确性 —— PydanticAI 会根据函数签名和文档构建 JSON schema。
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="PydanticAI 文档" icon="book" href="https://ai.pydantic.dev/">
+    Agent、工具、依赖和输出类型
+  </Card>
+  <Card title="Venice 模型" icon="database" href="/models/overview">
+    浏览模型及其支持的能力
+  </Card>
+</CardGroup>

@@ -1,0 +1,310 @@
+---
+title: "PydanticAI-Integration"
+description: "Typisierte Python-Agenten mit PydanticAI bauen — Venices private, OpenAI-kompatible Chat-Modelle für Tools, Structured Output und Streaming."
+"og:title": "PydanticAI-Integration | Venice API Docs"
+"og:description": "PydanticAI-Agenten auf Basis von Venice AIs privaten, unzensierten Modellen entwickeln"
+---
+
+[PydanticAI](https://ai.pydantic.dev/) ist ein Python-Agent-Framework aus dem Pydantic-Team. Es bietet typisierte Abhängigkeiten, Tool-Aufrufe, Structured Outputs und Streaming zusätzlich zu LLM-Providern. Venice funktioniert als OpenAI-kompatibles Backend — richte `OpenAIChatModel` auf Venice aus und nutze den Rest der PydanticAI-API wie gewohnt.
+
+## Voraussetzungen
+
+- Python 3.9 oder neuer
+- Ein [Venice-API-Schlüssel](/guides/getting-started/generating-api-key)
+
+## Einrichtung
+
+Installiere PydanticAI mit OpenAI-Unterstützung:
+
+<CodeGroup>
+```bash pip
+pip install "pydantic-ai-slim[openai]"
+```
+
+```bash uv
+uv add "pydantic-ai-slim[openai]"
+```
+</CodeGroup>
+
+Alternativ kannst du das vollständige `pydantic-ai`-Paket installieren, das die OpenAI-Extras enthält.
+
+Füge deinen Venice-API-Schlüssel zur Umgebung hinzu:
+
+```bash
+export VENICE_API_KEY=your-venice-api-key
+```
+
+<Warning>
+Halte API-Schlüssel aus der Versionskontrolle heraus. Bevorzuge in der Produktion Umgebungsvariablen oder einen Secret Manager.
+</Warning>
+
+## Venice als Modell-Provider konfigurieren
+
+Venice spricht die OpenAI Chat Completions API. Nutze `OpenAIChatModel` mit `OpenAIProvider` und der Base URL von Venice:
+
+```python
+import os
+
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+model = OpenAIChatModel(
+    "venice-uncensored",
+    provider=OpenAIProvider(
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+)
+
+agent = Agent(
+    model,
+    instructions="Du bist ein prägnanter, datenschutzbewusster Assistent.",
+)
+```
+
+<Note>
+Verwende `OpenAIChatModel` (Chat Completions), nicht `OpenAIResponsesModel` / den `openai:`-Kurzschreibweise. Venices primärer Kompatibilitätspfad ist `/chat/completions`. Wenn du Chat Completions festlegst, vermeidest du Responses-spezifisches Verhalten, das OpenAI-Standardmodelle in neueren PydanticAI-Versionen nutzen.
+</Note>
+
+### Umgebungsvariablen
+
+`OpenAIProvider` liest auch `OPENAI_API_KEY` und `OPENAI_BASE_URL`. So kannst du Venice statt über Argumente im Code konfigurieren:
+
+```bash
+export OPENAI_API_KEY=your-venice-api-key
+export OPENAI_BASE_URL=https://api.venice.ai/api/v1
+```
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+
+agent = Agent(
+    OpenAIChatModel("venice-uncensored"),
+    instructions="Du bist ein prägnanter, datenschutzbewusster Assistent.",
+)
+```
+
+## Einen Agenten ausführen
+
+```python
+result = agent.run_sync("Erkläre Zero Data Retention in zwei Sätzen.")
+print(result.output)
+print(result.usage)
+```
+
+Async-Nutzung folgt demselben Muster mit `await agent.run(...)`:
+
+```python
+import asyncio
+
+async def main() -> None:
+    result = await agent.run("Welche Privacy-Stufen bietet Venice?")
+    print(result.output)
+
+asyncio.run(main())
+```
+
+## Eine Antwort streamen
+
+Verwende `run_stream`, wenn du Tokens erhalten möchtest, sobald sie eintreffen:
+
+```python
+import asyncio
+
+async def main() -> None:
+    async with agent.run_stream("Schreibe ein kurzes Gedicht über private KI.") as response:
+        async for text in response.stream_text():
+            print(text, end="", flush=True)
+
+asyncio.run(main())
+```
+
+## Structured Output
+
+Übergib ein Pydantic-Modell als `output_type`, um die finale Antwort des Agenten zu validieren:
+
+```python
+import os
+
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+
+class PrivacySummary(BaseModel):
+    summary: str = Field(description="Überblick in einem Satz")
+    benefits: list[str] = Field(description="Wichtigste Privacy-Vorteile")
+    recommendation: str = Field(description="Wann dieser Ansatz zu wählen ist")
+
+
+model = OpenAIChatModel(
+    "zai-org-glm-5-1",
+    provider=OpenAIProvider(
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+)
+
+agent = Agent(
+    model,
+    output_type=PrivacySummary,
+    instructions="Extrahiere eine strukturierte Zusammenfassung aus der Anfrage des Nutzers.",
+)
+
+result = agent.run_sync("Vergleiche private Inferenz mit Providern, die Chat-Logs aufbewahren.")
+print(result.output.summary)
+print(result.output.benefits)
+```
+
+Bevor du in der Produktion auf toolbasierte Structured Outputs setzt, wirf einen Blick auf Modelle, die [Structured Responses](/guides/features/structured-responses) und [Function Calling](/guides/features/function-calling) unterstützen.
+
+## Tools
+
+Registriere Tools mit `@agent.tool_plain` (ohne Agent-Kontext) oder `@agent.tool` (benötigt `RunContext`):
+
+```python
+import os
+from dataclasses import dataclass
+
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+
+@dataclass
+class SupportDeps:
+    user_id: str
+
+
+model = OpenAIChatModel(
+    "zai-org-glm-5-1",
+    provider=OpenAIProvider(
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+)
+
+agent = Agent(
+    model,
+    deps_type=SupportDeps,
+    instructions="Hilf Nutzern, ein Venice-Modell auszuwählen. Nutze Tools, wenn du Fakten brauchst.",
+)
+
+
+@agent.tool_plain
+def list_budget_models() -> list[str]:
+    """Gibt budgetfreundliche IDs von Venice-Textmodellen zurück."""
+    return ["venice-uncensored", "qwen3-5-9b"]
+
+
+@agent.tool
+def get_user_tier(ctx: RunContext[SupportDeps]) -> str:
+    """Gibt die Account-Stufe des aufrufenden Nutzers zurück."""
+    return "pro" if ctx.deps.user_id.startswith("pro_") else "standard"
+
+
+result = agent.run_sync(
+    "Welche günstigen Venice-Modelle sollte ich ausprobieren, und in welcher Stufe bin ich?",
+    deps=SupportDeps(user_id="pro_42"),
+)
+print(result.output)
+```
+
+## Venice-spezifische Parameter
+
+Übergib Venice-eigene Optionen über `ModelSettings.extra_body`. Aktiviere zum Beispiel die integrierte Websuche mit `venice_parameters`:
+
+```python
+import os
+
+from pydantic_ai import Agent, ModelSettings
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+model = OpenAIChatModel(
+    "venice-uncensored",
+    provider=OpenAIProvider(
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+)
+
+agent = Agent(
+    model,
+    model_settings=ModelSettings(
+        extra_body={
+            "venice_parameters": {
+                "enable_web_search": "auto",
+            }
+        }
+    ),
+)
+
+result = agent.run_sync("Welche bemerkenswerten KI-Privacy-Entwicklungen gab es diese Woche?")
+print(result.output)
+```
+
+Du kannst die Einstellungen auch pro Lauf überschreiben:
+
+```python
+result = agent.run_sync(
+    "Fasse die heutigen Schlagzeilen zu dezentraler KI zusammen.",
+    model_settings=ModelSettings(
+        extra_body={"venice_parameters": {"enable_web_search": "on"}}
+    ),
+)
+```
+
+Die vollständige Liste der `venice_parameters` (Web-Scraping, Zitate, Charaktere, Thinking-Controls und E2EE-Toggles) findest du in der [API-Spezifikation](/api-reference/api-spec).
+
+## Empfohlene Modelle
+
+| Anwendungsfall | Modell | Warum |
+| --- | --- | --- |
+| Allgemeine Agenten | `venice-uncensored` | Schnell, günstig, unzensiert |
+| Tool Calling / Structured Output | `zai-org-glm-5-1` | Starkes privates Flaggschiff für Agenten |
+| Komplexes Reasoning | `zai-org-glm-5-1` | Bessere mehrstufige Planung |
+| Budget / hohes Volumen | `qwen3-5-9b` | Niedrige Kosten pro Token |
+| Code-orientierte Agenten | `qwen3-coder-480b-a35b-instruct` | Für Code optimiert |
+
+Modell-IDs ändern sich im Laufe der Zeit — verifiziere aktuelle IDs mit [`GET /models`](/api-reference/endpoint/models/list) oder in der [Modellübersicht](/models/overview).
+
+## Privacy-Vorteil
+
+PydanticAI wird häufig für Agenten eingesetzt, die auf Anwendungsdaten, Nutzerkontext oder interne Tools zugreifen. In Kombination mit Venice bleibt dieser Workflow auf privater, unzensierter Inferenz:
+
+- **Zero Data Retention** bei privaten Modellen — Prompts und Tool-Payloads werden nach der Anfrage nicht gespeichert
+- **Unzensierte Analyse**, wenn Agenten schonungslose Kritik oder Red-Teaming liefern sollen
+- **OpenAI-kompatible Infrastruktur**, sodass du bestehende PydanticAI-Apps migrieren kannst, indem du lediglich Provider-Base-URL und API-Schlüssel änderst
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized">
+    Prüfe, ob `VENICE_API_KEY` (oder `OPENAI_API_KEY`) in dem Prozess gesetzt ist, der den Agenten ausführt. Starte die Shell oder den Prozess nach dem Ändern von Umgebungsvariablen neu.
+  </Accordion>
+
+  <Accordion title="Modell nicht gefunden oder unerwartete Endpunkt-Fehler">
+    Verwende eine aktuelle Modell-ID von der [Modell-Seite](/models/overview). Setze `base_url` auf `https://api.venice.ai/api/v1` ohne abschließenden Pfad — PydanticAI hängt `/chat/completions` selbst an.
+  </Accordion>
+
+  <Accordion title="Fehler mit Responses API / openai:-Präfix">
+    Bevorzuge `OpenAIChatModel` mit einem expliziten `OpenAIProvider`. Vermeide die einfache `openai:`-Agent-Kurzschreibweise, die möglicherweise OpenAIs Responses API statt Chat Completions anspricht.
+  </Accordion>
+
+  <Accordion title="Tools oder Structured Output werden ignoriert">
+    Wähle ein Modell, das [Function Calling](/guides/features/function-calling) unterstützt, beschreibe in `instructions`, wann Tools ausgeführt werden sollen, und halte Tool-Docstrings präzise — PydanticAI erzeugt JSON-Schemas aus Signaturen und Docs.
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="PydanticAI Docs" icon="book" href="https://ai.pydantic.dev/">
+    Agenten, Tools, Abhängigkeiten und Output-Typen
+  </Card>
+  <Card title="Venice-Modelle" icon="database" href="/models/overview">
+    Modelle und unterstützte Funktionen durchsuchen
+  </Card>
+</CardGroup>
