@@ -1,0 +1,240 @@
+---
+title: "Mastra 통합"
+description: "Venice의 프라이빗한 OpenAI 호환 모델을 사용해 Mastra로 TypeScript 에이전트, 도구, 워크플로를 구축하세요."
+"og:title": "Mastra 통합 | Venice API Docs"
+"og:description": "Venice AI의 프라이빗 모델로 구동되는 Mastra 에이전트와 워크플로를 구축하세요"
+---
+
+[Mastra](https://mastra.ai/)는 AI 에이전트, 도구, 워크플로를 구축하기 위한 TypeScript 프레임워크입니다. 커스텀 OpenAI 호환 모델 endpoint를 구성하여 Venice에 연결하세요.
+
+## 사전 요구 사항
+
+- Node.js 22.18 이상
+- [Venice API 키](/guides/getting-started/generating-api-key)
+
+## Mastra 프로젝트 생성
+
+<CodeGroup>
+```bash npm
+npm create mastra@latest
+```
+
+```bash pnpm
+pnpm create mastra
+```
+
+```bash yarn
+yarn create mastra
+```
+
+```bash bun
+bunx create-mastra
+```
+</CodeGroup>
+
+생성된 프로젝트의 `.env` 파일에 Venice API 키를 추가하세요:
+
+```bash
+VENICE_API_KEY=your-venice-api-key
+```
+
+<Warning>
+`.env` 파일은 소스 관리에서 제외하세요. 브라우저 측 코드에 Venice API 키를 노출하지 마세요.
+</Warning>
+
+## Venice로 구동되는 에이전트 생성
+
+에이전트를 생성하고 모델 구성을 Venice API로 지정하세요:
+
+```typescript
+// src/mastra/agents/venice-agent.ts
+import { Agent } from '@mastra/core/agent'
+
+export const veniceAgent = new Agent({
+  id: 'venice-agent',
+  name: 'Venice Agent',
+  instructions: `
+    You are a concise, privacy-respecting assistant.
+    Give accurate answers and say when you are uncertain.
+  `,
+  model: {
+    id: 'venice/venice-uncensored',
+    url: 'https://api.venice.ai/api/v1',
+    apiKey: process.env.VENICE_API_KEY,
+  },
+})
+```
+
+`id`의 첫 번째 세그먼트는 Mastra의 라우팅 레이블입니다. Mastra는 나머지 모델 ID인 `venice-uncensored`를 Venice로 전송합니다.
+
+<Note>
+`url`은 위에 표시된 기본 API URL로 설정하세요. `/chat/completions`를 덧붙이지 마세요. Mastra가 해당 경로를 추가합니다.
+</Note>
+
+Mastra 인스턴스에 에이전트를 등록하세요:
+
+```typescript
+// src/mastra/index.ts
+import { Mastra } from '@mastra/core'
+import { veniceAgent } from './agents/venice-agent'
+
+export const mastra = new Mastra({
+  agents: { veniceAgent },
+})
+```
+
+개발 서버를 시작하고 터미널에 표시된 URL을 열어 Mastra Studio에서 에이전트를 테스트하세요:
+
+```bash
+npm run dev
+```
+
+## 응답 생성
+
+등록된 에이전트를 가져와 `generate()`를 호출하세요:
+
+```typescript
+import { mastra } from './src/mastra/index'
+
+const agent = mastra.getAgentById('venice-agent')
+const result = await agent.generate(
+  'Explain why zero data retention matters in two sentences.',
+)
+
+console.log(result.text)
+console.log(result.usage)
+```
+
+## 응답 스트리밍
+
+출력이 도착하는 대로 표시하려면 `stream()`을 사용하세요:
+
+```typescript
+const agent = mastra.getAgentById('venice-agent')
+const result = await agent.stream(
+  'Write a short poem about private AI inference.',
+)
+
+for await (const chunk of result.textStream) {
+  process.stdout.write(chunk)
+}
+```
+
+## 도구 추가
+
+Mastra 도구는 Zod 스키마를 사용해 입력과 출력을 검증합니다. 에이전트에 도구를 연결할 때는 함수 호출을 지원하는 Venice 모델을 사용하세요.
+
+```typescript
+// src/mastra/tools/model-info.ts
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+export const modelInfoTool = createTool({
+  id: 'model-info',
+  description: 'Returns a short description of a Venice model',
+  inputSchema: z.object({
+    model: z.string().describe('A Venice model ID'),
+  }),
+  outputSchema: z.object({
+    description: z.string(),
+  }),
+  execute: async ({ model }) => {
+    const descriptions: Record<string, string> = {
+      'venice-uncensored': 'A fast, uncensored general-purpose model.',
+      'zai-org-glm-5-1': 'A private model for reasoning and tool use.',
+    }
+
+    return {
+      description: descriptions[model] ?? `No description found for ${model}.`,
+    }
+  },
+})
+```
+
+에이전트에 도구를 연결하세요:
+
+```typescript
+// src/mastra/agents/model-guide-agent.ts
+import { Agent } from '@mastra/core/agent'
+import { modelInfoTool } from '../tools/model-info'
+
+export const modelGuideAgent = new Agent({
+  id: 'model-guide-agent',
+  name: 'Venice Model Guide',
+  instructions: 'Help users choose a Venice model. Use modelInfoTool when needed.',
+  model: {
+    id: 'venice/zai-org-glm-5-1',
+    url: 'https://api.venice.ai/api/v1',
+    apiKey: process.env.VENICE_API_KEY,
+  },
+  tools: { modelInfoTool },
+})
+```
+
+## 구조화된 출력 생성
+
+검증된 데이터를 받으려면 Zod 스키마를 `structuredOutput`으로 전달하세요:
+
+```typescript
+import { z } from 'zod'
+
+const result = await veniceAgent.generate(
+  'Compare private and data-retaining AI inference.',
+  {
+    structuredOutput: {
+      schema: z.object({
+        summary: z.string(),
+        privacyBenefits: z.array(z.string()),
+        recommendation: z.string(),
+      }),
+    },
+  },
+)
+
+console.log(result.object)
+```
+
+선택한 모델이 API의 구조화된 출력 모드를 지원하지 않는 경우, `structuredOutput` 내에서 `jsonPromptInjection: true`로 설정하여 Mastra가 대신 프롬프트에 스키마를 추가하도록 하세요.
+
+## 모델 변경
+
+다른 Venice 텍스트 모델을 사용하려면 `venice/` 라우팅 접두사를 유지하고 나머지 모델 ID를 교체하세요:
+
+```typescript
+model: {
+  id: 'venice/qwen3-5-9b',
+  url: 'https://api.venice.ai/api/v1',
+  apiKey: process.env.VENICE_API_KEY,
+}
+```
+
+[사용 가능한 Venice 모델](/models/overview)을 살펴보고 도구 호출, 비전, 구조화된 출력에 사용할 모델을 선택하기 전에 각 기능을 확인하세요.
+
+## 문제 해결
+
+<AccordionGroup>
+  <Accordion title="API가 401 Unauthorized를 반환합니다">
+    Mastra가 실행되는 환경에 `VENICE_API_KEY`가 존재하는지 확인한 다음, `.env`를 변경한 후 개발 서버를 다시 시작하세요.
+  </Accordion>
+
+  <Accordion title="API가 모델이 존재하지 않는다고 보고합니다">
+    [모델 페이지](/models/overview)에 표시된 정확한 모델 ID를 사용하세요. Mastra에서는 예를 들어 `venice/venice-uncensored`처럼 `venice/` 접두사를 붙이세요.
+  </Accordion>
+
+  <Accordion title="요청이 404 Not Found를 반환합니다">
+    모델 URL을 `https://api.venice.ai/api/v1`로 설정하세요. 전체 `/chat/completions` endpoint는 사용하지 마세요.
+  </Accordion>
+
+  <Accordion title="에이전트가 도구를 호출하지 않습니다">
+    함수 호출을 지원하는 모델을 선택하고, 에이전트가 언제 도구를 사용해야 하는지 instructions에 설명한 뒤, `createTool()`로 도구를 정의하세요.
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Mastra 문서" icon="book" href="https://mastra.ai/docs">
+    Mastra 에이전트, 도구, 워크플로에 대해 자세히 알아보기
+  </Card>
+  <Card title="Venice 모델" icon="database" href="/models/overview">
+    모델과 지원되는 기능 둘러보기
+  </Card>
+</CardGroup>

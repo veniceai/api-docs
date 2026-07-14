@@ -1,0 +1,240 @@
+---
+title: "Mastra 集成"
+description: "使用 Mastra 与 Venice 私有的、兼容 OpenAI 的模型构建 TypeScript 智能体、工具和工作流。"
+"og:title": "Mastra Integration | Venice API Docs"
+"og:description": "构建由 Venice AI 私有模型驱动的 Mastra 智能体和工作流"
+---
+
+[Mastra](https://mastra.ai/) 是一个用于构建 AI 智能体、工具和工作流的 TypeScript 框架。通过配置自定义的 OpenAI 兼容模型端点，即可将其接入 Venice。
+
+## 前置条件
+
+- Node.js 22.18 或更高版本
+- 一个 [Venice API 密钥](/guides/getting-started/generating-api-key)
+
+## 创建 Mastra 项目
+
+<CodeGroup>
+```bash npm
+npm create mastra@latest
+```
+
+```bash pnpm
+pnpm create mastra
+```
+
+```bash yarn
+yarn create mastra
+```
+
+```bash bun
+bunx create-mastra
+```
+</CodeGroup>
+
+将您的 Venice API 密钥添加到生成项目的 `.env` 文件中：
+
+```bash
+VENICE_API_KEY=your-venice-api-key
+```
+
+<Warning>
+请勿将 `.env` 提交到源代码管理中。不要在浏览器端代码中暴露您的 Venice API 密钥。
+</Warning>
+
+## 创建由 Venice 驱动的智能体
+
+创建一个智能体，并将其模型配置指向 Venice API：
+
+```typescript
+// src/mastra/agents/venice-agent.ts
+import { Agent } from '@mastra/core/agent'
+
+export const veniceAgent = new Agent({
+  id: 'venice-agent',
+  name: 'Venice Agent',
+  instructions: `
+    You are a concise, privacy-respecting assistant.
+    Give accurate answers and say when you are uncertain.
+  `,
+  model: {
+    id: 'venice/venice-uncensored',
+    url: 'https://api.venice.ai/api/v1',
+    apiKey: process.env.VENICE_API_KEY,
+  },
+})
+```
+
+`id` 的第一段是 Mastra 的路由标签。Mastra 会将剩余的模型 ID `venice-uncensored` 发送给 Venice。
+
+<Note>
+将 `url` 设置为上面显示的基础 API 地址。不要附加 `/chat/completions`；Mastra 会自动添加该路径。
+</Note>
+
+在您的 Mastra 实例中注册该智能体：
+
+```typescript
+// src/mastra/index.ts
+import { Mastra } from '@mastra/core'
+import { veniceAgent } from './agents/venice-agent'
+
+export const mastra = new Mastra({
+  agents: { veniceAgent },
+})
+```
+
+启动开发服务器，然后打开终端中显示的 URL，在 Mastra Studio 中测试该智能体：
+
+```bash
+npm run dev
+```
+
+## 生成响应
+
+获取已注册的智能体并调用 `generate()`：
+
+```typescript
+import { mastra } from './src/mastra/index'
+
+const agent = mastra.getAgentById('venice-agent')
+const result = await agent.generate(
+  'Explain why zero data retention matters in two sentences.',
+)
+
+console.log(result.text)
+console.log(result.usage)
+```
+
+## 流式响应
+
+当您想要在输出到达时逐步显示时，使用 `stream()`：
+
+```typescript
+const agent = mastra.getAgentById('venice-agent')
+const result = await agent.stream(
+  'Write a short poem about private AI inference.',
+)
+
+for await (const chunk of result.textStream) {
+  process.stdout.write(chunk)
+}
+```
+
+## 添加工具
+
+Mastra 工具使用 Zod schema 来校验输入和输出。当为智能体附加工具时，请使用支持函数调用的 Venice 模型。
+
+```typescript
+// src/mastra/tools/model-info.ts
+import { createTool } from '@mastra/core/tools'
+import { z } from 'zod'
+
+export const modelInfoTool = createTool({
+  id: 'model-info',
+  description: 'Returns a short description of a Venice model',
+  inputSchema: z.object({
+    model: z.string().describe('A Venice model ID'),
+  }),
+  outputSchema: z.object({
+    description: z.string(),
+  }),
+  execute: async ({ model }) => {
+    const descriptions: Record<string, string> = {
+      'venice-uncensored': 'A fast, uncensored general-purpose model.',
+      'zai-org-glm-5-1': 'A private model for reasoning and tool use.',
+    }
+
+    return {
+      description: descriptions[model] ?? `No description found for ${model}.`,
+    }
+  },
+})
+```
+
+将工具附加到智能体：
+
+```typescript
+// src/mastra/agents/model-guide-agent.ts
+import { Agent } from '@mastra/core/agent'
+import { modelInfoTool } from '../tools/model-info'
+
+export const modelGuideAgent = new Agent({
+  id: 'model-guide-agent',
+  name: 'Venice Model Guide',
+  instructions: 'Help users choose a Venice model. Use modelInfoTool when needed.',
+  model: {
+    id: 'venice/zai-org-glm-5-1',
+    url: 'https://api.venice.ai/api/v1',
+    apiKey: process.env.VENICE_API_KEY,
+  },
+  tools: { modelInfoTool },
+})
+```
+
+## 生成结构化输出
+
+通过 `structuredOutput` 传入一个 Zod schema，即可获得已校验的数据：
+
+```typescript
+import { z } from 'zod'
+
+const result = await veniceAgent.generate(
+  'Compare private and data-retaining AI inference.',
+  {
+    structuredOutput: {
+      schema: z.object({
+        summary: z.string(),
+        privacyBenefits: z.array(z.string()),
+        recommendation: z.string(),
+      }),
+    },
+  },
+)
+
+console.log(result.object)
+```
+
+如果所选模型不支持 API 的结构化输出模式，请在 `structuredOutput` 中设置 `jsonPromptInjection: true`，让 Mastra 改为将 schema 添加到提示词中。
+
+## 更换模型
+
+若要使用其他 Venice 文本模型，请保留 `venice/` 路由前缀，并替换剩余的模型 ID：
+
+```typescript
+model: {
+  id: 'venice/qwen3-5-9b',
+  url: 'https://api.venice.ai/api/v1',
+  apiKey: process.env.VENICE_API_KEY,
+}
+```
+
+在为工具调用、视觉或结构化输出选择模型之前，请浏览 [可用的 Venice 模型](/models/overview) 并查看它们的能力。
+
+## 故障排查
+
+<AccordionGroup>
+  <Accordion title="API 返回 401 Unauthorized">
+    请确认 `VENICE_API_KEY` 已在 Mastra 运行的环境中存在，并在修改 `.env` 后重启开发服务器。
+  </Accordion>
+
+  <Accordion title="API 报告该模型不存在">
+    请使用 [模型页面](/models/overview) 上显示的准确模型 ID。在 Mastra 中，为其加上 `venice/` 前缀，例如 `venice/venice-uncensored`。
+  </Accordion>
+
+  <Accordion title="请求返回 404 Not Found">
+    将模型 URL 设置为 `https://api.venice.ai/api/v1`。不要使用完整的 `/chat/completions` 端点。
+  </Accordion>
+
+  <Accordion title="智能体没有调用其工具">
+    选择支持函数调用的模型，在指令中说明智能体何时应使用该工具，并使用 `createTool()` 定义工具。
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Mastra 文档" icon="book" href="https://mastra.ai/docs">
+    了解更多关于 Mastra 智能体、工具和工作流的信息
+  </Card>
+  <Card title="Venice 模型" icon="database" href="/models/overview">
+    浏览模型及其支持的能力
+  </Card>
+</CardGroup>
