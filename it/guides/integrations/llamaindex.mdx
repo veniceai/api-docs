@@ -1,0 +1,333 @@
+---
+title: "Integrazione LlamaIndex"
+description: "Costruisci pipeline RAG, agenti e query engine con LlamaIndex usando i modelli chat e gli embedding privati e compatibili con OpenAI di Venice tramite il client OpenAILike."
+"og:title": "LlamaIndex Integration | Venice API Docs"
+"og:description": "Costruisci applicazioni LlamaIndex alimentate dai modelli privati e senza restrizioni di Venice AI"
+---
+
+[LlamaIndex](https://www.llamaindex.ai/) è un framework di dati per costruire pipeline RAG, agenti e query engine sui tuoi dati. Venice funziona come backend compatibile con OpenAI: punta i client LLM ed embedding `OpenAILike` al base URL di Venice e continua a usare il resto dell'API di LlamaIndex come al solito.
+
+## Prerequisiti
+
+- Python 3.9 o successivo
+- Una [chiave API Venice](/guides/getting-started/generating-api-key)
+
+## Setup
+
+Installa LlamaIndex con le integrazioni LLM ed embedding compatibili con OpenAI:
+
+<CodeGroup>
+```bash pip
+pip install llama-index llama-index-llms-openai-like llama-index-embeddings-openai-like
+```
+
+```bash uv
+uv add llama-index llama-index-llms-openai-like llama-index-embeddings-openai-like
+```
+</CodeGroup>
+
+Aggiungi la tua chiave API Venice all'ambiente:
+
+```bash
+export VENICE_API_KEY=your-venice-api-key
+```
+
+<Warning>
+Tieni le chiavi API fuori dal controllo di versione. In produzione, preferisci variabili d'ambiente o un secret manager.
+</Warning>
+
+## Configurare Venice come LLM
+
+Venice parla l'API OpenAI Chat Completions. Usa `OpenAILike` con il base URL di Venice e imposta `is_chat_model=True`:
+
+```python
+import os
+
+from llama_index.llms.openai_like import OpenAILike
+
+llm = OpenAILike(
+    model="venice-uncensored",
+    api_base="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    is_chat_model=True,
+    is_function_calling_model=True,
+    context_window=32768,
+    temperature=0.7,
+)
+
+response = llm.complete("Explain zero data retention in two sentences.")
+print(str(response))
+```
+
+<Note>
+Imposta `context_window` in base al modello che scegli: `OpenAILike` non può dedurlo per ID di modello non OpenAI. Imposta `is_function_calling_model=True` solo per i modelli che supportano il [function calling](/guides/features/function-calling).
+</Note>
+
+### Messaggi chat
+
+```python
+from llama_index.core.llms import ChatMessage
+
+messages = [
+    ChatMessage(role="system", content="You are a concise, privacy-respecting assistant."),
+    ChatMessage(role="user", content="Why does uncensored inference matter for research?"),
+]
+
+response = llm.chat(messages)
+print(response.message.content)
+```
+
+## Streaming
+
+```python
+for chunk in llm.stream_complete("Write a haiku about decentralization."):
+    print(chunk.delta, end="", flush=True)
+```
+
+## Impostazioni predefinite globali con Settings
+
+Imposta i modelli Venice una sola volta tramite `Settings` e ogni index, query engine e agente li userà:
+
+```python
+import os
+
+from llama_index.core import Settings
+from llama_index.llms.openai_like import OpenAILike
+from llama_index.embeddings.openai_like import OpenAILikeEmbedding
+
+Settings.llm = OpenAILike(
+    model="zai-org-glm-5-1",
+    api_base="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    is_chat_model=True,
+    is_function_calling_model=True,
+    context_window=32768,
+)
+
+Settings.embed_model = OpenAILikeEmbedding(
+    model_name="text-embedding-bge-m3",
+    api_base="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+)
+```
+
+## Embeddings
+
+```python
+import os
+
+from llama_index.embeddings.openai_like import OpenAILikeEmbedding
+
+embed_model = OpenAILikeEmbedding(
+    model_name="text-embedding-bge-m3",
+    api_base="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+)
+
+vector = embed_model.get_text_embedding("Venice AI provides private inference.")
+print(f"Embedding dimension: {len(vector)}")
+```
+
+## Pipeline RAG
+
+Costruisci un query engine con retrieval augmentation sui tuoi documenti. Usa i valori `Settings.llm` e `Settings.embed_model` configurati sopra:
+
+```python
+from llama_index.core import Document, VectorStoreIndex
+
+documents = [
+    Document(text="Venice AI provides private, uncensored AI inference with zero data retention."),
+    Document(text="The Venice API is OpenAI-compatible, supporting chat, images, audio, video, and embeddings."),
+    Document(text="Venice supports function calling, structured outputs, web search, and reasoning models."),
+    Document(text="Privacy tiers include Private (zero retention) and Anonymized (third-party processed)."),
+]
+
+index = VectorStoreIndex.from_documents(documents)
+query_engine = index.as_query_engine(similarity_top_k=2)
+
+response = query_engine.query("What privacy tiers does Venice offer?")
+print(str(response))
+```
+
+Per caricare i tuoi file da una directory, usa invece `SimpleDirectoryReader`:
+
+```python
+from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
+
+documents = SimpleDirectoryReader("./data").load_data()
+index = VectorStoreIndex.from_documents(documents)
+```
+
+## Agenti e tool
+
+Usa `FunctionAgent` per dare accesso ai tool ai modelli Venice. Scegli un modello che supporti il [function calling](/guides/features/function-calling):
+
+```python
+import asyncio
+import os
+
+from llama_index.core.agent.workflow import FunctionAgent
+from llama_index.llms.openai_like import OpenAILike
+
+
+def get_venice_model_price(model_id: str) -> str:
+    """Get the pricing for a Venice AI model."""
+    prices = {
+        "venice-uncensored": "Input: $0.20/1M, Output: $0.90/1M",
+        "zai-org-glm-5-1": "Input: $1.75/1M, Output: $5.50/1M",
+        "qwen3-5-9b": "Input: $0.10/1M, Output: $0.15/1M",
+    }
+    return prices.get(model_id, f"Model {model_id} not found in price list.")
+
+
+llm = OpenAILike(
+    model="zai-org-glm-5-1",
+    api_base="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    is_chat_model=True,
+    is_function_calling_model=True,
+    context_window=32768,
+)
+
+agent = FunctionAgent(
+    tools=[get_venice_model_price],
+    llm=llm,
+    system_prompt="You help users find the right Venice AI model. Use tools when needed.",
+)
+
+
+async def main() -> None:
+    response = await agent.run("How much does zai-org-glm-5-1 cost?")
+    print(str(response))
+
+
+asyncio.run(main())
+```
+
+## Output strutturato
+
+Avvolgi l'LLM con `as_structured_llm` per validare la risposta finale contro un modello Pydantic:
+
+```python
+import os
+
+from pydantic import BaseModel, Field
+from llama_index.core.llms import ChatMessage
+from llama_index.llms.openai_like import OpenAILike
+
+
+class PrivacySummary(BaseModel):
+    summary: str = Field(description="One-sentence overview")
+    benefits: list[str] = Field(description="Key privacy benefits")
+    recommendation: str = Field(description="When to choose this approach")
+
+
+llm = OpenAILike(
+    model="zai-org-glm-5-1",
+    api_base="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    is_chat_model=True,
+    is_function_calling_model=True,
+    context_window=32768,
+)
+
+structured_llm = llm.as_structured_llm(PrivacySummary)
+result = structured_llm.chat([
+    ChatMessage(role="user", content="Summarize why private inference beats providers that retain chat logs."),
+])
+
+summary = result.raw
+print(summary.summary)
+print(summary.benefits)
+```
+
+Prima di affidarti all'output strutturato in produzione, consulta i modelli che supportano le [risposte strutturate](/guides/features/structured-responses).
+
+## Parametri specifici di Venice
+
+Passa le opzioni esclusive di Venice tramite `additional_kwargs` usando `extra_body`. Ad esempio, abilita la web search integrata con `venice_parameters`:
+
+```python
+import os
+
+from llama_index.llms.openai_like import OpenAILike
+
+llm = OpenAILike(
+    model="venice-uncensored",
+    api_base="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    is_chat_model=True,
+    context_window=32768,
+    additional_kwargs={
+        "extra_body": {
+            "venice_parameters": {
+                "enable_web_search": "auto",
+            }
+        }
+    },
+)
+
+response = llm.complete("What are notable AI privacy developments this week?")
+print(str(response))
+```
+
+Puoi anche passare `extra_body` per singola chiamata:
+
+```python
+response = llm.complete(
+    "Summarize today's headlines about decentralized AI.",
+    extra_body={"venice_parameters": {"enable_web_search": "on"}},
+)
+```
+
+Consulta la [specifica dell'API](/api-reference/api-spec) per l'elenco completo di `venice_parameters` (web scraping, citazioni, personaggi, controlli di ragionamento e toggle E2EE).
+
+## Modelli consigliati
+
+| Caso d'uso | Modello | Perché |
+| --- | --- | --- |
+| Query generiche | `venice-uncensored` | Veloce, economico, senza restrizioni |
+| Agenti / tool calling | `zai-org-glm-5-1` | Solido modello di punta privato per agenti |
+| Ragionamento complesso | `zai-org-glm-5-1` | Migliore pianificazione multi-step |
+| Embeddings (RAG) | `text-embedding-bge-m3` | Embedding privati |
+| Budget / alto volume | `qwen3-5-9b` | Basso costo per token |
+| Agenti orientati al codice | `qwen3-coder-480b-a35b-instruct` | Ottimizzato per il codice |
+
+Gli ID dei modelli cambiano nel tempo: verifica quelli attuali con [`GET /models`](/api-reference/endpoint/models/list) o dalla [panoramica dei modelli](/models/overview).
+
+## Vantaggio in termini di privacy
+
+LlamaIndex viene tipicamente usato per costruire sistemi RAG su documenti privati, knowledge base interne e dati degli utenti. Abbinarlo a Venice mantiene quella pipeline su inferenza privata e senza restrizioni:
+
+- **Zero data retention** sui modelli privati: prompt, chunk recuperati e payload dei tool non vengono conservati dopo la richiesta
+- **Analisi senza restrizioni** quando i tuoi dati o le tue domande farebbero scattare i filtri di altri provider
+- **Plumbing compatibile con OpenAI** così puoi migrare le app LlamaIndex esistenti sostituendo i client LLM ed embedding con `OpenAILike`
+
+## Risoluzione dei problemi
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized">
+    Verifica che `VENICE_API_KEY` sia impostata nel processo che esegue la tua app. Riavvia la shell o il processo dopo aver modificato le variabili d'ambiente.
+  </Accordion>
+
+  <Accordion title="Modello non trovato o errori inattesi dell'endpoint">
+    Usa un ID di modello attuale dalla [pagina dei modelli](/models/overview). Imposta `api_base` a `https://api.venice.ai/api/v1` senza percorso finale: LlamaIndex accoda `/chat/completions`.
+  </Accordion>
+
+  <Accordion title="Errori di context window o token">
+    `OpenAILike` non può dedurre la context window per ID di modello non OpenAI. Imposta esplicitamente `context_window` in base al modello che stai usando.
+  </Accordion>
+
+  <Accordion title="I tool vengono ignorati">
+    Imposta `is_function_calling_model=True` e scegli un modello che supporti il [function calling](/guides/features/function-calling). Mantieni docstring precise per i tool: LlamaIndex costruisce gli schemi JSON dalle firme e dalla documentazione.
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Documentazione LlamaIndex" icon="book" href="https://docs.llamaindex.ai/">
+    Indici, query engine, agenti e workflow
+  </Card>
+  <Card title="Modelli Venice" icon="database" href="/models/overview">
+    Sfoglia i modelli e le capacità supportate
+  </Card>
+</CardGroup>
