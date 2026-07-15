@@ -74,6 +74,7 @@ Feature suffixes also work on model IDs, e.g. `venice-uncensored:web` enables we
 ## Key guides
 
 - Getting started: https://docs.venice.ai/overview/getting-started.md
+- VVV & DIEM (stake for daily API credit): https://docs.venice.ai/overview/vvv-diem.md
 - AI agents (Eliza, frameworks): https://docs.venice.ai/guides/integrations/ai-agents.md
 - Crypto RPC for agents: https://docs.venice.ai/guides/integrations/crypto-rpc-agents.md
 - Venice MCP server: https://docs.venice.ai/guides/integrations/venice-mcp.md
