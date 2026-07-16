@@ -1,0 +1,227 @@
+---
+title: "Prompt Enhancement"
+description: "Automatically rewrite image generation and edit prompts with Venice's enhance_prompt parameter to add clarifying visual detail and improve output quality."
+'og:title': "Prompt Enhancement | Venice API Docs"
+'og:description': "Learn how to use the enhance_prompt parameter on Venice's image generation and editing APIs to expand short prompts into richer, more detailed descriptions."
+---
+
+Prompt enhancement rewrites your prompt before image generation or editing to add clarifying visual detail, turning short or sparse descriptions into richer prompts that image models follow more reliably. Enable it by setting `enhance_prompt: true` on `POST /image/generate`, `POST /image/edit`, or `POST /image/multi-edit`.
+
+For image generation, this is the same enhancement that powers the "magic wand" in the Venice web app. For image edits, a vision-aware enhancer uses the input image or images to clarify your edit instruction.
+
+## When to use it
+
+Prompt enhancement is most useful when:
+
+- Your prompt is short (a few words or a single phrase) and you want the model to fill in composition, lighting, and mood.
+- You're building a product where end users type casual prompts that benefit from expansion.
+- You're editing an image and want the instruction rewritten with awareness of its visible content.
+- You want more consistent, detailed output without hand-writing long prompts.
+
+If you already send long, carefully crafted prompts, you'll usually get better control by leaving enhancement off.
+
+## Step 1: Send a request with enhancement enabled
+
+Add `enhance_prompt: true` to any standard image generation request.
+
+```bash
+curl https://api.venice.ai/api/v1/image/generate \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "venice-sd35",
+    "prompt": "a cabin in the woods",
+    "enhance_prompt": true,
+    "format": "webp"
+  }'
+```
+
+Venice rewrites `"a cabin in the woods"` into a more detailed prompt, then uses the rewritten text for generation. The rest of the request behaves exactly like a normal generation call.
+
+<Note>
+Enhancement adds up to ~30 seconds before generation starts, because the rewrite is produced by a separate model call. Account for this in client timeouts.
+</Note>
+
+## Step 2: Read the enhanced prompt from the response header
+
+When a rewrite is applied, Venice returns the final prompt URL-encoded in the `x-venice-enhanced-prompt` response header. Decode it to see, log, or display what was actually sent to the image model.
+
+<CodeGroup>
+```python Python
+import base64
+import os
+from urllib.parse import unquote
+
+import requests
+
+response = requests.post(
+    "https://api.venice.ai/api/v1/image/generate",
+    headers={
+        "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "model": "venice-sd35",
+        "prompt": "a cabin in the woods",
+        "enhance_prompt": True,
+        "format": "webp",
+    },
+)
+
+data = response.json()
+
+enhanced = response.headers.get("x-venice-enhanced-prompt")
+if enhanced:
+    print("Enhanced prompt:", unquote(enhanced))
+else:
+    print("No enhancement was applied; original prompt was used.")
+
+image_bytes = base64.b64decode(data["images"][0])
+with open("output.webp", "wb") as f:
+    f.write(image_bytes)
+```
+
+```javascript Node.js
+import fs from "fs";
+
+const response = await fetch("https://api.venice.ai/api/v1/image/generate", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    model: "venice-sd35",
+    prompt: "a cabin in the woods",
+    enhance_prompt: true,
+    format: "webp",
+  }),
+});
+
+const data = await response.json();
+
+const enhanced = response.headers.get("x-venice-enhanced-prompt");
+if (enhanced) {
+  console.log("Enhanced prompt:", decodeURIComponent(enhanced));
+} else {
+  console.log("No enhancement was applied; original prompt was used.");
+}
+
+const imageBuffer = Buffer.from(data.images[0], "base64");
+fs.writeFileSync("output.webp", imageBuffer);
+```
+</CodeGroup>
+
+The `x-venice-enhanced-prompt` header is only present when a rewrite was actually generated and applied. If enhancement is skipped or fails, the header is absent and your original prompt is used.
+
+## Using enhancement for image edits
+
+The edit endpoints use a vision-aware enhancer that analyzes the input image or images before rewriting the instruction. This helps turn a short request such as `"make it winter"` into a more specific edit while preserving relevant subjects and composition.
+
+For a single-image edit, include `enhance_prompt` in either a JSON or multipart request:
+
+```bash
+curl https://api.venice.ai/api/v1/image/edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -o edited.png \
+  -d '{
+    "image": "https://example.com/cabin.jpg",
+    "prompt": "make it winter",
+    "enhance_prompt": true
+  }'
+```
+
+For multi-edit, use the same parameter with the `images` array:
+
+```bash
+curl https://api.venice.ai/api/v1/image/multi-edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -o edited.png \
+  -d '{
+    "images": [
+      "https://example.com/cabin.jpg",
+      "https://example.com/snow-reference.jpg"
+    ],
+    "prompt": "make the first image match this winter atmosphere",
+    "enhance_prompt": true
+  }'
+```
+
+Both edit endpoints return the edited image as binary data. As with generation, inspect and URL-decode `x-venice-enhanced-prompt` to see the applied rewrite.
+
+## Behavior
+
+| Aspect | Behavior |
+|---|---|
+| Supported endpoints | `POST /image/generate`, `POST /image/edit`, and `POST /image/multi-edit` |
+| Default | `enhance_prompt` defaults to `false`; enhancement never happens unless you opt in. |
+| Fail-open | If the rewrite fails for any reason, generation or editing continues with your original prompt. The request does not error out because of enhancement. |
+| Image-aware edits | On edit requests, the enhancer analyzes the supplied image or images when rewriting the instruction. |
+| Character limit | For generation, the enhanced prompt is truncated to the selected model's `promptCharacterLimit` (see the [Models API](/api-reference/endpoint/models/list)). |
+| Safe mode | On generation requests, `safe_mode` is respected during enhancement. With `safe_mode: true`, the rewrite stays SFW. |
+| Response header | When applied, the final prompt is returned URL-encoded in `x-venice-enhanced-prompt`. |
+
+## Pricing
+
+Prompt enhancement is charged as a flat surcharge of **\$0.04 per applied rewrite**, on top of the normal image generation cost.
+
+Billing rules:
+
+- You are only charged when a rewrite is actually generated and applied. If enhancement is skipped or fails open to your original prompt, there is no surcharge.
+- The surcharge is billed on the image success path. If the generation ends in a content violation, the enhancement is not charged.
+- When you request multiple images with `variants`, the shared rewrite is billed **at most once** per request, not once per variant.
+
+See [Pricing](/overview/pricing) for image generation base costs.
+
+## Using enhancement with variants
+
+Enhancement pairs well with `variants` when exploring an idea: one rewrite is generated, then reused across every variant, so you pay the \$0.04 surcharge a single time.
+
+```bash
+curl https://api.venice.ai/api/v1/image/generate \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "venice-sd35",
+    "prompt": "a cabin in the woods",
+    "enhance_prompt": true,
+    "variants": 4
+  }'
+```
+
+<Note>
+`variants` is only supported when `return_binary` is `false`. See [Image Generation](/guides/media/image-generation) for details.
+</Note>
+
+## Prompting tips
+
+1. Keep your input prompt focused on the subject and any non-negotiable details. Enhancement fills in style, lighting, and composition around it.
+2. Log the `x-venice-enhanced-prompt` header during development so you can learn what enhancement adds and decide when you'd rather write prompts by hand.
+3. For repeatable generation results across a batch, generate once with enhancement, capture the enhanced prompt from the header, then reuse that exact text with `enhance_prompt` off.
+4. For image generation, combine the captured prompt with a fixed `seed` to compare other parameter changes without re-rewriting.
+
+## Errors
+
+Enhancement itself fails open and does not surface its own error codes. Standard image generation errors still apply.
+
+| Status | Meaning | Action |
+|---|---|---|
+| `400` | Invalid request parameters | Check field names, types, and model-specific constraints |
+| `401` | Authentication failed or model requires a higher access tier | Check your API key and model access |
+| `402` | Insufficient balance | Add credits at [venice.ai/settings/api](https://venice.ai/settings/api) |
+| `429` | Rate limit exceeded or model overloaded | Retry with backoff; check `Retry-After` header |
+| `500` | Inference processing failed | Retry the request |
+| `503` | Model at capacity | Retry after a short delay |
+
+See the full [Error Codes](/api-reference/error-codes) reference for details.
+
+## Related
+
+- [Image Generation](/guides/media/image-generation) — the full generation guide, including sizing, styles, and binary responses.
+- [Image Editing](/guides/media/image-editing) — single-image edits, layered multi-edit requests, and binary responses.
+- [Generate Images (API reference)](/api-reference/endpoint/image/generate) — every request and response field for `POST /image/generate`.
+- [Edit Image (API reference)](/api-reference/endpoint/image/edit) — request fields for `POST /image/edit`.
+- [Multi-Edit Image (API reference)](/api-reference/endpoint/image/multi-edit) — request fields for `POST /image/multi-edit`.
+- [Image Models](/models/image) — model list, pricing, and per-model `promptCharacterLimit`.
