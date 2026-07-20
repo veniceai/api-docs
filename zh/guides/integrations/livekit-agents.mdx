@@ -1,0 +1,254 @@
+---
+title: "LiveKit Agents"
+description: "使用 LiveKit Agents 和 Venice 构建实时语音智能体，通过 OpenAI 兼容插件在 STT-LLM-TTS 管线中串联 Venice 的 STT、LLM 和 TTS。"
+"og:title": "LiveKit Agents | Venice API 文档"
+"og:description": "使用 Venice 私密、无审查的 STT、LLM 和 TTS 模型驱动 LiveKit 语音智能体。"
+---
+
+[LiveKit Agents](https://docs.livekit.io/agents/) 是一个用于构建实时语音 AI 的框架。由于 Venice 在对话、转录和语音方面完全兼容 OpenAI，你可以通过将 `livekit-plugins-openai` 插件指向 Venice 的基础 URL，来驱动语音智能体的全部三个阶段——**语音转文本 (STT)**、**LLM** 和 **文本转语音 (TTS)**。
+
+<Note>
+Venice 适用于 LiveKit Agents 中的 **STT-LLM-TTS 管线** 架构。Venice 未提供 OpenAI Realtime（语音到语音）WebSocket API，因此 `RealtimeModel` / 多模态路径不可用。请使用下方展示的组件化管线——它让你完全掌控每个模型，并将推理保留在 Venice 的私有基础设施上。
+</Note>
+
+## Venice 如何映射到 LiveKit Agents
+
+| LiveKit 组件 | Venice 端点 | 插件类 |
+|-------------------|-----------------|--------------|
+| LLM | `POST /chat/completions` | `openai.LLM` |
+| STT | `POST /audio/transcriptions` | `openai.STT` |
+| TTS | `POST /audio/speech` | `openai.TTS` |
+| 轮次检测 (VAD) | —（本地运行） | `silero.VAD` |
+
+## 安装配置
+
+安装框架及下方使用到的插件：
+
+```bash
+pip install \
+  "livekit-agents[openai,silero,turn-detector]" \
+  livekit-plugins-openai \
+  livekit-plugins-silero
+```
+
+设置你的 Venice API 密钥以及 LiveKit 连接信息：
+
+```bash
+export VENICE_API_KEY="your-venice-api-key"
+
+# LiveKit Cloud or self-hosted server
+export LIVEKIT_URL="wss://your-project.livekit.cloud"
+export LIVEKIT_API_KEY="your-livekit-api-key"
+export LIVEKIT_API_SECRET="your-livekit-api-secret"
+```
+
+<Note>
+当省略 `api_key` 时，OpenAI 插件会回退到 `OPENAI_API_KEY`。由于你将其指向 Venice，请始终显式传入 `api_key`（否则密钥会从错误的变量中读取）。下方示例读取的是 `VENICE_API_KEY`。
+</Note>
+
+## 完整语音智能体
+
+这是一个完整的语音智能体：使用 Venice STT 转录、Venice LLM 思考、Venice TTS 发声。Silero 提供本地语音活动检测，让批量式 STT 知道一个轮次何时结束。
+
+```python
+import os
+
+from livekit import agents
+from livekit.agents import Agent, AgentSession, RoomInputOptions
+from livekit.plugins import openai, silero
+
+VENICE_BASE_URL = "https://api.venice.ai/api/v1"
+VENICE_API_KEY = os.environ["VENICE_API_KEY"]
+
+
+class Assistant(Agent):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions="You are a helpful, concise voice assistant powered by Venice.",
+        )
+
+
+async def entrypoint(ctx: agents.JobContext):
+    session = AgentSession(
+        # Speech-to-text — Venice /audio/transcriptions
+        stt=openai.STT(
+            model="nvidia/parakeet-tdt-0.6b-v3",
+            base_url=VENICE_BASE_URL,
+            api_key=VENICE_API_KEY,
+        ),
+        # LLM — Venice /chat/completions (streaming + tool calling supported)
+        # Venice's private, uncensored model feeding the STT-LLM-TTS pipeline
+        llm=openai.LLM(
+            model="venice-uncensored-1-2",
+            base_url=VENICE_BASE_URL,
+            api_key=VENICE_API_KEY,
+        ),
+        # Text-to-speech — Venice /audio/speech
+        tts=openai.TTS(
+            model="tts-kokoro",
+            voice="af_sky",
+            base_url=VENICE_BASE_URL,
+            api_key=VENICE_API_KEY,
+        ),
+        # Local VAD handles endpointing for the batch STT
+        vad=silero.VAD.load(),
+    )
+
+    await session.start(
+        room=ctx.room,
+        agent=Assistant(),
+        room_input_options=RoomInputOptions(),
+    )
+
+    await session.generate_reply(
+        instructions="Greet the user and offer your help."
+    )
+
+
+if __name__ == "__main__":
+    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+```
+
+在开发环境中运行它：
+
+```bash
+python agent.py dev
+```
+
+## 配置各个组件
+
+### LLM
+
+LLM 的映射最为直接——Venice `/chat/completions` 支持 SSE 流式传输、工具调用和视觉，这些能力 LiveKit 都能直接使用。`venice-uncensored-1-2` 让推理保持私密且无审查，同时喂给 TTS 管线；只有在需要更短首 token 时间时才考虑 `flash` 级模型。
+
+```python
+llm = openai.LLM(
+    model="venice-uncensored-1-2",
+    base_url="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    temperature=0.7,
+)
+```
+
+通过 `extra_body` 传入 Venice 特有的选项（网络搜索、角色人设、思考控制）：
+
+```python
+llm = openai.LLM(
+    model="venice-uncensored-1-2",
+    base_url="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    extra_body={"venice_parameters": {"enable_web_search": "auto"}},
+)
+```
+
+### 语音转文本
+
+LiveKit 的 OpenAI STT 会在每个语音片段上调用 `/audio/transcriptions`，因此需要 VAD（上文的 Silero）来检测轮次何时结束。请将默认模型覆盖为一个 Venice STT 模型。`nvidia/parakeet-tdt-0.6b-v3` 是最小、延迟最低的选择；如果你追求更高的准确率，`stt-xai-v1` 和 `elevenlabs/scribe-v2` 是更新的替代方案。
+
+```python
+stt = openai.STT(
+    model="nvidia/parakeet-tdt-0.6b-v3",
+    base_url="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    language="en",          # or detect_language=True
+    use_realtime=False,     # Venice has no realtime STT socket; keep batch mode
+)
+```
+
+### 文本转语音
+
+LiveKit 的 OpenAI TTS 会调用 `/audio/speech`。在 Venice 中，声音与模型绑定——请传入同一个模型的 `model`/`voice` 对。`tts-kokoro` 让语音阶段保持私密且无审查，从而可以原封不动地朗读 LLM 的输出；请求 `pcm` 可以省去 MP3 解码步骤，减少少量延迟。更快的第三方供应商声音（如 Gemini）可能会做内容过滤，若你需要无审查语音则应避免使用。
+
+```python
+tts = openai.TTS(
+    model="tts-kokoro",
+    voice="af_sky",
+    base_url="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    response_format="pcm",  # mp3 | opus | aac | flac | wav | pcm
+    speed=1.0,
+)
+```
+
+## 推荐模型
+
+模型 ID 会随时间变化——**请在运行时通过 `GET /models?type=...` 和 `GET /models/traits` 发现当前可用选项**，而不是硬编码。对于语音智能体，请优先选择低延迟层级（名称包含 `flash`、`turbo`、`mini` 或参数量较小的模型），因为响应感受取决于首 token 时间和 TTS 速度。以下是当前目录中的合理起点：
+
+| 组件 | 模型 | 原因 |
+|-----------|-------|-----|
+| LLM（私密 + 无审查，语音默认） | `venice-uncensored-1-2` | Venice 私密、无审查模型，喂给 TTS 管线 |
+| LLM（快速替代） | `gemini-3-5-flash`、`zai-org-glm-4.7-flash`、`deepseek-v4-flash` | Flash 级，用于降低首 token 时间 |
+| LLM（推理 / 工具） | `zai-org-glm-5-2`、`grok-4-5` | 近期旗舰，适合复杂工具调用 |
+| STT（最低延迟） | `nvidia/parakeet-tdt-0.6b-v3` | 小巧、快速、支持多语言 |
+| STT（较新 / 高准确率） | `stt-xai-v1`、`elevenlabs/scribe-v2` | 更新的转录模型 |
+| TTS（私密 + 无审查，语音默认） | `tts-kokoro` | 丰富的声音目录、低延迟，可原样朗读输出 |
+| TTS（快速替代） | `tts-gemini-3-1-flash`、`tts-elevenlabs-turbo-v2-5`、`tts-qwen3-0-6b` | 更快的层级，但第三方声音可能过滤内容 |
+
+<Card title="浏览全部模型" icon="database" href="/models/overview">
+  按文本、语音转文本和文本转语音进行筛选，查看实时价格与能力。
+</Card>
+
+## 延迟与生产实践建议
+
+语音智能体的质量主要由轮次切换延迟决定——即用户说完到智能体开始回话之间的时间。使用全 Venice 管线时，大致预算如下：
+
+| 阶段 | 贡献时间 | 说明 |
+|-------|--------------|-------|
+| VAD 端点检测 | ~300–700 ms | 认定一个轮次结束前的尾部静音时长。请调整 Silero 的 `min_silence_duration`。 |
+| STT | 几百毫秒 | 单次请求/响应，无中间结果。 |
+| LLM 首 token 时间 | 较小（可重叠） | 采用流式传输，可以与 TTS 形成管线。 |
+| TTS 首段音频 | 几百毫秒 | LiveKit 按句合成，因此播放会在第一句而不是完整回复后就开始。 |
+
+预期 **首段音频约 0.8–1.5 秒**——非常适合助手式、节奏稳健的轮次交互。对于高度可打断、频繁交叠的对话，你会感受到与原生语音到语音模型之间的差距。
+
+### 降低延迟
+
+- 在 TTS 上使用 `response_format="pcm"`，跳过 MP3 解码步骤。
+- 调优 Silero VAD（`silero.VAD.load(min_silence_duration=0.4)`），在不截断说话的前提下缩短端点检测。
+- 为 STT/TTS 选用低延迟层级（例如 `tts-kokoro` TTS、`nvidia/parakeet-tdt-0.6b-v3` STT）。LLM 保留 `venice-uncensored-1-2` 以保持私密和无审查；只有当你需要更快的首 token 时间时才切换到 `flash` 级 LLM。
+- 保持回复简洁——第一句话决定了感知响应速度。
+
+### 混合服务提供方
+
+LiveKit 允许你独立选择每个组件，因此你可以在最需要 Venice 的隐私和无审查特性时保留它，而在延迟至关重要的地方接入流式服务提供方。一种常见的高交互性配置是保留 Venice LLM（并可选保留 STT），并搭配专用的流式 TTS：
+
+```python
+from livekit.plugins import openai, silero
+# from livekit.plugins import cartesia  # example streaming TTS
+
+session = AgentSession(
+    stt=openai.STT(
+        model="nvidia/parakeet-tdt-0.6b-v3",
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+    llm=openai.LLM(
+        model="venice-uncensored-1-2",
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+    # Swap in a streaming TTS for the snappiest voice output
+    tts=cartesia.TTS(voice="..."),
+    vad=silero.VAD.load(),
+)
+```
+
+<Tip>
+从全 Venice 方案起步，获得最简单、最私密的配置。如果你在构建快速、高对话感的消费级体验，请保留 Venice LLM，并在语音输出阶段评估流式 TTS。
+</Tip>
+
+## 限制与注意事项
+
+- **不支持语音到语音 / Realtime API。** Venice 没有 OpenAI Realtime WebSocket，因此 `openai.realtime.RealtimeModel` 和多模态智能体路径不可用。请使用上文所示的 STT-LLM-TTS 管线。
+- **STT 是批量式而非流式。** Venice 转录采用请求/响应模式，因此需要 VAD（Silero）来做端点检测。相比流式 STT 套接字，这会带来少量额外延迟。
+- **TTS 由插件缓冲。** LiveKit 的 OpenAI TTS 封装报告 `streaming=False`，因此不会使用 Venice 逐句的 `streaming` 标志。对大多数智能体而言延迟仍然可以接受；使用 `response_format="pcm"` 可最大限度减少解码开销。
+- **让声音与模型匹配。** TTS `voice` ID 仅对对应的 `model` 有效。参见 [文本转语音模型](/models/text-to-speech)。
+- **不要硬编码模型列表。** Venice 模型 ID 会定期弃用与替换——请在运行时查询 `GET /models` / `GET /models/traits`。参见 [弃用说明](/overview/deprecations)。
+
+## 相关资源
+
+- [LiveKit Agents 文档](https://docs.livekit.io/agents/)
+- [语音转文本指南](/guides/media/speech-to-text) · [模型](/models/speech-to-text)
+- [文本转语音指南](/guides/media/text-to-speech) · [模型](/models/text-to-speech)
+- [函数调用](/guides/features/function-calling)
+- [AI 智能体](/guides/integrations/ai-agents)
