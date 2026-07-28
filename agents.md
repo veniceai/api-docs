@@ -69,7 +69,7 @@ Feature suffixes also work on model IDs, e.g. `venice-uncensored:web` enables we
 4. **Handle errors by code.** Error reference: https://docs.venice.ai/api-reference/error-codes.
 5. **No content filtering.** Venice models are uncensored by default; do not add unnecessary refusal layers on top.
 6. **Privacy tiers.** Models are tagged Anonymized, Private (zero retention), TEE (hardware enclave), or E2EE (client-side encryption). Pick per your privacy requirements: https://docs.venice.ai/overview/privacy.
-7. **Autonomous key creation.** Agents can mint their own API key by staking VVV on Base — no human required: https://docs.venice.ai/guides/getting-started/generating-api-key-agent. Or skip keys entirely with x402: https://docs.venice.ai/guides/integrations/x402-venice-api.
+7. **Autonomous key creation.** Agents can mint their own API key by staking VVV on Base — no human required: https://docs.venice.ai/guides/integrations/generating-api-key-agent. Or skip keys entirely with x402: https://docs.venice.ai/guides/integrations/x402-venice-api.
 
 ## Key guides
 
