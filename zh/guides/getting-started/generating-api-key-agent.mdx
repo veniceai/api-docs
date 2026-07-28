@@ -1,11 +1,11 @@
 ---
 title: 自主代理 API 密钥创建
-description: "通过在 Base 上质押 VVV 并用钱包签署 Venice 颁发的验证 token，让链上 AI agent 自主铸造 Venice API 密钥。"
+description: "通过在 Base 上质押 VVV 并用钱包签署 Venice 颁发的 SIWE 挑战消息，让链上 AI agent 自主铸造 Venice API 密钥。"
 'og:title': "Autonomous Agent API Key | Venice API Docs"
-'og:description': How an autonomous AI agent can mint its own Venice API key by signing a Venice-issued token with a wallet that holds staked VVV on Base.
+'og:description': How an autonomous AI agent can mint its own Venice API key by signing a Venice-issued SIWE challenge with a wallet that holds staked VVV on Base.
 ---
 
-控制 Base 上钱包的 AI agent 可以在无需人类参与的情况下铸造自己的 Venice API 密钥。agent 获取 VVV、质押它、用钱包签署 Venice 发布的短期验证 token，然后将签名后的 token 回传以获得绑定到质押钱包的全新 API 密钥。
+控制 Base 上钱包的 AI agent 可以在无需人类参与的情况下铸造自己的 Venice API 密钥。agent 获取 VVV、质押它、请求一条绑定到自身钱包地址的短期挑战消息，签署该消息并回传，即可获得绑定到质押钱包的全新 API 密钥。
 
 本指南从端到端介绍整个流程，并涵盖密钥铸造后用于实际支付推理的资金选项。
 
@@ -16,7 +16,7 @@ description: "通过在 Base 上质押 VVV 并用钱包签署 Venice 颁发的�
 * 任意非零数量的 VVV 用于质押。铸造端点仅要求钱包具备非零 sVVV 余额，因此 1 VVV 足以铸造密钥。请参阅[为推理付费](#paying-for-inference)了解实际调用付费端点需要什么。
 
 <Tip>
-  使用专用的 agent 钱包，而不是金库钱包。该钱包的私钥会签署每个 Venice token 请求，因此其影响范围应保持最小。
+  使用专用的 agent 钱包，而不是金库钱包。该钱包的私钥会签署每条 Venice 挑战消息，因此其影响范围应保持最小。
 </Tip>
 
 ## 步骤
@@ -41,23 +41,38 @@ description: "通过在 Base 上质押 VVV 并用钱包签署 Venice 颁发的�
     当第二笔交易确认时，钱包的 VVV 余额减少，其 sVVV 余额相应增加。铸造端点读取 sVVV 余额以确认钱包已质押。
   </Step>
 
-  <Step title="请求验证 token">
-    调用 `GET /api/v1/api_keys/generate_web3_key` 以获取由 Venice 签发的短期 token。此端点无需身份验证。
+  <Step title="为钱包请求挑战消息">
+    调用 `GET /api/v1/api_keys/generate_web3_key?address=<wallet address>` 以获取短期的 [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361)（Sign-In with Ethereum）挑战消息。此端点无需身份验证，但挑战消息会绑定到你传入的地址，只能由该钱包兑换。
 
     ```bash
     curl --request GET \
-      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+      --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>'
     ```
 
-    响应包含 `token` 字段。该 token 在签发 15 分钟后过期，因此请尽早签名并提交。
+    响应包含 `message`、`nonce` 和 `expiresAt`：
+
+    ```json
+    {
+      "data": {
+        "message": "api.venice.ai wants you to sign in with your Ethereum account:\n0x...\n\nAuthorize Venice API key creation. Only sign this on venice.ai — anyone holding this signature can create an API key on your Venice account.\n\nURI: https://api.venice.ai/api/v1/api_keys/generate_web3_key\nVersion: 1\nChain ID: 8453\nNonce: 9f2c1d6b4a8e05337c1b9d2e6f4a7c81\nIssued At: 2026-06-30T11:02:41.167Z\nExpiration Time: 2026-06-30T11:17:41.167Z\nResources:\n- urn:venice:api-key:create",
+        "nonce": "9f2c1d6b4a8e05337c1b9d2e6f4a7c81",
+        "expiresAt": "2026-06-30T11:17:41.167Z"
+      },
+      "success": true
+    }
+    ```
+
+    挑战消息在签发 15 分钟后过期，且**仅可使用一次**——首次用它铸造密钥时即被消耗。每铸造一个密钥都需重新请求。
   </Step>
 
-  <Step title="用质押钱包签署 token">
-    用持有质押 VVV 的钱包签署原始 token 字符串。这是对 token 字节的标准 `personal_sign`。`ethers.Wallet.signMessage(token)` 和 `viem` 的 `account.signMessage({ message: token })` 都会产生正确的签名。
+  <Step title="用质押钱包签署挑战消息">
+    用持有质押 VVV 的钱包原样签署 `message` 字符串。这是标准的 `personal_sign`。`ethers.Wallet.signMessage(message)` 和 `viem` 的 `account.signMessage({ message })` 都会产生正确的签名。
+
+    请勿重新格式化、重新换行或重新生成该消息。Venice 会针对其签发的确切字节验证签名，并独立复核其中的 `domain`、`URI`、`Chain ID`、声明文本和地址。
   </Step>
 
   <Step title="铸造 API 密钥">
-    将地址、签名和 token 以及您想要的密钥类型 `POST` 到同一端点。
+    将地址、签名和挑战消息以及您想要的密钥类型 `POST` 到同一端点。
 
     ```bash
     curl --request POST \
@@ -65,14 +80,14 @@ description: "通过在 Base 上质押 VVV 并用钱包签署 Venice 颁发的�
       --header 'Content-Type: application/json' \
       --data '{
         "address": "<wallet address>",
-        "signature": "<signed token>",
-        "token": "<unsigned token>",
+        "signature": "<signature of the challenge message>",
+        "message": "<the unmodified challenge message>",
         "apiKeyType": "INFERENCE",
         "description": "Agent key minted on <date>"
       }'
     ```
 
-    必填字段：`address`、`signature`、`token`、`apiKeyType`（`INFERENCE` 或 `ADMIN`）。
+    必填字段：`address`、`signature`、`message`、`apiKeyType`（`INFERENCE` 或 `ADMIN`）。
 
     可选字段：`description`、`expiresAt`、`consumptionLimit`（限制此密钥的总支出，以 `usd`、`vcu` 或 `diem` 计）。
 
@@ -90,10 +105,12 @@ import { ethers } from "ethers"
 const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
 const address = wallet.address
 
-const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
-const { data: { token } } = await tokenResponse.json()
+const challengeResponse = await fetch(
+  `https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=${address}`,
+)
+const { data: { message } } = await challengeResponse.json()
 
-const signature = await wallet.signMessage(token)
+const signature = await wallet.signMessage(message)
 
 const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
   method: "POST",
@@ -101,7 +118,7 @@ const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate
   body: JSON.stringify({
     address,
     signature,
-    token,
+    message,
     apiKeyType: "INFERENCE",
     description: "Agent key",
   }),
@@ -117,18 +134,32 @@ console.log("Minted key:", result.data.apiKey)
 
 ## 错误参考
 
-端点返回具体、可操作的错误消息。在 agent 中映射这些错误，以便它可以决定是重试、请求新 token 还是停止。
+端点返回具体、可操作的错误消息。在 agent 中映射这些错误，以便它可以决定是重试、请求新挑战消息还是停止。
 
 | 状态 | 错误消息包含 | 含义 | 应对方式 |
 | --- | --- | --- | --- |
 | `400` | `Invalid wallet address` | `address` 字段不是有效的 EVM 地址。 | 修正地址并重新提交。 |
-| `400` | `JWT has expired` | 验证 token 在您签名并提交之前已过期。 | 请求新 token，签名并立即提交。 |
-| `400` | `JWT signature is invalid` | 该 token 不是由 Venice 签发的（可能被篡改或伪造）。 | 始终使用 `GET` 端点返回的新鲜 token。 |
-| `400` | `JWT claims are invalid` | token 的签发者或受众与 Venice 期望的不匹配。 | 使用 `GET` 端点返回的未修改 token。 |
-| `400` | `JWT is malformed` | 提交的 `token` 不是 JWT。 | 确保发送 `GET` 端点返回的确切 `token` 字符串。 |
-| `400` | `Wallet signature does not match` | 给定 `token` 的 `signature` 与 `address` 不匹配。 | 用拥有 `address` 的钱包签署原始 token 字节。 |
+| `400` | `The challenge has expired` | 挑战消息在您签名并提交之前已过期。 | 请求新挑战消息，签名并立即提交。 |
+| `400` | `This challenge has already been used` | 该挑战消息已被兑换。每条最多铸造一个密钥。 | 每铸造一个密钥都请求一条新的挑战消息。 |
+| `400` | `issued for a different wallet address` | 提交的 `address` 不是该挑战消息签发时绑定的地址。 | 用即将签名的钱包地址作为 `?address=` 请求挑战消息。 |
+| `400` | `not a valid Venice API key authorization challenge` | `message` 不是 Venice 挑战消息，或已被修改。 | 发送 `GET` 端点返回的确切 `message` 字符串。 |
+| `400` | `The challenge statement was modified` | 声明行在签发后被更改。 | 原样签署该消息。 |
+| `400` | `The challenge domain must be "api.venice.ai"` | `domain` 行被更改。 | 原样签署该消息。 |
+| `400` | `Wallet signature does not match` | 给定 `message` 的 `signature` 与 `address` 不匹配。 | 用拥有 `address` 的钱包签署确切的消息。 |
 | `400` | `Could not verify wallet signature` | 验证签名的 RPC 调用失败（瞬态）。 | 退避后重试。 |
 | `400` | `Wallet has no staked VVV on Base` | 钱包的 sVVV 余额为零。 | 先质押 VVV，然后重试。 |
+
+## 为什么挑战消息绑定钱包且仅可使用一次
+
+挑战消息是人类可读的 EIP-4361 消息，而非不透明的 token，并提供三项保护。若某个钱包在你自己的 agent 之外被要求签署此类消息，这些保护尤为重要：
+
+* **地址绑定。** 挑战消息载明其签发对应的钱包。一方获取的挑战消息无法由另一个钱包签署并兑换。
+* **一次性 nonce。** Venice 在服务端跟踪 nonce，并在首次成功铸造时消耗它。一个签名恰好铸造一个密钥，因此被截获的签名无法重放以获取更多密钥。
+* **可读声明。** 该消息明确说明签名将授权创建 Venice API 密钥，因此 MetaMask 等钱包界面会向签名者展示其正在批准的内容，而不是一段二进制数据。
+
+<Warning>
+  请将对该消息的签名视同交出在你 Venice 账户上创建 API 密钥的权限。仅签署 `domain` 行为 `api.venice.ai`、且声明中写明创建 Venice API 密钥的挑战消息。`ADMIN` 密钥可以创建和删除其他密钥，并动用你的 DIEM、捆绑额度和 USD 余额。
+</Warning>
 
 ## 为推理付费
 

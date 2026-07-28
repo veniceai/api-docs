@@ -1,11 +1,11 @@
 ---
 title: Création de clé API pour agent autonome
-description: "Générez une clé d'API Venice depuis un agent IA on-chain en stakant des VVV sur Base et en signant un token de validation avec un wallet."
+description: "Générez une clé d'API Venice depuis un agent IA on-chain en stakant des VVV sur Base et en signant un challenge SIWE avec un wallet."
 'og:title': "Clé API pour agent autonome | Venice API Docs"
-'og:description': Comment un agent IA autonome peut générer sa propre clé API Venice en signant un token émis par Venice avec un portefeuille qui détient du VVV staké sur Base.
+'og:description': Comment un agent IA autonome peut générer sa propre clé API Venice en signant un challenge SIWE émis par Venice avec un portefeuille qui détient du VVV staké sur Base.
 ---
 
-Un agent IA qui contrôle un portefeuille sur Base peut générer sa propre clé API Venice sans intervention humaine. L'agent acquiert du VVV, le stake, signe un token de validation à courte durée de vie émis par Venice, et renvoie le token signé pour recevoir une nouvelle clé API liée au portefeuille de staking.
+Un agent IA qui contrôle un portefeuille sur Base peut générer sa propre clé API Venice sans intervention humaine. L'agent acquiert du VVV, le stake, demande un challenge à courte durée de vie lié à l'adresse de son portefeuille, le signe et le renvoie pour recevoir une nouvelle clé API liée au portefeuille de staking.
 
 Ce guide parcourt l'ensemble du flux de bout en bout et couvre les options de financement pour effectivement payer l'inférence une fois la clé créée.
 
@@ -16,7 +16,7 @@ Ce guide parcourt l'ensemble du flux de bout en bout et couvre les options de fi
 * Une quantité non nulle de VVV à staker. L'endpoint de création requiert seulement que le portefeuille ait un solde sVVV non nul, donc 1 VVV suffit pour générer une clé. Voir [Payer pour l'inférence](#paying-for-inference) pour ce dont vous avez réellement besoin pour appeler les endpoints payants.
 
 <Tip>
-  Utilisez un portefeuille agent dédié plutôt qu'un portefeuille de trésorerie. La clé privée du portefeuille signe chaque demande de token Venice, son rayon d'impact doit donc être limité.
+  Utilisez un portefeuille agent dédié plutôt qu'un portefeuille de trésorerie. La clé privée du portefeuille signe chaque challenge Venice, son rayon d'impact doit donc être limité.
 </Tip>
 
 ## Étapes
@@ -41,23 +41,38 @@ Ce guide parcourt l'ensemble du flux de bout en bout et couvre les options de fi
     Lorsque la deuxième transaction est confirmée, le solde VVV du portefeuille diminue et son solde sVVV augmente du même montant. L'endpoint de création lit le solde sVVV pour confirmer que le portefeuille est staké.
   </Step>
 
-  <Step title="Demander un token de validation">
-    Appelez `GET /api/v1/api_keys/generate_web3_key` pour obtenir un token à courte durée de vie signé par Venice. L'endpoint n'est pas authentifié.
+  <Step title="Demander un challenge pour le portefeuille">
+    Appelez `GET /api/v1/api_keys/generate_web3_key?address=<wallet address>` pour obtenir un challenge [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) (Sign-In with Ethereum) à courte durée de vie. L'endpoint n'est pas authentifié, mais le challenge est lié à l'adresse transmise et ne peut être utilisé que par ce portefeuille.
 
     ```bash
     curl --request GET \
-      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+      --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>'
     ```
 
-    La réponse contient un champ `token`. Le token expire 15 minutes après son émission, signez-le donc et soumettez-le bien avant.
+    La réponse contient `message`, `nonce` et `expiresAt` :
+
+    ```json
+    {
+      "data": {
+        "message": "api.venice.ai wants you to sign in with your Ethereum account:\n0x...\n\nAuthorize Venice API key creation. Only sign this on venice.ai — anyone holding this signature can create an API key on your Venice account.\n\nURI: https://api.venice.ai/api/v1/api_keys/generate_web3_key\nVersion: 1\nChain ID: 8453\nNonce: 9f2c1d6b4a8e05337c1b9d2e6f4a7c81\nIssued At: 2026-06-30T11:02:41.167Z\nExpiration Time: 2026-06-30T11:17:41.167Z\nResources:\n- urn:venice:api-key:create",
+        "nonce": "9f2c1d6b4a8e05337c1b9d2e6f4a7c81",
+        "expiresAt": "2026-06-30T11:17:41.167Z"
+      },
+      "success": true
+    }
+    ```
+
+    Le challenge expire 15 minutes après son émission et est **à usage unique** : il est consommé à la première clé créée avec lui. Demandez-en un nouveau pour chaque clé.
   </Step>
 
-  <Step title="Signer le token avec le portefeuille de staking">
-    Signez la chaîne brute du token avec le portefeuille qui détient le VVV staké. Il s'agit d'un `personal_sign` standard sur les octets du token. À la fois `ethers.Wallet.signMessage(token)` et `account.signMessage({ message: token })` de `viem` produisent la signature correcte.
+  <Step title="Signer le challenge avec le portefeuille de staking">
+    Signez la chaîne `message` telle quelle avec le portefeuille qui détient le VVV staké. Il s'agit d'un `personal_sign` standard. À la fois `ethers.Wallet.signMessage(message)` et `account.signMessage({ message })` de `viem` produisent la signature correcte.
+
+    Ne reformatez pas, ne recoupez pas et ne régénérez pas le message. Venice vérifie la signature sur les octets exacts qu'il a émis et revérifie indépendamment le `domain`, l'`URI`, le `Chain ID`, la déclaration et l'adresse qu'il contient.
   </Step>
 
   <Step title="Créer la clé API">
-    Faites un `POST` de l'adresse, de la signature et du token au même endpoint, avec le type de clé que vous souhaitez.
+    Faites un `POST` de l'adresse, de la signature et du message au même endpoint, avec le type de clé que vous souhaitez.
 
     ```bash
     curl --request POST \
@@ -65,14 +80,14 @@ Ce guide parcourt l'ensemble du flux de bout en bout et couvre les options de fi
       --header 'Content-Type: application/json' \
       --data '{
         "address": "<wallet address>",
-        "signature": "<signed token>",
-        "token": "<unsigned token>",
+        "signature": "<signature of the challenge message>",
+        "message": "<the unmodified challenge message>",
         "apiKeyType": "INFERENCE",
         "description": "Agent key minted on <date>"
       }'
     ```
 
-    Champs requis : `address`, `signature`, `token`, `apiKeyType` (`INFERENCE` ou `ADMIN`).
+    Champs requis : `address`, `signature`, `message`, `apiKeyType` (`INFERENCE` ou `ADMIN`).
 
     Champs optionnels : `description`, `expiresAt`, `consumptionLimit` (plafonne la dépense totale sur cette clé, libellée en `usd`, `vcu` ou `diem`).
 
@@ -90,10 +105,12 @@ import { ethers } from "ethers"
 const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
 const address = wallet.address
 
-const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
-const { data: { token } } = await tokenResponse.json()
+const challengeResponse = await fetch(
+  `https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=${address}`,
+)
+const { data: { message } } = await challengeResponse.json()
 
-const signature = await wallet.signMessage(token)
+const signature = await wallet.signMessage(message)
 
 const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
   method: "POST",
@@ -101,7 +118,7 @@ const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate
   body: JSON.stringify({
     address,
     signature,
-    token,
+    message,
     apiKeyType: "INFERENCE",
     description: "Agent key",
   }),
@@ -117,18 +134,32 @@ console.log("Minted key:", result.data.apiKey)
 
 ## Référence des erreurs
 
-L'endpoint renvoie des messages d'erreur spécifiques et exploitables. Mappez-les dans l'agent pour qu'il puisse décider de réessayer, demander un nouveau token ou s'arrêter.
+L'endpoint renvoie des messages d'erreur spécifiques et exploitables. Mappez-les dans l'agent pour qu'il puisse décider de réessayer, demander un nouveau challenge ou s'arrêter.
 
 | Statut | Le message d'erreur contient | Ce que cela signifie | Que faire |
 | --- | --- | --- | --- |
 | `400` | `Invalid wallet address` | Le champ `address` n'est pas une adresse EVM valide. | Corrigez l'adresse et resoumettez. |
-| `400` | `JWT has expired` | Le token de validation a expiré avant que vous ne le signiez et le soumettiez. | Demandez un nouveau token, signez-le et soumettez-le immédiatement. |
-| `400` | `JWT signature is invalid` | Le token n'a pas été signé par Venice (probablement modifié ou fabriqué). | Utilisez toujours un nouveau token de l'endpoint `GET`. |
-| `400` | `JWT claims are invalid` | L'émetteur ou l'audience du token ne correspond pas à ce que Venice attend. | Utilisez le token non modifié renvoyé par l'endpoint `GET`. |
-| `400` | `JWT is malformed` | Le `token` soumis n'est pas un JWT. | Assurez-vous d'envoyer exactement la chaîne `token` renvoyée par l'endpoint `GET`. |
-| `400` | `Wallet signature does not match` | La `signature` ne correspond pas à l'`address` pour le `token` donné. | Signez les octets bruts du token avec le portefeuille qui possède `address`. |
+| `400` | `The challenge has expired` | Le challenge a expiré avant que vous ne le signiez et le soumettiez. | Demandez un nouveau challenge, signez-le et soumettez-le immédiatement. |
+| `400` | `This challenge has already been used` | Le challenge a déjà été utilisé. Chacun ne crée au plus qu'une clé. | Demandez un nouveau challenge pour chaque clé créée. |
+| `400` | `issued for a different wallet address` | L'`address` soumise n'est pas celle pour laquelle le challenge a été émis. | Demandez un challenge avec `?address=` défini sur le portefeuille signataire. |
+| `400` | `not a valid Venice API key authorization challenge` | Le `message` n'est pas un challenge Venice, ou il a été modifié. | Envoyez exactement la chaîne `message` renvoyée par l'endpoint `GET`. |
+| `400` | `The challenge statement was modified` | La ligne de déclaration a été altérée après l'émission. | Signez le message tel quel. |
+| `400` | `The challenge domain must be "api.venice.ai"` | La ligne `domain` a été altérée. | Signez le message tel quel. |
+| `400` | `Wallet signature does not match` | La `signature` ne correspond pas à l'`address` pour le `message` donné. | Signez le message exact avec le portefeuille qui possède `address`. |
 | `400` | `Could not verify wallet signature` | L'appel RPC pour vérifier la signature a échoué (transitoire). | Réessayez avec backoff. |
 | `400` | `Wallet has no staked VVV on Base` | Le portefeuille a un solde sVVV nul. | Stakez d'abord du VVV, puis réessayez. |
+
+## Pourquoi le challenge est lié au portefeuille et à usage unique
+
+Le challenge est un message EIP-4361 lisible par un humain plutôt qu'un token opaque, et il apporte trois protections qui comptent si un portefeuille est un jour invité à en signer un en dehors de votre propre agent :
+
+* **Liaison à l'adresse.** Le challenge nomme le portefeuille pour lequel il a été émis. Un challenge obtenu par une partie ne peut pas être signé ni utilisé par un autre portefeuille.
+* **Nonce à usage unique.** Venice suit le nonce côté serveur et le consomme à la première création réussie. Une signature ne crée qu'une seule clé, une signature interceptée ne peut donc pas être rejouée pour en obtenir d'autres.
+* **Déclaration lisible.** Le message indique clairement que signer autorise la création d'une clé API Venice, si bien qu'une interface de portefeuille comme MetaMask montre au signataire ce qu'il approuve au lieu d'un blob binaire.
+
+<Warning>
+  Considérez une signature sur ce message comme équivalente à céder les droits de création de clés API sur votre compte Venice. Ne signez que des challenges dont la ligne `domain` indique `api.venice.ai` et dont la déclaration mentionne la création d'une clé API Venice. Une clé `ADMIN` peut créer et supprimer d'autres clés et dépenser vos soldes DIEM, crédits inclus et USD.
+</Warning>
 
 ## Payer pour l'inférence
 

@@ -1,11 +1,11 @@
 ---
 title: Autonomous Agent API Key Creation
-description: "Mint a Venice API key autonomously from an on-chain AI agent by staking VVV on Base and signing a Venice-issued validation token with a wallet."
+description: "Mint a Venice API key autonomously from an on-chain AI agent by staking VVV on Base and signing a Venice-issued SIWE challenge with a wallet."
 'og:title': "Autonomous Agent API Key | Venice API Docs"
-'og:description': How an autonomous AI agent can mint its own Venice API key by signing a Venice-issued token with a wallet that holds staked VVV on Base.
+'og:description': How an autonomous AI agent can mint its own Venice API key by signing a Venice-issued SIWE challenge with a wallet that holds staked VVV on Base.
 ---
 
-An AI agent that controls a wallet on Base can mint its own Venice API key with no human in the loop. The agent acquires VVV, stakes it, signs a short-lived validation token issued by Venice, and posts the signed token back to receive a fresh API key tied to the staking wallet.
+An AI agent that controls a wallet on Base can mint its own Venice API key with no human in the loop. The agent acquires VVV, stakes it, requests a short-lived challenge bound to its wallet address, signs that challenge, and posts it back to receive a fresh API key tied to the staking wallet.
 
 This guide walks through the full flow end to end and covers the funding options for actually paying for inference once the key is minted.
 
@@ -16,7 +16,7 @@ This guide walks through the full flow end to end and covers the funding options
 * Any non-zero amount of VVV to stake. The minting endpoint requires only that the wallet has a non-zero sVVV balance, so 1 VVV is enough to mint a key. See [Paying for inference](#paying-for-inference) for what you need to actually call paid endpoints.
 
 <Tip>
-  Use a dedicated agent wallet rather than a treasury wallet. The wallet's private key signs every Venice token request, so its blast radius should be small.
+  Use a dedicated agent wallet rather than a treasury wallet. The wallet's private key signs every Venice challenge, so its blast radius should be small.
 </Tip>
 
 ## Steps
@@ -41,23 +41,38 @@ This guide walks through the full flow end to end and covers the funding options
     When the second transaction confirms, the wallet's VVV balance decreases and its sVVV balance increases by the same amount. The minting endpoint reads the sVVV balance to confirm the wallet is staked.
   </Step>
 
-  <Step title="Request a validation token">
-    Call `GET /api/v1/api_keys/generate_web3_key` to get a short-lived token signed by Venice. The endpoint is unauthenticated.
+  <Step title="Request a challenge for the wallet">
+    Call `GET /api/v1/api_keys/generate_web3_key?address=<wallet address>` to get a short-lived [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) (Sign-In with Ethereum) challenge. The endpoint is unauthenticated, but the challenge is bound to the address you pass and can only be redeemed by that wallet.
 
     ```bash
     curl --request GET \
-      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+      --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>'
     ```
 
-    The response contains a `token` field. The token expires 15 minutes after issuance, so sign and submit it well before then.
+    The response contains `message`, `nonce`, and `expiresAt`:
+
+    ```json
+    {
+      "data": {
+        "message": "api.venice.ai wants you to sign in with your Ethereum account:\n0x...\n\nAuthorize Venice API key creation. Only sign this on venice.ai — anyone holding this signature can create an API key on your Venice account.\n\nURI: https://api.venice.ai/api/v1/api_keys/generate_web3_key\nVersion: 1\nChain ID: 8453\nNonce: 9f2c1d6b4a8e05337c1b9d2e6f4a7c81\nIssued At: 2026-06-30T11:02:41.167Z\nExpiration Time: 2026-06-30T11:17:41.167Z\nResources:\n- urn:venice:api-key:create",
+        "nonce": "9f2c1d6b4a8e05337c1b9d2e6f4a7c81",
+        "expiresAt": "2026-06-30T11:17:41.167Z"
+      },
+      "success": true
+    }
+    ```
+
+    The challenge expires 15 minutes after issuance and is **single-use** — it is consumed the first time a key is minted with it. Request a new one for every key.
   </Step>
 
-  <Step title="Sign the token with the staking wallet">
-    Sign the raw token string with the wallet that holds the staked VVV. This is a standard `personal_sign` over the token bytes. Both `ethers.Wallet.signMessage(token)` and `viem`'s `account.signMessage({ message: token })` produce the correct signature.
+  <Step title="Sign the challenge with the staking wallet">
+    Sign the `message` string verbatim with the wallet that holds the staked VVV. This is a standard `personal_sign`. Both `ethers.Wallet.signMessage(message)` and `viem`'s `account.signMessage({ message })` produce the correct signature.
+
+    Do not reformat, re-wrap, or regenerate the message. Venice verifies the signature over the exact bytes it issued, and independently re-checks the `domain`, `URI`, `Chain ID`, statement, and address inside it.
   </Step>
 
   <Step title="Mint the API key">
-    `POST` the address, signature, and token to the same endpoint, along with the type of key you want.
+    `POST` the address, signature, and message to the same endpoint, along with the type of key you want.
 
     ```bash
     curl --request POST \
@@ -65,14 +80,14 @@ This guide walks through the full flow end to end and covers the funding options
       --header 'Content-Type: application/json' \
       --data '{
         "address": "<wallet address>",
-        "signature": "<signed token>",
-        "token": "<unsigned token>",
+        "signature": "<signature of the challenge message>",
+        "message": "<the unmodified challenge message>",
         "apiKeyType": "INFERENCE",
         "description": "Agent key minted on <date>"
       }'
     ```
 
-    Required fields: `address`, `signature`, `token`, `apiKeyType` (`INFERENCE` or `ADMIN`).
+    Required fields: `address`, `signature`, `message`, `apiKeyType` (`INFERENCE` or `ADMIN`).
 
     Optional fields: `description`, `expiresAt`, `consumptionLimit` (caps total spend on this key, denominated in `usd`, `vcu`, or `diem`).
 
@@ -90,10 +105,12 @@ import { ethers } from "ethers"
 const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
 const address = wallet.address
 
-const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
-const { data: { token } } = await tokenResponse.json()
+const challengeResponse = await fetch(
+  `https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=${address}`,
+)
+const { data: { message } } = await challengeResponse.json()
 
-const signature = await wallet.signMessage(token)
+const signature = await wallet.signMessage(message)
 
 const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
   method: "POST",
@@ -101,7 +118,7 @@ const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate
   body: JSON.stringify({
     address,
     signature,
-    token,
+    message,
     apiKeyType: "INFERENCE",
     description: "Agent key",
   }),
@@ -122,13 +139,27 @@ The endpoint returns specific, actionable error messages. Map these in the agent
 | Status | Error message contains | What it means | What to do |
 | --- | --- | --- | --- |
 | `400` | `Invalid wallet address` | The `address` field is not a valid EVM address. | Fix the address and resubmit. |
-| `400` | `JWT has expired` | The validation token expired before you signed and submitted it. | Request a new token, sign it, and submit immediately. |
-| `400` | `JWT signature is invalid` | The token was not signed by Venice (likely tampered with or fabricated). | Always use a fresh token from the `GET` endpoint. |
-| `400` | `JWT claims are invalid` | The token's issuer or audience does not match what Venice expects. | Use the unmodified token returned by the `GET` endpoint. |
-| `400` | `JWT is malformed` | The submitted `token` is not a JWT. | Ensure you are sending the exact `token` string returned by the `GET` endpoint. |
-| `400` | `Wallet signature does not match` | The `signature` does not match the `address` for the given `token`. | Sign the raw token bytes with the wallet that owns `address`. |
+| `400` | `The challenge has expired` | The challenge expired before you signed and submitted it. | Request a new challenge, sign it, and submit immediately. |
+| `400` | `This challenge has already been used` | The challenge was already redeemed. Each one mints at most one key. | Request a new challenge for every key you mint. |
+| `400` | `issued for a different wallet address` | The `address` you submitted is not the address the challenge was issued for. | Request a challenge with `?address=` set to the wallet that will sign. |
+| `400` | `not a valid Venice API key authorization challenge` | The `message` is not a Venice challenge, or was modified. | Send the exact `message` string returned by the `GET` endpoint. |
+| `400` | `The challenge statement was modified` | The statement line was altered after issuance. | Sign the message verbatim. |
+| `400` | `The challenge domain must be "api.venice.ai"` | The `domain` line was altered. | Sign the message verbatim. |
+| `400` | `Wallet signature does not match` | The `signature` does not match the `address` for the given `message`. | Sign the exact message with the wallet that owns `address`. |
 | `400` | `Could not verify wallet signature` | RPC call to verify the signature failed (transient). | Retry with backoff. |
 | `400` | `Wallet has no staked VVV on Base` | The wallet has zero sVVV balance. | Stake VVV first, then retry. |
+
+## Why the challenge is wallet-bound and single-use
+
+The challenge is a human-readable EIP-4361 message rather than an opaque token, and it carries three protections that matter if a wallet is ever prompted to sign one outside your own agent:
+
+* **Address binding.** The challenge names the wallet it was issued for. A challenge obtained by one party cannot be signed and redeemed by a different wallet.
+* **Single-use nonce.** Venice tracks the nonce server-side and consumes it on the first successful mint. One signature mints exactly one key, so a captured signature cannot be replayed for additional keys.
+* **Readable statement.** The message states plainly that signing authorizes Venice API key creation, so a wallet UI such as MetaMask shows the signer what they are approving instead of a binary blob.
+
+<Warning>
+  Treat a signature over this message as equivalent to handing over API key creation rights on your Venice account. Only sign a challenge whose `domain` line reads `api.venice.ai` and whose statement names Venice API key creation. An `ADMIN` key can create and delete other keys and spend from your DIEM, bundled credits, and USD balance.
+</Warning>
 
 ## Paying for inference
 
