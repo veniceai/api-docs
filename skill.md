@@ -55,6 +55,21 @@ Before relying on a feature, check that model's `model_spec.capabilities` flags
 (`supportsWebSearch`, `supportsReasoning`, `supportsE2EE`, `supportsFunctionCalling`,
 `supportsVision`, and similar). Per-model pricing is on `model_spec.pricing`.
 
+Common text models, as a starting point rather than a fixed list:
+
+| Model ID | Context | Good for |
+| --- | --- | --- |
+| `zai-org-glm-5-2` | 1M | General-purpose work. Code-optimized and reasoning-capable. Text only. |
+| `claude-opus-5` | 1M | The hardest reasoning and code tasks. Vision and multi-image. |
+| `kimi-k3` | 1M | Long-context reasoning with vision and multi-image. Code-optimized. |
+| `deepseek-v4-flash` | 1M | Fast code and reasoning. Text only, no vision. |
+| `grok-4-3` | 1M | Adds X/Twitter search via `enable_x_search`. Vision and reasoning effort. |
+| `google-gemma-4-31b-it` | 256K | The only one here that accepts video input. Vision, logprobs, reasoning effort. |
+| `gemma-4-uncensored` | 256K | Uncensored responses. Vision, but no reasoning support. |
+
+Confirm against `GET /models` before you ship. This table is a snapshot and the
+catalog moves; the capability flags on each model are the authoritative answer.
+
 ## Endpoint map
 
 | Surface | Endpoints |
