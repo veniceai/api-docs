@@ -33,7 +33,7 @@ curl https://api.venice.ai/api/v1/chat/completions \
   -H "Authorization: Bearer $VENICE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "venice-uncensored-1-2",
+    "model": "kimi-k3",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
@@ -104,7 +104,7 @@ Venice-only features ride in a `venice_parameters` object on `/chat/completions`
 - `enable_e2ee`: end-to-end encryption on E2EE-capable models
 
 Feature suffixes on the model ID do the same thing, for example
-`venice-uncensored-1-2:web` or `venice-uncensored-1-2:enable_web_search=on`.
+`kimi-k3:web` or `kimi-k3:enable_web_search=on`.
 
 `POST /responses` accepts a narrower set: `character_slug`, `enable_e2ee`,
 `enable_web_search`, `enable_web_scraping`, `enable_web_citations`,
