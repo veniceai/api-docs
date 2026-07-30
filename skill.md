@@ -33,7 +33,7 @@ curl https://api.venice.ai/api/v1/chat/completions \
   -H "Authorization: Bearer $VENICE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "venice-uncensored",
+    "model": "kimi-k3",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
@@ -49,8 +49,11 @@ curl https://api.venice.ai/api/v1/models/traits \
   -H "Authorization: Bearer $VENICE_API_KEY"
 ```
 
-Traits like `text:default`, `text:uncensored`, and `image:fast` always map to a
-live model. Filter the full catalog with `GET /models?type=image|video|audio|tts|embedding`.
+The response maps trait names to whichever model currently fills that role. Text
+traits are `default`, `most_intelligent`, `most_uncensored`, `default_reasoning`,
+`default_vision`, `default_code`, and `function_calling_default`; image traits
+include `default`, `fastest`, `highest_quality`, and `most_uncensored`.
+Filter the full catalog with `GET /models?type=image|video|audio|tts|embedding`.
 Before relying on a feature, check that model's `model_spec.capabilities` flags
 (`supportsWebSearch`, `supportsReasoning`, `supportsE2EE`, `supportsFunctionCalling`,
 `supportsVision`, and similar). Per-model pricing is on `model_spec.pricing`.
@@ -101,10 +104,13 @@ Venice-only features ride in a `venice_parameters` object on `/chat/completions`
 - `enable_e2ee`: end-to-end encryption on E2EE-capable models
 
 Feature suffixes on the model ID do the same thing, for example
-`venice-uncensored:web` or `venice-uncensored:enable_web_search=on`.
+`kimi-k3:web` or `kimi-k3:enable_web_search=on`.
 
-`venice_parameters` is **rejected** on `POST /responses`. Use `/chat/completions`
-when you need it.
+`POST /responses` accepts a narrower set: `character_slug`, `enable_e2ee`,
+`enable_web_search`, `enable_web_scraping`, `enable_web_citations`,
+`include_venice_system_prompt`, and `include_search_results_in_stream`.
+Anything else is dropped without an error, so use `/chat/completions` when you
+need `enable_x_search` or the thinking controls.
 
 ## Authentication
 
@@ -160,7 +166,7 @@ This file is a map. Venice maintains one self-contained skill per API surface,
 versioned against the OpenAPI spec, at **https://github.com/veniceai/skills**.
 
 ```bash
-npx skills add docs.venice.ai
+npx skills add https://docs.venice.ai
 # or, for the full per-surface set:
 git clone https://github.com/veniceai/skills.git ~/src/venice-skills
 ln -s ~/src/venice-skills/skills ~/.claude/skills/venice
