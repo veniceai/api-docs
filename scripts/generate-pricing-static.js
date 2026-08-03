@@ -2,7 +2,7 @@
 /**
  * Generate static pricing content for pricing.mdx
  * 
- * This script reads STATIC_MODELS from model-search.js and generates
+ * This script reads the model snapshot from data/static-models.json and generates
  * markdown tables for pricing data, ensuring agent-friendly plain text format.
  * 
  * Placeholder divs are preserved so model-search.js can detect the pricing
@@ -15,19 +15,13 @@
 const fs = require('fs');
 const path = require('path');
 
-// Read model-search.js and extract STATIC_MODELS
 function extractStaticModels() {
-  const modelSearchPath = path.join(__dirname, '..', 'model-search.js');
-  const content = fs.readFileSync(modelSearchPath, 'utf-8');
-  
-  // Find STATIC_MODELS array using regex
-  const match = content.match(/const STATIC_MODELS = (\[[\s\S]*?\]);/);
-  if (!match) {
-    throw new Error('Could not find STATIC_MODELS in model-search.js');
+  const snapshotPath = path.join(__dirname, '..', 'data', 'static-models.json');
+  if (!fs.existsSync(snapshotPath)) {
+    throw new Error('Missing data/static-models.json');
   }
-  
-  // Parse the JSON array
-  return JSON.parse(match[1]);
+
+  return JSON.parse(fs.readFileSync(snapshotPath, 'utf-8'));
 }
 
 // Helper functions (same logic as model-search.js)
