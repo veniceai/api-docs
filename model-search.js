@@ -515,10 +515,72 @@
     return 0;
   }
 
+  // Columns the pricing tables can be sorted by. Each one maps to a figure the
+  // table actually puts on screen, so anything visible is directly sortable.
+  // `dir` is the direction a column starts in when first selected — cheapest
+  // first for prices, largest first for context.
+  const PRICING_SORT_FIELDS = {
+    name:    { label: 'Name',         dir: 'asc',  get: m => (m.model_spec?.name || m.id || '').toLowerCase() },
+    input:   { label: 'Input',        dir: 'asc',  get: m => m.model_spec?.pricing?.input?.usd },
+    output:  { label: 'Output',       dir: 'asc',  get: m => m.model_spec?.pricing?.output?.usd },
+    cache:   { label: 'Cache Read',   dir: 'asc',  get: m => m.model_spec?.pricing?.cache_input?.usd },
+    context: { label: 'Context',      dir: 'desc', get: m => m.model_spec?.availableContextTokens || m.model_spec?.constraints?.maxContextTokens },
+    price:   { label: 'Price',        dir: 'asc',  get: m => getModelSortPrice(m) },
+    newest:  { label: 'Newest',       dir: 'desc', get: m => m.created || 0 },
+  };
+
+  // Columns offered per pricing section. Sections whose cost is a single figure
+  // (image, audio, music, video) expose the generic `price` column instead of
+  // the token-based input/output split.
+  const PRICING_SECTION_FIELDS = {
+    chat:      ['name', 'input', 'output', 'cache', 'context', 'newest'],
+    embedding: ['name', 'input', 'newest'],
+    image:     ['name', 'price', 'newest'],
+    audio:     ['name', 'price', 'newest'],
+    music:     ['name', 'price', 'newest'],
+    video:     ['name', 'price', 'newest'],
+  };
+
+  // Models missing the sorted value always sink to the bottom rather than
+  // being treated as zero, which would park them at the top of a price sort.
+  function comparePricingField(field, dir) {
+    const def = PRICING_SORT_FIELDS[field];
+    const sign = dir === 'desc' ? -1 : 1;
+    return (a, b) => {
+      const av = def.get(a);
+      const bv = def.get(b);
+      const aMissing = av == null || av === '';
+      const bMissing = bv == null || bv === '';
+      if (aMissing && bMissing) return 0;
+      if (aMissing) return 1;
+      if (bMissing) return -1;
+      if (typeof av === 'string' || typeof bv === 'string') {
+        return sign * String(av).localeCompare(String(bv));
+      }
+      return sign * (av - bv);
+    };
+  }
+
+  function filterModelsByText(models, query) {
+    const q = (query || '').trim().toLowerCase();
+    if (!q) return models;
+    return models.filter(m => {
+      const spec = m.model_spec || {};
+      return `${spec.name || ''} ${m.id || ''}`.toLowerCase().includes(q);
+    });
+  }
+
   // Shared, stateless sort used by both the model browser and the pricing
-  // tables. `default` preserves the caller's incoming order.
+  // tables. `default` preserves the caller's incoming order. The pricing page
+  // passes `field:direction` (e.g. `output:desc`); the model browser passes the
+  // preset values from SORT_OPTIONS.
   function sortModelList(models, sortValue) {
     if (!sortValue || sortValue === 'default') return models;
+    if (sortValue.includes(':')) {
+      const [field, dir] = sortValue.split(':');
+      if (!PRICING_SORT_FIELDS[field]) return models;
+      return [...models].sort(comparePricingField(field, dir));
+    }
     const sorted = [...models];
     switch (sortValue) {
       case 'newest':
@@ -540,75 +602,48 @@
     }
   }
 
-  // Per-section sort selections on the pricing page, persisted across
-  // re-renders (e.g. when fresh API data replaces the cached/static render).
+  // Per-section sort and filter selections on the pricing page, persisted
+  // across re-renders (e.g. when fresh API data replaces the cached render).
   const pricingSortState = {};
-  let pricingSortListenersAttached = false;
 
-  function closePricingSortPanels(except) {
-    document.querySelectorAll('.vpt-sort-controls .vmb-dd.open').forEach(el => {
-      if (el === except) return;
-      el.classList.remove('open');
-      const trigger = el.querySelector('.vmb-dd-trigger');
-      if (trigger) trigger.setAttribute('aria-expanded', 'false');
-      const panel = el.querySelector('.vmb-dd-panel');
-      if (panel) panel.hidden = true;
-    });
+  function getPricingSectionState(sectionKey) {
+    if (!pricingSortState[sectionKey]) {
+      pricingSortState[sectionKey] = { field: '', dir: '', filter: '' };
+    }
+    return pricingSortState[sectionKey];
   }
 
-  function ensurePricingSortListeners() {
-    if (pricingSortListenersAttached) return;
-    pricingSortListenersAttached = true;
-    document.addEventListener('click', (e) => {
-      if (!e.target.closest('.vpt-sort-controls .vmb-dd')) closePricingSortPanels(null);
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closePricingSortPanels(null);
-    });
+  function pricingSortValue(state) {
+    return state.field ? `${state.field}:${state.dir}` : 'default';
   }
 
-  // Wire a standalone sort dropdown (used on the pricing page, one per
-  // section). Self-contained so it does not depend on the model browser's
-  // init() closures. Calls onChange(value) when a new option is picked.
-  function initPricingSortDropdown(ddEl, currentValue, onChange) {
-    if (!ddEl) return;
-    ensurePricingSortListeners();
-    let value = currentValue || 'default';
-    const labelEl = ddEl.querySelector('.vmb-dd-label');
-    const trigger = ddEl.querySelector('.vmb-dd-trigger');
-    const panel = ddEl.querySelector('.vmb-dd-panel');
+  function renderPricingSortBar(sectionKey, state) {
+    const fields = PRICING_SECTION_FIELDS[sectionKey] || ['name', 'price', 'newest'];
+    const chip = (field, label, active, dir) =>
+      `<button type="button" class="vpt-sort-chip${active ? ' active' : ''}" data-field="${field}" aria-pressed="${active}">` +
+        `<span class="vpt-sort-chip-label">${label}</span>` +
+        `<span class="vpt-sort-arrow" aria-hidden="true">${active && field ? (dir === 'asc' ? '↑' : '↓') : ''}</span>` +
+      `</button>`;
 
-    function syncUI() {
-      const opt = SORT_OPTIONS.find(o => o.value === value);
-      labelEl.textContent = opt ? t(opt.label) : t('Sort');
-      ddEl.querySelectorAll('.vmb-dd-option').forEach(o => {
-        const on = o.dataset.value === value;
-        o.classList.toggle('selected', on);
-        o.setAttribute('aria-selected', on ? 'true' : 'false');
-      });
-      ddEl.classList.toggle('vmb-dd-active', value !== 'default');
-    }
+    const chips = fields.map(key => {
+      const def = PRICING_SORT_FIELDS[key];
+      const active = state.field === key;
+      return chip(key, t(def.label), active, active ? state.dir : def.dir);
+    }).join('');
 
-    function toggle() {
-      const willOpen = !ddEl.classList.contains('open');
-      closePricingSortPanels(willOpen ? ddEl : null);
-      ddEl.classList.toggle('open', willOpen);
-      trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
-      panel.hidden = !willOpen;
-    }
-
-    ddEl.addEventListener('click', (e) => {
-      if (e.target.closest('.vmb-dd-trigger')) { toggle(); return; }
-      const option = e.target.closest('.vmb-dd-option');
-      if (option) {
-        value = option.dataset.value;
-        syncUI();
-        closePricingSortPanels(null);
-        onChange(value);
-      }
-    });
-
-    syncUI();
+    return `
+      <div class="vpt-sort-bar">
+        <div class="vpt-sort-chips" role="group" aria-label="${t('Sort models')}">
+          <span class="vpt-sort-caption">${t('Sort')}</span>
+          ${chip('', t('Recommended'), !state.field, '')}
+          ${chips}
+        </div>
+        <div class="vpt-filter">
+          <input type="search" class="vpt-filter-input" placeholder="${t('Filter models…')}"
+                 aria-label="${t('Filter models')}" value="${escapeHtml(state.filter || '')}" />
+          <span class="vpt-filter-count" aria-live="polite"></span>
+        </div>
+      </div>`;
   }
 
   function renderFilterDropdown(key, group) {
@@ -2273,24 +2308,68 @@
   // re-renders just the body. `sortKey` namespaces the persisted selection so
   // choices survive re-renders when fresh API data arrives. `afterRender` runs
   // after each (re)render, e.g. to kick off async video price fetches.
-  function mountPricingSection(el, sortKey, buildBody, afterRender) {
+  function mountPricingSection(el, sectionKey, models, buildBody, afterRender) {
     if (!el) return;
-    const current = pricingSortState[sortKey] || 'default';
+    const state = getPricingSectionState(sectionKey);
+
     el.innerHTML = `
-      <div class="vmb-controls vpt-sort-controls">
-        <div class="vmb-controls-group">${renderSortDropdown()}</div>
-      </div>
-      <div class="vpt-section-body">${buildBody(current)}</div>
+      ${renderPricingSortBar(sectionKey, state)}
+      <div class="vpt-section-body"></div>
     `;
     makePlaceholderVisible(el);
+
+    const bar = el.querySelector('.vpt-sort-bar');
     const body = el.querySelector('.vpt-section-body');
-    const sortDd = el.querySelector('.vmb-sort-dd');
-    if (afterRender) afterRender();
-    initPricingSortDropdown(sortDd, current, (value) => {
-      pricingSortState[sortKey] = value;
-      body.innerHTML = buildBody(value);
+    const countEl = el.querySelector('.vpt-filter-count');
+
+    function paint() {
+      body.innerHTML = buildBody(filterModelsByText(models, state.filter), pricingSortValue(state));
+      if (countEl) {
+        const shown = body.querySelectorAll('.vpt-row').length;
+        countEl.textContent = state.filter.trim() ? `${shown} ${shown === 1 ? t('match') : t('matches')}` : '';
+      }
       if (afterRender) afterRender();
+    }
+
+    // Repaint the chips in place rather than re-rendering the whole bar, so the
+    // filter input keeps focus and the caret position while you type.
+    function syncChips() {
+      bar.querySelectorAll('.vpt-sort-chip').forEach(chipEl => {
+        const field = chipEl.dataset.field;
+        const active = field === (state.field || '');
+        chipEl.classList.toggle('active', active);
+        chipEl.setAttribute('aria-pressed', String(active));
+        const arrow = chipEl.querySelector('.vpt-sort-arrow');
+        if (arrow) arrow.textContent = active && field ? (state.dir === 'asc' ? '↑' : '↓') : '';
+      });
+    }
+
+    bar.addEventListener('click', (e) => {
+      const chipEl = e.target.closest('.vpt-sort-chip');
+      if (!chipEl) return;
+      const field = chipEl.dataset.field;
+      if (!field) {
+        state.field = '';
+        state.dir = '';
+      } else if (state.field === field) {
+        state.dir = state.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.field = field;
+        state.dir = PRICING_SORT_FIELDS[field].dir;
+      }
+      syncChips();
+      paint();
     });
+
+    let filterTimer = null;
+    bar.addEventListener('input', (e) => {
+      if (!e.target.classList.contains('vpt-filter-input')) return;
+      state.filter = e.target.value;
+      clearTimeout(filterTimer);
+      filterTimer = setTimeout(paint, 120);
+    });
+
+    paint();
   }
 
   function renderPricingTables(models) {
@@ -2302,37 +2381,37 @@
     const websearchEl = document.getElementById('pricing-websearch-placeholder');
     const videoEl = document.getElementById('pricing-video-placeholder');
 
-    mountPricingSection(chatEl, 'chat', (sortValue) => `
-        ${renderPricingChatTable(models, sortValue)}
+    mountPricingSection(chatEl, 'chat', models, (list, sortValue) => `
+        ${renderPricingChatTable(list, sortValue)}
         <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and not recommended for production use. These models may be changed, removed, or replaced at any time without notice. <a href="/overview/beta-models">Learn more</a></p>
       `);
 
-    mountPricingSection(embeddingEl, 'embedding', (sortValue) =>
-      renderPricingEmbeddingTable(models, sortValue));
+    mountPricingSection(embeddingEl, 'embedding', models, (list, sortValue) =>
+      renderPricingEmbeddingTable(list, sortValue));
 
-    mountPricingSection(imageEl, 'image', (sortValue) => `
+    mountPricingSection(imageEl, 'image', models, (list, sortValue) => `
         <h4>Generation</h4>
-        ${renderPricingImageTable(models, sortValue)}
+        ${renderPricingImageTable(list, sortValue)}
         <h4>Upscaling</h4>
-        ${renderPricingUpscaleTable(models)}
+        ${renderPricingUpscaleTable(list)}
         <h4>Editing</h4>
-        ${renderPricingEditTable(models, sortValue)}
+        ${renderPricingEditTable(list, sortValue)}
         <p class="vpt-video-note">The <strong>Per Edit</strong> price includes the first input image. Models that list an <strong>Extra Input Image</strong> price charge that fee for each additional input image beyond the first. Example: editing with 3 input images on a model priced at $0.11 per edit with a $0.0035 extra-image fee costs $0.11 + 2 × $0.0035 = $0.117.</p>
       `);
 
-    mountPricingSection(audioEl, 'audio', (sortValue) => {
-      const asrHtml = renderPricingASRTable(models, sortValue);
+    mountPricingSection(audioEl, 'audio', models, (list, sortValue) => {
+      const asrHtml = renderPricingASRTable(list, sortValue);
       return `
         <h4>Text-to-Speech</h4>
-        ${renderPricingTTSTable(models, sortValue)}
+        ${renderPricingTTSTable(list, sortValue)}
         ${asrHtml ? `<h4>Speech-to-Text</h4>${asrHtml}` : ''}
       `;
     });
 
-    mountPricingSection(musicEl, 'music', (sortValue) => {
-      const durationHtml = renderPricingMusicDurationTable(models, sortValue);
-      const generationHtml = renderPricingMusicGenerationTable(models, sortValue);
-      const perSecondHtml = renderPricingMusicPerSecondTable(models, sortValue);
+    mountPricingSection(musicEl, 'music', models, (list, sortValue) => {
+      const durationHtml = renderPricingMusicDurationTable(list, sortValue);
+      const generationHtml = renderPricingMusicGenerationTable(list, sortValue);
+      const perSecondHtml = renderPricingMusicPerSecondTable(list, sortValue);
       const musicSections = [];
 
       if (durationHtml) musicSections.push(`<h4>Song Generation (Duration-Based)</h4>${durationHtml}`);
@@ -2347,9 +2426,9 @@
       makePlaceholderVisible(websearchEl);
     }
 
-    mountPricingSection(videoEl, 'video', (sortValue) => `
+    mountPricingSection(videoEl, 'video', models, (list, sortValue) => `
         <p class="vpt-video-note">Video pricing varies by resolution and duration. Visit the <a href="/models/video">Video Models page</a> for exact quotes, or use the <a href="/api-reference/endpoint/video/quote">Video Quote API</a>.</p>
-        ${renderPricingVideoTable(models, sortValue)}
+        ${renderPricingVideoTable(list, sortValue)}
       `, () => {
       // Prices are keyed by data-model attributes, so re-fetch after each render.
       updateVideoPricesForPricingPage(models);
