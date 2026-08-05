@@ -77,7 +77,7 @@ catalog moves; the capability flags on each model are the authoritative answer.
 
 | Surface | Endpoints |
 | --- | --- |
-| Chat / text | `POST /chat/completions`; `POST /responses` (alpha) |
+| Chat / text | `POST /chat/completions` |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`; OpenAI-style `POST /images/generations` |
 | Video (async) | `POST /video/quote`, `/video/queue`, `GET /video/retrieve?id=`, `POST /video/complete`, `POST /video/transcriptions` |
 | Audio | `POST /audio/speech` (TTS), `POST /audio/voices` (voice cloning), `POST /audio/transcriptions` (STT) |
@@ -106,11 +106,8 @@ Venice-only features ride in a `venice_parameters` object on `/chat/completions`
 Feature suffixes on the model ID do the same thing, for example
 `kimi-k3:web` or `kimi-k3:enable_web_search=on`.
 
-`POST /responses` accepts a narrower set: `character_slug`, `enable_e2ee`,
-`enable_web_search`, `enable_web_scraping`, `enable_web_citations`,
-`include_venice_system_prompt`, and `include_search_results_in_stream`.
-Anything else is dropped without an error, so use `/chat/completions` when you
-need `enable_x_search` or the thinking controls.
+Venice uses `/chat/completions` for text generation and does not currently expose
+OpenAI's Responses API.
 
 ## Authentication
 
@@ -150,9 +147,6 @@ VVV on Base, with no human in the loop.
   clamped to `0` through `0.02`. The old `enhance`, `enhancePrompt`,
   `enhanceCreativity`, and `replication` fields are gone.
 - `POST /image/edit` defaults to the `firered-image-edit` model.
-- `POST /responses` silently drops `n`, `stop`, `seed`, and `prompt_cache_key`.
-  They are accepted and ignored rather than rejected. E2EE models are not
-  supported there either.
 - `GET /billing/usage` is deprecated. Use `GET /billing/usage-history`, which is
   keyset-paginated and takes `startTimestamp` / `endTimestamp` rather than the
   old parameter names.
@@ -182,7 +176,7 @@ ln -s ~/src/venice-skills/skills ~/.claude/skills/venice
 | `venice-image-generate`, `venice-image-edit` | generation, edit, upscale |
 | `venice-video` | async video generation and transcription |
 | `venice-audio-speech`, `venice-audio-music`, `venice-audio-transcription` | TTS, voice cloning, music, STT |
-| `venice-embeddings`, `venice-characters`, `venice-responses` | embeddings, personas, the alpha Responses API |
+| `venice-embeddings`, `venice-characters` | embeddings and personas |
 | `venice-augment` | document parsing and web search |
 | `venice-x402`, `venice-crypto-rpc` | wallet credits, JSON-RPC proxy |
 | `venice-billing`, `venice-api-keys` | balance, usage history, key management |

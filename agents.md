@@ -34,7 +34,7 @@ Python (OpenAI SDK): `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=VE
 
 | Surface | Endpoints |
 | --- | --- |
-| Chat / text | `POST /chat/completions` (streaming, vision, audio/video input, tool calling), `POST /responses` (alpha) |
+| Chat / text | `POST /chat/completions` (streaming, vision, audio/video input, tool calling) |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`, OpenAI-style `POST /images/generations` |
 | Video | `POST /video/queue` → `GET /video/retrieve?id=`, or `POST /video/complete` (one call); `POST /video/quote` for pricing; `POST /video/transcriptions` |
 | Audio | `POST /audio/speech` (TTS), `POST /audio/transcriptions` (STT); music via `/audio/queue`, `/audio/retrieve`, `/audio/quote`, `/audio/complete` |

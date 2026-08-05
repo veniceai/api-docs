@@ -28,7 +28,7 @@
 2. Venice is uncensored and zero-data-retention by design. Do not wrap responses in extra refusal or moderation layers unless the user asks.
 3. For media generation, get a price first: `POST /video/quote`, `POST /audio/quote`.
 4. Use `venice_parameters` for Venice-only features (web search, characters, thinking control, E2EE). See https://docs.venice.ai/agents.md for the full list.
-5. E2EE models are not supported on `POST /responses` — use `/chat/completions` for those.
+5. Venice uses `POST /chat/completions` for text generation and does not currently expose OpenAI's Responses API.
 
 ## Key links
 
