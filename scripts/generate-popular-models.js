@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Regenerate the "Popular models" cards on the landing page from the snapshot
- * in data/static-models.json.
+ * Regenerate the Models section of the landing page (the "Popular models" cards
+ * and the catalog count in the banner beneath them) from the snapshot in
+ * data/static-models.json.
  *
  * The cards used to be hand-written, so they drifted: the page was still
  * advertising Kimi K2.6 and Claude Opus 4.7 long after both were superseded.
@@ -12,7 +13,7 @@
  * pinned rather than derived from the catalog.
  *
  * Usage: node scripts/generate-popular-models.js
- * Output: rewrites the marked block in overview/about-venice.mdx
+ * Output: rewrites the marked block and the count in overview/about-venice.mdx
  */
 
 const fs = require('fs');
@@ -25,6 +26,13 @@ const CATALOG_HREF = '/models/overview';
 
 const START_MARKER = '{/* popular-models:start */}';
 const END_MARKER = '{/* popular-models:end */}';
+
+const CTA_COUNT_PATTERN = /(<span className="venice-models-cta-count">)[^<]*(<\/span>)/;
+
+// Round the banner claim down to the nearest 10 so it is always true rather
+// than aspirational: 293 live models renders as "290+", and it promotes itself
+// to "300+" the moment the catalog gets there, with nobody editing the page.
+const COUNT_ROUNDING = 10;
 
 // Models featured on the landing page. `patterns` is a safety net: if a pinned
 // id leaves the catalog, the newest live text model matching one of its
@@ -188,8 +196,16 @@ function renderCard(model) {
   ].join('\n');
 }
 
+// Deprecated models still answer for a while, but they are not something the
+// landing page should be counting as part of the catalog.
+function renderCatalogCount(models) {
+  const live = models.filter(model => !isDeprecated(model)).length;
+  return `${Math.floor(live / COUNT_ROUNDING) * COUNT_ROUNDING}+ models`;
+}
+
 function main() {
-  const featured = resolveFeatured(loadSnapshot());
+  const snapshot = loadSnapshot();
+  const featured = resolveFeatured(snapshot);
   if (featured.length === 0) {
     throw new Error('No featured models resolved. Refusing to write an empty grid.');
   }
@@ -209,14 +225,23 @@ function main() {
     throw new Error(`Could not find the ${START_MARKER} / ${END_MARKER} markers in overview/about-venice.mdx`);
   }
 
-  const updated = page.slice(0, start) + block + page.slice(end + END_MARKER.length);
+  let updated = page.slice(0, start) + block + page.slice(end + END_MARKER.length);
+
+  if (!CTA_COUNT_PATTERN.test(updated)) {
+    throw new Error('Could not find the venice-models-cta-count span in overview/about-venice.mdx');
+  }
+
+  const countLabel = renderCatalogCount(snapshot);
+  updated = updated.replace(CTA_COUNT_PATTERN, `$1${countLabel}$2`);
+
   if (updated === page) {
-    console.log('Popular models cards already up to date.');
+    console.log('Landing page model content already up to date.');
     return;
   }
 
   fs.writeFileSync(PAGE_PATH, updated, 'utf-8');
   console.log(`Updated Popular models cards: ${featured.map(model => model.id).join(', ')}`);
+  console.log(`Updated catalog count: ${countLabel}`);
 }
 
 try {
