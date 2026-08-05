@@ -91,6 +91,11 @@ async function main() {
   fs.writeFileSync(SNAPSHOT_PATH, json, 'utf-8');
   console.log('Updated data/static-models.json');
 
+  // Runs before the pricing generator, which exits the process when it has
+  // nothing to write.
+  console.log('Regenerating Popular models cards...');
+  require('./generate-popular-models.js');
+
   console.log('Regenerating pricing.mdx...');
   require('./generate-pricing-static.js');
 }
