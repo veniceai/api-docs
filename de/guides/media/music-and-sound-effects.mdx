@@ -1,0 +1,208 @@
+---
+title: "Musik & Soundeffekte"
+description: "Generiere Musik und Soundeffekte mit Venices asynchroner Audio-API: Wähle ein Modell, hole dir einen Kostenvoranschlag, stelle einen Job in die Warteschlange und lade das fertige Audio herunter."
+"og:title": "Music & Sound Effects | Venice API Docs"
+"og:description": "Erfahre, wie du mit der Venice API Musik und Soundeffekte generierst."
+---
+
+Die Generierung von Musik und Soundeffekten erfolgt asynchron. Wähle ein Modell, fordere einen Kostenvoranschlag an, stelle die Generierung in die Warteschlange und frage anschließend den Status ab, bis Venice die fertige Audiodatei zurückgibt.
+
+## Modell auswählen
+
+Durchsuche [Musik- und Soundeffekt-Modelle](/models/music) für aktuelle Modell-IDs, Preise, Dauerbegrenzungen und unterstützte Funktionen.
+
+Du kannst die Modellfähigkeiten auch zur Laufzeit abrufen:
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=music" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+Prüfe die Metadaten jedes Modells, bevor du optionale Felder wie `duration_seconds`, `lyrics_prompt`, `force_instrumental` oder `loop` setzt. Nicht unterstützte Felder führen zu einer HTTP-`400`-Antwort.
+
+## Ablauf der Generierung
+
+| Endpunkt | Zweck |
+|----------|---------|
+| [`POST /audio/quote`](/api-reference/endpoint/audio/quote) | Generierungskosten in USD schätzen |
+| [`POST /audio/queue`](/api-reference/endpoint/audio/queue) | Musik- oder Soundeffekt-Generierung starten |
+| [`POST /audio/retrieve`](/api-reference/endpoint/audio/retrieve) | Job abfragen und fertiges Audio herunterladen |
+| [`POST /audio/complete`](/api-reference/endpoint/audio/complete) | Gespeicherte Medien nach dem Download löschen |
+
+## 1. Kostenvoranschlag einholen
+
+Hole vor der Generierung einen Kostenvoranschlag ein. Gib dasselbe Modell und dieselbe Dauer an, die du an den Queue-Endpunkt senden willst.
+
+```bash
+curl https://api.venice.ai/api/v1/audio/quote \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-music",
+    "duration_seconds": 30
+  }'
+```
+
+Die Antwort enthält die geschätzten Kosten in USD:
+
+```json
+{
+  "quote": 0.75
+}
+```
+
+## 2. Generierung in die Warteschlange stellen
+
+<CodeGroup>
+```bash Musik
+curl https://api.venice.ai/api/v1/audio/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-music",
+    "prompt": "Warm cinematic strings with a gentle piano melody, hopeful and spacious",
+    "duration_seconds": 30,
+    "force_instrumental": true
+  }'
+```
+
+```bash Soundeffekt
+curl https://api.venice.ai/api/v1/audio/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-sound-effects-v2",
+    "prompt": "Ocean waves rolling onto a pebble beach at night",
+    "duration_seconds": 10
+  }'
+```
+</CodeGroup>
+
+Eine erfolgreiche Anfrage liefert das Modell und eine Queue-ID zurück:
+
+```json
+{
+  "model": "elevenlabs-music",
+  "queue_id": "123e4567-e89b-12d3-a456-426614174000",
+  "status": "QUEUED"
+}
+```
+
+Speichere sowohl `model` als auch `queue_id`; die Endpunkte zum Abrufen und Abschließen benötigen beide Werte.
+
+## 3. Status abfragen und herunterladen
+
+Rufe `/audio/retrieve` mit den Werten aus der Queue-Antwort auf:
+
+```bash
+curl https://api.venice.ai/api/v1/audio/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-music",
+    "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+  }' \
+  --output response.bin
+```
+
+Prüfe den `Content-Type` der Antwort:
+
+| Content-Type | Bedeutung | Aktion |
+|--------------|---------|--------|
+| `application/json` | Generierung läuft noch | Zeitangaben lesen, warten und erneut abfragen |
+| `audio/mpeg`, `audio/wav` oder `audio/flac` | Generierung abgeschlossen | Binären Body mit der passenden Dateiendung speichern |
+
+Eine Antwort während der Verarbeitung sieht so aus:
+
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 20000,
+  "execution_duration": 5200
+}
+```
+
+Beide Zeitangaben sind in Millisekunden.
+
+## Vollständiges Beispiel
+
+Dieses Python-Beispiel stellt Instrumentalmusik in die Warteschlange, fragt alle fünf Sekunden den Status ab und speichert das Ergebnis mit einer Dateiendung, die auf dem Content-Type basiert.
+
+```python
+import os
+import time
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+    "Content-Type": "application/json",
+}
+
+generation = {
+    "model": "elevenlabs-music",
+    "prompt": "Warm cinematic strings with a gentle piano melody, hopeful and spacious",
+    "duration_seconds": 30,
+    "force_instrumental": True,
+}
+
+quote = requests.post(f"{BASE_URL}/audio/quote", json={
+    "model": generation["model"],
+    "duration_seconds": generation["duration_seconds"],
+})
+quote.raise_for_status()
+print(f"Estimated cost: ${quote.json()['quote']:.2f}")
+
+queued = requests.post(f"{BASE_URL}/audio/queue", headers=HEADERS, json=generation)
+queued.raise_for_status()
+job = queued.json()
+
+content_type_to_extension = {
+    "audio/mpeg": ".mp3",
+    "audio/wav": ".wav",
+    "audio/flac": ".flac",
+}
+
+while True:
+    result = requests.post(
+        f"{BASE_URL}/audio/retrieve",
+        headers=HEADERS,
+        json={"model": job["model"], "queue_id": job["queue_id"]},
+    )
+    result.raise_for_status()
+    content_type = result.headers.get("Content-Type", "").split(";")[0]
+
+    if content_type in content_type_to_extension:
+        output = Path("generated-audio" + content_type_to_extension[content_type])
+        output.write_bytes(result.content)
+        print(f"Saved {output}")
+        break
+
+    status = result.json()
+    print(f"Status: {status['status']}")
+    time.sleep(5)
+
+requests.post(
+    f"{BASE_URL}/audio/complete",
+    headers=HEADERS,
+    json={"model": job["model"], "queue_id": job["queue_id"]},
+).raise_for_status()
+```
+
+<Note>
+Der Quote-Endpunkt erfordert keine Authentifizierung, Anfragen an Queue, Retrieve und Complete hingegen schon.
+</Note>
+
+## Tipps für Prompts
+
+- Beschreibe bei Musik das Genre, die Instrumente, Stimmung, Tempo, Aufbau und ob Vocals gewünscht sind.
+- Beschreibe bei Soundeffekten die Quelle, Umgebung, Intensität, Timing und Perspektive.
+- Verwende `lyrics_prompt` nur, wenn das ausgewählte Modell Songtexte unterstützt.
+- Verwende `force_instrumental` oder `loop` nur, wenn die Modell-Metadaten Unterstützung dafür angeben.
+
+## Verwandte Ressourcen
+
+- [Musik- und Soundeffekt-Modelle](/models/music)
+- [Queue-Audio-Generation-API](/api-reference/endpoint/audio/queue)
+- [Retrieve-Audio-API](/api-reference/endpoint/audio/retrieve)
