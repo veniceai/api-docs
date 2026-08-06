@@ -5,7 +5,7 @@ info:
   description: The Venice.ai API.
   termsOfService: https://venice.ai/legal/tos
   title: Venice.ai API
-  version: "20260709.204640"
+  version: "20260806.142021"
   x-guidance: >-
     Venice.ai is an OpenAI-compatible inference API supporting text, image,
     audio, and video generation.
@@ -870,7 +870,11 @@ components:
                                         for some providers), or a base64-encoded
                                         data URL (e.g.,
                                         data:video/mp4;base64,...). Supported
-                                        formats: mp4, mpeg, mov, webm."
+                                        formats: mp4, mpeg, mov, webm. Remote
+                                        URLs must be publicly accessible, must
+                                        not redirect, and must return a
+                                        permitted video Content-Type. At most 3
+                                        videos may be provided in one request."
                                       format: uri
                                   required:
                                     - url
@@ -1052,6 +1056,13 @@ components:
                     type: string
                     enum:
                       - assistant
+                  thought_signature:
+                    type: string
+                    nullable: true
+                    description: Gemini thought signature returned by native GCP transport. For
+                      multi-turn conversations (especially with tool calls),
+                      pass it back exactly as received to preserve thought
+                      signatures.
                   tool_calls:
                     type: array
                     nullable: true
@@ -1760,7 +1771,9 @@ components:
               description: "The URL of the video. Can be a direct URL (including YouTube links
                 for some providers), or a base64-encoded data URL (e.g.,
                 data:video/mp4;base64,...). Supported formats: mp4, mpeg, mov,
-                webm."
+                webm. Remote URLs must be publicly accessible, must not
+                redirect, and must return a permitted video Content-Type. At
+                most 3 videos may be provided in one request."
               format: uri
           required:
             - url
@@ -2710,6 +2723,14 @@ components:
             `supportsOptimizePromptThinking`; ignored by others. Omit to use the
             model default.
           example: false
+        enhance_prompt:
+          type: boolean
+          description: Rewrite the prompt before generation to add clarifying visual
+            detail. Additional credits are charged when a rewrite is generated.
+            Adds up to ~30 seconds before generation starts. When enhancement is
+            applied, the final prompt is returned URL-encoded in the
+            `x-venice-enhanced-prompt` response header. Defaults to false.
+          example: false
         width:
           type: integer
           minimum: 0
@@ -2718,6 +2739,38 @@ components:
           default: 1024
           description: Width of the generated image.
           example: 1024
+        style_references:
+          type: array
+          items:
+            type: object
+            properties:
+              image:
+                anyOf:
+                  - type: string
+                  - type: string
+                    format: uri
+                description: A style reference image as a base64-encoded string (raw or data
+                  URI) or a URL starting with http:// or https://. Must be less
+                  than 8MB.
+                example: https://example.com/style-reference.png
+              strength:
+                type: number
+                minimum: 0.1
+                maximum: 1
+                description: How strongly the reference guides the output (0.1–1). Defaults to
+                  0.5. Ignored by models where supportsStyleReferenceStrength is
+                  false.
+                example: 0.5
+            required:
+              - image
+            additionalProperties: false
+          description: "Style reference images that guide the aesthetic of the generated
+            image. Only supported by models with `supportsStyleReferences: true`
+            (see GET /api/v1/models for the per-model `maxStyleReferences`
+            limit)."
+          example:
+            - image: https://example.com/style-reference.png
+              strength: 0.5
       required:
         - model
         - prompt
@@ -2898,6 +2951,21 @@ components:
             values vary by model - check GET /api/v1/models for model-specific
             options.
           example: 16:9
+        disable_prompt_optimization_thinking:
+          type: boolean
+          description: Skip the model's prompt-optimization thinking step for faster
+            generation. Only supported by models with
+            `supportsOptimizePromptThinking`; ignored by others. Omit to use the
+            model default.
+          example: false
+        enhance_prompt:
+          type: boolean
+          description: Rewrite the edit prompt using the input image before editing to add
+            clarifying detail. Additional credits are charged when a rewrite is
+            generated. Adds up to ~30 seconds. When enhancement is applied, the
+            final prompt is returned URL-encoded in the
+            `x-venice-enhanced-prompt` response header. Defaults to false.
+          example: false
         resolution:
           type: string
           minLength: 1
@@ -3012,13 +3080,13 @@ components:
             description: Image as a base64-encoded string or a URL starting with http:// or
               https://
           minItems: 1
-          maxItems: 3
-          description: Array of 1 to 3 images used for multi-editing. The first image is
-            treated as the base image, and the remaining images are used as edit
-            layers/masks. Each image can be a base64-encoded string or a URL
-            starting with http:// or https://. Image dimensions must be at least
-            65536 pixels and must not exceed 33177600 pixels. File size must be
-            less than 25MB.
+          description: Images used for multi-editing (minimum 1). The maximum is
+            model-specific — see `capabilities.maxInputImages` from GET
+            /api/v1/models. The first image is treated as the base image, and
+            the remaining images are used as edit layers/masks. Each image can
+            be a base64-encoded string or a URL starting with http:// or
+            https://. Image dimensions must be at least 65536 pixels and must
+            not exceed 33177600 pixels. File size must be less than 25MB.
         quality:
           type: string
           enum:
@@ -3050,12 +3118,21 @@ components:
             `supportsOptimizePromptThinking`; ignored by others. Omit to use the
             model default.
           example: false
+        enhance_prompt:
+          type: boolean
+          description: Rewrite the edit prompt using the input images before editing to
+            add clarifying detail. Additional credits are charged when a rewrite
+            is generated. Adds up to ~30 seconds. When enhancement is applied,
+            the final prompt is returned URL-encoded in the
+            `x-venice-enhanced-prompt` response header. Defaults to false.
+          example: false
       required:
         - prompt
         - images
       additionalProperties: false
-      description: Edit an image by compositing up to three layered images with a
-        single prompt. Supports base64-encoded strings and URLs.
+      description: Edit an image by compositing multiple layered input images (up to
+        the per-model maximum) with a single prompt. Supports base64-encoded
+        strings and URLs.
     MultiEditImageMultipartRequest:
       type: object
       properties:
@@ -3104,9 +3181,10 @@ components:
             type: string
             format: binary
           minItems: 1
-          maxItems: 3
-          description: Array of 1 to 3 image files. The first image is treated as the base
-            image, and the remaining images are used as edit layers/masks.
+          description: Image files (minimum 1). The maximum is model-specific — see
+            `capabilities.maxInputImages` from GET /api/v1/models. The first
+            image is treated as the base image, and the remaining images are
+            used as edit layers/masks.
         quality:
           type: string
           enum:
@@ -3138,11 +3216,20 @@ components:
             `supportsOptimizePromptThinking`; ignored by others. Omit to use the
             model default.
           example: false
+        enhance_prompt:
+          type: boolean
+          description: Rewrite the edit prompt using the input images before editing to
+            add clarifying detail. Additional credits are charged when a rewrite
+            is generated. Adds up to ~30 seconds. When enhancement is applied,
+            the final prompt is returned URL-encoded in the
+            `x-venice-enhanced-prompt` response header. Defaults to false.
+          example: false
       required:
         - prompt
         - images
-      description: Edit an image by compositing up to three layered image files with a
-        single prompt. Only file uploads are supported with multipart/form-data.
+      description: Edit an image by compositing multiple layered input image files (up
+        to the per-model maximum) with a single prompt. Only file uploads are
+        supported with multipart/form-data.
     BackgroundRemoveImageRequest:
       type: object
       properties:
@@ -3319,8 +3406,10 @@ components:
             - flac
             - wav
             - pcm
-          default: mp3
-          description: The format to audio in.
+          description: Requested audio output format. Supported formats and the default
+            when omitted are model-specific; see `model_spec.supported_formats`
+            and `model_spec.default_format` from GET /models?type=tts. An
+            explicit unsupported format returns HTTP 400.
           example: mp3
         speed:
           type: number
@@ -3353,188 +3442,13 @@ components:
             `supportsTopPParam` (currently Qwen 3 TTS). Ignored by other models.
           example: 1
         voice:
-          anyOf:
-            - type: string
-              enum:
-                - af_alloy
-                - af_aoede
-                - af_bella
-                - af_heart
-                - af_jadzia
-                - af_jessica
-                - af_kore
-                - af_nicole
-                - af_nova
-                - af_river
-                - af_sarah
-                - af_sky
-                - am_adam
-                - am_echo
-                - am_eric
-                - am_fenrir
-                - am_liam
-                - am_michael
-                - am_onyx
-                - am_puck
-                - am_santa
-                - bf_alice
-                - bf_emma
-                - bf_lily
-                - bm_daniel
-                - bm_fable
-                - bm_george
-                - bm_lewis
-                - zf_xiaobei
-                - zf_xiaoni
-                - zf_xiaoxiao
-                - zf_xiaoyi
-                - zm_yunjian
-                - zm_yunxi
-                - zm_yunxia
-                - zm_yunyang
-                - ff_siwis
-                - hf_alpha
-                - hf_beta
-                - hm_omega
-                - hm_psi
-                - if_sara
-                - im_nicola
-                - jf_alpha
-                - jf_gongitsune
-                - jf_nezumi
-                - jf_tebukuro
-                - jm_kumo
-                - pf_dora
-                - pm_alex
-                - pm_santa
-                - ef_dora
-                - em_alex
-                - em_santa
-                - Vivian
-                - Serena
-                - Ono_Anna
-                - Sohee
-                - Uncle_Fu
-                - Dylan
-                - Eric
-                - Ryan
-                - Aiden
-                - eve
-                - ara
-                - rex
-                - sal
-                - leo
-                - Craig
-                - Ashley
-                - Olivia
-                - Sarah
-                - Elizabeth
-                - Priya
-                - Alex
-                - Edward
-                - Theodore
-                - Ronald
-                - Mark
-                - Hades
-                - Luna
-                - Pixie
-                - Aurora
-                - Britney
-                - Siobhan
-                - Vicky
-                - Blade
-                - Carl
-                - Cliff
-                - Richard
-                - Rico
-                - tara
-                - leah
-                - jess
-                - mia
-                - zoe
-                - dan
-                - zac
-                - Rachel
-                - Aria
-                - Laura
-                - Charlotte
-                - Alice
-                - Matilda
-                - Jessica
-                - Lily
-                - Roger
-                - Charlie
-                - George
-                - Callum
-                - River
-                - Liam
-                - Will
-                - Chris
-                - Brian
-                - Daniel
-                - Bill
-                - WiseWoman
-                - FriendlyPerson
-                - InspirationalGirl
-                - CalmWoman
-                - LivelyGirl
-                - LovelyGirl
-                - SweetGirl
-                - ExuberantGirl
-                - DeepVoiceMan
-                - CasualGuy
-                - PatientMan
-                - YoungKnight
-                - DeterminedMan
-                - ImposingManner
-                - ElegantMan
-                - Achernar
-                - Achird
-                - Algenib
-                - Algieba
-                - Alnilam
-                - Aoede
-                - Autonoe
-                - Callirrhoe
-                - Charon
-                - Despina
-                - Enceladus
-                - Erinome
-                - Fenrir
-                - Gacrux
-                - Iapetus
-                - Kore
-                - Laomedeia
-                - Leda
-                - Orus
-                - Pulcherrima
-                - Puck
-                - Rasalgethi
-                - Sadachbia
-                - Sadaltager
-                - Schedar
-                - Sulafat
-                - Umbriel
-                - Vindemiatrix
-                - Zephyr
-                - Zubenelgenubi
-                - Emma
-                - Kent
-                - Eva
-                - Jack
-                - Mia
-                - Maximilian
-                - Valentina
-                - Sergio
-                - Elise
-                - Leo
-                - Davi
-            - type: string
-              pattern: ^vv_[A-Za-z0-9_-]+$
+          type: string
+          maxLength: 512
           default: af_sky
-          description: "The voice to use when generating the audio. Voices are
-            model-specific: Kokoro (e.g. af_sky, af_bella, am_adam), Qwen 3
-            (e.g. Vivian, Serena, Dylan), xAI (eve, ara, rex, sal, leo), Orpheus
+          description: "The voice to use when generating the audio. The maximum length is
+            512 characters. Voices are model-specific: Kokoro (e.g. af_sky,
+            af_bella, am_adam), Qwen 3 (e.g. Vivian, Serena, Dylan), xAI (26
+            voices, e.g. eve, ara, rex, sal, leo, luna, orion, carina), Orpheus
             (tara, leah, jess, leo, dan, mia, zac, zoe), Inworld (Craig, Ashley,
             ...), Chatterbox (Aurora, Blade, ...), ElevenLabs Turbo (Rachel,
             Aria, ...), MiniMax (WiseWoman, DeepVoiceMan, ...), Gradium (Emma,
@@ -3542,8 +3456,11 @@ components:
             spanning en/de/es/fr/pt). You can also pass a cloned-voice handle
             (`vv_<id>`) returned by POST /v1/audio/voices to synthesize in a
             previously cloned voice; the handle must be paired with the same
-            model used to create it. Using an incompatible voice returns a 400
-            error. Call GET /models/{id} to list voices for a specific model."
+            model used to create it. Models that advertise
+            `supports_custom_voice_id` (e.g. ElevenLabs) additionally accept a
+            raw provider Voice ID here. Using an incompatible voice returns a
+            400 error. Call GET /models/{id} to list voices for a specific
+            model."
           example: af_sky
       required:
         - input
@@ -3671,16 +3588,16 @@ components:
         prompt:
           type: string
           minLength: 1
-          maxLength: 10000
+          maxLength: 20000
           description: The prompt to use for video generation. Required for most models.
             The maximum length varies by model (default 2500 characters, up to
-            10000 for some models such as Seedance 2.0).
+            20000 for some models).
           example: Commerce being conducted in the city of Venice, Italy.
         negative_prompt:
           type: string
-          maxLength: 10000
+          maxLength: 20000
           description: Optional negative prompt. The maximum length varies by model
-            (default 2500 characters, up to 10000 for some models).
+            (default 2500 characters, up to 20000 for some models).
           example: low resolution, error, worst quality, low quality, defects
         duration:
           type: string
@@ -3701,9 +3618,19 @@ components:
             - 14s
             - 15s
             - 16s
+            - 17s
             - 18s
+            - 19s
             - 20s
+            - 21s
+            - 22s
+            - 23s
+            - 24s
             - 25s
+            - 26s
+            - 27s
+            - 28s
+            - 29s
             - 30s
             - 1 gen
             - Auto
@@ -3724,6 +3651,8 @@ components:
             - 9:21
             - 16:9
             - 21:9
+            - adaptive
+            - auto
           description: The aspect ratio of the video. Available options vary by model.
             Some models do not support aspect_ratio.
           example: 16:9
@@ -3742,6 +3671,8 @@ components:
             - 4k
             - 2x
             - 4x
+            - 2K
+            - 768P
             - true_1080p
           description: The resolution of the video. Available options vary by model. Some
             models do not support resolution. Use upscale_factor for upscale
@@ -3787,8 +3718,8 @@ components:
           type: array
           items:
             type: string
-          maxItems: 9
-          description: For models with reference image support, up to 9 images for
+          maxItems: 30
+          description: For models with reference image support, up to 30 images for
             character/style consistency. Each must be a URL or data URL.
           example:
             - data:image/png;base64,iVBORw0K...
@@ -3796,9 +3727,9 @@ components:
           type: array
           items:
             type: string
-          maxItems: 3
+          maxItems: 10
           description: 'For models with reference video support (e.g. Seedance 2.0 R2V),
-            up to 3 reference video URLs (`role: "reference_video"`) used to
+            up to 10 reference video URLs (`role: "reference_video"`) used to
             inherit subject motion, camera movement, and overall style. Per-clip
             2–15 s, .mp4 or .mov, ≤50 MB; aggregate duration ≤15 s. Each must be
             a URL or data URL.'
@@ -3808,9 +3739,9 @@ components:
           type: array
           items:
             type: string
-          maxItems: 3
+          maxItems: 10
           description: 'For models with reference audio support (e.g. Seedance 2.0 R2V),
-            up to 3 reference audio URLs (`role: "reference_audio"`) used as
+            up to 10 reference audio URLs (`role: "reference_audio"`) used as
             donors for vocal timbre, narration, or sound effects. Per-clip 2–15
             s, .wav or .mp3; aggregate duration ≤15 s. Must be paired with at
             least one reference image or reference video — audio-only Reference
@@ -3849,6 +3780,28 @@ components:
             images. Reference in prompt as @Image1, @Image2, etc.
           example:
             - data:image/png;base64,iVBORw0K...
+        keyframes:
+          type: array
+          items:
+            type: object
+            properties:
+              image_url:
+                type: string
+              frame_index:
+                type: integer
+                minimum: 0
+            required:
+              - image_url
+              - frame_index
+          maxItems: 10
+          description: For keyframe-driven models. Up to 10 keyframe images pinned to
+            frame positions in the generated 24 fps video. Each frame_index must
+            be unique and no greater than duration × 24.
+          example:
+            - image_url: data:image/png;base64,iVBORw0K...
+              frame_index: 0
+            - image_url: data:image/png;base64,iVBORw0K...
+              frame_index: 120
       required:
         - model
         - prompt
@@ -3881,9 +3834,19 @@ components:
             - 14s
             - 15s
             - 16s
+            - 17s
             - 18s
+            - 19s
             - 20s
+            - 21s
+            - 22s
+            - 23s
+            - 24s
             - 25s
+            - 26s
+            - 27s
+            - 28s
+            - 29s
             - 30s
             - 1 gen
             - Auto
@@ -3903,6 +3866,8 @@ components:
             - 9:21
             - 16:9
             - 21:9
+            - adaptive
+            - auto
           description: The aspect ratio. Required for some models with megapixel-rate
             pricing.
           example: 16:9
@@ -3921,6 +3886,8 @@ components:
             - 4k
             - 2x
             - 4x
+            - 2K
+            - 768P
             - true_1080p
           description: The resolution. Required for models with duration-resolution-rate
             pricing.
@@ -3948,7 +3915,7 @@ components:
           type: number
           minimum: 0
           description: For R2V models (e.g. Seedance 2.0 R2V), the aggregate duration in
-            seconds of all reference videos to include in the quote (max 45s;
+            seconds of all reference videos to include in the quote (max 150s;
             per-clip 2–15s, total ≤15s for Seedance). When provided, the quote
             reflects the BytePlus 'input with video' rate tier and the
             (input+output)×pixels token formula. When omitted, the quote returns
@@ -4094,6 +4061,12 @@ components:
           description: When enabled, auto-generates lyrics from the prompt. Only supported
             when `/models` reports `supports_lyrics_optimizer=true`.
             lyrics_prompt must be empty when this is true.
+          example: false
+        loop:
+          type: boolean
+          description: Render the clip so its end splices back into its start without an
+            audible seam. Only supported when `/models` reports
+            `supports_loop=true`.
           example: false
         voice:
           type: string
@@ -4858,7 +4831,7 @@ components:
         id:
           type: string
           description: Model ID
-          example: zai-org-glm-5-2
+          example: gemini-3-6-flash
         model_spec:
           type: object
           properties:
@@ -4872,7 +4845,7 @@ components:
               description: The maximum number of completion tokens the model can generate. Use
                 this to know the upper bound for the max_completion_tokens
                 request parameter. Only applicable for text models.
-              example: 131072
+              example: 65536
             beta:
               type: boolean
               description: Is this model restricted to beta users only? If true, only users
@@ -5025,6 +4998,11 @@ components:
                   description: Maximum number of images supported per request. Only present when
                     supportsMultipleImages is true.
                   example: 10
+                maxVideos:
+                  type: number
+                  description: Maximum number of video attachments supported per chat request.
+                    Only present when supportsVideoInput is true.
+                  example: 4
                 supportsVision:
                   type: boolean
                   description: Does the LLM support vision?
@@ -5164,6 +5142,18 @@ components:
                       description: The requested width and height of the image generation must be
                         divisible by this value.
                       example: 8
+                    maxStyleReferences:
+                      type: number
+                      description: Maximum number of style_references accepted by POST
+                        /image/generate. Only present for models that support
+                        style references.
+                      example: 3
+                    supportsStyleReferenceStrength:
+                      type: boolean
+                      description: Whether per-reference `strength` is honored. When false,
+                        style_references strength is ignored. Only present for
+                        models that support style references.
+                      example: true
                   required:
                     - promptCharacterLimit
                     - steps
@@ -5306,6 +5296,14 @@ components:
                       type: boolean
                       description: Whether this model supports combining multiple input images.
                       example: true
+                    maxInputImages:
+                      type: integer
+                      minimum: 0
+                      exclusiveMinimum: true
+                      description: Maximum number of input images accepted for combine/multi-edit.
+                        Absent means the default of 3 (or 1 when combineImages
+                        is false).
+                      example: 14
                     singleImageAspectRatio:
                       type: boolean
                       description: If false, output dimensions match the input on single-image edits
@@ -5360,6 +5358,11 @@ components:
                   description: Constraints that apply to inpaint/edit models.
                   title: Inpaint Model Constraints
               description: Constraints that apply to this model.
+            supportsStyleReferences:
+              type: boolean
+              description: Whether this image model accepts `style_references` on POST
+                /image/generate. Only present for image models.
+              example: true
             description:
               type: string
               description: A human-readable description of the model and its capabilities.
@@ -5368,11 +5371,11 @@ components:
             name:
               type: string
               description: The name of the model.
-              example: GLM 5.2
+              example: Gemini 3.6 Flash
             modelSource:
               type: string
               description: The source of the model, such as a URL to the model repository.
-              example: https://huggingface.co/zai-org/GLM-5.2
+              example: ""
             offline:
               type: boolean
               default: false
@@ -6015,6 +6018,11 @@ components:
               description: Whether this audio-generation model supports the force_instrumental
                 request parameter.
               example: true
+            supports_loop:
+              type: boolean
+              description: Whether this audio-generation model supports the loop request
+                parameter.
+              example: true
             voices:
               type: array
               items:
@@ -6086,6 +6094,12 @@ components:
               type: string
               description: Default voice for voice-enabled music models.
               example: Aria
+            supports_custom_voice_id:
+              type: boolean
+              description: Whether this model accepts a caller-supplied provider Voice ID in
+                the `voice` parameter in addition to its curated `voices` (e.g.
+                paste an ElevenLabs Voice ID).
+              example: true
             supports_language_code:
               type: boolean
               description: Whether this music model supports an ISO 639-1 language_code
@@ -6133,13 +6147,16 @@ components:
               type: array
               items:
                 type: string
-              description: Supported audio formats for this music model.
+              description: Supported output audio formats for this TTS or music model. An
+                explicit format outside this list is rejected by the
+                corresponding generation endpoint.
               example:
                 - mp3
                 - wav
             default_format:
               type: string
-              description: Default audio format for this music model.
+              description: Output audio format used when the request omits a format.
+                Applicable to TTS and music models.
               example: mp3
             prompt_character_limit:
               type: number
@@ -6520,6 +6537,13 @@ paths:
                                   type: string
                                   enum:
                                     - assistant
+                                thought_signature:
+                                  type: string
+                                  nullable: true
+                                  description: Gemini thought signature returned by native GCP transport. For
+                                    multi-turn conversations (especially with
+                                    tool calls), pass it back exactly as
+                                    received to preserve thought signatures.
                                 tool_calls:
                                   type: array
                                   nullable: true
@@ -8000,6 +8024,8 @@ paths:
                         - seedream-v5-lite-edit
                         - seedream-v5-pro-edit
                         - seedream-v4-edit
+                        - qwen-image-3-edit
+                        - qwen-image-3-pro-edit
           multipart/form-data:
             schema:
               allOf:
@@ -8027,6 +8053,8 @@ paths:
                         - seedream-v5-lite-edit
                         - seedream-v5-pro-edit
                         - seedream-v4-edit
+                        - qwen-image-3-edit
+                        - qwen-image-3-pro-edit
       security:
         - BearerAuth: []
         - siwx: []
@@ -8190,8 +8218,9 @@ paths:
   /image/multi-edit:
     post:
       description: >-
-        Edit or modify an image using up to three layered inputs (base image
-        plus masks/overlays).
+        Edit or modify an image using multiple layered inputs (base image plus
+        masks/overlays), up to the selected model's maximum input images (see
+        the capabilities.maxInputImages field in GET /api/v1/models).
 
 
         **Supported input formats by Content-Type:**
@@ -8247,6 +8276,8 @@ paths:
                         - seedream-v5-lite-edit
                         - seedream-v5-pro-edit
                         - seedream-v4-edit
+                        - qwen-image-3-edit
+                        - qwen-image-3-pro-edit
           multipart/form-data:
             schema:
               allOf:
@@ -8272,6 +8303,8 @@ paths:
                         - seedream-v5-lite-edit
                         - seedream-v5-pro-edit
                         - seedream-v4-edit
+                        - qwen-image-3-edit
+                        - qwen-image-3-pro-edit
       security:
         - BearerAuth: []
         - siwx: []
@@ -9815,7 +9848,19 @@ paths:
                           example: paid
                         rateLimitType:
                           type: string
-                          description: The type of rate limit that was exceeded.
+                          enum:
+                            - RPD
+                            - RPM
+                            - TPM
+                            - FAILED_REQUESTS
+                            - UNSUPPORTED_FEATURE_REQUESTS
+                          description: The type of rate limit that was exceeded. RPM, TPM, and RPD are
+                            throughput limits (requests per minute, tokens per
+                            minute, requests per day). FAILED_REQUESTS means too
+                            many requests returned a non-success status code
+                            within the window. UNSUPPORTED_FEATURE_REQUESTS
+                            means too many requests asked a model for a feature
+                            it does not support.
                           example: RPM
                         timestamp:
                           type: string
@@ -10962,6 +11007,12 @@ paths:
     post:
       description: >-
         Converts text to speech using various voice models and formats.
+
+
+        **Output formats:** Format support is model-specific. Read
+        `model_spec.supported_formats` and `model_spec.default_format` from GET
+        /models?type=tts. Omitting `response_format` uses the model default;
+        requesting an unsupported format returns HTTP 400.
 
 
         **Voice cloning:** Some TTS models (e.g. `tts-chatterbox-hd`) accept a
@@ -12918,9 +12969,11 @@ paths:
     get:
       deprecated: true
       description: "Get paginated billing usage data for the authenticated user.
-        DEPRECATED: This endpoint will be removed in a future release. Use GET
+        DEPRECATED: This endpoint is rate limited to 1 request per minute per
+        user and will be removed in a future release. Use GET
         /api/v1/billing/usage-history instead, which provides the same data with
-        keyset pagination."
+        keyset pagination. Accounts created on or after 2026-07-07 are blocked
+        with a 410 and must use the replacement endpoint."
       operationId: getBillingUsage
       parameters:
         - description: Accept header to specify the response format
@@ -13200,6 +13253,55 @@ paths:
                 description: Points to the replacement endpoint
                 example: </api/v1/billing/usage-history>; rel="successor-version"
                 type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "410":
+          description: This endpoint has been deprecated
+          headers:
+            Deprecation:
+              schema:
+                description: RFC 9745 date at which the endpoint was deprecated
+                example: "@1783555200"
+                type: string
+            Link:
+              schema:
+                description: Points to the replacement endpoint
+                example: </api/v1/billing/usage-history>; rel="successor-version"
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardError"
+        "429":
+          description: Rate limit exceeded
+          headers:
+            Deprecation:
+              schema:
+                description: RFC 9745 date at which the endpoint was deprecated
+                example: "@1783555200"
+                type: string
+            Link:
+              schema:
+                description: Points to the replacement endpoint
+                example: </api/v1/billing/usage-history>; rel="successor-version"
+                type: string
+            Retry-After:
+              schema:
+                description: Seconds to wait before retrying
+                example: 60
+                type: number
+            x-ratelimit-remaining:
+              schema:
+                description: Requests remaining in the current window
+                example: 0
+                type: number
+            x-ratelimit-resets:
+              schema:
+                description: Unix millisecond timestamp at which the window resets
+                example: 1783555200000
+                type: number
           content:
             application/json:
               schema:
@@ -13787,6 +13889,10 @@ paths:
                       - optimism-sepolia
                       - polygon-amoy
                       - polygon-mainnet
+                      - robinhood-mainnet
+                      - robinhood-testnet
+                      - solana-devnet
+                      - solana-mainnet
                       - starknet-mainnet
                       - starknet-sepolia
                       - zksync-mainnet
@@ -13815,14 +13921,16 @@ paths:
         - **Standard (1×)**: `eth_call`, `eth_getBalance`, `eth_blockNumber`,
         `eth_sendRawTransaction`, `eth_getLogs`, `net_version`,
         `web3_clientVersion`, ERC-4337 bundler methods (`eth_sendUserOperation`,
-        etc.), and chain-family extensions (`zks_*`, `linea_*`, `bor_*`,
-        `starknet_*`).
+        etc.), chain-family extensions (`zks_*`, `linea_*`, `bor_*`,
+        `starknet_*`), and Solana methods (`getAccountInfo`, `getBalance`,
+        `getLatestBlockhash`, `sendTransaction`, etc.).
 
         - **Advanced (2×)**: `trace_*`, `debug_*`, `txpool_inspect`,
         `txpool_status`, `arbtrace_*`.
 
         - **Large (4×)**: `trace_replayBlockTransactions`,
-        `trace_replayTransaction`, `txpool_content`, `arbtrace_replay*`.
+        `trace_replayTransaction`, `txpool_content`, `arbtrace_replay*`, and
+        Solana `getLargestAccounts`, `getSupply`.
 
 
         Stateful filter methods (`eth_newFilter`, `eth_getFilterChanges`,
@@ -13831,8 +13939,8 @@ paths:
         upstream backend. Use `eth_getLogs` instead.
 
 
-        WebSocket-only methods (`eth_subscribe`, `eth_unsubscribe`) return 400
-        because this proxy is HTTP-only.
+        WebSocket-only methods (EVM `eth_subscribe`/`eth_unsubscribe` and Solana
+        `*Subscribe`/`*Unsubscribe`) return 400 because this proxy is HTTP-only.
 
 
         ## Pricing
@@ -13840,8 +13948,9 @@ paths:
         Credits consumed per call = `baseCredits[chain] × methodTier`.
         `baseCredits` is 20 for most EVM chains (Ethereum, Base, Optimism,
         Arbitrum, Polygon, Linea, Avalanche, BSC, Blast) and Starknet; 30 for
-        zkSync Era. The USD price per credit is `~7e-7` — a single standard EVM
-        call costs ≈ $0.000014 and a large trace-replay costs ≈ $0.000056.
+        zkSync Era and Solana. The USD price per credit is `~7e-7` — a single
+        standard EVM call costs ≈ $0.000014 and a large trace-replay costs ≈
+        $0.000056.
 
 
         Per-request errors at the JSON-RPC layer (HTTP 200 with an `error` field

@@ -5,7 +5,7 @@
 ## TL;DR
 
 - **Base URL:** `https://api.venice.ai/api/v1`
-- **Auth:** `Authorization: Bearer <VENICE_API_KEY>` — or **x402 wallet auth** (USDC on Base, no API key or account needed)
+- **Auth:** `Authorization: Bearer <VENICE_API_KEY>` — or **x402 wallet auth** (USDC on Base or Solana, no API key or account needed)
 - **OpenAI-compatible:** Use any OpenAI SDK; only change `base_url` and the model ID
 - **Discover models at runtime:** `GET /models` (text), `GET /models?type=image|video|audio|tts|embedding` — never hardcode model lists; they change frequently
 - **Default text model trait:** `GET /models/traits` maps traits like `text:default`, `text:uncensored`, `image:fast` to current model IDs
@@ -40,9 +40,9 @@ Python (OpenAI SDK): `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=VE
 | Audio | `POST /audio/speech` (TTS), `POST /audio/transcriptions` (STT); music via `/audio/queue`, `/audio/retrieve`, `/audio/quote`, `/audio/complete` |
 | Embeddings | `POST /embeddings` |
 | Tools | `POST /augment/search` (web search), `/augment/scrape` (URL → markdown), `/augment/text-parser` (PDF/DOCX/XLSX → text) |
-| Blockchain RPC | `POST /crypto/rpc` — JSON-RPC to Ethereum, Base, Arbitrum, Optimism, Polygon, and more (one key, batch up to 100); `GET /crypto/networks` (public) |
+| Blockchain RPC | `POST /crypto/rpc/{network}` — JSON-RPC to Ethereum, Base, Arbitrum, Optimism, Polygon, Solana, Starknet, and more (one key, batch up to 100); `GET /crypto/rpc/networks` for the live slug list |
 | Models | `GET /models`, `/models/traits`, `/models/compatibility_mapping` |
-| Account | `GET /billing/balance`, `/billing/usage`, `/api_keys/*`, `/api_keys/rate_limits` |
+| Account | `GET /billing/balance`, `/billing/usage-history` (`/billing/usage` is deprecated), `/api_keys/*`, `/api_keys/rate_limits` |
 | Characters | `GET /characters`, `/characters/{slug}` |
 | x402 wallet | `GET /x402/balance`, `POST /x402/top-up`, `GET /x402/transactions` |
 
@@ -69,12 +69,13 @@ Feature suffixes also work on model IDs, e.g. `venice-uncensored:web` enables we
 4. **Handle errors by code.** Error reference: https://docs.venice.ai/api-reference/error-codes.
 5. **No content filtering.** Venice models are uncensored by default; do not add unnecessary refusal layers on top.
 6. **Privacy tiers.** Models are tagged Anonymized, Private (zero retention), TEE (hardware enclave), or E2EE (client-side encryption). Pick per your privacy requirements: https://docs.venice.ai/overview/privacy.
-7. **Autonomous key creation.** Agents can mint their own API key by staking VVV on Base — no human required: https://docs.venice.ai/guides/getting-started/generating-api-key-agent. Or skip keys entirely with x402: https://docs.venice.ai/guides/integrations/x402-venice-api.
+7. **Autonomous key creation.** Agents can mint their own API key by staking VVV on Base — no human required: https://docs.venice.ai/guides/integrations/generating-api-key-agent. Or skip keys entirely with x402: https://docs.venice.ai/guides/integrations/x402-venice-api.
 
 ## Key guides
 
 - Getting started: https://docs.venice.ai/overview/getting-started.md
-- AI agents (Eliza, frameworks): https://docs.venice.ai/guides/integrations/ai-agents.md
+- VVV & DIEM (stake for daily API credit): https://docs.venice.ai/overview/vvv-diem.md
+- AI agents (apps, coding tools, agent tooling, SDKs, and frameworks): https://docs.venice.ai/guides/integrations/ai-agents.md
 - Crypto RPC for agents: https://docs.venice.ai/guides/integrations/crypto-rpc-agents.md
 - Venice MCP server: https://docs.venice.ai/guides/integrations/venice-mcp.md
 - Venice Agent Skills: https://docs.venice.ai/guides/integrations/venice-skills.md
