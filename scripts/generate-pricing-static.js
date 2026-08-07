@@ -2,7 +2,7 @@
 /**
  * Generate static pricing content for pricing.mdx
  * 
- * This script reads STATIC_MODELS from model-search.js and generates
+ * This script reads the model snapshot from data/static-models.json and generates
  * markdown tables for pricing data, ensuring agent-friendly plain text format.
  * 
  * Placeholder divs are preserved so model-search.js can detect the pricing
@@ -15,19 +15,13 @@
 const fs = require('fs');
 const path = require('path');
 
-// Read model-search.js and extract STATIC_MODELS
 function extractStaticModels() {
-  const modelSearchPath = path.join(__dirname, '..', 'model-search.js');
-  const content = fs.readFileSync(modelSearchPath, 'utf-8');
-  
-  // Find STATIC_MODELS array using regex
-  const match = content.match(/const STATIC_MODELS = (\[[\s\S]*?\]);/);
-  if (!match) {
-    throw new Error('Could not find STATIC_MODELS in model-search.js');
+  const snapshotPath = path.join(__dirname, '..', 'data', 'static-models.json');
+  if (!fs.existsSync(snapshotPath)) {
+    throw new Error('Missing data/static-models.json');
   }
-  
-  // Parse the JSON array
-  return JSON.parse(match[1]);
+
+  return JSON.parse(fs.readFileSync(snapshotPath, 'utf-8'));
 }
 
 // Helper functions (same logic as model-search.js)
@@ -190,14 +184,15 @@ function renderPricingEditTable(models) {
   const editModels = models.filter(m => m.id === 'qwen-image' || m.type === 'inpaint').filter(m => !isDeprecatedModel(m));
   if (editModels.length === 0) return 'No models available.';
 
-  const header = `| Model | ID | Per Edit |\n|---|---|---|`;
+  const header = `| Model | ID | Per Edit | Extra Input Image |\n|---|---|---|---|`;
   const rows = editModels.map(model => {
     const spec = model.model_spec || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
     const editPrice = spec.pricing?.inpaint?.usd ?? 0.04;
+    const extraInputUsd = spec.pricing?.inputImages?.additional?.usd;
 
-    return `| ${name} | ${modelId} | ${formatPrice(editPrice)} |`;
+    return `| ${name} | ${modelId} | ${formatPrice(editPrice)} | ${formatPrice(extraInputUsd)} |`;
   }).join('\n');
 
   return header + '\n' + rows + '\n';
@@ -403,6 +398,8 @@ function generatePricingMdx() {
   sections.push('#### Editing');
   sections.push('');
   sections.push(editHtml);
+  sections.push('> **Editing with multiple input images:** The **Per Edit** price includes the first input image. Models that list an **Extra Input Image** price charge that fee for each additional input image beyond the first. Example: editing with 3 input images on a model priced at $0.11 per edit with a $0.0035 extra-image fee costs $0.11 + 2 \u00d7 $0.0035 = $0.117.');
+  sections.push('');
   sections.push('</div>');
   sections.push('');
   sections.push('### Audio');
@@ -475,10 +472,10 @@ function generatePricingMdx() {
   sections.push('');
   sections.push('<CardGroup cols={3}>');
   sections.push('  <Card title="USD" icon="credit-card" href="https://venice.ai/settings/api">');
-  sections.push('    Buy API credits with credit card. Credits never expire.');
+  sections.push('    Buy Venice credits with credit card. Credits never expire.');
   sections.push('  </Card>');
   sections.push('  <Card title="Crypto" icon="bitcoin" href="https://venice.ai/settings/api">');
-  sections.push('    Buy API credits with cryptocurrency. Same rates as USD.');
+  sections.push('    Buy Venice credits with cryptocurrency. Same rates as USD.');
   sections.push('  </Card>');
   sections.push('  <Card title="Stake DIEM" icon="coins" href="https://venice.ai/token">');
   sections.push('    Each Diem = $1/day of credits that refresh daily.');
@@ -487,7 +484,7 @@ function generatePricingMdx() {
   sections.push('');
   sections.push('### Pro Users');
   sections.push('');
-  sections.push('Pro subscribers receive a one-time $10 API credit when upgrading to Pro. Use it to test and build small apps.');
+  sections.push('Pro subscribers receive a one-time $10 Venice credit when upgrading to Pro. Use it to test and build small apps.');
   sections.push('');
 
   return sections.join('\n');

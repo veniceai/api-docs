@@ -1,3 +1,74 @@
+// Scroll-position safeguard for the Demos landing page.
+//
+// This site runs with history.scrollRestoration === "auto", so on SPA
+// navigation the browser can asynchronously restore a prior scroll offset onto
+// the newly rendered page. The Demos overview page is short and has its sidebar
+// and "On this page" column hidden, so any restored offset from a taller source
+// page is very visible (the page lands scrolled down). We watch the
+// data-current-path attribute Mintlify sets on <html> and force the window back
+// to the top whenever we land on that route, beating the browser's async
+// restoration. Scoped to this one route so it can't affect anchor links or
+// scroll behavior anywhere else.
+(function() {
+  var DEMOS_PATH = '/guides/projects/overview';
+
+  function resetIfDemos() {
+    if (document.documentElement.getAttribute('data-current-path') === DEMOS_PATH) {
+      window.scrollTo(0, 0);
+      // Re-assert across a few ticks to beat late async browser scroll
+      // restoration, which can fire after the route attribute updates.
+      requestAnimationFrame(function() { window.scrollTo(0, 0); });
+      setTimeout(function() { window.scrollTo(0, 0); }, 60);
+    }
+  }
+
+  new MutationObserver(resetIfDemos).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-current-path'],
+  });
+
+  resetIfDemos();
+})();
+
+// Relocate the language selector into the right-hand header actions cluster.
+//
+// Mintlify natively renders the language selector in the left group (next to the
+// logo). We want it on the right, just left of the search / Ask AI / theme icon
+// group. Rather than absolutely positioning it -- which collides whenever
+// Mintlify adds another header button (e.g. the AI assistant) -- we move the
+// node into the right actions cluster so it lays out in natural flex flow. The
+// header is re-rendered on SPA navigation, so we re-run on DOM changes,
+// idempotently and coalesced via requestAnimationFrame to avoid churn.
+(function() {
+  function relocate() {
+    const trigger = document.querySelector('#localization-select-trigger');
+    const search = document.querySelector('#search-bar-entry');
+    if (!trigger || !search) return;
+    const langWrapper = trigger.parentElement;   // <div> wrapping the trigger
+    const iconGroup = search.parentElement;      // <div> holding search + Ask AI
+    const cluster = iconGroup ? iconGroup.parentElement : null; // right actions cluster
+    if (!langWrapper || !iconGroup || !cluster) return;
+    // Already placed immediately before the icon group -> nothing to do (this
+    // guard also stops our own DOM mutation from causing a relocate loop).
+    if (langWrapper.parentElement === cluster && langWrapper.nextElementSibling === iconGroup) return;
+    cluster.insertBefore(langWrapper, iconGroup);
+  }
+
+  let scheduled = false;
+  function schedule() {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(function() { scheduled = false; relocate(); });
+  }
+
+  new MutationObserver(schedule).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
+  relocate();
+})();
+
 // Venice AI Model Browser & Pricing Tables - Fetches from API
 (function() {
 
@@ -11,8 +82,35 @@
   const CACHE_KEY = 'venice-models-cache';
   const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-  // Static fallback data for instant pricing page load (updated 2026-06-18)
-  const STATIC_MODELS = [{"id":"firered-image-edit","type":"inpaint","model_spec":{"privacy":"private","pricing":{"inpaint":{"usd":0.04,"diem":0.04}},"traits":[],"name":"FireRed Edit"},"created":1774396800},{"id":"flux-2-max-edit","type":"inpaint","model_spec":{"privacy":"anonymized","pricing":{"inpaint":{"usd":0.19,"diem":0.19}},"traits":[],"name":"Flux 2 Max"},"created":1767571200},{"id":"gpt-image-1-5-edit","type":"inpaint","model_spec":{"privacy":"anonymized","pricing":{"inpaint":{"usd":0.36,"diem":0.36}},"traits":[],"name":"GPT Image 1.5"},"created":1767555000},{"id":"gpt-image-2-edit","type":"inpaint","model_spec":{"privacy":"anonymized","pricing":{"inpaint":{"usd":0.36,"diem":0.36},"resolutions":{"1K":{"usd":0.36,"diem":0.36},"2K":{"usd":0.53,"diem":0.53},"4K":{"usd":0.85,"diem":0.85}},"quality":{"1K":{"high":{"usd":0.36,"diem":0.36},"low":{"usd":0.03,"diem":0.03},"medium":{"usd":0.1,"diem":0.1}},"2K":{"high":{"usd":0.53,"diem":0.53},"low":{"usd":0.04,"diem":0.04},"medium":{"usd":0.15,"diem":0.15}},"4K":{"high":{"usd":0.86,"diem":0.86},"low":{"usd":0.06,"diem":0.06},"medium":{"usd":0.22,"diem":0.22}}}},"traits":[],"name":"GPT Image 2"},"created":1776729600},{"id":"grok-imagine-edit","type":"inpaint","model_spec":{"privacy":"private","pricing":{"inpaint":{"usd":0.04,"diem":0.04},"resolutions":{"1K":{"usd":0.04,"diem":0.04},"2K":{"usd":0.06,"diem":0.06}}},"traits":[],"name":"Grok Imagine"},"created":1769644800},{"id":"grok-imagine-quality-edit","type":"inpaint","model_spec":{"privacy":"private","pricing":{"inpaint":{"usd":0.1,"diem":0.1},"resolutions":{"1K":{"usd":0.1,"diem":0.1},"2K":{"usd":0.12,"diem":0.12}}},"traits":[],"name":"Grok Imagine High Quality"},"created":1778198400},{"id":"nano-banana-2-edit","type":"inpaint","model_spec":{"privacy":"anonymized","pricing":{"inpaint":{"usd":0.1,"diem":0.1},"resolutions":{"1K":{"usd":0.1,"diem":0.1},"2K":{"usd":0.14,"diem":0.14},"4K":{"usd":0.19,"diem":0.19}}},"traits":[],"name":"Nano Banana 2"},"created":1772064000},{"id":"nano-banana-pro-edit","type":"inpaint","model_spec":{"privacy":"anonymized","pricing":{"inpaint":{"usd":0.18,"diem":0.18},"resolutions":{"1K":{"usd":0.18,"diem":0.18},"2K":{"usd":0.23,"diem":0.23},"4K":{"usd":0.35,"diem":0.35}}},"traits":[],"name":"Nano Banana Pro"},"created":1765584000},{"id":"qwen-edit","type":"inpaint","model_spec":{"privacy":"private","pricing":{"inpaint":{"usd":0.04,"diem":0.04}},"traits":[],"name":"Qwen Edit 2511"},"created":1756157864},{"id":"qwen-edit-uncensored","type":"inpaint","model_spec":{"betaModel":true,"privacy":"private","pricing":{"inpaint":{"usd":0.04,"diem":0.04}},"traits":[],"name":"Qwen Edit Uncensored"},"created":1780531200},{"id":"qwen-image-2-edit","type":"inpaint","model_spec":{"privacy":"anonymized","pricing":{"inpaint":{"usd":0.05,"diem":0.05}},"traits":[],"name":"Qwen Image 2"},"created":1772582400},{"id":"qwen-image-2-pro-edit","type":"inpaint","model_spec":{"privacy":"anonymized","pricing":{"inpaint":{"usd":0.1,"diem":0.1}},"traits":[],"name":"Qwen Image 2 Pro"},"created":1772582400},{"id":"seedream-v4-edit","type":"inpaint","model_spec":{"privacy":"anonymized","pricing":{"inpaint":{"usd":0.05,"diem":0.05}},"traits":[],"name":"Seedream V4.5"},"created":1767484800},{"id":"seedream-v5-lite-edit","type":"inpaint","model_spec":{"privacy":"anonymized","pricing":{"inpaint":{"usd":0.05,"diem":0.05}},"traits":[],"name":"Seedream V5 Lite"},"created":1771804800},{"id":"wan-2-7-pro-edit","type":"inpaint","model_spec":{"privacy":"anonymized","pricing":{"inpaint":{"usd":0.094,"diem":0.094}},"traits":[],"name":"Wan 2.7 Pro Edit"},"created":1776902400},{"id":"tts-chatterbox-hd","type":"tts","model_spec":{"privacy":"private","pricing":{"input":{"usd":50,"diem":50}},"traits":[],"name":"Chatterbox HD (Resemble AI)","voices":["Aurora","Blade","Britney","Carl","Cliff","Richard","Rico","Siobhan","Vicky"]},"created":1776384000},{"id":"tts-elevenlabs-turbo-v2-5","type":"tts","model_spec":{"privacy":"anonymized","pricing":{"input":{"usd":62.5,"diem":62.5}},"traits":[],"name":"ElevenLabs Turbo v2.5","voices":["Alice","Aria","Bill","Brian","Callum","Charlie","Charlotte","Chris","Daniel","Eric","George","Jessica","Laura","Liam","Lily","Matilda","Rachel","River","Roger","Sarah","Will"]},"created":1776384000},{"id":"tts-gemini-3-1-flash","type":"tts","model_spec":{"privacy":"anonymized","pricing":{"input":{"usd":187.5,"diem":187.5}},"traits":[],"name":"Gemini 3.1 Flash TTS","voices":["Achernar","Achird","Algenib","Algieba","Alnilam","Aoede","Autonoe","Callirrhoe","Charon","Despina","Enceladus","Erinome","Fenrir","Gacrux","Iapetus","Kore","Laomedeia","Leda","Orus","Puck","Pulcherrima","Rasalgethi","Sadachbia","Sadaltager","Schedar","Sulafat","Umbriel","Vindemiatrix","Zephyr","Zubenelgenubi"]},"created":1776643200},{"id":"tts-gradium-v1","type":"tts","model_spec":{"privacy":"anonymized","pricing":{"input":{"usd":47.5,"diem":47.5}},"traits":[],"name":"Gradium TTS","voices":["Alice","Davi","Elise","Emma","Eva","Jack","Kent","Leo","Maximilian","Mia","Sergio","Valentina"]},"created":1780617600},{"id":"tts-inworld-1-5-max","type":"tts","model_spec":{"privacy":"anonymized","pricing":{"input":{"usd":12.5,"diem":12.5}},"traits":[],"name":"Inworld TTS-1.5 Max","voices":["Alex","Ashley","Craig","Edward","Elizabeth","Hades","Luna","Mark","Olivia","Pixie","Priya","Ronald","Sarah","Theodore"]},"created":1776384000},{"id":"tts-kokoro","type":"tts","model_spec":{"privacy":"private","pricing":{"input":{"usd":3.5,"diem":3.5}},"traits":[],"name":"Kokoro Text to Speech","voices":["af_alloy","af_aoede","af_bella","af_heart","af_jadzia","af_jessica","af_kore","af_nicole","af_nova","af_river","af_sarah","af_sky","am_adam","am_echo","am_eric","am_fenrir","am_liam","am_michael","am_onyx","am_puck","am_santa","bf_alice","bf_emma","bf_lily","bm_daniel","bm_fable","bm_george","bm_lewis","ef_dora","em_alex","em_santa","ff_siwis","hf_alpha","hf_beta","hm_omega","hm_psi","if_sara","im_nicola","jf_alpha","jf_gongitsune","jf_nezumi","jf_tebukuro","jm_kumo","pf_dora","pm_alex","pm_santa","zf_xiaobei","zf_xiaoni","zf_xiaoxiao","zf_xiaoyi","zm_yunjian","zm_yunxi","zm_yunxia","zm_yunyang"]},"created":1742418046},{"id":"tts-minimax-speech-02-hd","type":"tts","model_spec":{"privacy":"anonymized","pricing":{"input":{"usd":125,"diem":125}},"traits":[],"name":"MiniMax Speech-02 HD","voices":["CalmWoman","CasualGuy","DeepVoiceMan","DeterminedMan","ElegantMan","ExuberantGirl","FriendlyPerson","ImposingManner","InspirationalGirl","LivelyGirl","LovelyGirl","PatientMan","SweetGirl","WiseWoman","YoungKnight"]},"created":1776384000},{"id":"tts-orpheus","type":"tts","model_spec":{"privacy":"private","pricing":{"input":{"usd":62.5,"diem":62.5}},"traits":[],"name":"Orpheus TTS","voices":["dan","jess","leah","leo","mia","tara","zac","zoe"]},"created":1776384000},{"id":"tts-qwen3-0-6b","type":"tts","model_spec":{"privacy":"private","pricing":{"input":{"usd":87.5,"diem":87.5}},"traits":[],"name":"Qwen 3 TTS 0.6B","voices":["Aiden","Dylan","Eric","Ono_Anna","Ryan","Serena","Sohee","Uncle_Fu","Vivian"]},"created":1773100800},{"id":"tts-qwen3-1-7b","type":"tts","model_spec":{"privacy":"private","pricing":{"input":{"usd":112.5,"diem":112.5}},"traits":[],"name":"Qwen 3 TTS 1.7B","voices":["Aiden","Dylan","Eric","Ono_Anna","Ryan","Serena","Sohee","Uncle_Fu","Vivian"]},"created":1773100800},{"id":"tts-xai-v1","type":"tts","model_spec":{"privacy":"anonymized","pricing":{"input":{"usd":18.75,"diem":18.75}},"traits":[],"name":"xAI TTS v1","voices":["ara","eve","leo","rex","sal"]},"created":1776384000},{"id":"text-embedding-bge-en-icl","type":"embedding","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.0125,"diem":0.0125},"output":{"usd":0.0125,"diem":0.0125}},"traits":[],"name":"BGE-EN-ICL"},"created":1776384000},{"id":"text-embedding-bge-m3","type":"embedding","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.15,"diem":0.15},"output":{"usd":0.6,"diem":0.6}},"traits":[],"name":"BGE-M3"},"created":1741924661},{"id":"gemini-embedding-2-preview","type":"embedding","model_spec":{"privacy":"anonymized","pricing":{"input":{"usd":0.25,"diem":0.25},"output":{"usd":0.25,"diem":0.25}},"traits":[],"name":"Gemini Embedding 2 Preview"},"created":1776384000},{"id":"text-embedding-multilingual-e5-large-instruct","type":"embedding","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.0125,"diem":0.0125},"output":{"usd":0.0125,"diem":0.0125}},"traits":[],"name":"Multilingual E5 Large Instruct"},"created":1776384000},{"id":"text-embedding-nemotron-embed-vl-1b-v2","type":"embedding","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.0125,"diem":0.0125},"output":{"usd":0.0125,"diem":0.0125}},"traits":[],"name":"Nemotron Embed VL 1B v2"},"created":1776384000},{"id":"text-embedding-qwen3-0-6b","type":"embedding","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.0125,"diem":0.0125},"output":{"usd":0.0125,"diem":0.0125}},"traits":[],"name":"Qwen3 Embedding 0.6B"},"created":1776384000},{"id":"text-embedding-qwen3-8b","type":"embedding","model_spec":{"privacy":"private","pricing":{"input":{"usd":0.0125,"diem":0.0125},"output":{"usd":0.0125,"diem":0.0125}},"traits":[],"name":"Qwen3 Embedding 8B"},"created":1776384000},{"id":"text-embedding-3-large","type":"embedding","model_spec":{"privacy":"anonymized","pricing":{"input":{"usd":0.1625,"diem":0.1625},"output":{"usd":0.1625,"diem":0.1625}},"traits":[],"name":"Text Embedding 3 Large"},"created":1776384000},{"id":"text-embedding-3-small","type":"embedding","model_spec":{"privacy":"anonymized","pricing":{"input":{"usd":0.025,"diem":0.025},"output":{"usd":0.025,"diem":0.025}},"traits":[],"name":"Text Embedding 3 Small"},"created":1776384000},{"id":"ace-step-15","type":"music","model_spec":{"privacy":"anonymized","pricing":{"durations":{"60":{"usd":0.03,"diem":0.03,"min_seconds":60,"max_seconds":60},"90":{"usd":0.04,"diem":0.04,"min_seconds":61,"max_seconds":90},"120":{"usd":0.05,"diem":0.05,"min_seconds":91,"max_seconds":120},"150":{"usd":0.06,"diem":0.06,"min_seconds":121,"max_seconds":150},"180":{"usd":0.07,"diem":0.07,"min_seconds":151,"max_seconds":180},"210":{"usd":0.08,"diem":0.08,"min_seconds":181,"max_seconds":210}}},"traits":[],"name":"ACE-Step 1.5"},"created":1771804800},{"id":"elevenlabs-tts-multilingual-v2","type":"music","model_spec":{"privacy":"anonymized","pricing":{"per_thousand_characters":{"usd":0.11500000000000002,"diem":0.11500000000000002}},"traits":[],"name":"ElevenLabs Multilingual v2","voices":["Aria","Roger","Sarah","Laura","Charlie","George","Callum","River","Liam","Charlotte","Alice","Matilda","Will","Jessica","Eric","Chris","Brian","Daniel","Lily","Bill"]},"created":1772236800},{"id":"elevenlabs-music","type":"music","model_spec":{"privacy":"anonymized","pricing":{"durations":{"60":{"usd":0.87,"diem":0.87,"min_seconds":3,"max_seconds":60},"120":{"usd":1.73,"diem":1.73,"min_seconds":61,"max_seconds":120},"180":{"usd":2.59,"diem":2.59,"min_seconds":121,"max_seconds":180},"240":{"usd":3.45,"diem":3.45,"min_seconds":181,"max_seconds":240},"300":{"usd":4.32,"diem":4.32,"min_seconds":241,"max_seconds":300},"360":{"usd":5.18,"diem":5.18,"min_seconds":301,"max_seconds":360},"420":{"usd":6.04,"diem":6.04,"min_seconds":361,"max_seconds":420},"480":{"usd":6.9,"diem":6.9,"min_seconds":421,"max_seconds":480},"540":{"usd":7.77,"diem":7.77,"min_seconds":481,"max_seconds":540},"600":{"usd":8.63,"diem":8.63,"min_seconds":541,"max_seconds":600}}},"traits":[],"name":"ElevenLabs Music"},"created":1771718400},{"id":"elevenlabs-sound-effects-v2","type":"music","model_spec":{"privacy":"anonymized","pricing":{"per_second":{"usd":0.0023000000000000004,"diem":0.0023000000000000004}},"traits":[],"name":"ElevenLabs Sound Effects"},"created":1772236800},{"id":"elevenlabs-tts-v3","type":"music","model_spec":{"privacy":"anonymized","pricing":{"per_thousand_characters":{"usd":0.11500000000000002,"diem":0.11500000000000002}},"traits":[],"name":"ElevenLabs TTS v3","voices":["Aria","Roger","Sarah","Laura","Charlie","George","Callum","River","Liam","Charlotte","Alice","Matilda","Will","Jessica","Eric","Chris","Brian","Daniel","Lily","Bill"]},"created":1772236800},{"id":"lyria-3-pro","type":"music","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.1,"diem":0.1}},"traits":[],"name":"Lyria 3 Pro"},"created":1779408000},{"id":"minimax-music-v2","type":"music","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.04,"diem":0.04}},"traits":[],"name":"MiniMax Music 2.0"},"created":1771718400},{"id":"minimax-music-v25","type":"music","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.24,"diem":0.24}},"traits":[],"name":"MiniMax Music 2.5"},"created":1775952000},{"id":"minimax-music-v26","type":"music","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.24,"diem":0.24}},"traits":[],"name":"MiniMax Music 2.6"},"created":1775952000},{"id":"mmaudio-v2-text-to-audio","type":"music","model_spec":{"privacy":"anonymized","pricing":{"per_second":{"usd":0.0009200000000000001,"diem":0.0009200000000000001}},"traits":[],"name":"MMAudio V2"},"created":1772236800},{"id":"stable-audio-25","type":"music","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.24,"diem":0.24}},"traits":[],"name":"Stable Audio 2.5"},"created":1771718400},{"id":"grok-imagine-1-5-image-to-video-private","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Grok Imagine 1.5 Private"},"created":1780185600},{"id":"grok-imagine-text-to-video-private","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Grok Imagine Private"},"created":1776038400},{"id":"grok-imagine-image-to-video-private","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Grok Imagine Private"},"created":1776211200},{"id":"grok-imagine-video-to-video-private","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Grok Imagine Private"},"created":1776211200},{"id":"grok-imagine-reference-to-video-private","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Grok Imagine R2V Private"},"created":1776211200},{"id":"happyhorse-1-0-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"HappyHorse 1.0"},"created":1776988800},{"id":"happyhorse-1-0-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"HappyHorse 1.0"},"created":1777075200},{"id":"happyhorse-1-0-video-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"HappyHorse 1.0 Edit"},"created":1777248000},{"id":"happyhorse-1-0-reference-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"HappyHorse 1.0 Reference"},"created":1777248000},{"id":"kling-2.5-turbo-pro-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling 2.5 Turbo Pro"},"created":1758825748},{"id":"kling-2.5-turbo-pro-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling 2.5 Turbo Pro"},"created":1758825748},{"id":"kling-2.6-pro-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling 2.6 Pro"},"created":1733186476},{"id":"kling-2.6-pro-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling 2.6 Pro"},"created":1733186476},{"id":"kling-o3-4k-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling O3 4K"},"created":1776816000},{"id":"kling-o3-4k-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling O3 4K"},"created":1776816000},{"id":"kling-o3-4k-reference-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling O3 4K R2V"},"created":1776816000},{"id":"kling-o3-pro-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling O3 Pro"},"created":1770076800},{"id":"kling-o3-pro-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling O3 Pro"},"created":1770076800},{"id":"kling-o3-pro-reference-to-video","type":"video","model_spec":{"betaModel":true,"privacy":"anonymized","traits":[],"name":"Kling O3 Pro R2V"},"created":1773014400},{"id":"kling-o3-standard-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling O3 Standard"},"created":1770076800},{"id":"kling-o3-standard-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling O3 Standard"},"created":1770076800},{"id":"kling-o3-standard-reference-to-video","type":"video","model_spec":{"betaModel":true,"privacy":"anonymized","traits":[],"name":"Kling O3 Standard R2V"},"created":1773100800},{"id":"kling-v3-4k-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 4K"},"created":1776816000},{"id":"kling-v3-4k-reference-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 4K R2V"},"created":1776816000},{"id":"kling-v3-pro-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 Pro"},"created":1770076800},{"id":"kling-v3-pro-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 Pro"},"created":1770076800},{"id":"kling-v3-pro-motion-control","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 Pro Motion Control"},"created":1779667200},{"id":"kling-v3-standard-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 Standard"},"created":1770076800},{"id":"kling-v3-standard-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 Standard"},"created":1770076800},{"id":"kling-v3-standard-motion-control","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 Standard Motion Control"},"created":1779667200},{"id":"kling-v3-turbo-pro-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 Turbo Pro"},"created":1781654400},{"id":"kling-v3-turbo-pro-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 Turbo Pro"},"created":1781654400},{"id":"kling-v3-turbo-standard-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 Turbo Standard"},"created":1781654400},{"id":"kling-v3-turbo-standard-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Kling V3 Turbo Standard"},"created":1781654400},{"id":"longcat-distilled-image-to-video","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Longcat Distilled"},"created":1764806400},{"id":"longcat-distilled-text-to-video","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Longcat Distilled"},"created":1764806400},{"id":"longcat-image-to-video","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Longcat Full Quality"},"created":1764806400},{"id":"longcat-text-to-video","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Longcat Full Quality"},"created":1764806400},{"id":"ltx-2-19b-full-text-to-video","type":"video","model_spec":{"privacy":"private","traits":[],"name":"LTX Video 2.0 19B"},"created":1767830400},{"id":"ltx-2-19b-full-image-to-video","type":"video","model_spec":{"privacy":"private","traits":[],"name":"LTX Video 2.0 19B"},"created":1767830400},{"id":"ltx-2-19b-distilled-text-to-video","type":"video","model_spec":{"privacy":"private","traits":[],"name":"LTX Video 2.0 19B Distilled"},"created":1767830400},{"id":"ltx-2-19b-distilled-image-to-video","type":"video","model_spec":{"privacy":"private","traits":[],"name":"LTX Video 2.0 19B Distilled"},"created":1767830400},{"id":"ltx-2-fast-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"LTX Video 2.0 Fast"},"created":1732684002},{"id":"ltx-2-fast-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"LTX Video 2.0 Fast"},"created":1732684002},{"id":"ltx-2-full-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"LTX Video 2.0 Full Quality"},"created":1732684002},{"id":"ltx-2-full-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"LTX Video 2.0 Full Quality"},"created":1732684002},{"id":"ltx-2-v2-3-fast-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"LTX Video 2.3 Fast"},"created":1772668800},{"id":"ltx-2-v2-3-fast-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"LTX Video 2.3 Fast"},"created":1772668800},{"id":"ltx-2-v2-3-full-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"LTX Video 2.3 Full Quality"},"created":1772668800},{"id":"ltx-2-v2-3-full-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"LTX Video 2.3 Full Quality"},"created":1772668800},{"id":"ovi-image-to-video","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Ovi"},"created":1758825748},{"id":"pixverse-c1-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"PixVerse C1"},"created":1775865600},{"id":"pixverse-c1-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"PixVerse C1"},"created":1775865600},{"id":"pixverse-c1-reference-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"PixVerse C1 R2V"},"created":1775865600},{"id":"pixverse-c1-transition","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"PixVerse C1 Transition"},"created":1775865600},{"id":"pixverse-v5.6-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"PixVerse v5.6"},"created":1769472000},{"id":"pixverse-v5.6-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"PixVerse v5.6"},"created":1769472000},{"id":"pixverse-v5.6-transition","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"PixVerse v5.6 Transition"},"created":1769472000},{"id":"runway-gen4-aleph","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Runway Gen-4 Aleph"},"created":1769040000},{"id":"runway-gen4-turbo","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Runway Gen-4 Turbo"},"created":1769040000},{"id":"runway-gen4-5","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Runway Gen-4.5"},"created":1775952000},{"id":"runway-gen4-5-text","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Runway Gen-4.5"},"created":1775952000},{"id":"seedance-1-5-pro-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Seedance 1.5 Pro"},"created":1773964800},{"id":"seedance-1-5-pro-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Seedance 1.5 Pro"},"created":1773964800},{"id":"seedance-2-0-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Seedance 2.0"},"created":1774915200},{"id":"seedance-2-0-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Seedance 2.0"},"created":1774915200},{"id":"seedance-2-0-enhanced-text-to-video","type":"video","model_spec":{"betaModel":true,"privacy":"anonymized","traits":[],"name":"Seedance 2.0 Enhanced"},"created":1780963200},{"id":"seedance-2-0-enhanced-reference-to-video","type":"video","model_spec":{"betaModel":true,"privacy":"anonymized","traits":[],"name":"Seedance 2.0 Enhanced R2V"},"created":1780963200},{"id":"seedance-2-0-fast-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Seedance 2.0 Fast"},"created":1775001600},{"id":"seedance-2-0-fast-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Seedance 2.0 Fast"},"created":1775001600},{"id":"seedance-2-0-fast-reference-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Seedance 2.0 Fast R2V"},"created":1775001600},{"id":"seedance-2-0-reference-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Seedance 2.0 R2V"},"created":1774915200},{"id":"sora-2-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Sora 2","deprecation":{"autoRemap":false,"date":"2026-09-24T00:00:00.000Z","removesAt":"2026-09-24T00:00:00.000Z"}},"created":1758825748},{"id":"sora-2-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Sora 2","deprecation":{"autoRemap":false,"date":"2026-09-24T00:00:00.000Z","removesAt":"2026-09-24T00:00:00.000Z"}},"created":1758825748},{"id":"sora-2-pro-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Sora 2 Pro","deprecation":{"autoRemap":false,"date":"2026-09-24T00:00:00.000Z","removesAt":"2026-09-24T00:00:00.000Z"}},"created":1758825748},{"id":"sora-2-pro-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Sora 2 Pro","deprecation":{"autoRemap":false,"date":"2026-09-24T00:00:00.000Z","removesAt":"2026-09-24T00:00:00.000Z"}},"created":1758825748},{"id":"topaz-video-upscale","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Topaz Video Upscale"},"created":1775174400},{"id":"veo3-fast-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Veo 3 Fast"},"created":1758825748},{"id":"veo3-fast-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Veo 3 Fast"},"created":1758825748},{"id":"veo3-full-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Veo 3 Full Quality"},"created":1758825748},{"id":"veo3-full-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Veo 3 Full Quality"},"created":1758825748},{"id":"veo3.1-fast-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Veo 3.1 Fast"},"created":1729030447},{"id":"veo3.1-fast-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Veo 3.1 Fast"},"created":1729030447},{"id":"veo3.1-full-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Veo 3.1 Full Quality"},"created":1729030447},{"id":"veo3.1-full-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Veo 3.1 Full Quality"},"created":1729030447},{"id":"vidu-q3-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Vidu Q3"},"created":1769817600},{"id":"vidu-q3-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Vidu Q3"},"created":1769817600},{"id":"wan-2.1-pro-image-to-video","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Wan 2.1 Pro"},"created":1758825748},{"id":"wan-2.2-a14b-text-to-video","type":"video","model_spec":{"privacy":"private","traits":[],"name":"Wan 2.2 A14B"},"created":1758825748},{"id":"wan-2.5-preview-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Wan 2.5 Preview"},"created":1758825748},{"id":"wan-2.5-preview-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Wan 2.5 Preview"},"created":1758825748},{"id":"wan-2.6-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Wan 2.6"},"created":1765843200},{"id":"wan-2.6-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Wan 2.6"},"created":1765843200},{"id":"wan-2.6-flash-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Wan 2.6 Flash"},"created":1768824000},{"id":"wan-2-7-text-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Wan 2.7"},"created":1775088000},{"id":"wan-2-7-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Wan 2.7"},"created":1775088000},{"id":"wan-2-7-video-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Wan 2.7 Edit"},"created":1775088000},{"id":"wan-2-7-reference-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Wan 2.7 Reference"},"created":1775088000},{"id":"wan-2-7-uncensored-image-to-video","type":"video","model_spec":{"privacy":"anonymized","traits":[],"name":"Wan 2.7 Uncensored"},"created":1778284800},{"id":"wan-2-7-uncensored-text-to-video","type":"video","model_spec":{"betaModel":true,"privacy":"anonymized","traits":[],"name":"Wan 2.7 Uncensored"},"created":1780444800},{"id":"aion-labs-aion-2-0","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":128000,"pricing":{"input":{"usd":1,"diem":1},"cache_input":{"usd":0.25,"diem":0.25},"output":{"usd":2,"diem":2}},"traits":[],"name":"Aion 2.0","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":false,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1774310400},{"id":"claude-fable-5","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":12,"diem":12},"cache_input":{"usd":1.2,"diem":1.2},"cache_write":{"usd":15,"diem":15},"output":{"usd":60,"diem":60}},"traits":[],"name":"Claude Fable 5","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1781049600},{"id":"claude-opus-4-5","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":198000,"pricing":{"input":{"usd":6,"diem":6},"cache_input":{"usd":0.6,"diem":0.6},"cache_write":{"usd":7.5,"diem":7.5},"output":{"usd":30,"diem":30}},"traits":[],"name":"Claude Opus 4.5","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1764979200},{"id":"claude-opus-4-6","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":6,"diem":6},"cache_input":{"usd":0.6,"diem":0.6},"cache_write":{"usd":7.5,"diem":7.5},"output":{"usd":30,"diem":30}},"traits":[],"name":"Claude Opus 4.6","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1770249600},{"id":"claude-opus-4-6-fast","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":36,"diem":36},"cache_input":{"usd":3.6,"diem":3.6},"cache_write":{"usd":45,"diem":45},"output":{"usd":180,"diem":180}},"traits":[],"name":"Claude Opus 4.6 Fast","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1775606400},{"id":"claude-opus-4-7","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":6,"diem":6},"cache_input":{"usd":0.6,"diem":0.6},"cache_write":{"usd":7.5,"diem":7.5},"output":{"usd":30,"diem":30}},"traits":[],"name":"Claude Opus 4.7","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1776297600},{"id":"claude-opus-4-7-fast","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":36,"diem":36},"cache_input":{"usd":3.6,"diem":3.6},"cache_write":{"usd":45,"diem":45},"output":{"usd":180,"diem":180}},"traits":[],"name":"Claude Opus 4.7 Fast","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1778716800},{"id":"claude-opus-4-8","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":6,"diem":6},"cache_input":{"usd":0.6,"diem":0.6},"cache_write":{"usd":7.5,"diem":7.5},"output":{"usd":30,"diem":30}},"traits":[],"name":"Claude Opus 4.8","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1779926400},{"id":"claude-opus-4-8-fast","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":12,"diem":12},"cache_input":{"usd":1.2,"diem":1.2},"cache_write":{"usd":15,"diem":15},"output":{"usd":60,"diem":60}},"traits":[],"name":"Claude Opus 4.8 Fast","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1779926400},{"id":"claude-sonnet-4-5","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":198000,"pricing":{"input":{"usd":3.75,"diem":3.75},"cache_input":{"usd":0.375,"diem":0.375},"cache_write":{"usd":4.69,"diem":4.69},"output":{"usd":18.75,"diem":18.75}},"traits":[],"name":"Claude Sonnet 4.5","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1736899200},{"id":"claude-sonnet-4-6","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":3.6,"diem":3.6},"cache_input":{"usd":0.36,"diem":0.36},"cache_write":{"usd":4.5,"diem":4.5},"output":{"usd":18,"diem":18}},"traits":[],"name":"Claude Sonnet 4.6","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1771286400},{"id":"deepseek-v3.2","type":"text","model_spec":{"privacy":"private","availableContextTokens":160000,"pricing":{"input":{"usd":0.33,"diem":0.33},"cache_input":{"usd":0.16,"diem":0.16},"output":{"usd":0.48,"diem":0.48}},"traits":[],"name":"DeepSeek V3.2","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1764806400},{"id":"deepseek-v4-flash","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":0.17,"diem":0.17},"cache_input":{"usd":0.028,"diem":0.028},"output":{"usd":0.35,"diem":0.35}},"traits":[],"name":"DeepSeek V4 Flash","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1776988800},{"id":"deepseek-v4-pro","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":1.73,"diem":1.73},"cache_input":{"usd":0.33,"diem":0.33},"output":{"usd":3.796,"diem":3.796}},"traits":[],"name":"DeepSeek V4 Pro","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1776988800},{"id":"gemini-3-flash-preview","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":256000,"pricing":{"input":{"usd":0.7,"diem":0.7},"cache_input":{"usd":0.07,"diem":0.07},"output":{"usd":3.75,"diem":3.75}},"traits":[],"name":"Gemini 3 Flash Preview","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":true,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1766102400},{"id":"gemini-3-1-pro-preview","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":2.5,"diem":2.5},"cache_input":{"usd":0.5,"diem":0.5},"cache_write":{"usd":0.5,"diem":0.5},"output":{"usd":15,"diem":15},"extended":{"context_token_threshold":200000,"input":{"usd":5,"diem":5},"output":{"usd":22.5,"diem":22.5},"cache_input":{"usd":0.5,"diem":0.5},"cache_write":{"usd":0.5,"diem":0.5}}},"traits":[],"name":"Gemini 3.1 Pro Preview","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":true,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":20,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1771459200},{"id":"gemini-3-5-flash","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":1.55,"diem":1.55},"cache_input":{"usd":0.155,"diem":0.155},"cache_write":{"usd":0.086,"diem":0.086},"output":{"usd":9.45,"diem":9.45}},"traits":[],"name":"Gemini 3.5 Flash","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":true,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":20,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1779408000},{"id":"e2ee-gemma-3-27b-p","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":40000,"pricing":{"input":{"usd":0.14,"diem":0.14},"output":{"usd":0.5,"diem":0.5}},"traits":[],"name":"Gemma 3 27B","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1773792000},{"id":"e2ee-gemma-4-26b-a4b-uncensored-p","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":64000,"pricing":{"input":{"usd":0.19,"diem":0.19},"output":{"usd":0.88,"diem":0.88}},"traits":[],"name":"Gemma 4 26B A4B Uncensored","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1779580800},{"id":"e2ee-gemma-4-31b","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":32000,"pricing":{"input":{"usd":0.139,"diem":0.139},"cache_input":{"usd":0.028,"diem":0.028},"output":{"usd":0.43,"diem":0.43}},"traits":[],"name":"Gemma 4 31B Instruct","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1779235200},{"id":"gemma-4-uncensored","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.1625,"diem":0.1625},"output":{"usd":0.5,"diem":0.5}},"traits":[],"name":"Gemma 4 Uncensored","capabilities":{"optimizedForCode":false,"quantization":"int4","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":true,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1776038400},{"id":"zai-org-glm-4.6","type":"text","model_spec":{"privacy":"private","availableContextTokens":198000,"pricing":{"input":{"usd":0.85,"diem":0.85},"cache_input":{"usd":0.3,"diem":0.3},"output":{"usd":2.75,"diem":2.75}},"traits":[],"name":"GLM 4.6","capabilities":{"optimizedForCode":false,"quantization":"fp4","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1711929600},{"id":"zai-org-glm-4.7","type":"text","model_spec":{"privacy":"private","availableContextTokens":198000,"pricing":{"input":{"usd":0.55,"diem":0.55},"cache_input":{"usd":0.11,"diem":0.11},"output":{"usd":2.65,"diem":2.65}},"traits":["default","most_intelligent","function_calling_default"],"name":"GLM 4.7","capabilities":{"optimizedForCode":false,"quantization":"fp4","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1766534400},{"id":"e2ee-glm-4-7-p","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":1.1,"diem":1.1},"output":{"usd":4.15,"diem":4.15}},"traits":[],"name":"GLM 4.7","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1773792000},{"id":"zai-org-glm-4.7-flash","type":"text","model_spec":{"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.125,"diem":0.125},"output":{"usd":0.5,"diem":0.5}},"traits":[],"name":"GLM 4.7 Flash","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1769644800},{"id":"olafangensan-glm-4.7-flash-heretic","type":"text","model_spec":{"privacy":"private","availableContextTokens":200000,"pricing":{"input":{"usd":0.14,"diem":0.14},"output":{"usd":0.8,"diem":0.8}},"traits":[],"name":"GLM 4.7 Flash Heretic","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1770163200},{"id":"zai-org-glm-5","type":"text","model_spec":{"privacy":"private","availableContextTokens":198000,"pricing":{"input":{"usd":1,"diem":1},"cache_input":{"usd":0.2,"diem":0.2},"output":{"usd":3.2,"diem":3.2}},"traits":[],"name":"GLM 5","capabilities":{"optimizedForCode":true,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1770768000},{"id":"z-ai-glm-5-turbo","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":200000,"pricing":{"input":{"usd":1.2,"diem":1.2},"cache_input":{"usd":0.24,"diem":0.24},"output":{"usd":4,"diem":4}},"traits":[],"name":"GLM 5 Turbo","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1773532800},{"id":"zai-org-glm-5-1","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":200000,"pricing":{"input":{"usd":1.75,"diem":1.75},"cache_input":{"usd":0.325,"diem":0.325},"output":{"usd":5.5,"diem":5.5}},"traits":[],"name":"GLM 5.1","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1775520000},{"id":"e2ee-glm-5-1","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":200000,"pricing":{"input":{"usd":1.1,"diem":1.1},"output":{"usd":4.15,"diem":4.15}},"traits":[],"name":"GLM 5.1","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1776988800},{"id":"zai-org-glm-5-2","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":1000000,"pricing":{"input":{"usd":1.4,"diem":1.4},"cache_input":{"usd":0.26,"diem":0.26},"output":{"usd":4.4,"diem":4.4}},"traits":[],"name":"GLM 5.2","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1781568000},{"id":"e2ee-glm-5-2-p","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":524288,"pricing":{"input":{"usd":1.75,"diem":1.75},"output":{"usd":5.75,"diem":5.75}},"traits":[],"name":"GLM 5.2","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1781568000},{"id":"z-ai-glm-5v-turbo","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":200000,"pricing":{"input":{"usd":1.5,"diem":1.5},"cache_input":{"usd":0.3,"diem":0.3},"output":{"usd":5,"diem":5}},"traits":[],"name":"GLM 5V Turbo","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1775001600},{"id":"google-gemma-3-27b-it","type":"text","model_spec":{"privacy":"private","availableContextTokens":198000,"pricing":{"input":{"usd":0.12,"diem":0.12},"output":{"usd":0.2,"diem":0.2}},"traits":[],"name":"Google Gemma 3 27B Instruct","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1762214400},{"id":"google-gemma-4-26b-a4b-it","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.1625,"diem":0.1625},"output":{"usd":0.5,"diem":0.5}},"traits":[],"name":"Google Gemma 4 26B A4B Instruct","capabilities":{"optimizedForCode":false,"quantization":"bf16","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":true,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1775088000},{"id":"google-gemma-4-31b-it","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.12,"diem":0.12},"cache_input":{"usd":0.09,"diem":0.09},"output":{"usd":0.36,"diem":0.36}},"traits":[],"name":"Google Gemma 4 31B Instruct","capabilities":{"optimizedForCode":false,"quantization":"bf16","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":true,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1775174400},{"id":"e2ee-gpt-oss-120b-p","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.13,"diem":0.13},"output":{"usd":0.65,"diem":0.65}},"traits":[],"name":"GPT OSS 120B","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1773792000},{"id":"e2ee-gpt-oss-20b-p","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.05,"diem":0.05},"output":{"usd":0.19,"diem":0.19}},"traits":[],"name":"GPT OSS 20B","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1773792000},{"id":"openai-gpt-4o-2024-11-20","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":128000,"pricing":{"input":{"usd":3.125,"diem":3.125},"output":{"usd":12.5,"diem":12.5}},"traits":[],"name":"GPT-4o","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":true,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1772236800},{"id":"openai-gpt-4o-mini-2024-07-18","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":128000,"pricing":{"input":{"usd":0.1875,"diem":0.1875},"cache_input":{"usd":0.09375,"diem":0.09375},"output":{"usd":0.75,"diem":0.75}},"traits":[],"name":"GPT-4o Mini","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":true,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1772236800},{"id":"openai-gpt-52","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":256000,"pricing":{"input":{"usd":2.19,"diem":2.19},"cache_input":{"usd":0.219,"diem":0.219},"output":{"usd":17.5,"diem":17.5}},"traits":[],"name":"GPT-5.2","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","minimal","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1765584000},{"id":"openai-gpt-52-codex","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":256000,"pricing":{"input":{"usd":2.19,"diem":2.19},"cache_input":{"usd":0.219,"diem":0.219},"output":{"usd":17.5,"diem":17.5}},"traits":[],"name":"GPT-5.2 Codex","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","minimal","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1736899200},{"id":"openai-gpt-53-codex","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":400000,"pricing":{"input":{"usd":2.19,"diem":2.19},"cache_input":{"usd":0.219,"diem":0.219},"output":{"usd":17.5,"diem":17.5}},"traits":[],"name":"GPT-5.3 Codex","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","minimal","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1771891200},{"id":"openai-gpt-54","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":3.13,"diem":3.13},"cache_input":{"usd":0.313,"diem":0.313},"output":{"usd":18.8,"diem":18.8}},"traits":[],"name":"GPT-5.4","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","minimal","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1772668800},{"id":"openai-gpt-54-mini","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":400000,"pricing":{"input":{"usd":0.9375,"diem":0.9375},"cache_input":{"usd":0.09375,"diem":0.09375},"output":{"usd":5.625,"diem":5.625}},"traits":[],"name":"GPT-5.4 Mini","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","minimal","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1774569600},{"id":"openai-gpt-54-pro","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":37.5,"diem":37.5},"output":{"usd":225,"diem":225},"extended":{"context_token_threshold":272000,"input":{"usd":75,"diem":75},"output":{"usd":337.5,"diem":337.5}}},"traits":[],"name":"GPT-5.4 Pro","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","minimal","low","medium","high"],"defaultReasoningEffort":"medium","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1772668800},{"id":"openai-gpt-55","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":6.25,"diem":6.25},"cache_input":{"usd":0.625,"diem":0.625},"output":{"usd":37.5,"diem":37.5},"extended":{"context_token_threshold":272000,"input":{"usd":12.5,"diem":12.5},"output":{"usd":56.25,"diem":56.25},"cache_input":{"usd":1.25,"diem":1.25}}},"traits":[],"name":"GPT-5.5","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","minimal","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1776902400},{"id":"openai-gpt-55-pro","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":37.5,"diem":37.5},"output":{"usd":225,"diem":225}},"traits":[],"name":"GPT-5.5 Pro","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","minimal","low","medium","high"],"defaultReasoningEffort":"medium","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1776988800},{"id":"grok-4-20","type":"text","model_spec":{"privacy":"private","availableContextTokens":2000000,"pricing":{"input":{"usd":1.42,"diem":1.42},"cache_input":{"usd":0.23,"diem":0.23},"output":{"usd":2.83,"diem":2.83},"extended":{"context_token_threshold":200000,"input":{"usd":2.83,"diem":2.83},"output":{"usd":5.67,"diem":5.67},"cache_input":{"usd":0.45,"diem":0.45}}},"traits":[],"name":"Grok 4.20","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":true}},"created":1773273600},{"id":"grok-4-20-multi-agent","type":"text","model_spec":{"privacy":"private","availableContextTokens":2000000,"pricing":{"input":{"usd":1.42,"diem":1.42},"cache_input":{"usd":0.23,"diem":0.23},"output":{"usd":2.83,"diem":2.83},"extended":{"context_token_threshold":200000,"input":{"usd":2.83,"diem":2.83},"output":{"usd":5.67,"diem":5.67},"cache_input":{"usd":0.45,"diem":0.45}}},"traits":[],"name":"Grok 4.20 Multi-Agent","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":true}},"created":1773273600},{"id":"grok-4-3","type":"text","model_spec":{"privacy":"private","availableContextTokens":1000000,"pricing":{"input":{"usd":1.42,"diem":1.42},"cache_input":{"usd":0.23,"diem":0.23},"output":{"usd":2.83,"diem":2.83},"extended":{"context_token_threshold":200000,"input":{"usd":2.83,"diem":2.83},"output":{"usd":5.67,"diem":5.67},"cache_input":{"usd":0.45,"diem":0.45}}},"traits":[],"name":"Grok 4.3","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":true}},"created":1776470400},{"id":"grok-build-0-1","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":1,"diem":1},"cache_input":{"usd":0.2,"diem":0.2},"output":{"usd":2,"diem":2},"extended":{"context_token_threshold":200000,"input":{"usd":2,"diem":2},"output":{"usd":4,"diem":4},"cache_input":{"usd":0.4,"diem":0.4}}},"traits":[],"name":"Grok Build 0.1","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1779321600},{"id":"hermes-3-llama-3.1-405b","type":"text","model_spec":{"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":1.1,"diem":1.1},"output":{"usd":3,"diem":3}},"traits":[],"name":"Hermes 3 Llama 3.1 405b","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1758758400},{"id":"kimi-k2-5","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.56,"diem":0.56},"cache_input":{"usd":0.22,"diem":0.22},"output":{"usd":3.5,"diem":3.5}},"traits":[],"name":"Kimi K2.5","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":true,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1769548800},{"id":"kimi-k2-6","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.85,"diem":0.85},"cache_input":{"usd":0.22,"diem":0.22},"output":{"usd":4.655,"diem":4.655}},"traits":[],"name":"Kimi K2.6","capabilities":{"optimizedForCode":true,"quantization":"int4","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1776643200},{"id":"kimi-k2-7-code","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.9,"diem":0.9},"cache_input":{"usd":0.2,"diem":0.2},"output":{"usd":4.3,"diem":4.3}},"traits":[],"name":"Kimi K2.7 Code","capabilities":{"optimizedForCode":true,"quantization":"int4","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1781308800},{"id":"llama-3.2-3b","type":"text","model_spec":{"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.15,"diem":0.15},"output":{"usd":0.6,"diem":0.6}},"traits":[],"name":"Llama 3.2 3B","capabilities":{"optimizedForCode":false,"quantization":"fp16","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1727966436},{"id":"llama-3.3-70b","type":"text","model_spec":{"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.7,"diem":0.7},"output":{"usd":2.8,"diem":2.8}},"traits":[],"name":"Llama 3.3 70B","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1743897600},{"id":"mercury-2","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":128000,"pricing":{"input":{"usd":0.3125,"diem":0.3125},"cache_input":{"usd":0.03125,"diem":0.03125},"output":{"usd":0.9375,"diem":0.9375}},"traits":[],"name":"Mercury 2","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1771545600},{"id":"xiaomi-mimo-v2-5","type":"text","model_spec":{"privacy":"private","availableContextTokens":1000000,"pricing":{"input":{"usd":0.175,"diem":0.175},"cache_input":{"usd":0.0625,"diem":0.0625},"output":{"usd":0.35,"diem":0.35}},"traits":[],"name":"MiMo-V2.5","capabilities":{"optimizedForCode":true,"quantization":"fp8","supportsAudioInput":true,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1781136000},{"id":"minimax-m25","type":"text","model_spec":{"privacy":"private","availableContextTokens":198000,"pricing":{"input":{"usd":0.34,"diem":0.34},"cache_input":{"usd":0.04,"diem":0.04},"output":{"usd":1.19,"diem":1.19}},"traits":[],"name":"MiniMax M2.5","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":false,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1770854400},{"id":"minimax-m27","type":"text","model_spec":{"privacy":"private","availableContextTokens":198000,"pricing":{"input":{"usd":0.375,"diem":0.375},"cache_input":{"usd":0.06875,"diem":0.06875},"output":{"usd":1.5,"diem":1.5}},"traits":[],"name":"MiniMax M2.7","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":false,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1773792000},{"id":"minimax-m3","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":500000,"pricing":{"input":{"usd":0.3,"diem":0.3},"cache_input":{"usd":0.06,"diem":0.06},"output":{"usd":1.2,"diem":1.2}},"traits":[],"name":"MiniMax M3","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1780272000},{"id":"minimax-m3-preview","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":524288,"pricing":{"input":{"usd":0.3,"diem":0.3},"cache_input":{"usd":0.06,"diem":0.06},"output":{"usd":1.2,"diem":1.2}},"traits":[],"name":"MiniMax M3 Preview","capabilities":{"optimizedForCode":true,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":false,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1781222400},{"id":"mistral-small-3-2-24b-instruct","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.09375,"diem":0.09375},"output":{"usd":0.25,"diem":0.25}},"traits":[],"name":"Mistral Small 3.2 24B Instruct","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1768435200},{"id":"mistral-small-2603","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.1875,"diem":0.1875},"output":{"usd":0.75,"diem":0.75}},"traits":[],"name":"Mistral Small 4","capabilities":{"optimizedForCode":true,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1773619200},{"id":"nvidia-nemotron-cascade-2-30b-a3b","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.14,"diem":0.14},"output":{"usd":0.8,"diem":0.8}},"traits":[],"name":"Nemotron Cascade 2 30B A3B","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1774310400},{"id":"nvidia-nemotron-3-nano-30b-a3b","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.075,"diem":0.075},"output":{"usd":0.3,"diem":0.3}},"traits":[],"name":"NVIDIA Nemotron 3 Nano 30B","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1769472000},{"id":"nvidia-nemotron-3-ultra-550b-a55b","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.625,"diem":0.625},"cache_input":{"usd":0.1875,"diem":0.1875},"output":{"usd":3.125,"diem":3.125}},"traits":[],"name":"NVIDIA Nemotron 3 Ultra","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1780531200},{"id":"openai-gpt-oss-120b","type":"text","model_spec":{"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.07,"diem":0.07},"output":{"usd":0.3,"diem":0.3}},"traits":[],"name":"OpenAI GPT OSS 120B","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":false,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1762387200},{"id":"e2ee-qwen-2-5-7b-p","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":32000,"pricing":{"input":{"usd":0.05,"diem":0.05},"output":{"usd":0.13,"diem":0.13}},"traits":[],"name":"Qwen 2.5 7B","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1773792000},{"id":"qwen3-235b-a22b-instruct-2507","type":"text","model_spec":{"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.15,"diem":0.15},"output":{"usd":0.75,"diem":0.75}},"traits":[],"name":"Qwen 3 235B A22B Instruct 2507","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1745903059},{"id":"qwen3-235b-a22b-thinking-2507","type":"text","model_spec":{"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.45,"diem":0.45},"output":{"usd":3.5,"diem":3.5}},"traits":["default_reasoning"],"name":"Qwen 3 235B A22B Thinking 2507","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1745903059},{"id":"qwen3-coder-480b-a35b-instruct-turbo","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.35,"diem":0.35},"cache_input":{"usd":0.04,"diem":0.04},"output":{"usd":1.5,"diem":1.5}},"traits":["default_code"],"name":"Qwen 3 Coder 480B Turbo","capabilities":{"optimizedForCode":true,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":true,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1769472000},{"id":"qwen3-next-80b","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.35,"diem":0.35},"output":{"usd":1.9,"diem":1.9}},"traits":[],"name":"Qwen 3 Next 80b","capabilities":{"optimizedForCode":false,"quantization":"fp16","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1745903059},{"id":"qwen3-5-35b-a3b","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.3125,"diem":0.3125},"cache_input":{"usd":0.15625,"diem":0.15625},"output":{"usd":1.25,"diem":1.25}},"traits":[],"name":"Qwen 3.5 35B A3B","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":true,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1771977600},{"id":"qwen3-5-397b-a17b","type":"text","model_spec":{"privacy":"anonymized","availableContextTokens":128000,"pricing":{"input":{"usd":0.75,"diem":0.75},"output":{"usd":4.5,"diem":4.5}},"traits":[],"name":"Qwen 3.5 397B","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":true,"supportsMultipleImages":true,"maxImages":5,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1771200000},{"id":"qwen3-5-9b","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.1,"diem":0.1},"output":{"usd":0.15,"diem":0.15}},"traits":[],"name":"Qwen 3.5 9B","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":true,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1772668800},{"id":"qwen3-6-27b","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.325,"diem":0.325},"output":{"usd":3.25,"diem":3.25}},"traits":[],"name":"Qwen 3.6 27B","capabilities":{"optimizedForCode":true,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["none","low","medium","high"],"defaultReasoningEffort":"low","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1776988800},{"id":"e2ee-qwen3-6-35b-a3b","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":32000,"pricing":{"input":{"usd":0.182,"diem":0.182},"cache_input":{"usd":0.06,"diem":0.06},"output":{"usd":1.18,"diem":1.18}},"traits":[],"name":"Qwen 3.6 35B A3B FP8","capabilities":{"optimizedForCode":true,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1779235200},{"id":"qwen-3-6-plus","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":0.625,"diem":0.625},"cache_input":{"usd":0.0625,"diem":0.0625},"cache_write":{"usd":0.78,"diem":0.78},"output":{"usd":3.75,"diem":3.75},"extended":{"context_token_threshold":256000,"input":{"usd":2.5,"diem":2.5},"output":{"usd":7.5,"diem":7.5},"cache_input":{"usd":0.0625,"diem":0.0625},"cache_write":{"usd":0.78,"diem":0.78}}},"traits":[],"name":"Qwen 3.6 Plus Uncensored","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1775433600},{"id":"qwen-3-7-max","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":2.7,"diem":2.7},"cache_input":{"usd":0.27,"diem":0.27},"cache_write":{"usd":3.35,"diem":3.35},"output":{"usd":8.05,"diem":8.05}},"traits":[],"name":"Qwen 3.7 Max","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1779408000},{"id":"qwen-3-7-plus","type":"text","model_spec":{"betaModel":true,"privacy":"anonymized","availableContextTokens":1000000,"pricing":{"input":{"usd":0.5,"diem":0.5},"cache_input":{"usd":0.05,"diem":0.05},"cache_write":{"usd":0.625,"diem":0.625},"output":{"usd":2,"diem":2},"extended":{"context_token_threshold":256000,"input":{"usd":1.5,"diem":1.5},"output":{"usd":6,"diem":6},"cache_input":{"usd":0.15,"diem":0.15},"cache_write":{"usd":1.875,"diem":1.875}}},"traits":[],"name":"Qwen 3.7 Plus","capabilities":{"optimizedForCode":true,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":true,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":true,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1780358400},{"id":"e2ee-qwen3-30b-a3b-p","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.19,"diem":0.19},"output":{"usd":0.69,"diem":0.69}},"traits":[],"name":"Qwen3 30B A3B","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1773792000},{"id":"qwen3-vl-235b-a22b","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.25,"diem":0.25},"output":{"usd":1.5,"diem":1.5}},"traits":["default_vision"],"name":"Qwen3 VL 235B","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1768521600},{"id":"e2ee-qwen3-vl-30b-a3b-p","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.25,"diem":0.25},"output":{"usd":0.9,"diem":0.9}},"traits":[],"name":"Qwen3 VL 30B A3B","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1773792000},{"id":"e2ee-qwen3-6-35b-a3b-uncensored-p","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.38,"diem":0.38},"output":{"usd":1.88,"diem":1.88}},"traits":[],"name":"Qwen3.6 35B A3B Uncensored","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1779580800},{"id":"arcee-trinity-large-thinking","type":"text","model_spec":{"privacy":"private","availableContextTokens":256000,"pricing":{"input":{"usd":0.3125,"diem":0.3125},"cache_input":{"usd":0.075,"diem":0.075},"output":{"usd":1.125,"diem":1.125}},"traits":[],"name":"Trinity Large Thinking","capabilities":{"optimizedForCode":true,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":true,"supportsReasoningEffort":true,"reasoningEffortOptions":["low","medium","high"],"defaultReasoningEffort":"high","supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1775088000},{"id":"venice-uncensored-role-play","type":"text","model_spec":{"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.5,"diem":0.5},"output":{"usd":2,"diem":2}},"traits":[],"name":"Venice Role Play Uncensored","capabilities":{"optimizedForCode":false,"quantization":"fp8","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1771545600},{"id":"e2ee-venice-uncensored-24b-p","type":"text","model_spec":{"betaModel":true,"privacy":"private","availableContextTokens":32000,"pricing":{"input":{"usd":0.25,"diem":0.25},"output":{"usd":1.15,"diem":1.15}},"traits":[],"name":"Venice Uncensored 1.1","capabilities":{"optimizedForCode":false,"quantization":"not-available","supportsAudioInput":false,"supportsFunctionCalling":false,"supportsLogProbs":false,"supportsMultipleImages":false,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":false,"supportsTeeAttestation":true,"supportsE2EE":true,"supportsVideoInput":false,"supportsVision":false,"supportsWebSearch":true,"supportsXSearch":false}},"created":1773792000},{"id":"venice-uncensored-1-2","type":"text","model_spec":{"privacy":"private","availableContextTokens":128000,"pricing":{"input":{"usd":0.2,"diem":0.2},"output":{"usd":0.9,"diem":0.9}},"traits":["most_uncensored"],"name":"Venice Uncensored 1.2","capabilities":{"optimizedForCode":false,"quantization":"fp16","supportsAudioInput":false,"supportsFunctionCalling":true,"supportsLogProbs":false,"supportsMultipleImages":true,"maxImages":10,"supportsReasoning":false,"supportsReasoningEffort":false,"supportsResponseSchema":true,"supportsTeeAttestation":false,"supportsE2EE":false,"supportsVideoInput":false,"supportsVision":true,"supportsWebSearch":true,"supportsXSearch":false}},"created":1775001600},{"id":"elevenlabs/scribe-v2","type":"asr","model_spec":{"privacy":"anonymized","pricing":{"per_audio_second":{"usd":0.000167,"diem":0.000167}},"traits":[],"name":"ElevenLabs Scribe V2"},"created":1776384000},{"id":"nvidia/parakeet-tdt-0.6b-v3","type":"asr","model_spec":{"privacy":"private","pricing":{"per_audio_second":{"usd":0.0001,"diem":0.0001}},"traits":[],"name":"Parakeet ASR"},"created":1760136444},{"id":"openai/whisper-large-v3","type":"asr","model_spec":{"privacy":"private","pricing":{"per_audio_second":{"usd":0.0001,"diem":0.0001}},"traits":[],"name":"Whisper Large V3"},"created":1736899200},{"id":"fal-ai/wizper","type":"asr","model_spec":{"privacy":"private","pricing":{"per_audio_second":{"usd":0.0001,"diem":0.0001}},"traits":[],"name":"Wizper (Whisper v3)"},"created":1776384000},{"id":"stt-xai-v1","type":"asr","model_spec":{"privacy":"anonymized","pricing":{"per_audio_second":{"usd":0.000031480000000000004,"diem":0.000031480000000000004}},"traits":[],"name":"xAI Speech to Text v1"},"created":1776470400},{"id":"upscaler","type":"upscale","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01,"diem":0.01},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Upscaler"},"created":1744453050},{"id":"wai-Illustrious","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01,"diem":0.01},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Anime (WAI)"},"created":1736635129},{"id":"bria-bg-remover","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.03,"diem":0.03},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Background Remover"},"created":1772064000},{"id":"chroma","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01,"diem":0.01},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Chroma"},"created":1769731200},{"id":"flux-2-max","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.09,"diem":0.09},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Flux 2 Max"},"created":1764086377},{"id":"flux-2-pro","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.04,"diem":0.04},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Flux 2 Pro"},"created":1764086377},{"id":"gpt-image-1-5","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.26,"diem":0.26},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"GPT Image 1.5"},"created":1765986864},{"id":"gpt-image-2","type":"image","model_spec":{"privacy":"anonymized","pricing":{"resolutions":{"1K":{"usd":0.27,"diem":0.27},"2K":{"usd":0.51,"diem":0.51},"4K":{"usd":0.84,"diem":0.84}},"quality":{"1K":{"high":{"usd":0.26,"diem":0.26},"low":{"usd":0.02,"diem":0.02},"medium":{"usd":0.07,"diem":0.07}},"2K":{"high":{"usd":0.5,"diem":0.5},"low":{"usd":0.03,"diem":0.03},"medium":{"usd":0.13,"diem":0.13}},"4K":{"high":{"usd":0.83,"diem":0.83},"low":{"usd":0.05,"diem":0.05},"medium":{"usd":0.21,"diem":0.21}}},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"GPT Image 2"},"created":1776729600},{"id":"grok-imagine-image","type":"image","model_spec":{"privacy":"private","pricing":{"resolutions":{"1K":{"usd":0.04,"diem":0.04},"2K":{"usd":0.06,"diem":0.06}},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Grok Imagine"},"created":1775692800},{"id":"grok-imagine-image-quality","type":"image","model_spec":{"privacy":"private","pricing":{"resolutions":{"1K":{"usd":0.08,"diem":0.08},"2K":{"usd":0.1,"diem":0.1}},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Grok Imagine High Quality (SOTA)"},"created":1778112000},{"id":"hunyuan-image-v3","type":"image","model_spec":{"betaModel":true,"privacy":"private","pricing":{"generation":{"usd":0.09,"diem":0.09},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Hunyuan Image 3.0"},"created":1772323200},{"id":"ideogram-v4","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.15,"diem":0.15},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Ideogram V4"},"created":1780444800},{"id":"imagineart-1.5-pro","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.06,"diem":0.06},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"ImagineArt 1.5 Pro"},"created":1769437800},{"id":"krea-v2-large","type":"image","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"generation":{"usd":0.07,"diem":0.07},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Krea v2 Large"},"created":1779408000},{"id":"krea-v2-medium","type":"image","model_spec":{"betaModel":true,"privacy":"anonymized","pricing":{"generation":{"usd":0.04,"diem":0.04},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Krea v2 Medium"},"created":1779408000},{"id":"lustify-sdxl","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01,"diem":0.01},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Lustify SDXL"},"created":1738704152},{"id":"lustify-v7","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01,"diem":0.01},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":["most_uncensored"],"name":"Lustify v7"},"created":1736635129},{"id":"lustify-v8","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01,"diem":0.01},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":["most_uncensored"],"name":"Lustify v8"},"created":1774828800},{"id":"nano-banana-2","type":"image","model_spec":{"privacy":"anonymized","pricing":{"resolutions":{"1K":{"usd":0.1,"diem":0.1},"2K":{"usd":0.14,"diem":0.14},"4K":{"usd":0.19,"diem":0.19}},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Nano Banana 2"},"created":1772064000},{"id":"nano-banana-pro","type":"image","model_spec":{"privacy":"anonymized","pricing":{"resolutions":{"1K":{"usd":0.18,"diem":0.18},"2K":{"usd":0.23,"diem":0.23},"4K":{"usd":0.35,"diem":0.35}},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Nano Banana Pro"},"created":1763653951},{"id":"qwen-image","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.03,"diem":0.03},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":["highest_quality"],"name":"Qwen Image"},"created":1736635129},{"id":"qwen-image-2","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.05,"diem":0.05},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Qwen Image 2"},"created":1772582400},{"id":"qwen-image-2-pro","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.1,"diem":0.1},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Qwen Image 2 Pro"},"created":1772582400},{"id":"recraft-v4","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.05,"diem":0.05},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Recraft V4"},"created":1770854400},{"id":"recraft-v4-pro","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.29,"diem":0.29},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Recraft V4 Pro"},"created":1770854400},{"id":"seedream-v4","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.05,"diem":0.05},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Seedream V4.5"},"created":1762383600},{"id":"seedream-v5-lite","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.05,"diem":0.05},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Seedream V5 Lite"},"created":1771804800},{"id":"venice-sd35","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01,"diem":0.01},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":["eliza-default"],"name":"Venice SD35"},"created":1743099022},{"id":"wan-2-7-text-to-image","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.0375,"diem":0.0375},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Wan 2.7"},"created":1775001600},{"id":"wan-2-7-pro-text-to-image","type":"image","model_spec":{"privacy":"anonymized","pricing":{"generation":{"usd":0.09375,"diem":0.09375},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":[],"name":"Wan 2.7 Pro"},"created":1775001600},{"id":"z-image-turbo","type":"image","model_spec":{"privacy":"private","pricing":{"generation":{"usd":0.01,"diem":0.01},"upscale":{"2x":{"usd":0.02,"diem":0.02},"4x":{"usd":0.08,"diem":0.08}}},"traits":["default","fastest"],"name":"Z-Image Turbo"},"created":1764758779}];
+  // Static fallback data for fast first paint. Loaded from a cacheable JSON file
+  // rather than inlined here, because Mintlify injects this script into every page.
+  const STATIC_MODELS_URL = '/data/static-models.json';
+  let STATIC_MODELS = [];
+  let staticModelsPromise = null;
+
+  // Resolves once STATIC_MODELS is populated. Falls back to the live API so the
+  // tables still render if the snapshot is unavailable.
+  function ensureStaticModels() {
+    if (staticModelsPromise) return staticModelsPromise;
+
+    staticModelsPromise = fetch(STATIC_MODELS_URL)
+      .then(r => {
+        if (!r.ok) throw new Error(`snapshot returned ${r.status}`);
+        return r.json();
+      })
+      .then(models => {
+        if (Array.isArray(models) && models.length > 0) STATIC_MODELS = models;
+        return STATIC_MODELS;
+      })
+      .catch(() => fetchModelsFromAPI()
+        .then(models => {
+          if (models.length > 0) STATIC_MODELS = models;
+          return STATIC_MODELS;
+        })
+        .catch(() => STATIC_MODELS));
+
+    return staticModelsPromise;
+  }
   
   // Privacy types that are always private (no API privacy field needed)
   const PRIVATE_TYPES = new Set(['upscale']);
@@ -149,6 +247,59 @@
 
   // Placeholder image for I2V quote requests (price is same regardless of image content)
   const PLACEHOLDER_IMAGE_URL = 'https://venice.ai/favicon.ico';
+  const MODEL_ICON_BASE_PATH = '/images/icons/models/';
+  const MODEL_TYPE_ICON_BY_TYPE = {
+    asr: 'text.svg',
+    embedding: 'text.svg',
+    image: 'image.svg',
+    inpaint: 'image.svg',
+    music: 'music.svg',
+    text: 'text.svg',
+    tts: 'music.svg',
+    upscale: 'image.svg',
+    video: 'video.svg'
+  };
+  // Mirrors the interface API catalog's best-effort provider/logo matching for
+  // API-only models whose public response does not include an assetPath.
+  // Order matters: the first rule whose pattern is a substring of the haystack
+  // (id + name + modelSource, lowercased) wins. Keep broad provider prefixes
+  // ('google' before 'gemma', 'openai' before 'sora') ahead of narrower ones.
+  const SYNTHETIC_PROVIDER_ASSET_RULES = [
+    ['openai.svg', ['openai', 'gpt-image', 'whisper', 'sora']],
+    ['grok.svg', ['grok', 'x.ai', 'xai']],
+    ['qwen.svg', ['qwen', 'wan-', 'tongyi']],
+    ['google.svg', ['google', 'gemini', 'veo', 'nano-banana']],
+    ['gemma.svg', ['gemma']],
+    ['bytedance.svg', ['bytedance', 'seedance', 'seedream', 'doubao']],
+    ['BlackForestLabs.svg', ['black forest', 'blackforest', 'flux-']],
+    ['Zhipu.svg', ['zai-org', 'z-ai', 'glm', 'zhipu']],
+    ['nvidia.svg', ['nvidia', 'parakeet']],
+    ['minimax.svg', ['minimax', 'hailuo']],
+    ['elevenlabs.svg', ['elevenlabs']],
+    ['runway.svg', ['runway']],
+    ['pixversevideo.svg', ['pixverse']],
+    ['kling.svg', ['kling']],
+    ['vidu.svg', ['vidu']],
+    ['hunyuan.svg', ['hunyuan']],
+    ['imagineart.svg', ['imagineart']],
+    ['ltx.svg', ['ltx', 'lightricks']],
+    ['kimi.svg', ['moonshot', 'kimi']],
+    ['arcee-ai.svg', ['arcee']],
+    ['deepseek.svg', ['deepseek']],
+    ['HiDreamLogo.svg', ['hidream']],
+    ['aionlabs.svg', ['aionlabs', 'aion-labs']],
+    ['stable-audio.svg', ['stable-audio']],
+    ['opus.svg', ['claude', 'anthropic']],
+    ['mistral.svg', ['mistral']],
+    ['meta.svg', ['llama', 'meta-llama']],
+    ['ideogram.svg', ['ideogram']],
+    ['longcat.svg', ['longcat']],
+    ['topaz.svg', ['topaz']],
+    ['ovi.svg', ['ovi-']],
+    ['krea.svg', ['krea']],
+    ['inception.svg', ['mercury', 'inception']],
+    ['venice-keys.svg', ['venice', 'firered', 'z-image', 'chroma', 'upscaler']]
+  ];
 
   // Circuit breaker: stop fetching video quotes after repeated CORS/network failures
   let videoQuoteFailures = 0;
@@ -219,16 +370,144 @@
     }
   }
 
-  // Filter categories
-  const CAPABILITY_FILTERS = ['reasoning', 'vision', 'function', 'code'];
-
+  // Capability filters only apply to text/chat models.
   function categoryAllowsCapabilityFilters(category) {
     return category === 'all' || category === 'text';
   }
 
-  const VIDEO_FILTERS = ['text-to-video', 'image-to-video'];
-  const IMAGE_FILTERS = ['image-gen', 'image-upscale', 'image-edit', 'image-uncensored'];
-  const PRIVACY_FILTERS = ['e2ee', 'tee', 'private', 'anonymized'];
+  // ========== I18N (filter/sort UI chrome) ==========
+  // The model browser UI is rendered by JS, so its labels can't be localized by
+  // Mintlify's per-language content. We detect the locale from the URL prefix
+  // (e.g. /es/models/...) and translate the visible chrome. Keys are the English
+  // source strings; unknown keys fall back to English.
+  const SUPPORTED_LOCALES = ['pt-BR', 'ar', 'it', 'de', 'es', 'fr', 'zh', 'ko'];
+  function detectLocale() {
+    try {
+      const seg = (location.pathname.split('/')[1] || '').toLowerCase();
+      const hit = SUPPORTED_LOCALES.find(l => l.toLowerCase() === seg);
+      if (hit) return hit;
+      const htmlLang = (document.documentElement.getAttribute('lang') || '').trim();
+      const byLang = SUPPORTED_LOCALES.find(l => l.toLowerCase() === htmlLang.toLowerCase());
+      if (byLang) return byLang;
+    } catch (e) {}
+    return 'en';
+  }
+  const LOCALE = detectLocale();
+  const I18N = {
+    'pt-BR': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Recurso', 'Privacy': 'Privacidade', 'All types': 'Todos os tipos', 'Text': 'Texto', 'Image': 'Imagem', 'Video': 'Vídeo', 'Audio': 'Áudio', 'Embedding': 'Embedding', 'Generation': 'Geração', 'Upscale': 'Ampliação', 'Edit': 'Edição', 'Uncensored': 'Sem censura', 'Text to Video': 'Texto para vídeo', 'Image to Video': 'Imagem para vídeo', 'Reasoning': 'Raciocínio', 'Vision': 'Visão', 'Function Calling': 'Chamada de funções', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Mais recentes', 'Oldest': 'Mais antigos', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Preço: menor para maior', 'Price: High to Low': 'Preço: maior para menor', 'Clear filters': 'Limpar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'correspondências mais próximas', 'No close model matches': 'Nenhum modelo próximo encontrado', 'No models match your filters': 'Nenhum modelo corresponde aos seus filtros' },
+    'ar': { 'Type': 'النوع', 'Kind': 'الفئة', 'Capability': 'القدرة', 'Privacy': 'الخصوصية', 'All types': 'كل الأنواع', 'Text': 'نص', 'Image': 'صورة', 'Video': 'فيديو', 'Audio': 'صوت', 'Embedding': 'تضمين', 'Generation': 'توليد', 'Upscale': 'تحسين الدقة', 'Edit': 'تحرير', 'Uncensored': 'بدون رقابة', 'Text to Video': 'نص إلى فيديو', 'Image to Video': 'صورة إلى فيديو', 'Reasoning': 'استدلال', 'Vision': 'رؤية', 'Function Calling': 'استدعاء الدوال', 'Code': 'برمجة', 'Private': 'خاص', 'Anonymized': 'مجهول الهوية', 'Sort': 'ترتيب', 'Sort models': 'ترتيب النماذج', 'Search models': 'بحث في النماذج', 'Recommended': 'موصى به', 'Newest': 'الأحدث', 'Oldest': 'الأقدم', 'Name (A–Z)': 'الاسم (أ–ي)', 'Price: Low to High': 'السعر: من الأقل إلى الأعلى', 'Price: High to Low': 'السعر: من الأعلى إلى الأقل', 'Clear filters': 'مسح عوامل التصفية', 'Search models...': 'بحث في النماذج...', 'models': 'نماذج', 'closest matches': 'أقرب النتائج', 'No close model matches': 'لا توجد نماذج قريبة', 'No models match your filters': 'لا توجد نماذج تطابق عوامل التصفية' },
+    'it': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Capacità', 'Privacy': 'Privacy', 'All types': 'Tutti i tipi', 'Text': 'Testo', 'Image': 'Immagine', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generazione', 'Upscale': 'Upscaling', 'Edit': 'Modifica', 'Uncensored': 'Senza censura', 'Text to Video': 'Testo in video', 'Image to Video': 'Immagine in video', 'Reasoning': 'Ragionamento', 'Vision': 'Visione', 'Function Calling': 'Chiamata di funzioni', 'Code': 'Codice', 'Private': 'Privato', 'Anonymized': 'Anonimizzato', 'Sort': 'Ordina', 'Sort models': 'Ordina modelli', 'Search models': 'Cerca modelli', 'Recommended': 'Consigliati', 'Newest': 'Più recenti', 'Oldest': 'Meno recenti', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Prezzo: dal più basso', 'Price: High to Low': 'Prezzo: dal più alto', 'Clear filters': 'Cancella filtri', 'Search models...': 'Cerca modelli...', 'models': 'modelli', 'closest matches': 'corrispondenze più vicine', 'No close model matches': 'Nessun modello simile trovato', 'No models match your filters': 'Nessun modello corrisponde ai filtri' },
+    'de': { 'Type': 'Typ', 'Kind': 'Art', 'Capability': 'Fähigkeit', 'Privacy': 'Datenschutz', 'All types': 'Alle Typen', 'Text': 'Text', 'Image': 'Bild', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generierung', 'Upscale': 'Hochskalierung', 'Edit': 'Bearbeiten', 'Uncensored': 'Unzensiert', 'Text to Video': 'Text zu Video', 'Image to Video': 'Bild zu Video', 'Reasoning': 'Reasoning', 'Vision': 'Vision', 'Function Calling': 'Function Calling', 'Code': 'Code', 'Private': 'Privat', 'Anonymized': 'Anonymisiert', 'Sort': 'Sortieren', 'Sort models': 'Modelle sortieren', 'Search models': 'Modelle suchen', 'Recommended': 'Empfohlen', 'Newest': 'Neueste', 'Oldest': 'Älteste', 'Name (A–Z)': 'Name (A–Z)', 'Price: Low to High': 'Preis: aufsteigend', 'Price: High to Low': 'Preis: absteigend', 'Clear filters': 'Filter zurücksetzen', 'Search models...': 'Modelle suchen...', 'models': 'Modelle', 'closest matches': 'nächste Treffer', 'No close model matches': 'Keine ähnlichen Modelle gefunden', 'No models match your filters': 'Keine Modelle entsprechen deinen Filtern' },
+    'es': { 'Type': 'Tipo', 'Kind': 'Categoría', 'Capability': 'Capacidad', 'Privacy': 'Privacidad', 'All types': 'Todos los tipos', 'Text': 'Texto', 'Image': 'Imagen', 'Video': 'Vídeo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generación', 'Upscale': 'Escalado', 'Edit': 'Edición', 'Uncensored': 'Sin censura', 'Text to Video': 'Texto a vídeo', 'Image to Video': 'Imagen a vídeo', 'Reasoning': 'Razonamiento', 'Vision': 'Visión', 'Function Calling': 'Llamada de funciones', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Más recientes', 'Oldest': 'Más antiguos', 'Name (A–Z)': 'Nombre (A–Z)', 'Price: Low to High': 'Precio: de menor a mayor', 'Price: High to Low': 'Precio: de mayor a menor', 'Clear filters': 'Borrar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'coincidencias más cercanas', 'No close model matches': 'No hay modelos parecidos', 'No models match your filters': 'Ningún modelo coincide con tus filtros' },
+    'fr': { 'Type': 'Type', 'Kind': 'Catégorie', 'Capability': 'Capacité', 'Privacy': 'Confidentialité', 'All types': 'Tous les types', 'Text': 'Texte', 'Image': 'Image', 'Video': 'Vidéo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Génération', 'Upscale': 'Agrandissement', 'Edit': 'Édition', 'Uncensored': 'Sans censure', 'Text to Video': 'Texte vers vidéo', 'Image to Video': 'Image vers vidéo', 'Reasoning': 'Raisonnement', 'Vision': 'Vision', 'Function Calling': 'Appel de fonctions', 'Code': 'Code', 'Private': 'Privé', 'Anonymized': 'Anonymisé', 'Sort': 'Trier', 'Sort models': 'Trier les modèles', 'Search models': 'Rechercher des modèles', 'Recommended': 'Recommandé', 'Newest': 'Plus récents', 'Oldest': 'Plus anciens', 'Name (A–Z)': 'Nom (A–Z)', 'Price: Low to High': 'Prix : croissant', 'Price: High to Low': 'Prix : décroissant', 'Clear filters': 'Effacer les filtres', 'Search models...': 'Rechercher des modèles...', 'models': 'modèles', 'closest matches': 'correspondances les plus proches', 'No close model matches': 'Aucun modèle proche', 'No models match your filters': 'Aucun modèle ne correspond à vos filtres' },
+    'zh': { 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
+    'ko': { 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
+  };
+  function t(s) {
+    if (LOCALE === 'en') return s;
+    const table = I18N[LOCALE];
+    return (table && table[s] != null) ? table[s] : s;
+  }
+
+  // ========== FILTER DROPDOWNS ==========
+  // The model browser filters are grouped into focused dropdowns instead of a
+  // flat wall of pills. Type/Kind/Privacy are single-select; Capability is
+  // multi-select (AND semantics, e.g. Reasoning + Vision).
+  const FILTER_GROUPS = {
+    type: {
+      label: 'Type', mode: 'single', default: 'all',
+      options: [
+        { value: 'all', label: 'All types' },
+        { value: 'text', label: 'Text' },
+        { value: 'image', label: 'Image' },
+        ...(ENABLE_VIDEO ? [{ value: 'video', label: 'Video' }] : []),
+        { value: 'audio', label: 'Audio' },
+        { value: 'embedding', label: 'Embedding' },
+      ],
+    },
+    image: {
+      label: 'Kind', mode: 'single', default: null,
+      options: [
+        { value: 'image-gen', label: 'Generation' },
+        { value: 'image-upscale', label: 'Upscale' },
+        { value: 'image-edit', label: 'Edit' },
+        { value: 'image-uncensored', label: 'Uncensored' },
+      ],
+    },
+    video: {
+      label: 'Kind', mode: 'single', default: null,
+      options: [
+        { value: 'text-to-video', label: 'Text to Video' },
+        { value: 'image-to-video', label: 'Image to Video' },
+      ],
+    },
+    capability: {
+      label: 'Capability', mode: 'multi', default: null,
+      options: [
+        { value: 'reasoning', label: 'Reasoning' },
+        { value: 'vision', label: 'Vision' },
+        { value: 'function', label: 'Function Calling' },
+        { value: 'code', label: 'Code' },
+      ],
+    },
+    privacy: {
+      label: 'Privacy', mode: 'single', default: null,
+      options: [
+        { value: 'e2ee', label: 'E2EE' },
+        { value: 'tee', label: 'TEE' },
+        { value: 'private', label: 'Private' },
+        { value: 'anonymized', label: 'Anonymized' },
+      ],
+    },
+  };
+
+  const FILTER_CHEVRON = '<svg class="vmb-dd-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+  const FILTER_CHECK = '<svg class="vmb-dd-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+  const SORT_ICON = '<svg class="vmb-dd-sort-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"/></svg>';
+
+  // Sort options (single-select). `default` preserves the API's curated order and
+  // is the natural resting state on preset pages; the overview page defaults to
+  // newest. All values are handled by sortModels().
+  const SORT_OPTIONS = [
+    { value: 'default', label: 'Recommended' },
+    { value: 'newest', label: 'Newest' },
+    { value: 'oldest', label: 'Oldest' },
+    { value: 'name', label: 'Name (A–Z)' },
+    { value: 'price-low', label: 'Price: Low to High' },
+    { value: 'price-high', label: 'Price: High to Low' },
+  ];
+
+  function renderSortDropdown() {
+    const opts = SORT_OPTIONS.map(o =>
+      `<button type="button" class="vmb-dd-option" role="option" aria-selected="false" data-value="${o.value}">` +
+        `<span class="vmb-dd-option-label">${t(o.label)}</span>${FILTER_CHECK}` +
+      `</button>`
+    ).join('');
+    return (
+      `<div class="vmb-dd vmb-sort-dd">` +
+        `<button type="button" class="vmb-dd-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="${t('Sort models')}">` +
+          `${SORT_ICON}<span class="vmb-dd-label">${t('Sort')}</span>${FILTER_CHEVRON}` +
+        `</button>` +
+        `<div class="vmb-dd-panel" role="listbox" aria-label="${t('Sort models')}" hidden>${opts}</div>` +
+      `</div>`
+    );
+  }
+
+  function renderFilterDropdown(key, group) {
+    const opts = group.options.map(o =>
+      `<button type="button" class="vmb-dd-option" role="option" aria-selected="false" data-group="${key}" data-value="${o.value}">` +
+        `<span class="vmb-dd-option-label">${t(o.label)}</span>${FILTER_CHECK}` +
+      `</button>`
+    ).join('');
+    return (
+      `<div class="vmb-dd" data-group="${key}" data-mode="${group.mode}">` +
+        `<button type="button" class="vmb-dd-trigger" aria-haspopup="listbox" aria-expanded="false">` +
+          `<span class="vmb-dd-label">${t(group.label)}</span>${FILTER_CHEVRON}` +
+        `</button>` +
+        `<div class="vmb-dd-panel" role="listbox" aria-label="${t(group.label)}" hidden>${opts}</div>` +
+      `</div>`
+    );
+  }
   const MODEL_SEARCH_ALIASES = {
     gpt4: ['gpt-4', 'gpt 4', 'openai gpt-4'],
     gpt4o: ['gpt-4o', 'gpt 4o', 'openai gpt-4o'],
@@ -370,6 +649,25 @@
   function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function getModelAssetFile(model) {
+    const spec = model.model_spec || {};
+    const haystack = [model.id, spec.name, spec.modelSource].filter(Boolean).join(' ').toLowerCase();
+    const match = SYNTHETIC_PROVIDER_ASSET_RULES.find(([, patterns]) => patterns.some(pattern => haystack.includes(pattern)));
+    return match?.[0] || MODEL_TYPE_ICON_BY_TYPE[model.type] || 'text.svg';
+  }
+
+  function getModelLogoHtml(model) {
+    const assetFile = getModelAssetFile(model);
+    const assetPath = `${MODEL_ICON_BASE_PATH}${assetFile}`;
+    // Decorative only: the model name is already present as visible, announced
+    // text in the row, so the avatar is aria-hidden and carries no extra label.
+    return `
+      <span class="vmb-model-avatar" aria-hidden="true">
+        <span class="vmb-model-avatar-mask" style="--vmb-model-icon: url('${escapeHtml(assetPath)}')"></span>
+      </span>
+    `;
   }
 
   function normalizeSearchText(value) {
@@ -1006,6 +1304,7 @@
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
       const editPrice = spec.pricing?.inpaint?.usd ?? spec.pricing?.generation?.usd ?? 0.04;
+      const extraInputUsd = spec.pricing?.inputImages?.additional?.usd;
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
 
       return `<div class="vpt-row">
@@ -1018,6 +1317,7 @@
         </div>
         <div class="vpt-row-bottom">
           <span class="vpt-price-item"><span class="vpt-price-label">Per Edit</span><span class="vpt-price-value">${formatPrice(editPrice)}</span></span>
+          ${extraInputUsd ? `<span class="vpt-price-item vpt-tooltip" data-tooltip="Charged per input image beyond the first, added on top of the per-edit price."><span class="vpt-price-label">Extra Input Image</span><span class="vpt-price-value">${formatPrice(extraInputUsd)}</span></span>` : ''}
         </div>
       </div>`;
     }).join('');
@@ -1376,14 +1676,13 @@
     const el = document.getElementById('cache-pricing-placeholder');
     if (!el) return;
 
-    // Always render static data immediately for instant display
-    el.innerHTML = renderCachePricingContent(STATIC_MODELS);
-
-    // Then try cache or fetch fresh data to update
+    // Prefer the session cache, otherwise fall back to the static snapshot
     const cachedModels = getCachedModels();
-    if (cachedModels && cachedModels.length > 0) {
-      el.innerHTML = renderCachePricingContent(cachedModels);
-    }
+    const initialModels = cachedModels && cachedModels.length > 0
+      ? cachedModels
+      : await ensureStaticModels();
+    el.innerHTML = renderCachePricingContent(initialModels);
+
     // Fetch fresh data in background and update
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
@@ -1403,7 +1702,9 @@
     if (!el) return;
 
     const cachedModels = getCachedModels();
-    const initialModels = cachedModels && cachedModels.length > 0 ? cachedModels : STATIC_MODELS;
+    const initialModels = cachedModels && cachedModels.length > 0
+      ? cachedModels
+      : await ensureStaticModels();
     el.innerHTML = renderDeprecationTable(initialModels);
     ensurePlaceholderVisible(el);
 
@@ -1512,13 +1813,14 @@
     const el = document.getElementById('traits-list-placeholder');
     if (!el) return;
 
-    el.innerHTML = renderTraitsList(getStaticTraits());
-    ensurePlaceholderVisible(el);
-
     const cachedTraits = getCachedTraits();
     if (cachedTraits) {
       el.innerHTML = renderTraitsList(cachedTraits);
+    } else {
+      await ensureStaticModels();
+      el.innerHTML = renderTraitsList(getStaticTraits());
     }
+    ensurePlaceholderVisible(el);
 
     const freshTraits = await fetchTraitsFromAPI();
     if (freshTraits) {
@@ -1564,14 +1866,13 @@
     const el = document.getElementById('beta-models-placeholder');
     if (!el) return;
 
-    // Always render static data immediately for instant display
-    el.innerHTML = renderBetaModelsTable(STATIC_MODELS);
-
-    // Then try cache or fetch fresh data to update
+    // Prefer the session cache, otherwise fall back to the static snapshot
     const cachedModels = getCachedModels();
-    if (cachedModels && cachedModels.length > 0) {
-      el.innerHTML = renderBetaModelsTable(cachedModels);
-    }
+    const initialModels = cachedModels && cachedModels.length > 0
+      ? cachedModels
+      : await ensureStaticModels();
+    el.innerHTML = renderBetaModelsTable(initialModels);
+
     // Fetch fresh data in background and update
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
@@ -1608,12 +1909,12 @@
     const el = document.getElementById('reasoning-models-placeholder');
     if (!el) return;
 
-    el.innerHTML = renderReasoningModelsTable(STATIC_MODELS);
-
     const cachedModels = getCachedModels();
-    if (cachedModels && cachedModels.length > 0) {
-      el.innerHTML = renderReasoningModelsTable(cachedModels);
-    }
+    const initialModels = cachedModels && cachedModels.length > 0
+      ? cachedModels
+      : await ensureStaticModels();
+    el.innerHTML = renderReasoningModelsTable(initialModels);
+
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
         el.innerHTML = renderReasoningModelsTable(freshModels);
@@ -1806,12 +2107,10 @@
     el.style.height = 'auto';
     el.style.overflow = 'visible';
 
-    mountVoicePicker(el, STATIC_MODELS);
-
     const cachedModels = getCachedModels();
-    if (cachedModels && cachedModels.length > 0) {
-      mountVoicePicker(el, cachedModels);
-    }
+    mountVoicePicker(el, cachedModels && cachedModels.length > 0
+      ? cachedModels
+      : await ensureStaticModels());
 
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels && freshModels.length > 0) {
@@ -1848,6 +2147,7 @@
         ${renderPricingUpscaleTable(models)}
         <h4>Editing</h4>
         ${renderPricingEditTable(models)}
+        <p class="vpt-video-note">The <strong>Per Edit</strong> price includes the first input image. Models that list an <strong>Extra Input Image</strong> price charge that fee for each additional input image beyond the first. Example: editing with 3 input images on a model priced at $0.11 per edit with a $0.0035 extra-image fee costs $0.11 + 2 × $0.0035 = $0.117.</p>
       `;
     }
 
@@ -1904,12 +2204,13 @@
     
     if (!chatEl && !embeddingEl && !imageEl && !audioEl && !musicEl) return;
 
-    // Immediately render dynamic version from cache or STATIC_MODELS (instant, adds JS interactivity)
+    // Replace the static markdown tables with the interactive version, from the
+    // session cache when available and the static snapshot otherwise
     const cachedModels = getCachedModels();
     if (cachedModels && cachedModels.length > 0) {
       renderPricingTables(cachedModels);
     } else {
-      renderPricingTables(STATIC_MODELS);
+      renderPricingTables(await ensureStaticModels());
     }
     
     // Fetch fresh data in background and update when ready
@@ -1933,7 +2234,7 @@
     
     isInitializing = true;
     const presetFilter = placeholder.dataset.filter || null;
-    const hasCachedData = getCachedModels() !== null || STATIC_MODELS.length > 0;
+    const hasCachedData = getCachedModels() !== null;
 
     // Create container - show loading only if no data available
     const container = document.createElement('div');
@@ -1941,50 +2242,23 @@
     container.innerHTML = `
       <div class="vmb-toolbar">
         <div class="vmb-toolbar-left">
-          <input type="text" class="vmb-search" placeholder="Search models..." aria-label="Search models" />
-        </div>
-        <div class="vmb-toolbar-right">
-          <button class="vmb-sort-toggle" aria-label="Sort by date" title="Sort by date">
-            <svg class="vmb-sort-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"/>
-            </svg>
-          </button>
+          <input type="text" class="vmb-search" placeholder="${t('Search models...')}" aria-label="${t('Search models')}" />
         </div>
       </div>
-      <div class="vmb-filters" role="toolbar" aria-label="Model filters">
-        <span class="vmb-category-filters" role="group" aria-label="Category filters">
-          <button class="vmb-filter active" data-filter="all" aria-pressed="true">All</button>
-          <button class="vmb-filter" data-filter="text" aria-pressed="false">Text</button>
-          <button class="vmb-filter" data-filter="image" aria-pressed="false">Image</button>
-          ${ENABLE_VIDEO ? '<button class="vmb-filter" data-filter="video" aria-pressed="false">Video</button>' : ''}
-          <button class="vmb-filter" data-filter="audio" aria-pressed="false">Audio</button>
-          <button class="vmb-filter" data-filter="embedding" aria-pressed="false">Embedding</button>
-        </span>
-        <span class="vmb-privacy-filters" role="group" aria-label="Privacy filters">
-          <button class="vmb-filter" data-filter="e2ee" aria-pressed="false">E2EE</button>
-          <button class="vmb-filter" data-filter="tee" aria-pressed="false">TEE</button>
-          <button class="vmb-filter" data-filter="private" aria-pressed="false">Private</button>
-          <button class="vmb-filter" data-filter="anonymized" aria-pressed="false">Anonymized</button>
-        </span>
-        <span class="vmb-capability-filters" role="group" aria-label="Capability filters">
-          <button class="vmb-filter" data-filter="reasoning" aria-pressed="false">Reasoning</button>
-          <button class="vmb-filter" data-filter="vision" aria-pressed="false" title="Chat models that accept image input">Vision</button>
-          <button class="vmb-filter vmb-text-only" data-filter="function" aria-pressed="false">Function Calling</button>
-          <button class="vmb-filter vmb-text-only" data-filter="code" aria-pressed="false">Code</button>
-        </span>
-        ${ENABLE_VIDEO ? `<span class="vmb-video-filters" role="group" aria-label="Video type filters">
-          <button class="vmb-filter" data-filter="text-to-video" aria-pressed="false">Text to Video</button>
-          <button class="vmb-filter" data-filter="image-to-video" aria-pressed="false">Image to Video</button>
-        </span>` : ''}
-        <span class="vmb-image-filters" role="group" aria-label="Image type filters">
-          <button class="vmb-filter" data-filter="image-gen" aria-pressed="false">Generation</button>
-          <button class="vmb-filter" data-filter="image-upscale" aria-pressed="false">Upscale</button>
-          <button class="vmb-filter" data-filter="image-edit" aria-pressed="false">Edit</button>
-          <button class="vmb-filter" data-filter="image-uncensored" aria-pressed="false">Uncensored</button>
-        </span>
-      </div>
-      <div class="vmb-results-bar">
+      <div class="vmb-controls">
         <span class="vmb-count" aria-live="polite">${hasCachedData ? '' : 'Loading...'}</span>
+        <div class="vmb-controls-group">
+          ${renderSortDropdown()}
+          <div class="vmb-controls-divider" aria-hidden="true"></div>
+          <div class="vmb-filters" role="toolbar" aria-label="Model filters">
+            ${renderFilterDropdown('type', FILTER_GROUPS.type)}
+            ${renderFilterDropdown('image', FILTER_GROUPS.image)}
+            ${ENABLE_VIDEO ? renderFilterDropdown('video', FILTER_GROUPS.video) : ''}
+            ${renderFilterDropdown('capability', FILTER_GROUPS.capability)}
+            ${renderFilterDropdown('privacy', FILTER_GROUPS.privacy)}
+            <button type="button" class="vmb-dd-clear" hidden>${t('Clear filters')}</button>
+          </div>
+        </div>
       </div>
       <div class="vmb-models" role="list" aria-label="Model list">
         ${hasCachedData ? '' : '<div class="vmb-loading">Loading models...</div>'}
@@ -1995,91 +2269,249 @@
 
     // Get elements
     const searchInput = container.querySelector('.vmb-search');
-    const filterButtons = container.querySelectorAll('.vmb-filter');
     const countDisplay = container.querySelector('.vmb-count');
     const modelsContainer = container.querySelector('.vmb-models');
-    const categoryFilters = container.querySelector('.vmb-category-filters');
-    const capabilityFilters = container.querySelector('.vmb-capability-filters');
-    const videoFilters = ENABLE_VIDEO ? container.querySelector('.vmb-video-filters') : null;
-    const imageFilters = container.querySelector('.vmb-image-filters');
-    const privacyFilters = container.querySelector('.vmb-privacy-filters');
-    
-    // Configure filter visibility based on page context
-    if (presetFilter) {
-      categoryFilters.style.display = 'none';
-      const filterVisibility = {
-        text: { capability: true, video: false, image: false },
-        video: { capability: false, video: true, image: false },
-        image: { capability: false, video: false, image: true }
-      };
-      const config = filterVisibility[presetFilter] || { capability: false, video: false, image: false };
-      capabilityFilters.style.display = config.capability ? 'contents' : 'none';
-      if (videoFilters) videoFilters.style.display = config.video ? 'contents' : 'none';
-      imageFilters.style.display = config.image ? 'contents' : 'none';
-    } else {
-      capabilityFilters.style.display = 'contents';
-      if (videoFilters) videoFilters.style.display = 'none';
-      imageFilters.style.display = 'none';
-    }
+    const filtersBar = container.querySelector('.vmb-filters');
+    const clearBtn = container.querySelector('.vmb-dd-clear');
+
+    // Map each dropdown group key to its root element.
+    const dd = {};
+    container.querySelectorAll('.vmb-dd').forEach(el => { dd[el.dataset.group] = el; });
+    const showDd = (key, show) => { if (dd[key]) dd[key].style.display = show ? '' : 'none'; };
 
     let allModels = [];
     let activeFilter = presetFilter || 'all';
-    let activeCapability = null;
+    const activeCapabilities = new Set(); // multi-select
     let activeVideoType = null;
     let activeImageType = null;
     let activePrivacy = null;
     // On overview page (no preset filter), default to newest first
     let activeSort = presetFilter ? 'default' : 'newest';
 
-    function updateAriaPressed(btn, isActive) {
-      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    // Configure which dropdowns are visible for the current page context.
+    if (presetFilter) {
+      const filterVisibility = {
+        text: { capability: true, video: false, image: false },
+        video: { capability: false, video: true, image: false },
+        image: { capability: false, video: false, image: true },
+      };
+      const config = filterVisibility[presetFilter] || { capability: false, video: false, image: false };
+      showDd('type', false);
+      showDd('capability', config.capability);
+      showDd('video', config.video);
+      showDd('image', config.image);
+    } else {
+      showDd('type', true);
+      showDd('capability', true);
+      showDd('video', false);
+      showDd('image', false);
+    }
+    // Privacy dropdown is always available.
+
+    // ----- Dropdown state <-> UI helpers -----
+    function getSingleState(key) {
+      if (key === 'type') return activeFilter;
+      if (key === 'image') return activeImageType;
+      if (key === 'video') return activeVideoType;
+      if (key === 'privacy') return activePrivacy;
+      return null;
+    }
+    function setSingleState(key, value) {
+      if (key === 'type') activeFilter = value;
+      else if (key === 'image') activeImageType = value;
+      else if (key === 'video') activeVideoType = value;
+      else if (key === 'privacy') activePrivacy = value;
     }
 
-    function syncCapabilityFilterControls() {
-      const allow = categoryAllowsCapabilityFilters(activeFilter);
-      if (!allow && activeCapability) {
-        activeCapability = null;
-        capabilityFilters.querySelectorAll('.vmb-filter').forEach(b => {
-          b.classList.remove('active');
-          updateAriaPressed(b, false);
+    function updateDropdownUI(key) {
+      const ddEl = dd[key];
+      if (!ddEl) return;
+      const group = FILTER_GROUPS[key];
+      const labelEl = ddEl.querySelector('.vmb-dd-label');
+      let active = false;
+      let text = t(group.label);
+
+      if (group.mode === 'multi') {
+        active = activeCapabilities.size > 0;
+        if (activeCapabilities.size === 1) {
+          const v = [...activeCapabilities][0];
+          text = t((group.options.find(o => o.value === v) || {}).label || group.label);
+        } else if (activeCapabilities.size > 1) {
+          text = `${t(group.label)} · ${activeCapabilities.size}`;
+        }
+        ddEl.querySelectorAll('.vmb-dd-option').forEach(o => {
+          const on = activeCapabilities.has(o.dataset.value);
+          o.classList.toggle('selected', on);
+          o.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+      } else {
+        const cur = getSingleState(key);
+        const def = key === 'type' ? 'all' : null;
+        active = cur != null && cur !== def;
+        if (active) {
+          const o = group.options.find(op => op.value === cur);
+          if (o) text = t(o.label);
+        }
+        ddEl.querySelectorAll('.vmb-dd-option').forEach(o => {
+          const on = o.dataset.value === cur;
+          o.classList.toggle('selected', on);
+          o.setAttribute('aria-selected', on ? 'true' : 'false');
         });
       }
-      capabilityFilters.querySelectorAll('.vmb-filter').forEach(b => {
-        b.disabled = !allow;
-        b.setAttribute('aria-disabled', allow ? 'false' : 'true');
-        if (!allow) {
-          b.title = 'Available when viewing All or Text models';
-        } else {
-          const f = b.dataset.filter;
-          if (f === 'vision') {
-            b.title = 'Chat models that accept image input';
-          } else {
-            b.removeAttribute('title');
-          }
-        }
+
+      labelEl.textContent = text;
+      ddEl.classList.toggle('vmb-dd-active', active);
+    }
+
+    function updateAllDropdownUI() {
+      Object.keys(FILTER_GROUPS).forEach(updateDropdownUI);
+    }
+
+    function updateClearVisibility() {
+      const any = activeCapabilities.size > 0 || activeVideoType || activeImageType ||
+        activePrivacy || (!presetFilter && activeFilter !== 'all');
+      clearBtn.hidden = !any;
+    }
+
+    function closeAllPanels(except) {
+      container.querySelectorAll('.vmb-dd').forEach(el => {
+        if (el === except) return;
+        el.classList.remove('open');
+        const t = el.querySelector('.vmb-dd-trigger');
+        if (t) t.setAttribute('aria-expanded', 'false');
+        const p = el.querySelector('.vmb-dd-panel');
+        if (p) p.hidden = true;
       });
     }
 
-    syncCapabilityFilterControls();
-
-    const sortToggle = container.querySelector('.vmb-sort-toggle');
-    
-    // Set initial sort toggle UI state for overview page
-    if (!presetFilter) {
-      sortToggle.classList.add('active');
-      sortToggle.title = 'Newest first (click for oldest)';
+    function togglePanel(ddEl) {
+      const trigger = ddEl.querySelector('.vmb-dd-trigger');
+      const panel = ddEl.querySelector('.vmb-dd-panel');
+      const willOpen = !ddEl.classList.contains('open');
+      closeAllPanels(willOpen ? ddEl : null);
+      ddEl.classList.toggle('open', willOpen);
+      trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      panel.hidden = !willOpen;
     }
 
-    // Always render static data immediately for instant display
-    allModels = STATIC_MODELS;
-    renderModels();
+    function syncCapabilityFilterControls() {
+      const capDd = dd.capability;
+      if (!capDd) return;
+      const allow = categoryAllowsCapabilityFilters(activeFilter);
+      if (!allow && activeCapabilities.size) {
+        activeCapabilities.clear();
+        updateDropdownUI('capability');
+      }
+      capDd.classList.toggle('vmb-dd-disabled', !allow);
+      const trigger = capDd.querySelector('.vmb-dd-trigger');
+      trigger.disabled = !allow;
+      trigger.setAttribute('aria-disabled', allow ? 'false' : 'true');
+      trigger.title = allow ? '' : 'Available when viewing All or Text models';
+      if (!allow) {
+        capDd.classList.remove('open');
+        trigger.setAttribute('aria-expanded', 'false');
+        capDd.querySelector('.vmb-dd-panel').hidden = true;
+      }
+    }
 
-    // Then try cache or fetch fresh data to update
-    const cachedModels = getCachedModels();
-    if (cachedModels && cachedModels.length > 0) {
-      allModels = cachedModels;
+    function handleOptionSelect(option) {
+      const key = option.dataset.group;
+      const value = option.dataset.value;
+      const group = FILTER_GROUPS[key];
+
+      if (group.mode === 'multi') {
+        if (activeCapabilities.has(value)) activeCapabilities.delete(value);
+        else activeCapabilities.add(value);
+        // Selecting a capability on the main page implies text models.
+        if (activeCapabilities.size > 0 && !presetFilter && activeFilter === 'all') {
+          activeFilter = 'text';
+          updateDropdownUI('type');
+        }
+        updateDropdownUI('capability');
+        // Keep the panel open for multi-select.
+      } else {
+        const cur = getSingleState(key);
+        const def = key === 'type' ? 'all' : null;
+        const next = cur === value ? def : value;
+        setSingleState(key, next);
+        // Changing type resets the type-dependent filters.
+        if (key === 'type') {
+          activeCapabilities.clear();
+          activeVideoType = null;
+          activeImageType = null;
+          updateDropdownUI('capability');
+          updateDropdownUI('video');
+          updateDropdownUI('image');
+        }
+        updateDropdownUI(key);
+        closeAllPanels(null);
+      }
+      syncCapabilityFilterControls();
+      updateClearVisibility();
       renderModels();
     }
+
+    function clearAllFilters() {
+      activeCapabilities.clear();
+      activeVideoType = null;
+      activeImageType = null;
+      activePrivacy = null;
+      if (!presetFilter) activeFilter = 'all';
+      updateAllDropdownUI();
+      syncCapabilityFilterControls();
+      updateClearVisibility();
+      closeAllPanels(null);
+      renderModels();
+    }
+
+    // ----- Dropdown events -----
+    filtersBar.addEventListener('click', (e) => {
+      const trigger = e.target.closest('.vmb-dd-trigger');
+      if (trigger) {
+        if (trigger.disabled) return;
+        togglePanel(trigger.closest('.vmb-dd'));
+        return;
+      }
+      if (e.target.closest('.vmb-dd-clear')) { clearAllFilters(); return; }
+      const option = e.target.closest('.vmb-dd-option');
+      if (option) { handleOptionSelect(option); return; }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.vmb-dd')) closeAllPanels(null);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeAllPanels(null);
+    });
+
+    updateAllDropdownUI();
+    syncCapabilityFilterControls();
+    updateClearVisibility();
+
+    const sortDd = container.querySelector('.vmb-sort-dd');
+    const sortDefault = presetFilter ? 'default' : 'newest';
+
+    // Sync the sort dropdown's trigger label, selected option, and active accent
+    // (highlighted whenever the sort differs from the page's natural default).
+    function updateSortUI() {
+      const opt = SORT_OPTIONS.find(o => o.value === activeSort);
+      sortDd.querySelector('.vmb-dd-label').textContent = opt ? t(opt.label) : t('Sort');
+      sortDd.querySelectorAll('.vmb-dd-option').forEach(o => {
+        const on = o.dataset.value === activeSort;
+        o.classList.toggle('selected', on);
+        o.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      sortDd.classList.toggle('vmb-dd-active', activeSort !== sortDefault);
+    }
+    updateSortUI();
+
+    // Prefer the session cache, otherwise fall back to the static snapshot
+    const cachedModels = getCachedModels();
+    allModels = cachedModels && cachedModels.length > 0
+      ? cachedModels
+      : await ensureStaticModels();
+    renderModels();
+
     // Fetch fresh data in background and update
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
@@ -2102,14 +2534,16 @@
     }
 
     function matchesCapability(model) {
-      if (!activeCapability) return true;
+      if (activeCapabilities.size === 0) return true;
       const spec = model.model_spec || {};
       const caps = spec.capabilities || {};
-      
-      if (activeCapability === 'reasoning') return caps.supportsReasoning;
-      if (activeCapability === 'vision') return caps.supportsVision;
-      if (activeCapability === 'function') return caps.supportsFunctionCalling;
-      if (activeCapability === 'code') return matchesCodeFilter(model);
+      // AND semantics: the model must satisfy every selected capability.
+      for (const cap of activeCapabilities) {
+        if (cap === 'reasoning' && !caps.supportsReasoning) return false;
+        if (cap === 'vision' && !caps.supportsVision) return false;
+        if (cap === 'function' && !caps.supportsFunctionCalling) return false;
+        if (cap === 'code' && !matchesCodeFilter(model)) return false;
+      }
       return true;
     }
 
@@ -2199,11 +2633,17 @@
         sorted = visibleScored.map(item => item.model);
       }
 
-      const countLabel = sorted.length + ' model' + (sorted.length !== 1 ? 's' : '');
-      countDisplay.textContent = showingClosestMatches ? `${countLabel} closest match${sorted.length !== 1 ? 'es' : ''}` : countLabel;
+      const n = sorted.length;
+      const countLabel = (LOCALE === 'en')
+        ? (n + ' model' + (n !== 1 ? 's' : ''))
+        : (n + ' ' + t('models'));
+      const closestSuffix = (LOCALE === 'en')
+        ? ('closest match' + (n !== 1 ? 'es' : ''))
+        : t('closest matches');
+      countDisplay.textContent = showingClosestMatches ? `${countLabel} ${closestSuffix}` : countLabel;
 
       if (sorted.length === 0) {
-        modelsContainer.innerHTML = `<div class="vmb-loading">${query ? 'No close model matches' : 'No models match your filters'}</div>`;
+        modelsContainer.innerHTML = `<div class="vmb-loading">${query ? t('No close model matches') : t('No models match your filters')}</div>`;
         return;
       }
 
@@ -2289,6 +2729,9 @@
           priceStr = `${formatPrice(pricing.generation.usd)}/image`;
         } else if (model.type === 'inpaint' && pricing.inpaint) {
           priceStr = `${formatPrice(pricing.inpaint.usd)}/edit`;
+          if (pricing.inputImages?.additional?.usd) {
+            priceStr += ` <span class="vmb-pipe">|</span> ${formatPrice(pricing.inputImages.additional.usd)}/extra image`;
+          }
         } else if (model.type === 'embedding' && pricing.input) {
           priceStr = `${formatPrice(pricing.input.usd)}/M tokens`;
         } else if (pricing.input && pricing.output) {
@@ -2440,6 +2883,9 @@
       
       return `
         <div class="vmb-model" role="listitem">
+          <div class="vmb-model-shell">
+            ${getModelLogoHtml(model)}
+            <div class="vmb-model-body">
             <div class="vmb-model-row">
               <div class="vmb-model-left">
                 ${nameLink}${copyBtn}${dateInfo?.isNew ? '<span class="vmb-new-dot" title="Recently added">New</span>' : ''}
@@ -2453,6 +2899,8 @@
               <span class="vmb-info-left">${leftParts.join('<span class="vmb-dot">·</span>')}</span>
               <span class="vmb-info-right">${capIcons}${contextMobile}${releaseDateHtml}</span>
             </div>
+            </div>
+          </div>
           </div>
         `;
     }
@@ -2464,118 +2912,16 @@
       searchTimeout = setTimeout(renderModels, 100);
     });
 
-    // Event: Sort toggle - cycles through: default → newest → oldest → default
-    sortToggle.addEventListener('click', () => {
-      const cycle = ['default', 'newest', 'oldest'];
-      const currentIndex = cycle.indexOf(activeSort);
-      const nextIndex = (currentIndex + 1) % cycle.length;
-      activeSort = cycle[nextIndex];
-      
-      // Update icon direction and active state
-      sortToggle.classList.toggle('active', activeSort !== 'default');
-      sortToggle.classList.toggle('asc', activeSort === 'oldest');
-      sortToggle.title = activeSort === 'default' ? 'Sort by date' : 
-                         activeSort === 'newest' ? 'Newest first (click for oldest)' : 
-                         'Oldest first (click to reset)';
-      renderModels();
-    });
-
-    // Event: Filter buttons
-    filterButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const filter = btn.dataset.filter;
-        const isCapability = CAPABILITY_FILTERS.includes(filter);
-        const isVideoType = VIDEO_FILTERS.includes(filter);
-        const isImageType = IMAGE_FILTERS.includes(filter);
-        const isPrivacy = PRIVACY_FILTERS.includes(filter);
-        
-        if (isPrivacy) {
-          if (activePrivacy === filter) {
-            activePrivacy = null;
-            btn.classList.remove('active');
-            updateAriaPressed(btn, false);
-          } else {
-            privacyFilters.querySelectorAll('.vmb-filter').forEach(b => {
-              b.classList.remove('active');
-              updateAriaPressed(b, false);
-            });
-            activePrivacy = filter;
-            btn.classList.add('active');
-            updateAriaPressed(btn, true);
-          }
-        } else if (isCapability) {
-          if (activeCapability === filter) {
-            activeCapability = null;
-            btn.classList.remove('active');
-            updateAriaPressed(btn, false);
-          } else {
-            capabilityFilters.querySelectorAll('.vmb-filter').forEach(b => {
-              b.classList.remove('active');
-              updateAriaPressed(b, false);
-            });
-            activeCapability = filter;
-            btn.classList.add('active');
-            updateAriaPressed(btn, true);
-
-            if (!presetFilter) {
-              activeFilter = 'text';
-              categoryFilters.querySelectorAll('.vmb-filter').forEach(b => {
-                b.classList.remove('active');
-                updateAriaPressed(b, false);
-              });
-              const textCategoryBtn = categoryFilters.querySelector('[data-filter="text"]');
-              if (textCategoryBtn) {
-                textCategoryBtn.classList.add('active');
-                updateAriaPressed(textCategoryBtn, true);
-              }
-            }
-          }
-        } else if (isVideoType && videoFilters) {
-          if (activeVideoType === filter) {
-            activeVideoType = null;
-            btn.classList.remove('active');
-            updateAriaPressed(btn, false);
-          } else {
-            videoFilters.querySelectorAll('.vmb-filter').forEach(b => {
-              b.classList.remove('active');
-              updateAriaPressed(b, false);
-            });
-            activeVideoType = filter;
-            btn.classList.add('active');
-            updateAriaPressed(btn, true);
-          }
-        } else if (isImageType) {
-          if (activeImageType === filter) {
-            activeImageType = null;
-            btn.classList.remove('active');
-            updateAriaPressed(btn, false);
-          } else {
-            imageFilters.querySelectorAll('.vmb-filter').forEach(b => {
-              b.classList.remove('active');
-              updateAriaPressed(b, false);
-            });
-            activeImageType = filter;
-            btn.classList.add('active');
-            updateAriaPressed(btn, true);
-          }
-        } else {
-          // Category filter (main page only) - preserve privacy filter state
-          activeFilter = filter;
-          activeCapability = null;
-          activeVideoType = null;
-          activeImageType = null;
-          filterButtons.forEach(b => {
-            if (!PRIVACY_FILTERS.includes(b.dataset.filter)) {
-              b.classList.remove('active');
-              updateAriaPressed(b, false);
-            }
-          });
-          btn.classList.add('active');
-          updateAriaPressed(btn, true);
-        }
-        syncCapabilityFilterControls();
+    // Event: Sort dropdown (single-select, reuses the shared popover behavior).
+    sortDd.addEventListener('click', (e) => {
+      if (e.target.closest('.vmb-dd-trigger')) { togglePanel(sortDd); return; }
+      const option = e.target.closest('.vmb-dd-option');
+      if (option) {
+        activeSort = option.dataset.value;
+        updateSortUI();
+        closeAllPanels(null);
         renderModels();
-      });
+      }
     });
 
     // Event: Copy button (delegated) - handles both name and ID copy buttons

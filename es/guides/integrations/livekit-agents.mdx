@@ -1,0 +1,254 @@
+---
+title: "LiveKit Agents"
+description: "Crea agentes de voz en tiempo real con LiveKit Agents y Venice, conectando STT, LLM y TTS de Venice a través del plugin compatible con OpenAI en una tubería STT-LLM-TTS."
+"og:title": "LiveKit Agents | Documentación de la API de Venice"
+"og:description": "Impulsa agentes de voz de LiveKit con los modelos STT, LLM y TTS privados y sin censura de Venice."
+---
+
+[LiveKit Agents](https://docs.livekit.io/agents/) es un framework para construir IA de voz en tiempo real. Como Venice es totalmente compatible con OpenAI para chat, transcripción y voz, puedes impulsar las tres etapas de un agente de voz — **reconocimiento de voz (STT)**, **el LLM** y **síntesis de voz (TTS)** — a través del plugin `livekit-plugins-openai` apuntándolo a la URL base de Venice.
+
+<Note>
+Venice encaja en la arquitectura de tubería **STT-LLM-TTS** de LiveKit Agents. Venice no expone una API WebSocket Realtime (voz a voz) de OpenAI, por lo que la ruta `RealtimeModel` / multimodal no está disponible. Utiliza la tubería por componentes que se muestra a continuación — te da control total sobre cada modelo y mantiene la inferencia en la infraestructura privada de Venice.
+</Note>
+
+## Cómo se corresponde Venice con LiveKit Agents
+
+| Componente de LiveKit | Endpoint de Venice | Clase del plugin |
+|-------------------|-----------------|--------------|
+| LLM | `POST /chat/completions` | `openai.LLM` |
+| STT | `POST /audio/transcriptions` | `openai.STT` |
+| TTS | `POST /audio/speech` | `openai.TTS` |
+| Detección de turno (VAD) | — (se ejecuta localmente) | `silero.VAD` |
+
+## Configuración
+
+Instala el framework y los plugins que se usan a continuación:
+
+```bash
+pip install \
+  "livekit-agents[openai,silero,turn-detector]" \
+  livekit-plugins-openai \
+  livekit-plugins-silero
+```
+
+Establece tu clave de API de Venice y los detalles de conexión de LiveKit:
+
+```bash
+export VENICE_API_KEY="your-venice-api-key"
+
+# LiveKit Cloud o servidor autoalojado
+export LIVEKIT_URL="wss://your-project.livekit.cloud"
+export LIVEKIT_API_KEY="your-livekit-api-key"
+export LIVEKIT_API_SECRET="your-livekit-api-secret"
+```
+
+<Note>
+El plugin de OpenAI recurre a `OPENAI_API_KEY` cuando se omite `api_key`. Como lo estás apuntando a Venice, pasa siempre `api_key` de forma explícita (o la clave se leería de la variable equivocada). Los ejemplos a continuación leen `VENICE_API_KEY`.
+</Note>
+
+## Agente de voz completo
+
+Este es un agente de voz completo que transcribe con Venice STT, piensa con un LLM de Venice y habla con Venice TTS. Silero proporciona detección de actividad de voz local para que el STT por lotes sepa cuándo termina un turno.
+
+```python
+import os
+
+from livekit import agents
+from livekit.agents import Agent, AgentSession, RoomInputOptions
+from livekit.plugins import openai, silero
+
+VENICE_BASE_URL = "https://api.venice.ai/api/v1"
+VENICE_API_KEY = os.environ["VENICE_API_KEY"]
+
+
+class Assistant(Agent):
+    def __init__(self) -> None:
+        super().__init__(
+            instructions="You are a helpful, concise voice assistant powered by Venice.",
+        )
+
+
+async def entrypoint(ctx: agents.JobContext):
+    session = AgentSession(
+        # Speech-to-text — Venice /audio/transcriptions
+        stt=openai.STT(
+            model="nvidia/parakeet-tdt-0.6b-v3",
+            base_url=VENICE_BASE_URL,
+            api_key=VENICE_API_KEY,
+        ),
+        # LLM — Venice /chat/completions (streaming + tool calling supported)
+        # Venice's private, uncensored model feeding the STT-LLM-TTS pipeline
+        llm=openai.LLM(
+            model="venice-uncensored-1-2",
+            base_url=VENICE_BASE_URL,
+            api_key=VENICE_API_KEY,
+        ),
+        # Text-to-speech — Venice /audio/speech
+        tts=openai.TTS(
+            model="tts-kokoro",
+            voice="af_sky",
+            base_url=VENICE_BASE_URL,
+            api_key=VENICE_API_KEY,
+        ),
+        # Local VAD handles endpointing for the batch STT
+        vad=silero.VAD.load(),
+    )
+
+    await session.start(
+        room=ctx.room,
+        agent=Assistant(),
+        room_input_options=RoomInputOptions(),
+    )
+
+    await session.generate_reply(
+        instructions="Greet the user and offer your help."
+    )
+
+
+if __name__ == "__main__":
+    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+```
+
+Ejecútalo en desarrollo:
+
+```bash
+python agent.py dev
+```
+
+## Configuración de cada componente
+
+### LLM
+
+El LLM es la correspondencia más limpia — Venice `/chat/completions` admite streaming SSE, llamadas a herramientas y visión, todo lo cual LiveKit utiliza directamente. `venice-uncensored-1-2` mantiene la inferencia privada y sin censura mientras alimenta la tubería de TTS; recurre a un modelo de clase `flash` solo si necesitas un menor tiempo hasta el primer token.
+
+```python
+llm = openai.LLM(
+    model="venice-uncensored-1-2",
+    base_url="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    temperature=0.7,
+)
+```
+
+Pasa opciones específicas de Venice (búsqueda web, personas de personajes, control del razonamiento) a través de `extra_body`:
+
+```python
+llm = openai.LLM(
+    model="venice-uncensored-1-2",
+    base_url="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    extra_body={"venice_parameters": {"enable_web_search": "auto"}},
+)
+```
+
+### Reconocimiento de voz (Speech-to-Text)
+
+El STT de OpenAI de LiveKit llama a `/audio/transcriptions` por cada segmento de habla, por lo que necesita un VAD (Silero, arriba) para detectar cuándo termina un turno. Anula el modelo predeterminado con un modelo STT de Venice. `nvidia/parakeet-tdt-0.6b-v3` es la opción más pequeña y de menor latencia; `stt-xai-v1` y `elevenlabs/scribe-v2` son alternativas más recientes si quieres mayor precisión.
+
+```python
+stt = openai.STT(
+    model="nvidia/parakeet-tdt-0.6b-v3",
+    base_url="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    language="en",          # or detect_language=True
+    use_realtime=False,     # Venice has no realtime STT socket; keep batch mode
+)
+```
+
+### Síntesis de voz (Text-to-Speech)
+
+El TTS de OpenAI de LiveKit llama a `/audio/speech`. Las voces son específicas de cada modelo en Venice — pasa un par `model`/`voice` del mismo modelo. `tts-kokoro` mantiene la etapa de voz privada y sin censura para que pueda pronunciar la salida del LLM de forma literal; solicita `pcm` para evitar un paso de decodificación de MP3 y reducir un poco la latencia. Las voces más rápidas respaldadas por proveedores (por ejemplo, Gemini) pueden aplicar filtrado de contenido, así que evítalas si necesitas voz sin censura.
+
+```python
+tts = openai.TTS(
+    model="tts-kokoro",
+    voice="af_sky",
+    base_url="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    response_format="pcm",  # mp3 | opus | aac | flac | wav | pcm
+    speed=1.0,
+)
+```
+
+## Modelos recomendados
+
+Los IDs de los modelos cambian con el tiempo — **descubre las opciones actuales en tiempo de ejecución** con `GET /models?type=...` y `GET /models/traits` en lugar de codificarlos de forma fija. Para agentes de voz, prioriza los niveles de baja latencia (modelos denominados `flash`, `turbo`, `mini`, o con pocos parámetros) ya que la capacidad de respuesta percibida depende del tiempo hasta el primer token y de la velocidad de TTS. Buenos puntos de partida del catálogo actual:
+
+| Componente | Modelo | Por qué |
+|-----------|-------|-----|
+| LLM (privado + sin censura, predeterminado para voz) | `venice-uncensored-1-2` | Modelo privado y sin censura de Venice que alimenta la tubería TTS |
+| LLM (alternativas rápidas) | `gemini-3-5-flash`, `zai-org-glm-4.7-flash`, `deepseek-v4-flash` | Clase flash si necesitas un menor tiempo hasta el primer token |
+| LLM (razonamiento / herramientas) | `zai-org-glm-5-2`, `grok-4-5` | Buques insignia recientes para uso complejo de herramientas |
+| STT (menor latencia) | `nvidia/parakeet-tdt-0.6b-v3` | Pequeño, rápido y multilingüe |
+| STT (reciente / precisión) | `stt-xai-v1`, `elevenlabs/scribe-v2` | Modelos de transcripción más nuevos |
+| TTS (privado + sin censura, predeterminado para voz) | `tts-kokoro` | Amplio catálogo de voces, baja latencia, pronuncia la salida de forma literal |
+| TTS (alternativas rápidas) | `tts-gemini-3-1-flash`, `tts-elevenlabs-turbo-v2-5`, `tts-qwen3-0-6b` | Niveles más rápidos, pero las voces respaldadas por proveedores pueden filtrar contenido |
+
+<Card title="Explorar todos los modelos" icon="database" href="/models/overview">
+  Filtra por texto, reconocimiento de voz y síntesis de voz con precios y capacidades en tiempo real.
+</Card>
+
+## Latencia y consejos para producción
+
+La calidad del agente de voz está dominada por la latencia en la toma de turnos — el tiempo entre que el usuario termina su frase y el agente comienza a hablar. Con la tubería íntegramente de Venice, calcula aproximadamente:
+
+| Etapa | Contribución | Notas |
+|-------|--------------|-------|
+| Detección de fin de turno del VAD | ~300–700 ms | Silencio al final antes de considerar un turno completo. Ajusta `min_silence_duration` de Silero. |
+| STT | unos pocos cientos de ms | Una única solicitud/respuesta, sin resultados intermedios. |
+| Tiempo hasta el primer token del LLM | pequeño (se solapa) | Se transmite en streaming, por lo que se encadena con el TTS. |
+| Primer audio del TTS | unos pocos cientos de ms | LiveKit sintetiza frase a frase, por lo que la reproducción comienza tras la primera frase, no toda la respuesta. |
+
+Espera **~0,8–1,5 s hasta el primer audio** — genial para una toma de turnos mesurada, estilo asistente. Para conversaciones altamente interrumpibles y solapadas notarás la diferencia respecto a un modelo nativo de voz a voz.
+
+### Reducir la latencia
+
+- Usa `response_format="pcm"` en el TTS para saltarte el paso de decodificación de MP3.
+- Ajusta Silero VAD (`silero.VAD.load(min_silence_duration=0.4)`) para acortar la detección de fin de turno sin cortar el habla.
+- Prefiere niveles de baja latencia para STT/TTS (por ejemplo, `tts-kokoro` para TTS, `nvidia/parakeet-tdt-0.6b-v3` para STT). Conserva `venice-uncensored-1-2` para el LLM y mantén la privacidad y ausencia de censura; cambia a un LLM de clase `flash` solo si necesitas un menor tiempo hasta el primer token.
+- Mantén las respuestas concisas — la primera frase es la que condiciona la capacidad de respuesta percibida.
+
+### Combinar proveedores
+
+LiveKit te permite elegir cada componente de forma independiente, de modo que puedes mantener Venice donde su privacidad y sus modelos sin censura son más importantes y sustituirlo por un proveedor de streaming donde la latencia es crítica. Una configuración común de alta interactividad conserva el LLM de Venice (y opcionalmente el STT) y lo empareja con un TTS de streaming dedicado:
+
+```python
+from livekit.plugins import openai, silero
+# from livekit.plugins import cartesia  # example streaming TTS
+
+session = AgentSession(
+    stt=openai.STT(
+        model="nvidia/parakeet-tdt-0.6b-v3",
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+    llm=openai.LLM(
+        model="venice-uncensored-1-2",
+        base_url="https://api.venice.ai/api/v1",
+        api_key=os.environ["VENICE_API_KEY"],
+    ),
+    # Swap in a streaming TTS for the snappiest voice output
+    tts=cartesia.TTS(voice="..."),
+    vad=silero.VAD.load(),
+)
+```
+
+<Tip>
+Comienza con una configuración íntegramente de Venice para la instalación más sencilla y privada. Si estás construyendo una experiencia de consumo rápida y altamente conversacional, mantén el LLM de Venice y evalúa un TTS de streaming para la etapa de salida de voz.
+</Tip>
+
+## Limitaciones y notas
+
+- **Sin API Realtime / voz a voz.** Venice no tiene un WebSocket Realtime de OpenAI, por lo que `openai.realtime.RealtimeModel` y la ruta de agente multimodal no están disponibles. Utiliza la tubería STT-LLM-TTS mostrada arriba.
+- **El STT es por lotes, no en streaming.** La transcripción de Venice es de solicitud/respuesta, por lo que se requiere un VAD (Silero) para la detección de fin de turno. Esto añade una pequeña cantidad de latencia frente a un socket STT en streaming.
+- **El TTS es almacenado en búfer por el plugin.** El wrapper TTS de OpenAI de LiveKit informa `streaming=False`, por lo que no utiliza el flag `streaming` frase a frase de Venice. La latencia sigue siendo aceptable para la mayoría de los agentes; usa `response_format="pcm"` para minimizar la sobrecarga de decodificación.
+- **Empareja la voz con el modelo.** Los IDs de `voice` de TTS solo son válidos para su `model` correspondiente. Consulta [Modelos de síntesis de voz](/models/text-to-speech).
+- **No codifiques listas de modelos de forma fija.** Los IDs de los modelos de Venice se deprecian y reemplazan con regularidad — consulta `GET /models` / `GET /models/traits` en tiempo de ejecución. Consulta [Deprecaciones](/overview/deprecations).
+
+## Recursos relacionados
+
+- [Documentación de LiveKit Agents](https://docs.livekit.io/agents/)
+- [Guía de reconocimiento de voz](/guides/media/speech-to-text) · [Modelos](/models/speech-to-text)
+- [Guía de síntesis de voz](/guides/media/text-to-speech) · [Modelos](/models/text-to-speech)
+- [Llamada a funciones](/guides/features/function-calling)
+- [Agentes de IA](/guides/integrations/ai-agents)
