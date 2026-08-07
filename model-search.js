@@ -493,6 +493,159 @@
     );
   }
 
+  // Price used when sorting a model list by price. Falls back through the
+  // various pricing shapes (token input, per-image generation, per-second,
+  // resolution/duration tiers) so a single comparator works across every
+  // pricing table (chat, image, audio, music, …).
+  function getModelSortPrice(model) {
+    const p = model.model_spec?.pricing || {};
+    if (typeof p.input?.usd === 'number') return p.input.usd;
+    if (typeof p.generation?.usd === 'number') return p.generation.usd;
+    if (typeof p.per_second?.usd === 'number') return p.per_second.usd;
+    if (typeof p.per_audio_second?.usd === 'number') return p.per_audio_second.usd;
+    if (typeof p.inpaint?.usd === 'number') return p.inpaint.usd;
+    if (p.resolutions) {
+      const first = Object.values(p.resolutions)[0];
+      if (typeof first?.usd === 'number') return first.usd;
+    }
+    if (p.durations) {
+      const first = Object.values(p.durations)[0];
+      if (typeof first?.usd === 'number') return first.usd;
+    }
+    return 0;
+  }
+
+  // Columns the pricing tables can be sorted by. Each one maps to a figure the
+  // table actually puts on screen, so anything visible is directly sortable.
+  // `dir` is the direction a column starts in when first selected — cheapest
+  // first for prices, largest first for context.
+  const PRICING_SORT_FIELDS = {
+    name:    { label: 'Name',         dir: 'asc',  get: m => (m.model_spec?.name || m.id || '').toLowerCase() },
+    input:   { label: 'Input',        dir: 'asc',  get: m => m.model_spec?.pricing?.input?.usd },
+    output:  { label: 'Output',       dir: 'asc',  get: m => m.model_spec?.pricing?.output?.usd },
+    cache:   { label: 'Cache Read',   dir: 'asc',  get: m => m.model_spec?.pricing?.cache_input?.usd },
+    context: { label: 'Context',      dir: 'desc', get: m => m.model_spec?.availableContextTokens || m.model_spec?.constraints?.maxContextTokens },
+    price:   { label: 'Price',        dir: 'asc',  get: m => getModelSortPrice(m) },
+    newest:  { label: 'Newest',       dir: 'desc', get: m => m.created || 0 },
+  };
+
+  // Columns offered per pricing section. Sections whose cost is a single figure
+  // (image, audio, music, video) expose the generic `price` column instead of
+  // the token-based input/output split.
+  const PRICING_SECTION_FIELDS = {
+    chat:      ['name', 'input', 'output', 'cache', 'context', 'newest'],
+    embedding: ['name', 'input', 'newest'],
+    image:     ['name', 'price', 'newest'],
+    audio:     ['name', 'price', 'newest'],
+    music:     ['name', 'price', 'newest'],
+    video:     ['name', 'price', 'newest'],
+  };
+
+  // Models missing the sorted value always sink to the bottom rather than
+  // being treated as zero, which would park them at the top of a price sort.
+  function comparePricingField(field, dir) {
+    const def = PRICING_SORT_FIELDS[field];
+    const sign = dir === 'desc' ? -1 : 1;
+    return (a, b) => {
+      const av = def.get(a);
+      const bv = def.get(b);
+      const aMissing = av == null || av === '';
+      const bMissing = bv == null || bv === '';
+      if (aMissing && bMissing) return 0;
+      if (aMissing) return 1;
+      if (bMissing) return -1;
+      if (typeof av === 'string' || typeof bv === 'string') {
+        return sign * String(av).localeCompare(String(bv));
+      }
+      return sign * (av - bv);
+    };
+  }
+
+  function filterModelsByText(models, query) {
+    const q = (query || '').trim().toLowerCase();
+    if (!q) return models;
+    return models.filter(m => {
+      const spec = m.model_spec || {};
+      return `${spec.name || ''} ${m.id || ''}`.toLowerCase().includes(q);
+    });
+  }
+
+  // Shared, stateless sort used by both the model browser and the pricing
+  // tables. `default` preserves the caller's incoming order. The pricing page
+  // passes `field:direction` (e.g. `output:desc`); the model browser passes the
+  // preset values from SORT_OPTIONS.
+  function sortModelList(models, sortValue) {
+    if (!sortValue || sortValue === 'default') return models;
+    if (sortValue.includes(':')) {
+      const [field, dir] = sortValue.split(':');
+      if (!PRICING_SORT_FIELDS[field]) return models;
+      return [...models].sort(comparePricingField(field, dir));
+    }
+    const sorted = [...models];
+    switch (sortValue) {
+      case 'newest':
+        return sorted.sort((a, b) => (b.created || 0) - (a.created || 0));
+      case 'oldest':
+        return sorted.sort((a, b) => (a.created || 0) - (b.created || 0));
+      case 'price-low':
+        return sorted.sort((a, b) => getModelSortPrice(a) - getModelSortPrice(b));
+      case 'price-high':
+        return sorted.sort((a, b) => getModelSortPrice(b) - getModelSortPrice(a));
+      case 'name':
+        return sorted.sort((a, b) => {
+          const nameA = a.model_spec?.name || a.id || '';
+          const nameB = b.model_spec?.name || b.id || '';
+          return nameA.localeCompare(nameB);
+        });
+      default:
+        return models;
+    }
+  }
+
+  // Per-section sort and filter selections on the pricing page, persisted
+  // across re-renders (e.g. when fresh API data replaces the cached render).
+  const pricingSortState = {};
+
+  function getPricingSectionState(sectionKey) {
+    if (!pricingSortState[sectionKey]) {
+      pricingSortState[sectionKey] = { field: '', dir: '', filter: '' };
+    }
+    return pricingSortState[sectionKey];
+  }
+
+  function pricingSortValue(state) {
+    return state.field ? `${state.field}:${state.dir}` : 'default';
+  }
+
+  function renderPricingSortBar(sectionKey, state) {
+    const fields = PRICING_SECTION_FIELDS[sectionKey] || ['name', 'price', 'newest'];
+    const chip = (field, label, active, dir) =>
+      `<button type="button" class="vpt-sort-chip${active ? ' active' : ''}" data-field="${field}" aria-pressed="${active}">` +
+        `<span class="vpt-sort-chip-label">${label}</span>` +
+        `<span class="vpt-sort-arrow" aria-hidden="true">${active && field ? (dir === 'asc' ? '↑' : '↓') : ''}</span>` +
+      `</button>`;
+
+    const chips = fields.map(key => {
+      const def = PRICING_SORT_FIELDS[key];
+      const active = state.field === key;
+      return chip(key, t(def.label), active, active ? state.dir : def.dir);
+    }).join('');
+
+    return `
+      <div class="vpt-sort-bar">
+        <div class="vpt-sort-chips" role="group" aria-label="${t('Sort models')}">
+          <span class="vpt-sort-caption">${t('Sort')}</span>
+          ${chip('', t('Recommended'), !state.field, '')}
+          ${chips}
+        </div>
+        <div class="vpt-filter">
+          <input type="search" class="vpt-filter-input" placeholder="${t('Filter models…')}"
+                 aria-label="${t('Filter models')}" value="${escapeHtml(state.filter || '')}" />
+          <span class="vpt-filter-count" aria-live="polite"></span>
+        </div>
+      </div>`;
+  }
+
   function renderFilterDropdown(key, group) {
     const opts = group.options.map(o =>
       `<button type="button" class="vmb-dd-option" role="option" aria-selected="false" data-group="${key}" data-value="${o.value}">` +
@@ -1115,10 +1268,13 @@
     return `<button class="vpt-copy-btn" data-model-id="${modelId}" title="Copy">${copyIcon}${checkIcon}</button>`;
   }
 
-  function renderPricingChatTable(models) {
-    const chatModels = models
-      .filter(m => m.type === 'text')
-      .filter(m => !isDeprecatedModel(m));
+  function renderPricingChatTable(models, sortValue) {
+    const chatModels = sortModelList(
+      models
+        .filter(m => m.type === 'text')
+        .filter(m => !isDeprecatedModel(m)),
+      sortValue
+    );
 
     if (chatModels.length === 0) return '<p>No models available.</p>';
 
@@ -1182,8 +1338,11 @@
     return `<div class="vpt-list">${rows}</div>`;
   }
 
-  function renderPricingEmbeddingTable(models) {
-    const embModels = models.filter(m => m.type === 'embedding').filter(m => !isDeprecatedModel(m));
+  function renderPricingEmbeddingTable(models, sortValue) {
+    const embModels = sortModelList(
+      models.filter(m => m.type === 'embedding').filter(m => !isDeprecatedModel(m)),
+      sortValue
+    );
     if (embModels.length === 0) return '<p>No models available.</p>';
 
     const rows = embModels.map(model => {
@@ -1221,9 +1380,12 @@
     return `<span class="vpt-res-group"><select class="vpt-res-select" data-model="${modelId}">${options}</select><span class="vpt-price-value vpt-res-price" data-model="${modelId}">${formatPrice(defaultPrice)}</span></span>`;
   }
 
-  function renderPricingImageTable(models) {
-    const imageModels = models.filter(m => m.type === 'image').filter(m => !isDeprecatedModel(m))
-      .sort((a, b) => {
+  function renderPricingImageTable(models, sortValue) {
+    const baseImageModels = models.filter(m => m.type === 'image').filter(m => !isDeprecatedModel(m));
+    // Default (Recommended) order: non-beta first, then by price high→low.
+    const imageModels = (sortValue && sortValue !== 'default')
+      ? sortModelList(baseImageModels, sortValue)
+      : baseImageModels.sort((a, b) => {
         const aBeta = isBetaModel(a) ? 1 : 0;
         const bBeta = isBetaModel(b) ? 1 : 0;
         if (aBeta !== bBeta) return aBeta - bBeta;
@@ -1295,8 +1457,11 @@
     </div>`;
   }
 
-  function renderPricingEditTable(models) {
-    const editModels = models.filter(m => m.id === 'qwen-image' || m.type === 'inpaint').filter(m => !isDeprecatedModel(m));
+  function renderPricingEditTable(models, sortValue) {
+    const editModels = sortModelList(
+      models.filter(m => m.id === 'qwen-image' || m.type === 'inpaint').filter(m => !isDeprecatedModel(m)),
+      sortValue
+    );
     if (editModels.length === 0) return '<p>No models available.</p>';
 
     const rows = editModels.map(model => {
@@ -1325,8 +1490,11 @@
     return `<div class="vpt-list">${rows}</div>`;
   }
 
-  function renderPricingTTSTable(models) {
-    const ttsModels = models.filter(m => m.type === 'tts').filter(m => !isDeprecatedModel(m));
+  function renderPricingTTSTable(models, sortValue) {
+    const ttsModels = sortModelList(
+      models.filter(m => m.type === 'tts').filter(m => !isDeprecatedModel(m)),
+      sortValue
+    );
     if (ttsModels.length === 0) return '<p>No models available.</p>';
 
     const rows = ttsModels.map(model => {
@@ -1352,8 +1520,11 @@
     return `<div class="vpt-list">${rows}</div>`;
   }
 
-  function renderPricingASRTable(models) {
-    const asrModels = models.filter(m => m.type === 'asr').filter(m => !isDeprecatedModel(m));
+  function renderPricingASRTable(models, sortValue) {
+    const asrModels = sortModelList(
+      models.filter(m => m.type === 'asr').filter(m => !isDeprecatedModel(m)),
+      sortValue
+    );
     if (asrModels.length === 0) return '';
 
     const rows = asrModels.map(model => {
@@ -1381,16 +1552,19 @@
     return `<div class="vpt-list">${rows}</div>`;
   }
 
-  function getPricingMusicModels(models, pricingKey) {
-    return models
+  function getPricingMusicModels(models, pricingKey, sortValue) {
+    const filtered = models
       .filter(m => m.type === 'music')
       .filter(m => !isDeprecatedModel(m))
-      .filter(m => m.model_spec?.pricing?.[pricingKey])
-      .sort((a, b) => (a.model_spec?.name || a.id).localeCompare(b.model_spec?.name || b.id));
+      .filter(m => m.model_spec?.pricing?.[pricingKey]);
+    // Default (Recommended) order for music is alphabetical by name.
+    return (sortValue && sortValue !== 'default')
+      ? sortModelList(filtered, sortValue)
+      : filtered.sort((a, b) => (a.model_spec?.name || a.id).localeCompare(b.model_spec?.name || b.id));
   }
 
-  function renderPricingMusicDurationTable(models) {
-    const musicModels = getPricingMusicModels(models, 'durations');
+  function renderPricingMusicDurationTable(models, sortValue) {
+    const musicModels = getPricingMusicModels(models, 'durations', sortValue);
     if (musicModels.length === 0) return '';
 
     const rows = musicModels.map(model => {
@@ -1422,8 +1596,8 @@
     return `<div class="vpt-list">${rows}</div>`;
   }
 
-  function renderPricingMusicGenerationTable(models) {
-    const musicModels = getPricingMusicModels(models, 'generation');
+  function renderPricingMusicGenerationTable(models, sortValue) {
+    const musicModels = getPricingMusicModels(models, 'generation', sortValue);
     if (musicModels.length === 0) return '';
 
     const rows = musicModels.map(model => {
@@ -1449,8 +1623,8 @@
     return `<div class="vpt-list">${rows}</div>`;
   }
 
-  function renderPricingMusicPerSecondTable(models) {
-    const musicModels = getPricingMusicModels(models, 'per_second');
+  function renderPricingMusicPerSecondTable(models, sortValue) {
+    const musicModels = getPricingMusicModels(models, 'per_second', sortValue);
     if (musicModels.length === 0) return '';
 
     const rows = musicModels.map(model => {
@@ -1514,9 +1688,12 @@
     </div>`;
   }
 
-  function renderPricingVideoTable(models) {
-    const videoModels = models.filter(m => m.type === 'video').filter(m => !isDeprecatedModel(m))
-      .sort((a, b) => {
+  function renderPricingVideoTable(models, sortValue) {
+    const baseVideoModels = models.filter(m => m.type === 'video').filter(m => !isDeprecatedModel(m));
+    // Default (Recommended) order for video is alphabetical by name.
+    const videoModels = (sortValue && sortValue !== 'default')
+      ? sortModelList(baseVideoModels, sortValue)
+      : baseVideoModels.sort((a, b) => {
         const aName = a.model_spec?.name || a.id;
         const bName = b.model_spec?.name || b.id;
         return aName.localeCompare(bName);
@@ -2119,6 +2296,82 @@
     }).catch(() => {});
   }
 
+  function makePlaceholderVisible(el) {
+    if (!el) return;
+    el.style.visibility = 'visible';
+    el.style.height = 'auto';
+    el.style.overflow = 'visible';
+  }
+
+  // Render a pricing section with its own Sort dropdown. `buildBody(sortValue)`
+  // returns the section's inner HTML for a given sort; picking a new option
+  // re-renders just the body. `sortKey` namespaces the persisted selection so
+  // choices survive re-renders when fresh API data arrives. `afterRender` runs
+  // after each (re)render, e.g. to kick off async video price fetches.
+  function mountPricingSection(el, sectionKey, models, buildBody, afterRender) {
+    if (!el) return;
+    const state = getPricingSectionState(sectionKey);
+
+    el.innerHTML = `
+      ${renderPricingSortBar(sectionKey, state)}
+      <div class="vpt-section-body"></div>
+    `;
+    makePlaceholderVisible(el);
+
+    const bar = el.querySelector('.vpt-sort-bar');
+    const body = el.querySelector('.vpt-section-body');
+    const countEl = el.querySelector('.vpt-filter-count');
+
+    function paint() {
+      body.innerHTML = buildBody(filterModelsByText(models, state.filter), pricingSortValue(state));
+      if (countEl) {
+        const shown = body.querySelectorAll('.vpt-row').length;
+        countEl.textContent = state.filter.trim() ? `${shown} ${shown === 1 ? t('match') : t('matches')}` : '';
+      }
+      if (afterRender) afterRender();
+    }
+
+    // Repaint the chips in place rather than re-rendering the whole bar, so the
+    // filter input keeps focus and the caret position while you type.
+    function syncChips() {
+      bar.querySelectorAll('.vpt-sort-chip').forEach(chipEl => {
+        const field = chipEl.dataset.field;
+        const active = field === (state.field || '');
+        chipEl.classList.toggle('active', active);
+        chipEl.setAttribute('aria-pressed', String(active));
+        const arrow = chipEl.querySelector('.vpt-sort-arrow');
+        if (arrow) arrow.textContent = active && field ? (state.dir === 'asc' ? '↑' : '↓') : '';
+      });
+    }
+
+    bar.addEventListener('click', (e) => {
+      const chipEl = e.target.closest('.vpt-sort-chip');
+      if (!chipEl) return;
+      const field = chipEl.dataset.field;
+      if (!field) {
+        state.field = '';
+        state.dir = '';
+      } else if (state.field === field) {
+        state.dir = state.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.field = field;
+        state.dir = PRICING_SORT_FIELDS[field].dir;
+      }
+      syncChips();
+      paint();
+    });
+
+    let filterTimer = null;
+    bar.addEventListener('input', (e) => {
+      if (!e.target.classList.contains('vpt-filter-input')) return;
+      state.filter = e.target.value;
+      clearTimeout(filterTimer);
+      filterTimer = setTimeout(paint, 120);
+    });
+
+    paint();
+  }
+
   function renderPricingTables(models) {
     const chatEl = document.getElementById('pricing-chat-placeholder');
     const embeddingEl = document.getElementById('pricing-embedding-placeholder');
@@ -2128,70 +2381,57 @@
     const websearchEl = document.getElementById('pricing-websearch-placeholder');
     const videoEl = document.getElementById('pricing-video-placeholder');
 
-    if (chatEl) {
-      chatEl.innerHTML = `
-        ${renderPricingChatTable(models)}
+    mountPricingSection(chatEl, 'chat', models, (list, sortValue) => `
+        ${renderPricingChatTable(list, sortValue)}
         <p class="vpt-beta-note">⚠️ <strong>Beta models</strong> are experimental and not recommended for production use. These models may be changed, removed, or replaced at any time without notice. <a href="/overview/beta-models">Learn more</a></p>
-      `;
-    }
+      `);
 
-    if (embeddingEl) {
-      embeddingEl.innerHTML = renderPricingEmbeddingTable(models);
-    }
+    mountPricingSection(embeddingEl, 'embedding', models, (list, sortValue) =>
+      renderPricingEmbeddingTable(list, sortValue));
 
-    if (imageEl) {
-      imageEl.innerHTML = `
+    mountPricingSection(imageEl, 'image', models, (list, sortValue) => `
         <h4>Generation</h4>
-        ${renderPricingImageTable(models)}
+        ${renderPricingImageTable(list, sortValue)}
         <h4>Upscaling</h4>
-        ${renderPricingUpscaleTable(models)}
+        ${renderPricingUpscaleTable(list)}
         <h4>Editing</h4>
-        ${renderPricingEditTable(models)}
+        ${renderPricingEditTable(list, sortValue)}
         <p class="vpt-video-note">The <strong>Per Edit</strong> price includes the first input image. Models that list an <strong>Extra Input Image</strong> price charge that fee for each additional input image beyond the first. Example: editing with 3 input images on a model priced at $0.11 per edit with a $0.0035 extra-image fee costs $0.11 + 2 × $0.0035 = $0.117.</p>
-      `;
-    }
+      `);
 
-    if (audioEl) {
-      const asrHtml = renderPricingASRTable(models);
-      audioEl.innerHTML = `
+    mountPricingSection(audioEl, 'audio', models, (list, sortValue) => {
+      const asrHtml = renderPricingASRTable(list, sortValue);
+      return `
         <h4>Text-to-Speech</h4>
-        ${renderPricingTTSTable(models)}
+        ${renderPricingTTSTable(list, sortValue)}
         ${asrHtml ? `<h4>Speech-to-Text</h4>${asrHtml}` : ''}
       `;
-    }
+    });
 
-    if (musicEl) {
-      const durationHtml = renderPricingMusicDurationTable(models);
-      const generationHtml = renderPricingMusicGenerationTable(models);
-      const perSecondHtml = renderPricingMusicPerSecondTable(models);
+    mountPricingSection(musicEl, 'music', models, (list, sortValue) => {
+      const durationHtml = renderPricingMusicDurationTable(list, sortValue);
+      const generationHtml = renderPricingMusicGenerationTable(list, sortValue);
+      const perSecondHtml = renderPricingMusicPerSecondTable(list, sortValue);
       const musicSections = [];
 
       if (durationHtml) musicSections.push(`<h4>Song Generation (Duration-Based)</h4>${durationHtml}`);
       if (generationHtml) musicSections.push(`<h4>Song Generation (Per-Generation)</h4>${generationHtml}`);
       if (perSecondHtml) musicSections.push(`<h4>Sound Effects (Per-Second)</h4>${perSecondHtml}`);
 
-      musicEl.innerHTML = musicSections.length > 0 ? musicSections.join('') : '<p>No music models available.</p>';
-    }
+      return musicSections.length > 0 ? musicSections.join('') : '<p>No music models available.</p>';
+    });
 
     if (websearchEl) {
       websearchEl.innerHTML = renderPricingWebSearchTable();
+      makePlaceholderVisible(websearchEl);
     }
 
-    if (videoEl) {
-      videoEl.innerHTML = `
+    mountPricingSection(videoEl, 'video', models, (list, sortValue) => `
         <p class="vpt-video-note">Video pricing varies by resolution and duration. Visit the <a href="/models/video">Video Models page</a> for exact quotes, or use the <a href="/api-reference/endpoint/video/quote">Video Quote API</a>.</p>
-        ${renderPricingVideoTable(models)}
-      `;
-      // Fetch video prices asynchronously
+        ${renderPricingVideoTable(list, sortValue)}
+      `, () => {
+      // Prices are keyed by data-model attributes, so re-fetch after each render.
       updateVideoPricesForPricingPage(models);
-    }
-
-    [chatEl, embeddingEl, imageEl, audioEl, musicEl, websearchEl, videoEl].forEach(el => {
-      if (el) {
-        el.style.visibility = 'visible';
-        el.style.height = 'auto';
-        el.style.overflow = 'visible';
-      }
     });
   }
 
