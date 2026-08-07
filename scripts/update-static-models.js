@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Fetch models from Venice API and update STATIC_MODELS in model-search.js.
+ * Fetch models from Venice API and update the snapshot in data/static-models.json.
  * Then regenerate pricing.mdx.
  * 
  * Usage: node scripts/update-static-models.js
@@ -11,7 +11,7 @@ const path = require('path');
 
 const API_BASE = 'https://api.venice.ai/api/v1/models';
 const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video', 'music'];
-const STATIC_MODELS_REGEX = /\/\/ Static fallback data for instant pricing page load \(updated .*?\)\r?\n\s*const STATIC_MODELS = (\[[\s\S]*?\]);/;
+const SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-models.json');
 
 async function fetchAllModels() {
   const results = await Promise.all(MODEL_TYPES.map(async type => {
@@ -70,19 +70,10 @@ function sortModels(models) {
   });
 }
 
-function extractStaticModels(content) {
-  const match = content.match(STATIC_MODELS_REGEX);
-  if (!match) {
-    throw new Error('Could not find STATIC_MODELS in model-search.js');
-  }
-
-  return JSON.parse(match[1]);
-}
-
 async function main() {
-  const modelSearchPath = path.join(__dirname, '..', 'model-search.js');
-  const content = fs.readFileSync(modelSearchPath, 'utf-8');
-  const currentModels = extractStaticModels(content);
+  const currentJson = fs.existsSync(SNAPSHOT_PATH)
+    ? fs.readFileSync(SNAPSHOT_PATH, 'utf-8')
+    : null;
 
   console.log('Fetching models from API...');
   const models = await fetchAllModels();
@@ -90,21 +81,20 @@ async function main() {
 
   const cleaned = sortModels(models.map(cleanModel));
   const json = JSON.stringify(cleaned);
-  const currentJson = JSON.stringify(currentModels);
 
   if (currentJson === json) {
-    console.log('STATIC_MODELS already up to date. Skipping pricing regeneration.');
+    console.log('Model snapshot already up to date. Skipping pricing regeneration.');
     return;
   }
 
-  const dateStr = new Date().toISOString().split('T')[0];
-  const updatedContent = content.replace(
-    STATIC_MODELS_REGEX,
-    `// Static fallback data for instant pricing page load (updated ${dateStr})\n  const STATIC_MODELS = ${json};`
-  );
+  fs.mkdirSync(path.dirname(SNAPSHOT_PATH), { recursive: true });
+  fs.writeFileSync(SNAPSHOT_PATH, json, 'utf-8');
+  console.log('Updated data/static-models.json');
 
-  fs.writeFileSync(modelSearchPath, updatedContent, 'utf-8');
-  console.log('Updated STATIC_MODELS in model-search.js');
+  // Runs before the pricing generator, which exits the process when it has
+  // nothing to write.
+  console.log('Regenerating Popular models cards...');
+  require('./generate-popular-models.js');
 
   console.log('Regenerating pricing.mdx...');
   require('./generate-pricing-static.js');
