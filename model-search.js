@@ -2613,7 +2613,7 @@
                matchesPrivacy(model);
       });
 
-      let sorted = sortModels(filtered);
+      let candidates = filtered;
       let showingClosestMatches = false;
 
       if (query) {
@@ -2630,8 +2630,12 @@
         const visibleScored = strongScored.length > 0 ? strongScored : (directScored.length > 0 ? directScored : scored);
 
         showingClosestMatches = scored.length > 0 && directScored.length === 0;
-        sorted = visibleScored.map(item => item.model);
+        // Keep search-relevance order for Recommended; otherwise apply the
+        // selected sort (Newest/Oldest/etc.) after search filtering.
+        candidates = visibleScored.map(item => item.model);
       }
+
+      const sorted = sortModels(candidates);
 
       const n = sorted.length;
       const countLabel = (LOCALE === 'en')
