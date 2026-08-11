@@ -83,3 +83,11 @@ Feature suffixes also work on model IDs, e.g. `venice-uncensored:web` enables we
 - Reasoning models: https://docs.venice.ai/guides/features/reasoning-models.md
 - File inputs (PDF/Office/code in chat): https://docs.venice.ai/guides/features/file-inputs.md
 - Prompt caching: https://docs.venice.ai/guides/features/prompt-caching.md
+
+## Documentation repo (this project)
+
+When editing English `.mdx` pages that have locale copies under `ar/`, `de/`, `es/`, `fr/`, `it/`, `ko/`, `pt-BR/`, or `zh/`:
+
+- Edit the English source only unless you are deliberately updating every locale by hand.
+- Do not add new localized nav entries in `docs.json` for pages you have not translated — add the English path only; Mintlify regenerates locale files and nav after merge to `main`.
+- Do not commit plan or design scratch files (`docs/plans/`, `docs/superpowers/`).
