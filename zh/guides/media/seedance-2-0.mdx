@@ -1,0 +1,485 @@
+---
+title: "Seedance 2.0 与 2.5"
+description: "在 Venice 上使用 Seedance 2.0 与 2.5 生成、编辑、扩展和拼接视频：文本、图像和参考到视频工作流、faces-off API 行为，以及不同系列的多模态限制。"
+'og:title': "Seedance 2.0 & 2.5 Guide | Venice API Docs"
+'og:description': "Generate, edit, extend and stitch videos with Seedance 2.0 and 2.5 via the Venice API. Workflow patterns, faces-off behavior, multimodal limits, pricing, and worked examples."
+---
+
+Seedance 是 Venice 上一个旗舰级的多模态视频系列，用于文本驱动、图像驱动和参考驱动的视频生成。**Seedance 2.0**（含 Fast）与 **Seedance 2.5** 共享相同的 R2V 提示词路由模型：单一的 reference-to-video 端点处理**四种不同的工作流**（Reference、Edit、Extend、Stitch），工作流由**提示词的形态**推断得出。
+
+本指南涵盖各种变体、四种工作流、**faces-off 公共 API 行为**、**不同系列的多模态限制**、价格以及 `curl` 示例。
+
+<Warning>
+**公共 Seedance API 不支持人脸。** Venice 不会为公共 Seedance 模型运行人脸资产配置或人脸同意声明流程（`consents.seedance` / `needs_consent`）。含人脸的输入可能会被上游作为内容策略或提供方错误拒绝。若需进行相似度或人脸资产生成，请使用 Venice 应用或 Studio。
+</Warning>
+
+## 变体
+
+| Model ID | 变体 | 输出分辨率 | 说明 |
+|---|---|---|---|
+| `seedance-2-0-text-to-video-basic` | T2V | 480p / 720p / 1080p / **4k** | 仅接受文本提示 |
+| `seedance-2-0-image-to-video-basic` | I2V | 480p / 720p / 1080p / **4k** | 首帧（并可选末帧）图像锚定 |
+| `seedance-2-0-reference-to-video-basic` | R2V | 480p / 720p / 1080p / **4k** | 最多 9 张参考图 + 3 个参考视频 + 3 个参考音频源。驱动 Reference / Edit / Extend / Stitch |
+| `seedance-2-0-fast-text-to-video-basic` | Fast T2V | 480p / 720p | 更快、保真度较低的档次（不支持 1080p / 4k） |
+| `seedance-2-0-fast-image-to-video-basic` | Fast I2V | 480p / 720p | 更快、保真度较低的档次（不支持 1080p / 4k） |
+| `seedance-2-0-fast-reference-to-video-basic` | Fast R2V | 480p / 720p | 更快、保真度较低的档次（不支持 1080p / 4k）；工作流集合相同 |
+| `seedance-2-5-text-to-video-basic` | T2V | 480p / 720p | 最长 30 秒输出；原生音频 |
+| `seedance-2-5-image-to-video-basic` | I2V | 480p / 720p | 最长 30 秒输出；首帧（并可选末帧）锚定 |
+| `seedance-2-5-reference-to-video-basic` | R2V | 480p / 720p | 最多 30 张图 + 10 个视频 + 10 个音频源；同样的 Reference / Edit / Extend / Stitch 工作流 |
+
+所有变体均为异步。通过 `POST /api/v1/video/queue` 提交，然后轮询 `POST /api/v1/video/retrieve` 直到响应体为 `video/mp4`。参见 [Video Generation](/guides/media/video-generation) 了解通用队列流程。
+
+`resolution` 需传入以下之一：`480p`、`720p`、`1080p` 或 `4k`（小写）。Seedance **2.0**（非 Fast）接受全部四种；**2.0 Fast** 和 **2.5** 仅接受 `480p` / `720p`。请通过 `GET /models?type=video` 发现实时可用的模型 ID 与能力，不要在代码中硬编码可用性。
+
+## “一个模型，四种工作流”
+
+reference-to-video 变体（`seedance-2-0-reference-to-video-basic`、其 Fast 兄弟版以及 `seedance-2-5-reference-to-video-basic`）使用相同的提示词路由模式。**模型会根据提示词前缀和输入的形态来推断任务。** 没有 `task` 或 `workflow` 字段，提示词语法本身就是路由。
+
+| 工作流 | 作用 | 提示词前缀 | 输入 |
+|---|---|---|---|
+| **Reference** | 使用上传的参考文件作为主体、动作、风格、音频的来源，生成一个全新的视频 | `Refer to ... in <Image\|Video\|Audio N> to generate ...` | 文本 + 至少 1 张图像或 1 个视频参考，可选音频源（数量因系列而异，见限制部分） |
+| **Edit** | 修改单个输入视频，同时保留其余内容 | `Strictly edit <Video 1>, changing its ...` | 1 个输入视频 + 文本（图像可选，用于锚定） |
+| **Extend** | 对单个片段进行向前 / 向后扩展 | `Extend <Video 1>, generate ...` | 1 个输入视频 + 文本 |
+| **Stitch** | 使用自动生成的过渡将输入片段拼接起来 | `<Video 1> + <transition description> + followed by <Video 2> + ...` | 多个输入视频 + 文本（片段数量 / 时长上限因系列而异） |
+
+**提示词语法是规范且区分大小写的**：尖括号、首字母大写、数字前一个空格，即 `<Video 1>`、`<Image 1>`、`<Audio 1>`。
+
+---
+
+## 工作流模式
+
+### Reference 工作流
+
+将上传的参考文件作为**素材源**（主体、场景、动作、风格、声音音色），生成一个全新的视频。
+
+**规范提示词模式**：
+
+```
+Refer to <Subject N> in <Image N> to generate ...
+Refer to the [action | camera scene | style | sound effect] in <Video N> to generate ...
+Refer to the [tone | timbre] in <Audio N> to generate ...
+```
+
+**示例**：
+
+- `Refer to <Subject 1> in <Image 1> to generate a 5-second clip of the same character riding a horse through snow.`
+- `Refer to the camera scene in <Video 1> to generate a similar establishing shot of a futuristic city at dawn.`
+- `Refer to <Subject 1> in <Image 1> and use the timbre in <Audio 1> for the narrator describing the scene.`（音频源必须与至少一个图像或视频参考配对，仅音频会被拒绝）
+
+### Edit 工作流
+
+修改单个输入视频。**提示词中未明确指定的内容会被保留。** 当您想要局部修改（主体替换、天气 / 色彩变化、元素添加 / 移除），而不是生成全新视频时，使用此工作流。
+
+**规范提示词模式**：
+
+```
+Strictly edit <Video 1>, changing its [original feature] to [new feature] ...
+```
+
+**用于更精细控制的子模式**：
+
+```
+Add Elements:
+  At [timestamp / timing] and [spatial location] of <Video 1>, add [description of intended element].
+
+Remove Elements:
+  Remove [element to be deleted] from <Video 1>, keeping the rest of the video content unchanged.
+
+Modify Elements:
+  Replace [description of element to be changed] in <Video 1> with [description of intended element].
+```
+
+**示例**：
+
+- `Strictly edit <Video 1>, changing its weather from sunny to a heavy rainstorm.`
+- `Add snacks such as fried chicken and pizza to the countertop in <Video 1>.`
+- `Remove the red car from <Video 1>, keeping the rest of the video content unchanged.`
+- `Replace the perfume featured in <Video 1> with the face cream from <Image 1>, with all original motions and camera work preserved.`
+
+最后一个例子将 Edit 与图像参考结合。这完全合法，模型会将 `<Image 1>` 用作替换目标的视觉源。
+
+### Extend 工作流
+
+将单个片段在时间上向前或向后延续。**默认情况下，Seedance 只返回新生成的内容**，而不是把原始输入与扩展部分拼接在一起。这是有意为之，用于过渡的连续性；如果您希望保留输入片段与扩展一起呈现，请显式说明：
+
+```
+Extend <Video 1>, generate [description of extended content]
+Extend <Video 1> backward, [description of extended content]
+Extend <Video 1>, start with <Video 1>, then [description of extended content]      ← 保留输入作为开头
+Extend <Video 1> backward, [description], and then end with <Video 1>               ← 保留输入作为结尾
+```
+
+过渡处理：模型会自动提取过渡帧以实现无缝衔接，输入视频的原始片段不会被重新生成。
+
+**示例**：
+
+- `Extend <Video 1>, generate a dramatic chase scene through narrow alleys at dusk.`
+- `Extend <Video 1> backward, the same character walking toward the camera before the original shot begins.`
+- `Extend <Video 1>, start with <Video 1>, then the camera pulls back to reveal a vast landscape.`
+
+### Stitch 工作流（轨道补全）
+
+使用 AI 生成的过渡连接输入片段。请遵守 [多模态输入限制](#multimodal-input-limits) 中**特定于系列的**合并时长与片段数量上限（Seedance 2.0：≤3 段 / 合计 ≤15 秒；Seedance 2.5：视频上限更高）。
+
+**规范提示词模式**：
+
+```
+<Video 1> + [transition description] + followed by <Video 2> [+ [transition description] + followed by <Video 3>]
+```
+
+**示例**：
+
+- `<Video 1> + a smooth seamless cut + followed by <Video 2>`
+- `<Video 1>. The moment a leaf falls to the ground, it sets off a special effect of golden particles. A gust of wind blows by, leading into <Video 2>.`
+- `<Video 1> + a wisp of smoke transforms into a flock of birds + followed by <Video 2> + a slow dolly-in + followed by <Video 3>`
+
+模型会在连接点自动修剪连接片段，以保持连续性。
+
+---
+
+## 通用提示词公式
+
+在四种工作流中，推荐的编写公式如下：
+
+```
+Subject + Motion + Environment (Optional)
+       + Camera Movement / Cut (Optional)
+       + Aesthetic Description (Optional)
+       + Audio (Optional)
+```
+
+- **Subject + Motion**：逻辑基础，定义“谁”在执行“什么动作”
+- **Environment + Aesthetics**：空间背景、光线、视觉风格
+- **Camera**：明确的镜头类型或运动方式
+- **Audio**：环境声效或人声指引，让输出更有沉浸感
+
+将上述内容叠加在工作流前缀之上（例如 `Strictly edit <Video 1>, changing its <subject + motion + environment + ...>`），可以获得最高质量的输出。
+
+---
+
+## 多模态输入限制
+
+以下值是 Venice API 所接受的范围。超出这些范围的请求会在到达推理前，在 Schema 层以 400 被拒绝。
+
+**Seedance 2.0 与 Seedance 2.5 使用不同的上限。** 请始终查阅对应模型系列的那一列。
+
+### 通用媒体下限
+
+| 约束 | 值 |
+|---|---|
+| 图像 / 视频 / 音频输入方式 | URL（`http://`、`https://`）或 Base64 data URL |
+| 图像格式 | `.jpeg`、`.png`、`.webp`、`.bmp`、`.tiff`、`.gif`、`.heic`、`.heif` |
+| 图像宽高比（W / H） | 开区间 `(0.4, 2.5)` |
+| 图像最小边 | ≥ 300 px |
+| 视频格式 | `.mp4`、`.mov` |
+| 视频编解码器 | H.264 / AVC，H.265 / HEVC |
+| 音频编解码器（容器内） | AAC、MP3 |
+| 音频格式（参考音频） | `.wav`、`.mp3` |
+| 单个视频片段大小 | ≤ 50 MB |
+| 单个音频片段大小 | ≤ 15 MB |
+| I2V 首帧图像 | 1 |
+| I2V 首帧 + 末帧 | 2 |
+
+### 系列对比
+
+| 约束 | Seedance 2.0（含 Fast） | Seedance 2.5 |
+|---|---|---|
+| 输出时长 | 4–15 秒 | 4–30 秒（默认 10） |
+| 输出分辨率 | 480p / 720p / 1080p / **4k**（Fast：仅 480p / 720p） | 仅 480p / 720p |
+| R2V 参考图数量 | 1–9 | 1–30 |
+| R2V 单张参考图最大字节数 | （沿用共享请求上限） | 每张 ≤ 30 MB |
+| R2V 参考视频数量 | ≤ 3 | ≤ 10 |
+| 每段参考视频时长 | `[2, 15]` 秒 | `[2, 30]` 秒 |
+| 参考视频合计时长 | ≤ 15 秒 | ≤ 30 秒 |
+| R2V 参考音频片段数量 | ≤ 3 | ≤ 10 |
+| 每段参考音频时长 | `[2, 15]` 秒 | `[2, 30]` 秒 |
+| 参考音频合计时长 | ≤ 15 秒 | ≤ 30 秒 |
+
+参考音频仅在 R2V 变体上受支持。每个条目会作为 `role: "reference_audio"` 的内容项转发给模型，提示词中以 `<Audio 1>`、`<Audio 2>` 等方式引用。模型会根据提示词的表述，将每段片段用于声音音色、音效或背景音乐。旧版单数字段 `audio_url` 映射到相同的内容形态，现等价于传入只有一个元素的 `reference_audio_urls`。
+
+<Warning>
+**`reference_audio_urls` 不能作为唯一的参考输入。** 模型要求任何音频源都必须至少配上一个图像或视频参考。请将 `reference_audio_urls` 与 `reference_image_urls`、`reference_video_urls`、`image_url` 或 `video_url` 组合使用，只包含音频的提交会被拒绝。
+</Warning>
+
+### 请求大小
+
+队列端点接受最大 **35 MB** 的 JSON 请求体。对于大型视频的内联 data URL 可能会超出此限制，尤其是多片段 Stitch 时，请优先使用 URL 而非内联 base64。
+
+---
+
+## 价格
+
+在向 `/video/queue` 提交之前，可调用 `POST /api/v1/video/quote` 获取指定请求形态的报价。报价端点是唯一权威的来源，价格细节可能会变化，不应在客户端缓存或复制。
+
+当请求中包含参考视频时，还需要传入 `reference_video_total_duration`（所有参考片段时长之和，单位为秒），以便报价与 `/video/queue` 实际收取的费用一致：
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/quote \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "duration": "5s",
+    "resolution": "1080p",
+    "aspect_ratio": "16:9",
+    "reference_video_total_duration": 5
+  }'
+```
+
+---
+
+## 完整示例
+
+以下所有示例都假设环境变量中已设置 `VENICE_API_KEY`。
+
+### Text-to-video
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-text-to-video-basic",
+    "prompt": "A golden retriever frolicking through a sunlit meadow at sunset, slow camera dolly-in, shallow depth of field, warm cinematic lighting.",
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Seedance 2.0 text-to-video（4K）
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-text-to-video-basic",
+    "prompt": "Ultra-detailed aerial glide over a sunlit alpine lake, crystal water, distant peaks, cinematic color grade.",
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "4k"
+  }'
+```
+
+### Seedance 2.5 text-to-video（更长时长）
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-5-text-to-video-basic",
+    "prompt": "A slow aerial push over misty mountains at sunrise, clouds parting, soft orchestral ambience, cinematic widescreen framing.",
+    "duration": "20s",
+    "aspect_ratio": "16:9",
+    "resolution": "720p"
+  }'
+```
+
+### Image-to-video（首帧）
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-image-to-video-basic",
+    "prompt": "The lighthouse keeper turns toward the storm, lantern raised, waves crashing against the rocks.",
+    "image_url": "https://example.com/lighthouse.jpg",
+    "duration": "5s",
+    "resolution": "720p"
+  }'
+```
+
+<Note>
+Seedance I2V 模型（`seedance-2-0-image-to-video-basic`、其 Fast 变体以及 `seedance-2-5-image-to-video-basic`）**不接受 `aspect_ratio`**，输出宽高比会自动依据输入图像的尺寸推导。传入该字段会返回 400，并附带 *"This model does not support aspect_ratio"*。如需显式控制宽高比，请使用 T2V 或 R2V 变体。
+</Note>
+
+### Reference 工作流：主体源
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "Refer to <Subject 1> in <Image 1> to generate a 5-second clip of the same character walking through a neon-lit Tokyo street at night.",
+    "reference_image_urls": ["https://example.com/character.png"],
+    "duration": "5s",
+    "aspect_ratio": "9:16",
+    "resolution": "1080p"
+  }'
+```
+
+### Seedance 2.5 Reference 工作流：多图
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-5-reference-to-video-basic",
+    "prompt": "Refer to <Subject 1> in <Image 1> and the style in <Image 2> to generate a 12-second clip of the same character exploring a rainy cyberpunk alley.",
+    "reference_image_urls": [
+      "https://example.com/character.png",
+      "https://example.com/style-board.png"
+    ],
+    "duration": "12s",
+    "aspect_ratio": "9:16",
+    "resolution": "720p"
+  }'
+```
+
+### Reference 工作流：主体 + 音频源
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "Refer to <Subject 1> in <Image 1> to generate a 5-second clip of the same character walking through a neon-lit Tokyo street at night. Refer to the timbre in <Audio 1> for a soft female voiceover describing the scene.",
+    "reference_image_urls": ["https://example.com/character.png"],
+    "reference_audio_urls": ["https://example.com/voice-sample.mp3"],
+    "duration": "5s",
+    "aspect_ratio": "9:16",
+    "resolution": "1080p"
+  }'
+```
+
+### Edit 工作流
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "Strictly edit <Video 1>, changing its weather from sunny to a heavy rainstorm, with all original motions and camera work preserved.",
+    "reference_video_urls": ["https://example.com/sunny-scene.mp4"],
+    "reference_video_total_duration": 5,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### 带图像锚定的 Edit 工作流
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "Replace the perfume featured in <Video 1> with the face cream from <Image 1>, with all original motions and camera work preserved.",
+    "reference_video_urls": ["https://example.com/perfume-ad.mp4"],
+    "reference_image_urls": ["https://example.com/face-cream.png"],
+    "reference_video_total_duration": 4,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### 向前 Extend
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "Extend <Video 1>, generate a dramatic chase scene through narrow alleys at dusk, with neon signs flickering and rain on the pavement.",
+    "reference_video_urls": ["https://example.com/alley-intro.mp4"],
+    "reference_video_total_duration": 4,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Stitch（3 段）
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "<Video 1> + a wisp of smoke transforms into a flock of birds + followed by <Video 2> + a slow dolly-in + followed by <Video 3>",
+    "reference_video_urls": [
+      "https://example.com/clip-1.mp4",
+      "https://example.com/clip-2.mp4",
+      "https://example.com/clip-3.mp4"
+    ],
+    "reference_video_total_duration": 12,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### 轮询任务完成
+
+在每次提交队列后，请保存返回的 `queue_id` 并轮询 `/video/retrieve`，直到响应体为 `video/mp4`：
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+  }' \
+  -o output.mp4
+```
+
+在任务完成前，响应始终是 JSON（`{ "status": "queued" | "running" | "failed", ... }`）。任务完成后，响应体切换为 `video/mp4` 字节。完整轮询模式请参见 [Video Generation](/guides/media/video-generation)。
+
+---
+
+## 故障排查
+
+### `At least one reference is required for this model`
+
+Reference-to-video 提交必须至少包含 `reference_image_urls`、`reference_video_urls`、`image_references` 或 `video_references` 之一。纯文本生成不是有效的 R2V 工作流，请改用 text-to-video 模型 ID。仅使用 `reference_audio_urls` 是不够的（参见上文音频部分）。
+
+### 参考视频 / 图像过多
+
+Seedance **2.0** 的 R2V 上限是 **9 张图像**和 **3 个视频**。Seedance **2.5** 将上限提升到 **30 张图像**和 **10 个视频**。若超出对应系列的限制，请先裁剪输入或在离线端拼接。
+
+### 时长 / 合计时长错误
+
+- **2.0：** 每段参考视频 / 音频 `[2, 15]` 秒；合计视频 / 音频 ≤ 15 秒；输出 4–15 秒。
+- **2.5：** 每段参考视频 / 音频 `[2, 30]` 秒；合计视频 / 音频 ≤ 30 秒；输出 4–30 秒。
+
+请在客户端提交前先修剪片段。
+
+### 提示词路由到错误的工作流
+
+工作流由提示词语法推断得出。常见的误路由情况：
+
+- 想要 **Extend** 却写成 `Refer to ...`：模型会把您的视频当作*素材源*，而不是要继续的画布
+- 想要 **Stitch** 却写成 `Refer to ...`：模型会挑选其中一个作为素材源，忽略其余
+- 想要 **Edit** 却写成 `Generate a video based on <Video 1>`：含义不明，模型可能默认为 Reference
+
+请严格使用规范的前缀：`Strictly edit <Video 1>, ...`、`Extend <Video 1>, ...`、`<Video 1> + ... + followed by <Video 2>`。
+
+### 含人脸 / 相似度的输入被拒绝
+
+公共 Seedance API 模型是 **faces-off** 的。不要期待有同意声明流程。含人脸的媒体可能因内容策略或提供方错误而失败。如需相似度相关工作流，请使用 Venice 应用或 Studio。
+
+### 报价与队列扣费不一致
+
+如果请求中包含参考视频，但您没有在调用 `/video/quote` 时传入 `reference_video_total_duration`，那么报价与队列实际扣费可能会不同。当存在参考视频时，请务必传入 `reference_video_total_duration`（所有参考片段时长之和，单位为秒）。
+
+---
+
+## 参考资料
+
+- Venice 视频队列端点：[`POST /api/v1/video/queue`](/api-reference/endpoint/video/queue)
+- Venice 报价端点：[`POST /api/v1/video/quote`](/api-reference/endpoint/video/quote)
+- 配套指南：[Reference to Video](/guides/media/reference-to-video)（涵盖 Kling O3 + Grok Imagine R2V）
+- 配套指南：[Video Generation](/guides/media/video-generation)（队列 / 轮询概览）

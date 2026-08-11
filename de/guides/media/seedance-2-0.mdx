@@ -1,0 +1,485 @@
+---
+title: "Seedance 2.0 & 2.5"
+description: "Videos mit Seedance 2.0 und 2.5 auf Venice generieren, bearbeiten, verlängern und zusammenfügen – Text-, Bild- und Reference-to-Video-Workflows, Faces-off-API-Verhalten und familienspezifische multimodale Limits."
+'og:title': "Seedance 2.0 & 2.5 Guide | Venice API Docs"
+'og:description': "Videos mit Seedance 2.0 und 2.5 über die Venice API generieren, bearbeiten, verlängern und zusammenfügen. Workflow-Muster, Faces-off-Verhalten, multimodale Limits, Preisgestaltung und ausgearbeitete Beispiele."
+---
+
+Seedance ist eine Flaggschiff-Familie multimodaler Videomodelle auf Venice für text-, bild- und referenzgetriebene Videogenerierung. **Seedance 2.0** (samt Fast) und **Seedance 2.5** teilen sich dasselbe R2V-Prompt-Routing-Modell: ein einzelner Reference-to-Video-Endpunkt verarbeitet **vier verschiedene Workflows** (Reference, Edit, Extend, Stitch). Der Workflow wird aus der **Form Ihres Prompts** abgeleitet.
+
+Dieser Leitfaden behandelt Varianten, die vier Workflows, das **Faces-off-Verhalten der öffentlichen API**, **familienspezifische multimodale Limits**, Preise und `curl`-Beispiele.
+
+<Warning>
+**Gesichter werden von der öffentlichen Seedance-API nicht unterstützt.** Venice führt für die öffentlichen Seedance-Modelle keine Face-Asset-Bereitstellung oder Face-Consent-Attestierung (`consents.seedance` / `needs_consent`) durch. Eingaben mit Gesichtern können vom Anbieter als Content-Policy- bzw. Provider-Fehler abgelehnt werden. Für Likeness- bzw. Face-Asset-Generierung verwenden Sie die Venice-App oder Studio.
+</Warning>
+
+## Varianten
+
+| Model ID | Variante | Ausgabeauflösungen | Hinweise |
+|---|---|---|---|
+| `seedance-2-0-text-to-video-basic` | T2V | 480p / 720p / 1080p / **4k** | Nur Text-Prompt |
+| `seedance-2-0-image-to-video-basic` | I2V | 480p / 720p / 1080p / **4k** | Verankerung über Erstes-Frame-Bild (optional auch Letztes-Frame-Bild) |
+| `seedance-2-0-reference-to-video-basic` | R2V | 480p / 720p / 1080p / **4k** | Bis zu 9 Referenzbilder + 3 Referenzvideos + 3 Referenzaudio-Donors. Treibt Reference / Edit / Extend / Stitch an |
+| `seedance-2-0-fast-text-to-video-basic` | Fast T2V | 480p / 720p | Schnellere Stufe mit geringerer Detailtreue (kein 1080p / 4k) |
+| `seedance-2-0-fast-image-to-video-basic` | Fast I2V | 480p / 720p | Schnellere Stufe mit geringerer Detailtreue (kein 1080p / 4k) |
+| `seedance-2-0-fast-reference-to-video-basic` | Fast R2V | 480p / 720p | Schnellere Stufe mit geringerer Detailtreue (kein 1080p / 4k); gleicher Workflow-Umfang |
+| `seedance-2-5-text-to-video-basic` | T2V | 480p / 720p | Bis zu 30 s Ausgabe; natives Audio |
+| `seedance-2-5-image-to-video-basic` | I2V | 480p / 720p | Bis zu 30 s Ausgabe; Verankerung über Erstes-Frame (optional auch Letztes-Frame) |
+| `seedance-2-5-reference-to-video-basic` | R2V | 480p / 720p | Bis zu 30 Bilder + 10 Videos + 10 Audio-Donors; gleiche Reference- / Edit- / Extend- / Stitch-Workflows |
+
+Alle Varianten sind asynchron. Übermitteln Sie über `POST /api/v1/video/queue` und pollen Sie anschließend `POST /api/v1/video/retrieve`, bis der Response-Body den Typ `video/mp4` hat. Siehe [Video Generation](/guides/media/video-generation) für den allgemeinen Queue-Ablauf.
+
+Übergeben Sie `resolution` als einen der Werte: `480p`, `720p`, `1080p` oder `4k` (in Kleinbuchstaben). Seedance **2.0** (Nicht-Fast) akzeptiert alle vier; **2.0 Fast** und **2.5** akzeptieren nur `480p` / `720p`. Ermitteln Sie aktuelle Model-IDs und Fähigkeiten über `GET /models?type=video`. Kodieren Sie die Verfügbarkeit nicht fest.
+
+## Das Modell „Ein Modell, vier Workflows"
+
+Die Reference-to-Video-Varianten (`seedance-2-0-reference-to-video-basic`, das Fast-Pendant und `seedance-2-5-reference-to-video-basic`) verwenden dasselbe Prompt-Routing-Muster. **Das Modell leitet die Aufgabe aus dem Prompt-Präfix und der Form Ihrer Eingaben ab.** Es gibt kein Feld `task` oder `workflow`. Die Prompt-Syntax ist das Routing.
+
+| Workflow | Zweck | Prompt-Präfix | Eingaben |
+|---|---|---|---|
+| **Reference** | Generiert ein neues Video und verwendet hochgeladene Referenzdateien als Donors für Motiv / Bewegung / Stil / Audio | `Refer to ... in <Image\|Video\|Audio N> to generate ...` | Text + ≥1 Bild- ODER Video-Referenz, plus optionale Audio-Donors (Anzahl je nach Familie unterschiedlich – siehe Limits) |
+| **Edit** | Modifiziert ein einzelnes Eingabevideo unter Beibehaltung des Rests | `Strictly edit <Video 1>, changing its ...` | 1 Eingabevideo + Text (Bilder als optionale Verankerung) |
+| **Extend** | Vorwärts- oder Rückwärtsverlängerung eines Clips | `Extend <Video 1>, generate ...` | 1 Eingabevideo + Text |
+| **Stitch** | Fügt Eingabeclips mit automatisch generierten Übergängen zusammen | `<Video 1> + <transition description> + followed by <Video 2> + ...` | Mehrere Eingabevideos + Text (Clip-Anzahl / Dauer-Obergrenzen je nach Familie unterschiedlich) |
+
+Die **Prompt-Syntax ist kanonisch und Groß-/Kleinschreibung-sensitiv**: spitze Klammern, großer Anfangsbuchstabe, ein Leerzeichen vor der Nummer, also `<Video 1>`, `<Image 1>`, `<Audio 1>`.
+
+---
+
+## Workflow-Muster
+
+### Reference-Workflow
+
+Verwenden Sie die hochgeladenen Referenzdateien als **Donors** (Motiv, Szene, Bewegung, Stil, Stimmklang), um ein völlig neues Video zu erzeugen.
+
+**Kanonische Prompt-Muster**:
+
+```
+Refer to <Subject N> in <Image N> to generate ...
+Refer to the [action | camera scene | style | sound effect] in <Video N> to generate ...
+Refer to the [tone | timbre] in <Audio N> to generate ...
+```
+
+**Beispiele**:
+
+- `Refer to <Subject 1> in <Image 1> to generate a 5-second clip of the same character riding a horse through snow.`
+- `Refer to the camera scene in <Video 1> to generate a similar establishing shot of a futuristic city at dawn.`
+- `Refer to <Subject 1> in <Image 1> and use the timbre in <Audio 1> for the narrator describing the scene.` (Audio-Donors müssen mit mindestens einer Bild- oder Videoreferenz gekoppelt sein; reine Audio-Eingaben werden abgelehnt.)
+
+### Edit-Workflow
+
+Modifiziert ein einzelnes Eingabevideo. **Alles, was im Prompt nicht ausdrücklich benannt wird, bleibt erhalten.** Verwenden Sie dies, wenn Sie eine lokal begrenzte Änderung wünschen (Motivtausch, Wetter-/Farbwechsel, Element hinzufügen/entfernen) und kein komplett neues Video.
+
+**Kanonisches Prompt-Muster**:
+
+```
+Strictly edit <Video 1>, changing its [original feature] to [new feature] ...
+```
+
+**Untermuster für feinere Steuerung**:
+
+```
+Add Elements:
+  At [timestamp / timing] and [spatial location] of <Video 1>, add [description of intended element].
+
+Remove Elements:
+  Remove [element to be deleted] from <Video 1>, keeping the rest of the video content unchanged.
+
+Modify Elements:
+  Replace [description of element to be changed] in <Video 1> with [description of intended element].
+```
+
+**Beispiele**:
+
+- `Strictly edit <Video 1>, changing its weather from sunny to a heavy rainstorm.`
+- `Add snacks such as fried chicken and pizza to the countertop in <Video 1>.`
+- `Remove the red car from <Video 1>, keeping the rest of the video content unchanged.`
+- `Replace the perfume featured in <Video 1> with the face cream from <Image 1>, with all original motions and camera work preserved.`
+
+Das letzte Beispiel kombiniert Edit mit einer Bildreferenz. Das ist völlig zulässig; das Modell verwendet `<Image 1>` als visuellen Donor für den Austausch.
+
+### Extend-Workflow
+
+Setzt einen einzelnen Clip zeitlich nach vorne oder hinten fort. **Standardmäßig liefert Seedance nur den neuen Inhalt zurück**, nicht das ursprüngliche Eingabevideo mit der Verlängerung verkettet. Das ist so gewollt, damit der Übergang durchgängig ist. Wenn Sie möchten, dass der Eingabeclip neben der Verlängerung erhalten bleibt, geben Sie das ausdrücklich an:
+
+```
+Extend <Video 1>, generate [description of extended content]
+Extend <Video 1> backward, [description of extended content]
+Extend <Video 1>, start with <Video 1>, then [description of extended content]      ← behält Eingabe am Anfang bei
+Extend <Video 1> backward, [description], and then end with <Video 1>               ← behält Eingabe am Ende bei
+```
+
+Übergangshandhabung: Das Modell extrahiert automatisch die Übergangsframes für nahtloses Blending, und die ursprünglichen Segmente des Eingabevideos werden nicht neu generiert.
+
+**Beispiele**:
+
+- `Extend <Video 1>, generate a dramatic chase scene through narrow alleys at dusk.`
+- `Extend <Video 1> backward, the same character walking toward the camera before the original shot begins.`
+- `Extend <Video 1>, start with <Video 1>, then the camera pulls back to reveal a vast landscape.`
+
+### Stitch-Workflow (Track Completion)
+
+Verbindet Eingabeclips mit KI-generierten Übergängen. Beachten Sie die **familienspezifischen** Obergrenzen für kombinierte Dauer und Clip-Anzahl in [Multimodale Eingabelimits](#multimodal-input-limits) (Seedance 2.0: ≤3 Clips / ≤15 s kombiniert; Seedance 2.5: höhere Videolimits).
+
+**Kanonisches Prompt-Muster**:
+
+```
+<Video 1> + [transition description] + followed by <Video 2> [+ [transition description] + followed by <Video 3>]
+```
+
+**Beispiele**:
+
+- `<Video 1> + a smooth seamless cut + followed by <Video 2>`
+- `<Video 1>. The moment a leaf falls to the ground, it sets off a special effect of golden particles. A gust of wind blows by, leading into <Video 2>.`
+- `<Video 1> + a wisp of smoke transforms into a flock of birds + followed by <Video 2> + a slow dolly-in + followed by <Video 3>`
+
+Das Modell schneidet die Verbindungssegmente an den Übergangspunkten automatisch für einen kontinuierlichen Ablauf zu.
+
+---
+
+## Universelle Prompt-Formel
+
+Über alle vier Workflows hinweg lautet die empfohlene Autorenformel:
+
+```
+Subject + Motion + Environment (Optional)
+       + Camera Movement / Cut (Optional)
+       + Aesthetic Description (Optional)
+       + Audio (Optional)
+```
+
+- **Subject + Motion**: die logische Grundlage. Definieren Sie „Wer" welche „Aktion" ausführt.
+- **Environment + Aesthetics**: räumlicher Hintergrund, Beleuchtung, visueller Stil
+- **Camera**: expliziter Shot-Typ oder Kamerabewegung
+- **Audio**: Umgebungsgeräusche oder Stimmführung für immersive Ausgaben
+
+Wird dies auf ein Workflow-Präfix aufgesetzt (z. B. `Strictly edit <Video 1>, changing its <subject + motion + environment + ...>`), erhalten Sie Ergebnisse in höchster Qualität.
+
+---
+
+## Multimodale Eingabelimits
+
+Die folgenden Werte werden von der Venice API akzeptiert. Anfragen außerhalb dieser Bereiche werden auf Schema-Ebene mit einem 400 abgelehnt, bevor sie die Inferenz erreichen.
+
+**Seedance 2.0 und Seedance 2.5 verwenden unterschiedliche Obergrenzen.** Prüfen Sie stets die Spalte für die Modellfamilie, die Sie aufrufen.
+
+### Gemeinsame Medienuntergrenzen
+
+| Einschränkung | Wert |
+|---|---|
+| Bild- / Video- / Audio-Eingabemethoden | URL (`http://`, `https://`) oder Base64-Daten-URL |
+| Bildformate | `.jpeg`, `.png`, `.webp`, `.bmp`, `.tiff`, `.gif`, `.heic`, `.heif` |
+| Bildseitenverhältnis (B / H) | exklusiv `(0.4, 2.5)` |
+| Minimale Bildseite | ≥ 300 px |
+| Videoformate | `.mp4`, `.mov` |
+| Video-Codecs | H.264 / AVC, H.265 / HEVC |
+| Audio-Codecs (im Container) | AAC, MP3 |
+| Audioformate (Referenzaudio) | `.wav`, `.mp3` |
+| Videogröße pro Clip | ≤ 50 MB |
+| Audiogröße pro Clip | ≤ 15 MB |
+| I2V-Erste-Frame-Bilder | 1 |
+| I2V erstes + letztes Frame | 2 |
+
+### Familienvergleich
+
+| Einschränkung | Seedance 2.0 (+ Fast) | Seedance 2.5 |
+|---|---|---|
+| Ausgabedauer | 4–15 s | 4–30 s (Standard 10) |
+| Ausgabeauflösungen | 480p / 720p / 1080p / **4k** (Fast: nur 480p / 720p) | nur 480p / 720p |
+| R2V-Referenzbilder | 1–9 | 1–30 |
+| Max. R2V-Referenzbildgröße in Bytes | (gemeinsame Anfragegrenzen) | ≤ 30 MB pro Bild |
+| R2V-Referenzvideos | ≤ 3 | ≤ 10 |
+| Dauer pro Referenzvideo | `[2, 15]` s | `[2, 30]` s |
+| Kombinierte Referenzvideodauer | ≤ 15 s | ≤ 30 s |
+| R2V-Referenzaudio-Clips | ≤ 3 | ≤ 10 |
+| Dauer pro Referenzaudio | `[2, 15]` s | `[2, 30]` s |
+| Kombinierte Referenzaudiodauer | ≤ 15 s | ≤ 30 s |
+
+Referenzaudio wird nur bei den R2V-Varianten unterstützt. Jeder Eintrag wird als `role: "reference_audio"`-Content-Item an das Modell weitergegeben, das der Prompt als `<Audio 1>`, `<Audio 2>`, … adressiert. Das Modell verwendet jeden Clip je nach Prompt-Kontext für Stimmklang, Soundeffekte oder Hintergrundmusik. Das ältere singuläre Feld `audio_url` wird auf dieselbe Content-Struktur abgebildet und entspricht nun der Übergabe eines einelementigen `reference_audio_urls`.
+
+<Warning>
+**`reference_audio_urls` darf nicht die einzige Referenzeingabe sein.** Das Modell benötigt neben jedem Audio-Donor mindestens eine Bild- oder Videoreferenz. Koppeln Sie `reference_audio_urls` mit `reference_image_urls`, `reference_video_urls`, `image_url` oder `video_url`. Reine Audio-Übermittlungen werden abgelehnt.
+</Warning>
+
+### Anfragegröße
+
+Der Queue-Endpunkt akzeptiert JSON-Bodys bis **35 MB**. Inline-Daten-URLs für große Videos können diese Grenze überschreiten. Insbesondere bei mehrteiligen Stitch-Aufrufen sind URLs Inline-Base64 vorzuziehen.
+
+---
+
+## Preise
+
+Rufen Sie `POST /api/v1/video/quote` auf, um vor der Übermittlung an `/video/queue` ein Angebot für eine bestimmte Anfrageform zu erhalten. Der Quote-Endpunkt ist die einzige verbindliche Quelle; Preisdetails können sich ändern und sollten nicht clientseitig gecacht oder dupliziert werden.
+
+Wenn Referenzvideo(s) Teil der Anfrage sind, übergeben Sie zusätzlich `reference_video_total_duration` (die Summe aller Referenzclip-Dauern in Sekunden), damit das Angebot dem entspricht, was `/video/queue` berechnet:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/quote \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "duration": "5s",
+    "resolution": "1080p",
+    "aspect_ratio": "16:9",
+    "reference_video_total_duration": 5
+  }'
+```
+
+---
+
+## Vollständige Beispiele
+
+Alle Beispiele setzen voraus, dass `VENICE_API_KEY` in der Umgebung gesetzt ist.
+
+### Text-to-video
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-text-to-video-basic",
+    "prompt": "A golden retriever frolicking through a sunlit meadow at sunset, slow camera dolly-in, shallow depth of field, warm cinematic lighting.",
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Seedance 2.0 Text-to-video (4K)
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-text-to-video-basic",
+    "prompt": "Ultra-detailed aerial glide over a sunlit alpine lake, crystal water, distant peaks, cinematic color grade.",
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "4k"
+  }'
+```
+
+### Seedance 2.5 Text-to-video (längere Dauer)
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-5-text-to-video-basic",
+    "prompt": "A slow aerial push over misty mountains at sunrise, clouds parting, soft orchestral ambience, cinematic widescreen framing.",
+    "duration": "20s",
+    "aspect_ratio": "16:9",
+    "resolution": "720p"
+  }'
+```
+
+### Image-to-video (erstes Frame)
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-image-to-video-basic",
+    "prompt": "The lighthouse keeper turns toward the storm, lantern raised, waves crashing against the rocks.",
+    "image_url": "https://example.com/lighthouse.jpg",
+    "duration": "5s",
+    "resolution": "720p"
+  }'
+```
+
+<Note>
+Seedance-I2V-Modelle (`seedance-2-0-image-to-video-basic`, dessen Fast-Variante und `seedance-2-5-image-to-video-basic`) **akzeptieren `aspect_ratio` nicht**. Das Ausgabeseitenverhältnis wird automatisch aus den Abmessungen des Eingabebildes abgeleitet. Wird das Feld übergeben, wird ein 400 mit *„This model does not support aspect_ratio"* zurückgegeben. Verwenden Sie die T2V- oder R2V-Varianten, wenn Sie eine explizite Steuerung des Seitenverhältnisses benötigen.
+</Note>
+
+### Reference-Workflow: Motiv-Donor
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "Refer to <Subject 1> in <Image 1> to generate a 5-second clip of the same character walking through a neon-lit Tokyo street at night.",
+    "reference_image_urls": ["https://example.com/character.png"],
+    "duration": "5s",
+    "aspect_ratio": "9:16",
+    "resolution": "1080p"
+  }'
+```
+
+### Seedance 2.5 Reference-Workflow: mehrere Bilder
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-5-reference-to-video-basic",
+    "prompt": "Refer to <Subject 1> in <Image 1> and the style in <Image 2> to generate a 12-second clip of the same character exploring a rainy cyberpunk alley.",
+    "reference_image_urls": [
+      "https://example.com/character.png",
+      "https://example.com/style-board.png"
+    ],
+    "duration": "12s",
+    "aspect_ratio": "9:16",
+    "resolution": "720p"
+  }'
+```
+
+### Reference-Workflow: Motiv + Audio-Donor
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "Refer to <Subject 1> in <Image 1> to generate a 5-second clip of the same character walking through a neon-lit Tokyo street at night. Refer to the timbre in <Audio 1> for a soft female voiceover describing the scene.",
+    "reference_image_urls": ["https://example.com/character.png"],
+    "reference_audio_urls": ["https://example.com/voice-sample.mp3"],
+    "duration": "5s",
+    "aspect_ratio": "9:16",
+    "resolution": "1080p"
+  }'
+```
+
+### Edit-Workflow
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "Strictly edit <Video 1>, changing its weather from sunny to a heavy rainstorm, with all original motions and camera work preserved.",
+    "reference_video_urls": ["https://example.com/sunny-scene.mp4"],
+    "reference_video_total_duration": 5,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Edit-Workflow mit Bildverankerung
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "Replace the perfume featured in <Video 1> with the face cream from <Image 1>, with all original motions and camera work preserved.",
+    "reference_video_urls": ["https://example.com/perfume-ad.mp4"],
+    "reference_image_urls": ["https://example.com/face-cream.png"],
+    "reference_video_total_duration": 4,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Extend vorwärts
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "Extend <Video 1>, generate a dramatic chase scene through narrow alleys at dusk, with neon signs flickering and rain on the pavement.",
+    "reference_video_urls": ["https://example.com/alley-intro.mp4"],
+    "reference_video_total_duration": 4,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Stitch (3 Clips)
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "prompt": "<Video 1> + a wisp of smoke transforms into a flock of birds + followed by <Video 2> + a slow dolly-in + followed by <Video 3>",
+    "reference_video_urls": [
+      "https://example.com/clip-1.mp4",
+      "https://example.com/clip-2.mp4",
+      "https://example.com/clip-3.mp4"
+    ],
+    "reference_video_total_duration": 12,
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "resolution": "1080p"
+  }'
+```
+
+### Auf Fertigstellung pollen
+
+Speichern Sie nach jeder Queue-Übermittlung die zurückgegebene `queue_id` und pollen Sie `/video/retrieve`, bis der Response-Body den Typ `video/mp4` hat:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-0-reference-to-video-basic",
+    "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+  }' \
+  -o output.mp4
+```
+
+Die Antwort ist JSON (`{ "status": "queued" | "running" | "failed", ... }`), bis der Job abgeschlossen ist. In diesem Moment wechselt der Response-Body zu `video/mp4`-Bytes. Siehe [Video Generation](/guides/media/video-generation) für das vollständige Polling-Muster.
+
+---
+
+## Fehlerbehebung
+
+### `At least one reference is required for this model`
+
+Reference-to-Video-Übermittlungen müssen mindestens eines der Felder `reference_image_urls`, `reference_video_urls`, `image_references` oder `video_references` enthalten. Eine reine Text-Generierung ist kein gültiger R2V-Workflow. Verwenden Sie stattdessen eine Text-to-Video-Model-ID. `reference_audio_urls` allein genügt nicht (siehe Audio-Abschnitt oben).
+
+### Zu viele Referenzvideos / Bilder
+
+Seedance **2.0** begrenzt R2V auf **9 Bilder** und **3 Videos**. Seedance **2.5** hebt diese Grenzen auf **30 Bilder** und **10 Videos** an. Wenn Sie das Familienlimit überschreiten, kürzen Sie die Eingaben oder fügen Sie sie zuvor offline zusammen.
+
+### Fehler bei Dauer / Gesamtdauer
+
+- **2.0:** Referenzvideo/-audio pro Clip `[2, 15]` s; kombiniert Video/Audio ≤ 15 s; Ausgabe 4–15 s.
+- **2.5:** Referenzvideo/-audio pro Clip `[2, 30]` s; kombiniert Video/Audio ≤ 30 s; Ausgabe 4–30 s.
+
+Schneiden Sie die Clips vor der Übermittlung clientseitig zu.
+
+### Prompt wird dem falschen Workflow zugeordnet
+
+Der Workflow wird aus der Prompt-Syntax abgeleitet. Häufige Fehlrouten:
+
+- Sie wollen **Extend**, schreiben aber `Refer to ...` → das Modell behandelt Ihr Video als *Donor*, nicht als fortzusetzende Vorlage
+- Sie wollen **Stitch**, schreiben aber `Refer to ...` → das Modell wählt eines als Donor und ignoriert die anderen
+- Sie wollen **Edit**, schreiben aber `Generate a video based on <Video 1>` → mehrdeutig; das Modell fällt möglicherweise auf Reference zurück
+
+Verwenden Sie die kanonischen Präfixe exakt wie angegeben: `Strictly edit <Video 1>, ...`, `Extend <Video 1>, ...`, `<Video 1> + ... + followed by <Video 2>`.
+
+### Gesicht-/Likeness-Eingaben werden abgelehnt
+
+Die öffentlichen Seedance-API-Modelle sind **Faces-off**. Erwarten Sie keinen Consent-Attestierungs-Ablauf. Medien mit Gesichtern können mit einem Content-Policy- bzw. Provider-Fehler fehlschlagen. Verwenden Sie für Likeness-Workflows die Venice-App oder Studio.
+
+### Angebot stimmt nicht mit dem eingereihten Betrag überein
+
+Wenn Sie ein Referenzvideo eingefügt, aber `reference_video_total_duration` nicht an `/video/quote` übergeben haben, können sich Angebot und eingereihter Betrag unterscheiden. Übergeben Sie bei vorhandenen Referenzvideos immer `reference_video_total_duration` (Summe aller Referenzclip-Dauern in Sekunden).
+
+---
+
+## Referenzen
+
+- Venice-Video-Queue-Endpunkt: [`POST /api/v1/video/queue`](/api-reference/endpoint/video/queue)
+- Venice-Quote-Endpunkt: [`POST /api/v1/video/quote`](/api-reference/endpoint/video/quote)
+- Begleitleitfaden: [Reference to Video](/guides/media/reference-to-video) (behandelt Kling O3 + Grok Imagine R2V)
+- Begleitleitfaden: [Video Generation](/guides/media/video-generation) (Überblick Queue / Polling)
