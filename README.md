@@ -42,9 +42,11 @@ The documentation will be available at `http://localhost:3000`.
 ### Making Changes
 
 - Edit `.mdx` files to modify the documentation content
-- Update `mint.json` to configure site navigation and metadata
+- Update `docs.json` to configure site navigation and metadata
 - Place images and assets in the corresponding directories
 - Reference the OpenAPI specification in `swagger.yaml` for API details
+
+**Translations:** Edit English source pages only. Mintlify regenerates locale copies after merge to `main`. Do not hand-edit every locale in the same PR unless you are intentionally updating all translations. When adding a new nav page, add the English path in `docs.json` only — not `{locale}/...` paths until translations exist.
 
 ## 📖 Documentation Features
 
