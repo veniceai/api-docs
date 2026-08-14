@@ -986,9 +986,13 @@
   function isUncensoredModel(model) {
     const spec = model.model_spec || {};
     const traits = spec.traits || [];
-    const modelId = model.id.toLowerCase();
-    return traits.includes('most_uncensored') || 
-           modelId.includes('uncensored') || 
+    const modelId = (model.id || '').toLowerCase();
+    // model_spec.uncensored is authoritative and only present when true. The
+    // trait and id checks stay as a fallback for snapshots taken before the
+    // field was captured.
+    return spec.uncensored === true ||
+           traits.includes('most_uncensored') ||
+           modelId.includes('uncensored') ||
            modelId.includes('lustify');
   }
 
