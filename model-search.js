@@ -370,9 +370,40 @@
     }
   }
 
-  // Capability filters only apply to text/chat models.
-  function categoryAllowsCapabilityFilters(category) {
-    return category === 'all' || category === 'text';
+  // Capability options are data-driven: every entry knows how to test a model, so
+  // the dropdown can offer whatever actually discriminates inside the modality on
+  // screen instead of being hard-wired to text models.
+  const CAPABILITY_FILTERS = [
+    { value: 'reasoning', label: 'Reasoning', match: m => !!m.model_spec?.capabilities?.supportsReasoning },
+    { value: 'vision', label: 'Vision', match: m => !!m.model_spec?.capabilities?.supportsVision },
+    { value: 'function', label: 'Function Calling', match: m => !!m.model_spec?.capabilities?.supportsFunctionCalling },
+    // matchesCodeFilter falls back to id substrings, so it has to stay pinned to
+    // text or every grok-* image and video model would match.
+    { value: 'code', label: 'Code', match: m => m.type === 'text' && matchesCodeFilter(m) },
+    { value: 'audio-input', label: 'Audio Input', match: m => !!m.model_spec?.capabilities?.supportsAudioInput },
+    { value: 'video-input', label: 'Video Input', match: m => !!m.model_spec?.capabilities?.supportsVideoInput },
+    { value: 'audio-output', label: 'Audio', match: m => generatesAudio(m) },
+    { value: 'voices', label: 'Voice Selection', match: m => (m.model_spec?.voices?.length || 0) > 1 },
+  ];
+  const CAPABILITY_BY_VALUE = new Map(CAPABILITY_FILTERS.map(c => [c.value, c]));
+
+  // Video models that can score the clip with sound. constraints.audio only
+  // arrives with the live model list, so the hardcoded pricing config is the
+  // fallback that keeps the filter honest against the static snapshot.
+  function generatesAudio(model) {
+    if (model.type !== 'video') return false;
+    return model.model_spec?.constraints?.audio === true ||
+           !!getVideoModelConfig(model.id).audioPricing;
+  }
+
+  // An option earns a slot only when it splits the visible set: no matches means
+  // it says nothing about this modality, and matching everything filters nothing.
+  function relevantCapabilities(models) {
+    if (!models.length) return [];
+    return CAPABILITY_FILTERS.filter(cap => {
+      const hits = models.reduce((n, m) => n + (cap.match(m) ? 1 : 0), 0);
+      return hits > 0 && hits < models.length;
+    });
   }
 
   // ========== I18N (filter/sort UI chrome) ==========
@@ -394,14 +425,14 @@
   }
   const LOCALE = detectLocale();
   const I18N = {
-    'pt-BR': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Recurso', 'Content': 'Conteúdo', 'All': 'Todos', 'Music': 'Música', 'Model': 'Modelo', 'Context': 'Contexto', 'Input': 'Entrada', 'Output': 'Saída', 'Cache': 'Cache', 'Capabilities': 'Recursos', 'Privacy': 'Privacidade', 'All types': 'Todos os tipos', 'Text': 'Texto', 'Image': 'Imagem', 'Video': 'Vídeo', 'Audio': 'Áudio', 'Embedding': 'Embedding', 'Generation': 'Geração', 'Upscale': 'Ampliação', 'Edit': 'Edição', 'Uncensored': 'Sem censura', 'Text to Video': 'Texto para vídeo', 'Image to Video': 'Imagem para vídeo', 'Reasoning': 'Raciocínio', 'Vision': 'Visão', 'Function Calling': 'Chamada de funções', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Mais recentes', 'Oldest': 'Mais antigos', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Preço: menor para maior', 'Price: High to Low': 'Preço: maior para menor', 'Clear filters': 'Limpar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'correspondências mais próximas', 'No close model matches': 'Nenhum modelo próximo encontrado', 'No models match your filters': 'Nenhum modelo corresponde aos seus filtros' },
-    'ar': { 'Type': 'النوع', 'Kind': 'الفئة', 'Capability': 'القدرة', 'Content': 'المحتوى', 'All': 'الكل', 'Music': 'موسيقى', 'Model': 'النموذج', 'Context': 'السياق', 'Input': 'المدخلات', 'Output': 'المخرجات', 'Cache': 'التخزين المؤقت', 'Capabilities': 'القدرات', 'Privacy': 'الخصوصية', 'All types': 'كل الأنواع', 'Text': 'نص', 'Image': 'صورة', 'Video': 'فيديو', 'Audio': 'صوت', 'Embedding': 'تضمين', 'Generation': 'توليد', 'Upscale': 'تحسين الدقة', 'Edit': 'تحرير', 'Uncensored': 'بدون رقابة', 'Text to Video': 'نص إلى فيديو', 'Image to Video': 'صورة إلى فيديو', 'Reasoning': 'استدلال', 'Vision': 'رؤية', 'Function Calling': 'استدعاء الدوال', 'Code': 'برمجة', 'Private': 'خاص', 'Anonymized': 'مجهول الهوية', 'Sort': 'ترتيب', 'Sort models': 'ترتيب النماذج', 'Search models': 'بحث في النماذج', 'Recommended': 'موصى به', 'Newest': 'الأحدث', 'Oldest': 'الأقدم', 'Name (A–Z)': 'الاسم (أ–ي)', 'Price: Low to High': 'السعر: من الأقل إلى الأعلى', 'Price: High to Low': 'السعر: من الأعلى إلى الأقل', 'Clear filters': 'مسح عوامل التصفية', 'Search models...': 'بحث في النماذج...', 'models': 'نماذج', 'closest matches': 'أقرب النتائج', 'No close model matches': 'لا توجد نماذج قريبة', 'No models match your filters': 'لا توجد نماذج تطابق عوامل التصفية' },
-    'it': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Capacità', 'Content': 'Contenuto', 'All': 'Tutti', 'Music': 'Musica', 'Model': 'Modello', 'Context': 'Contesto', 'Input': 'Input', 'Output': 'Output', 'Cache': 'Cache', 'Capabilities': 'Capacità', 'Privacy': 'Privacy', 'All types': 'Tutti i tipi', 'Text': 'Testo', 'Image': 'Immagine', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generazione', 'Upscale': 'Upscaling', 'Edit': 'Modifica', 'Uncensored': 'Senza censura', 'Text to Video': 'Testo in video', 'Image to Video': 'Immagine in video', 'Reasoning': 'Ragionamento', 'Vision': 'Visione', 'Function Calling': 'Chiamata di funzioni', 'Code': 'Codice', 'Private': 'Privato', 'Anonymized': 'Anonimizzato', 'Sort': 'Ordina', 'Sort models': 'Ordina modelli', 'Search models': 'Cerca modelli', 'Recommended': 'Consigliati', 'Newest': 'Più recenti', 'Oldest': 'Meno recenti', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Prezzo: dal più basso', 'Price: High to Low': 'Prezzo: dal più alto', 'Clear filters': 'Cancella filtri', 'Search models...': 'Cerca modelli...', 'models': 'modelli', 'closest matches': 'corrispondenze più vicine', 'No close model matches': 'Nessun modello simile trovato', 'No models match your filters': 'Nessun modello corrisponde ai filtri' },
-    'de': { 'Type': 'Typ', 'Kind': 'Art', 'Capability': 'Fähigkeit', 'Content': 'Inhalt', 'All': 'Alle', 'Music': 'Musik', 'Model': 'Modell', 'Context': 'Kontext', 'Input': 'Eingabe', 'Output': 'Ausgabe', 'Cache': 'Cache', 'Capabilities': 'Fähigkeiten', 'Privacy': 'Datenschutz', 'All types': 'Alle Typen', 'Text': 'Text', 'Image': 'Bild', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generierung', 'Upscale': 'Hochskalierung', 'Edit': 'Bearbeiten', 'Uncensored': 'Unzensiert', 'Text to Video': 'Text zu Video', 'Image to Video': 'Bild zu Video', 'Reasoning': 'Reasoning', 'Vision': 'Vision', 'Function Calling': 'Function Calling', 'Code': 'Code', 'Private': 'Privat', 'Anonymized': 'Anonymisiert', 'Sort': 'Sortieren', 'Sort models': 'Modelle sortieren', 'Search models': 'Modelle suchen', 'Recommended': 'Empfohlen', 'Newest': 'Neueste', 'Oldest': 'Älteste', 'Name (A–Z)': 'Name (A–Z)', 'Price: Low to High': 'Preis: aufsteigend', 'Price: High to Low': 'Preis: absteigend', 'Clear filters': 'Filter zurücksetzen', 'Search models...': 'Modelle suchen...', 'models': 'Modelle', 'closest matches': 'nächste Treffer', 'No close model matches': 'Keine ähnlichen Modelle gefunden', 'No models match your filters': 'Keine Modelle entsprechen deinen Filtern' },
-    'es': { 'Type': 'Tipo', 'Kind': 'Categoría', 'Capability': 'Capacidad', 'Content': 'Contenido', 'All': 'Todos', 'Music': 'Música', 'Model': 'Modelo', 'Context': 'Contexto', 'Input': 'Entrada', 'Output': 'Salida', 'Cache': 'Caché', 'Capabilities': 'Capacidades', 'Privacy': 'Privacidad', 'All types': 'Todos los tipos', 'Text': 'Texto', 'Image': 'Imagen', 'Video': 'Vídeo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generación', 'Upscale': 'Escalado', 'Edit': 'Edición', 'Uncensored': 'Sin censura', 'Text to Video': 'Texto a vídeo', 'Image to Video': 'Imagen a vídeo', 'Reasoning': 'Razonamiento', 'Vision': 'Visión', 'Function Calling': 'Llamada de funciones', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Más recientes', 'Oldest': 'Más antiguos', 'Name (A–Z)': 'Nombre (A–Z)', 'Price: Low to High': 'Precio: de menor a mayor', 'Price: High to Low': 'Precio: de mayor a menor', 'Clear filters': 'Borrar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'coincidencias más cercanas', 'No close model matches': 'No hay modelos parecidos', 'No models match your filters': 'Ningún modelo coincide con tus filtros' },
-    'fr': { 'Type': 'Type', 'Kind': 'Catégorie', 'Capability': 'Capacité', 'Content': 'Contenu', 'All': 'Tous', 'Music': 'Musique', 'Model': 'Modèle', 'Context': 'Contexte', 'Input': 'Entrée', 'Output': 'Sortie', 'Cache': 'Cache', 'Capabilities': 'Capacités', 'Privacy': 'Confidentialité', 'All types': 'Tous les types', 'Text': 'Texte', 'Image': 'Image', 'Video': 'Vidéo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Génération', 'Upscale': 'Agrandissement', 'Edit': 'Édition', 'Uncensored': 'Sans censure', 'Text to Video': 'Texte vers vidéo', 'Image to Video': 'Image vers vidéo', 'Reasoning': 'Raisonnement', 'Vision': 'Vision', 'Function Calling': 'Appel de fonctions', 'Code': 'Code', 'Private': 'Privé', 'Anonymized': 'Anonymisé', 'Sort': 'Trier', 'Sort models': 'Trier les modèles', 'Search models': 'Rechercher des modèles', 'Recommended': 'Recommandé', 'Newest': 'Plus récents', 'Oldest': 'Plus anciens', 'Name (A–Z)': 'Nom (A–Z)', 'Price: Low to High': 'Prix : croissant', 'Price: High to Low': 'Prix : décroissant', 'Clear filters': 'Effacer les filtres', 'Search models...': 'Rechercher des modèles...', 'models': 'modèles', 'closest matches': 'correspondances les plus proches', 'No close model matches': 'Aucun modèle proche', 'No models match your filters': 'Aucun modèle ne correspond à vos filtres' },
-    'zh': { 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Content': '内容', 'All': '全部', 'Music': '音乐', 'Model': '模型', 'Context': '上下文', 'Input': '输入', 'Output': '输出', 'Cache': '缓存', 'Capabilities': '能力', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
-    'ko': { 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Content': '콘텐츠', 'All': '전체', 'Music': '음악', 'Model': '모델', 'Context': '컨텍스트', 'Input': '입력', 'Output': '출력', 'Cache': '캐시', 'Capabilities': '기능', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
+    'pt-BR': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Recurso', 'Content': 'Conteúdo', 'All': 'Todos', 'Music': 'Música', 'Model': 'Modelo', 'Context': 'Contexto', 'Input': 'Entrada', 'Output': 'Saída', 'Cache': 'Cache', 'Capabilities': 'Recursos', 'Privacy': 'Privacidade', 'All types': 'Todos os tipos', 'Text': 'Texto', 'Image': 'Imagem', 'Video': 'Vídeo', 'Audio': 'Áudio', 'Embedding': 'Embedding', 'Generation': 'Geração', 'Upscale': 'Ampliação', 'Edit': 'Edição', 'Uncensored': 'Sem censura', 'Text to Video': 'Texto para vídeo', 'Image to Video': 'Imagem para vídeo', 'Text to Speech': 'Texto para fala', 'Speech to Text': 'Fala para texto', 'Audio Input': 'Entrada de áudio', 'Video Input': 'Entrada de vídeo', 'Voice Selection': 'Seleção de voz', 'Reasoning': 'Raciocínio', 'Vision': 'Visão', 'Function Calling': 'Chamada de funções', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Mais recentes', 'Oldest': 'Mais antigos', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Preço: menor para maior', 'Price: High to Low': 'Preço: maior para menor', 'Clear filters': 'Limpar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'correspondências mais próximas', 'No close model matches': 'Nenhum modelo próximo encontrado', 'No models match your filters': 'Nenhum modelo corresponde aos seus filtros' },
+    'ar': { 'Type': 'النوع', 'Kind': 'الفئة', 'Capability': 'القدرة', 'Content': 'المحتوى', 'All': 'الكل', 'Music': 'موسيقى', 'Model': 'النموذج', 'Context': 'السياق', 'Input': 'المدخلات', 'Output': 'المخرجات', 'Cache': 'التخزين المؤقت', 'Capabilities': 'القدرات', 'Privacy': 'الخصوصية', 'All types': 'كل الأنواع', 'Text': 'نص', 'Image': 'صورة', 'Video': 'فيديو', 'Audio': 'صوت', 'Embedding': 'تضمين', 'Generation': 'توليد', 'Upscale': 'تحسين الدقة', 'Edit': 'تحرير', 'Uncensored': 'بدون رقابة', 'Text to Video': 'نص إلى فيديو', 'Image to Video': 'صورة إلى فيديو', 'Text to Speech': 'نص إلى كلام', 'Speech to Text': 'كلام إلى نص', 'Audio Input': 'إدخال صوتي', 'Video Input': 'إدخال فيديو', 'Voice Selection': 'اختيار الصوت', 'Reasoning': 'استدلال', 'Vision': 'رؤية', 'Function Calling': 'استدعاء الدوال', 'Code': 'برمجة', 'Private': 'خاص', 'Anonymized': 'مجهول الهوية', 'Sort': 'ترتيب', 'Sort models': 'ترتيب النماذج', 'Search models': 'بحث في النماذج', 'Recommended': 'موصى به', 'Newest': 'الأحدث', 'Oldest': 'الأقدم', 'Name (A–Z)': 'الاسم (أ–ي)', 'Price: Low to High': 'السعر: من الأقل إلى الأعلى', 'Price: High to Low': 'السعر: من الأعلى إلى الأقل', 'Clear filters': 'مسح عوامل التصفية', 'Search models...': 'بحث في النماذج...', 'models': 'نماذج', 'closest matches': 'أقرب النتائج', 'No close model matches': 'لا توجد نماذج قريبة', 'No models match your filters': 'لا توجد نماذج تطابق عوامل التصفية' },
+    'it': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Capacità', 'Content': 'Contenuto', 'All': 'Tutti', 'Music': 'Musica', 'Model': 'Modello', 'Context': 'Contesto', 'Input': 'Input', 'Output': 'Output', 'Cache': 'Cache', 'Capabilities': 'Capacità', 'Privacy': 'Privacy', 'All types': 'Tutti i tipi', 'Text': 'Testo', 'Image': 'Immagine', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generazione', 'Upscale': 'Upscaling', 'Edit': 'Modifica', 'Uncensored': 'Senza censura', 'Text to Video': 'Testo in video', 'Image to Video': 'Immagine in video', 'Text to Speech': 'Da testo a voce', 'Speech to Text': 'Da voce a testo', 'Audio Input': 'Input audio', 'Video Input': 'Input video', 'Voice Selection': 'Selezione voce', 'Reasoning': 'Ragionamento', 'Vision': 'Visione', 'Function Calling': 'Chiamata di funzioni', 'Code': 'Codice', 'Private': 'Privato', 'Anonymized': 'Anonimizzato', 'Sort': 'Ordina', 'Sort models': 'Ordina modelli', 'Search models': 'Cerca modelli', 'Recommended': 'Consigliati', 'Newest': 'Più recenti', 'Oldest': 'Meno recenti', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Prezzo: dal più basso', 'Price: High to Low': 'Prezzo: dal più alto', 'Clear filters': 'Cancella filtri', 'Search models...': 'Cerca modelli...', 'models': 'modelli', 'closest matches': 'corrispondenze più vicine', 'No close model matches': 'Nessun modello simile trovato', 'No models match your filters': 'Nessun modello corrisponde ai filtri' },
+    'de': { 'Type': 'Typ', 'Kind': 'Art', 'Capability': 'Fähigkeit', 'Content': 'Inhalt', 'All': 'Alle', 'Music': 'Musik', 'Model': 'Modell', 'Context': 'Kontext', 'Input': 'Eingabe', 'Output': 'Ausgabe', 'Cache': 'Cache', 'Capabilities': 'Fähigkeiten', 'Privacy': 'Datenschutz', 'All types': 'Alle Typen', 'Text': 'Text', 'Image': 'Bild', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generierung', 'Upscale': 'Hochskalierung', 'Edit': 'Bearbeiten', 'Uncensored': 'Unzensiert', 'Text to Video': 'Text zu Video', 'Image to Video': 'Bild zu Video', 'Text to Speech': 'Text zu Sprache', 'Speech to Text': 'Sprache zu Text', 'Audio Input': 'Audio-Eingabe', 'Video Input': 'Video-Eingabe', 'Voice Selection': 'Stimmenauswahl', 'Reasoning': 'Reasoning', 'Vision': 'Vision', 'Function Calling': 'Function Calling', 'Code': 'Code', 'Private': 'Privat', 'Anonymized': 'Anonymisiert', 'Sort': 'Sortieren', 'Sort models': 'Modelle sortieren', 'Search models': 'Modelle suchen', 'Recommended': 'Empfohlen', 'Newest': 'Neueste', 'Oldest': 'Älteste', 'Name (A–Z)': 'Name (A–Z)', 'Price: Low to High': 'Preis: aufsteigend', 'Price: High to Low': 'Preis: absteigend', 'Clear filters': 'Filter zurücksetzen', 'Search models...': 'Modelle suchen...', 'models': 'Modelle', 'closest matches': 'nächste Treffer', 'No close model matches': 'Keine ähnlichen Modelle gefunden', 'No models match your filters': 'Keine Modelle entsprechen deinen Filtern' },
+    'es': { 'Type': 'Tipo', 'Kind': 'Categoría', 'Capability': 'Capacidad', 'Content': 'Contenido', 'All': 'Todos', 'Music': 'Música', 'Model': 'Modelo', 'Context': 'Contexto', 'Input': 'Entrada', 'Output': 'Salida', 'Cache': 'Caché', 'Capabilities': 'Capacidades', 'Privacy': 'Privacidad', 'All types': 'Todos los tipos', 'Text': 'Texto', 'Image': 'Imagen', 'Video': 'Vídeo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generación', 'Upscale': 'Escalado', 'Edit': 'Edición', 'Uncensored': 'Sin censura', 'Text to Video': 'Texto a vídeo', 'Image to Video': 'Imagen a vídeo', 'Text to Speech': 'Texto a voz', 'Speech to Text': 'Voz a texto', 'Audio Input': 'Entrada de audio', 'Video Input': 'Entrada de vídeo', 'Voice Selection': 'Selección de voz', 'Reasoning': 'Razonamiento', 'Vision': 'Visión', 'Function Calling': 'Llamada de funciones', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Más recientes', 'Oldest': 'Más antiguos', 'Name (A–Z)': 'Nombre (A–Z)', 'Price: Low to High': 'Precio: de menor a mayor', 'Price: High to Low': 'Precio: de mayor a menor', 'Clear filters': 'Borrar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'coincidencias más cercanas', 'No close model matches': 'No hay modelos parecidos', 'No models match your filters': 'Ningún modelo coincide con tus filtros' },
+    'fr': { 'Type': 'Type', 'Kind': 'Catégorie', 'Capability': 'Capacité', 'Content': 'Contenu', 'All': 'Tous', 'Music': 'Musique', 'Model': 'Modèle', 'Context': 'Contexte', 'Input': 'Entrée', 'Output': 'Sortie', 'Cache': 'Cache', 'Capabilities': 'Capacités', 'Privacy': 'Confidentialité', 'All types': 'Tous les types', 'Text': 'Texte', 'Image': 'Image', 'Video': 'Vidéo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Génération', 'Upscale': 'Agrandissement', 'Edit': 'Édition', 'Uncensored': 'Sans censure', 'Text to Video': 'Texte vers vidéo', 'Image to Video': 'Image vers vidéo', 'Text to Speech': 'Synthèse vocale', 'Speech to Text': 'Transcription vocale', 'Audio Input': 'Entrée audio', 'Video Input': 'Entrée vidéo', 'Voice Selection': 'Choix de voix', 'Reasoning': 'Raisonnement', 'Vision': 'Vision', 'Function Calling': 'Appel de fonctions', 'Code': 'Code', 'Private': 'Privé', 'Anonymized': 'Anonymisé', 'Sort': 'Trier', 'Sort models': 'Trier les modèles', 'Search models': 'Rechercher des modèles', 'Recommended': 'Recommandé', 'Newest': 'Plus récents', 'Oldest': 'Plus anciens', 'Name (A–Z)': 'Nom (A–Z)', 'Price: Low to High': 'Prix : croissant', 'Price: High to Low': 'Prix : décroissant', 'Clear filters': 'Effacer les filtres', 'Search models...': 'Rechercher des modèles...', 'models': 'modèles', 'closest matches': 'correspondances les plus proches', 'No close model matches': 'Aucun modèle proche', 'No models match your filters': 'Aucun modèle ne correspond à vos filtres' },
+    'zh': { 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Content': '内容', 'All': '全部', 'Music': '音乐', 'Model': '模型', 'Context': '上下文', 'Input': '输入', 'Output': '输出', 'Cache': '缓存', 'Capabilities': '能力', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Text to Speech': '文本转语音', 'Speech to Text': '语音转文本', 'Audio Input': '音频输入', 'Video Input': '视频输入', 'Voice Selection': '语音选择', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
+    'ko': { 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Content': '콘텐츠', 'All': '전체', 'Music': '음악', 'Model': '모델', 'Context': '컨텍스트', 'Input': '입력', 'Output': '출력', 'Cache': '캐시', 'Capabilities': '기능', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Text to Speech': '텍스트 음성 변환', 'Speech to Text': '음성 텍스트 변환', 'Audio Input': '오디오 입력', 'Video Input': '비디오 입력', 'Voice Selection': '음성 선택', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
   };
   function t(s) {
     if (LOCALE === 'en') return s;
@@ -441,14 +472,20 @@
         { value: 'image-to-video', label: 'Image to Video' },
       ],
     },
+    // The Audio tab mixes speech synthesis with transcription, so it gets the
+    // same Kind treatment as image and video.
+    audio: {
+      label: 'Kind', mode: 'single', default: null,
+      options: [
+        { value: 'tts', label: 'Text to Speech' },
+        { value: 'asr', label: 'Speech to Text' },
+      ],
+    },
+    // Options are the full registry; the panel is narrowed to the ones that
+    // discriminate within the active modality when it renders.
     capability: {
       label: 'Capability', mode: 'multi', default: null,
-      options: [
-        { value: 'reasoning', label: 'Reasoning' },
-        { value: 'vision', label: 'Vision' },
-        { value: 'function', label: 'Function Calling' },
-        { value: 'code', label: 'Code' },
-      ],
+      options: CAPABILITY_FILTERS.map(({ value, label }) => ({ value, label })),
     },
     // Uncensored spans text, image, video, and audio models, so it gets its own
     // always-available dropdown rather than a slot in the text-only Capability
@@ -502,12 +539,14 @@
     );
   }
 
-  function renderFilterDropdown(key, group) {
-    const opts = group.options.map(o =>
-      `<button type="button" class="vmb-dd-option" role="option" aria-selected="false" data-group="${key}" data-value="${o.value}">` +
+  function renderFilterOption(key, o) {
+    return `<button type="button" class="vmb-dd-option" role="option" aria-selected="false" data-group="${key}" data-value="${o.value}">` +
         `<span class="vmb-dd-option-label">${t(o.label)}</span>${FILTER_CHECK}` +
-      `</button>`
-    ).join('');
+      `</button>`;
+  }
+
+  function renderFilterDropdown(key, group) {
+    const opts = group.options.map(o => renderFilterOption(key, o)).join('');
     return (
       `<div class="vmb-dd" data-group="${key}" data-mode="${group.mode}">` +
         `<button type="button" class="vmb-dd-trigger" aria-haspopup="listbox" aria-expanded="false">` +
@@ -532,6 +571,11 @@
     { value: 'music', label: 'Music' },
     { value: 'embedding', label: 'Embedding' },
   ];
+
+  // Tabs that interleave several API model types, so a per-row type badge is
+  // still doing work: All shows everything, Image covers image/upscale/inpaint,
+  // and Audio covers tts/asr.
+  const MIXED_TYPE_TABS = new Set(['all', 'image', 'audio']);
 
   function renderModalityTabs(active) {
     const tabs = MODALITY_TABS.map(o => {
@@ -1119,10 +1163,19 @@
     return `<span class="vmb-price">${value}<span class="vmb-price-unit">${suffix}</span></span>`;
   }
 
+  // Doubles as "the one number that defines this model", the way the card layout
+  // used a single context line: tokens for text, voices for speech, dimensions
+  // for embeddings. Leaving speech and embedding rows as em dashes threw away a
+  // fact developers actually shop on.
   function getContextCell(model) {
     const spec = model.model_spec || {};
     const tokens = spec.availableContextTokens || spec.constraints?.maxContextTokens;
-    return tokens ? `<span class="vmb-ctx">${formatContext(tokens)}</span>` : DASH;
+    if (tokens) return `<span class="vmb-ctx">${formatContext(tokens)}</span>`;
+
+    const voices = spec.voices?.length || 0;
+    if (voices) return `<span class="vmb-ctx vmb-ctx-alt">${voices} voice${voices === 1 ? '' : 's'}</span>`;
+    if (spec.embeddingDimensions) return `<span class="vmb-ctx vmb-ctx-alt">${spec.embeddingDimensions} dims</span>`;
+    return DASH;
   }
 
   // Video price is quoted live, so the cell carries the same selects and toggle
@@ -2460,6 +2513,7 @@
           <div class="vmb-filters" role="toolbar" aria-label="Model filters">
             ${renderFilterDropdown('image', FILTER_GROUPS.image)}
             ${ENABLE_VIDEO ? renderFilterDropdown('video', FILTER_GROUPS.video) : ''}
+            ${renderFilterDropdown('audio', FILTER_GROUPS.audio)}
             ${renderFilterDropdown('capability', FILTER_GROUPS.capability)}
             ${renderFilterDropdown('content', FILTER_GROUPS.content)}
             ${renderFilterDropdown('privacy', FILTER_GROUPS.privacy)}
@@ -2496,26 +2550,27 @@
     const activeCapabilities = new Set(); // multi-select
     let activeVideoType = null;
     let activeImageType = null;
+    let activeAudioType = null;
     let activePrivacy = null;
     let activeContent = null;
     // On overview page (no preset filter), default to newest first
     let activeSort = presetFilter ? 'default' : 'newest';
 
-    // Configure which dropdowns are visible for the current page context.
+    // Configure which Kind dropdowns are visible for the current page context.
+    // Capability owns its own visibility (see syncCapabilityFilterControls).
     if (presetFilter) {
       const filterVisibility = {
-        text: { capability: true, video: false, image: false },
-        video: { capability: false, video: true, image: false },
-        image: { capability: false, video: false, image: true },
+        video: { video: true, image: false, audio: false },
+        image: { video: false, image: true, audio: false },
       };
-      const config = filterVisibility[presetFilter] || { capability: false, video: false, image: false };
-      showDd('capability', config.capability);
+      const config = filterVisibility[presetFilter] || { video: false, image: false, audio: false };
       showDd('video', config.video);
       showDd('image', config.image);
+      showDd('audio', config.audio);
     } else {
-      showDd('capability', true);
       showDd('video', false);
       showDd('image', false);
+      showDd('audio', false);
     }
     // Privacy and Content dropdowns are always available. Type is no longer a
     // dropdown; the modality tab strip owns it on every models page.
@@ -2527,6 +2582,7 @@
       if (key === 'type') return activeFilter;
       if (key === 'image') return activeImageType;
       if (key === 'video') return activeVideoType;
+      if (key === 'audio') return activeAudioType;
       if (key === 'privacy') return activePrivacy;
       if (key === 'content') return activeContent;
       return null;
@@ -2535,6 +2591,7 @@
       if (key === 'type') activeFilter = value;
       else if (key === 'image') activeImageType = value;
       else if (key === 'video') activeVideoType = value;
+      else if (key === 'audio') activeAudioType = value;
       else if (key === 'privacy') activePrivacy = value;
       else if (key === 'content') activeContent = value;
     }
@@ -2598,11 +2655,13 @@
       if (presetFilter) return;
       showDd('image', activeFilter === 'image');
       showDd('video', ENABLE_VIDEO && activeFilter === 'video');
+      showDd('audio', activeFilter === 'audio');
     }
 
     function updateClearVisibility() {
       const any = activeCapabilities.size > 0 || activeVideoType || activeImageType ||
-        activePrivacy || activeContent || (!presetFilter && activeFilter !== 'all');
+        activeAudioType || activePrivacy || activeContent ||
+        (!presetFilter && activeFilter !== 'all');
       clearBtn.hidden = !any;
     }
 
@@ -2627,24 +2686,35 @@
       panel.hidden = !willOpen;
     }
 
+    // Capability used to grey itself out on every modality except text, which
+    // read as broken. Instead the panel is rebuilt from whatever discriminates
+    // among the models on screen, and the control steps aside entirely when
+    // nothing does.
+    let capabilitySignature = null;
     function syncCapabilityFilterControls() {
       const capDd = dd.capability;
       if (!capDd) return;
-      const allow = categoryAllowsCapabilityFilters(activeFilter);
-      if (!allow && activeCapabilities.size) {
-        activeCapabilities.clear();
-        updateDropdownUI('capability');
+      const available = relevantCapabilities(allModels.filter(matchesCategory));
+      const allowed = new Set(available.map(c => c.value));
+
+      [...activeCapabilities]
+        .filter(v => !allowed.has(v))
+        .forEach(v => activeCapabilities.delete(v));
+
+      const signature = available.map(c => c.value).join(',');
+      const panel = capDd.querySelector('.vmb-dd-panel');
+      if (signature !== capabilitySignature) {
+        panel.innerHTML = available.map(o => renderFilterOption('capability', o)).join('');
+        capabilitySignature = signature;
       }
-      capDd.classList.toggle('vmb-dd-disabled', !allow);
-      const trigger = capDd.querySelector('.vmb-dd-trigger');
-      trigger.disabled = !allow;
-      trigger.setAttribute('aria-disabled', allow ? 'false' : 'true');
-      trigger.title = allow ? '' : 'Available when viewing All or Text models';
-      if (!allow) {
+
+      capDd.style.display = available.length ? '' : 'none';
+      if (!available.length) {
         capDd.classList.remove('open');
-        trigger.setAttribute('aria-expanded', 'false');
-        capDd.querySelector('.vmb-dd-panel').hidden = true;
+        capDd.querySelector('.vmb-dd-trigger').setAttribute('aria-expanded', 'false');
+        panel.hidden = true;
       }
+      updateDropdownUI('capability');
     }
 
     function handleOptionSelect(option) {
@@ -2655,11 +2725,6 @@
       if (group.mode === 'multi') {
         if (activeCapabilities.has(value)) activeCapabilities.delete(value);
         else activeCapabilities.add(value);
-        // Selecting a capability on the main page implies text models.
-        if (activeCapabilities.size > 0 && !presetFilter && activeFilter === 'all') {
-          activeFilter = 'text';
-          updateDropdownUI('type');
-        }
         updateDropdownUI('capability');
         // Keep the panel open for multi-select.
       } else {
@@ -2672,9 +2737,11 @@
           activeCapabilities.clear();
           activeVideoType = null;
           activeImageType = null;
+          activeAudioType = null;
           updateDropdownUI('capability');
           updateDropdownUI('video');
           updateDropdownUI('image');
+          updateDropdownUI('audio');
         }
         updateDropdownUI(key);
         closeAllPanels(null);
@@ -2688,6 +2755,7 @@
       activeCapabilities.clear();
       activeVideoType = null;
       activeImageType = null;
+      activeAudioType = null;
       activePrivacy = null;
       activeContent = null;
       if (!presetFilter) activeFilter = 'all';
@@ -2710,10 +2778,12 @@
         activeCapabilities.clear();
         activeVideoType = null;
         activeImageType = null;
+        activeAudioType = null;
         updateModalityUI();
         updateDropdownUI('capability');
         updateDropdownUI('video');
         updateDropdownUI('image');
+        updateDropdownUI('audio');
         syncModalityDependentControls();
         syncCapabilityFilterControls();
         updateClearVisibility();
@@ -2769,12 +2839,16 @@
     allModels = cachedModels && cachedModels.length > 0
       ? cachedModels
       : await ensureStaticModels();
+    // The Capability panel is derived from the catalog, so it can only be built
+    // once there is one. The live list adds constraints the snapshot omits.
+    syncCapabilityFilterControls();
     renderModels();
 
     // Fetch fresh data in background and update
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
         allModels = freshModels;
+        syncCapabilityFilterControls();
         renderModels();
       }
     }).catch(() => {});
@@ -2794,14 +2868,10 @@
 
     function matchesCapability(model) {
       if (activeCapabilities.size === 0) return true;
-      const spec = model.model_spec || {};
-      const caps = spec.capabilities || {};
       // AND semantics: the model must satisfy every selected capability.
-      for (const cap of activeCapabilities) {
-        if (cap === 'reasoning' && !caps.supportsReasoning) return false;
-        if (cap === 'vision' && !caps.supportsVision) return false;
-        if (cap === 'function' && !caps.supportsFunctionCalling) return false;
-        if (cap === 'code' && !matchesCodeFilter(model)) return false;
+      for (const value of activeCapabilities) {
+        const cap = CAPABILITY_BY_VALUE.get(value);
+        if (cap && !cap.match(model)) return false;
       }
       return true;
     }
@@ -2810,6 +2880,11 @@
       if (!activeVideoType) return true;
       const constraints = model.model_spec?.constraints || {};
       return constraints.model_type === activeVideoType;
+    }
+
+    function matchesAudioType(model) {
+      if (!activeAudioType) return true;
+      return model.type === activeAudioType;
     }
 
     function matchesImageType(model) {
@@ -2875,6 +2950,7 @@
                matchesCapability(model) &&
                matchesVideoType(model) &&
                matchesImageType(model) &&
+               matchesAudioType(model) &&
                matchesPrivacy(model) &&
                matchesContent(model);
       });
@@ -2950,13 +3026,19 @@
         ? `<a href="${escapeHtml(spec.modelSource)}" target="_blank" rel="noopener" class="vmb-model-name">${modelName}</a>`
         : `<span class="vmb-model-name">${modelName}</span>`;
 
-      // Same tag set the card layout carried. The plain type badge is dropped
-      // because the modality tabs already say which type is on screen.
+      // Same tag set the card layout carried. The plain type badge is what tells
+      // a speech model from a transcription one, or a generator from an editor,
+      // so it stays on any tab that mixes types. Text needs no label and video
+      // gets the more specific T2V/I2V badge below.
+      const typeBadge = MIXED_TYPE_TABS.has(activeFilter) && model.type !== 'text' && model.type !== 'video'
+        ? `<span class="vmb-type-badge">${escapeHtml(model.type)}</span>`
+        : '';
       const videoTypeBadge = model.type === 'video' && constraints.model_type
         ? `<span class="vmb-video-type-badge ${constraints.model_type === 'text-to-video' ? 'ttv' : 'itv'}" title="${escapeHtml(constraints.model_type)}">${constraints.model_type === 'text-to-video' ? 'T2V' : 'I2V'}</span>`
         : '';
       const rateTier = getModelRateLimitTier(model.id, model.type);
       const tags = [
+        typeBadge,
         videoTypeBadge,
         getPrivacyTag(model, 'vmb'),
         isBetaModel(model) ? `<span class="vmb-beta-badge vmb-tooltip" data-tooltip="${TOOLTIPS.beta}">Beta</span>` : '',
@@ -2964,19 +3046,33 @@
         isUpgradedModel(model) ? `<span class="vmb-upgraded-badge vmb-tooltip" data-tooltip="${TOOLTIPS.upgraded}">Upgraded</span>` : '',
         isUncensoredModel(model) ? `<span class="vmb-uncensored-badge vmb-tooltip" data-tooltip="${TOOLTIPS.uncensored}">Uncensored</span>` : '',
         hasContentModeration(model.id) ? `<span class="vmb-moderation-badge vmb-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '',
-        rateTier ? `<span class="vmb-ratelimit-badge vmb-tooltip tier-${rateTier}" data-tooltip="${RATE_LIMIT_TIERS[rateTier].tooltip}">${RATE_LIMIT_TIERS[rateTier].label}</span>` : '',
-        dateInfo?.isNew ? '<span class="vmb-new-badge">NEW</span>' : ''
+        rateTier ? `<span class="vmb-ratelimit-badge vmb-tooltip tier-${rateTier}" data-tooltip="${RATE_LIMIT_TIERS[rateTier].tooltip}">${RATE_LIMIT_TIERS[rateTier].label}</span>` : ''
       ].filter(Boolean).join('');
+
+      // The pulsing dot the cards used, not the flat NEW chip: it reads as a
+      // status next to the name rather than one more badge in the row.
+      const newDot = dateInfo?.isNew
+        ? '<span class="vmb-new-dot" title="Recently added">New</span>'
+        : '';
 
       const idCopyBtn = `<button class="vmb-id-copy-btn" data-model-id="${modelId}" title="Copy model ID" aria-label="Copy model ID">
         <svg class="copy-icon" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
         <svg class="check-icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
       </button>`;
 
-      // Facts with no column of their own.
+      // Shape pips for the aspect ratios a video model supports. Voices and
+      // dimensions moved into the Context column, so what is left here is the
+      // video detail the selects above don't already cover.
+      const aspectRatios = model.type === 'video' ? getAspectRatios(constraints) : [];
+      const aspectPips = aspectRatios.length
+        ? `<span class="vmb-aspect-ratios">${aspectRatios.map(ar => {
+            const [w, h] = ar.split(':').map(Number);
+            const cls = w > h ? 'landscape' : h > w ? 'portrait' : 'square';
+            return `<span class="vmb-ar ${cls}" title="${escapeHtml(ar)}"></span>`;
+          }).join('')}</span>`
+        : '';
+
       const metaParts = [];
-      if (model.type === 'tts' && spec.voices?.length > 0) metaParts.push(`${spec.voices.length} voices`);
-      if (model.type === 'embedding' && spec.embeddingDimensions) metaParts.push(`${spec.embeddingDimensions} dimensions`);
       if (model.type === 'video') {
         if (!model._hasResDropdown && constraints.resolutions?.length) metaParts.push(constraints.resolutions.join(', '));
         if (!model._hasDurDropdown && constraints.durations?.length) metaParts.push(constraints.durations.join(', '));
@@ -2984,6 +3080,9 @@
       }
       const meta = metaParts.length
         ? `<span class="vmb-row-meta">${escapeHtml(metaParts.join(' · '))}</span>`
+        : '';
+      const added = dateInfo
+        ? `<span class="vmb-release-date">Added ${escapeHtml(dateInfo.dateStr)}</span>`
         : '';
 
       const capIcons = getCapabilityIcons(spec.capabilities);
@@ -2993,10 +3092,12 @@
           <div class="vmb-td vmb-col-model" role="cell">
             ${getModelLogoHtml(model)}
             <div class="vmb-ident">
-              <div class="vmb-ident-head">${nameLink}${tags}</div>
+              <div class="vmb-ident-head">${nameLink}${newDot}${tags}</div>
               <div class="vmb-ident-sub">
                 <span class="vmb-model-id"><span class="vmb-id-text">${modelIdDisplay}</span>${idCopyBtn}</span>
+                ${aspectPips}
                 ${meta}
+                ${added}
               </div>
             </div>
           </div>
