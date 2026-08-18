@@ -394,14 +394,14 @@
   }
   const LOCALE = detectLocale();
   const I18N = {
-    'pt-BR': { 'Model ID': 'ID do modelo', 'Configure price': 'Configurar preço', 'Pricing': 'Preço', 'Capacity': 'Capacidade', 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Recurso', 'Content': 'Conteúdo', 'Privacy': 'Privacidade', 'All types': 'Todos os tipos', 'Text': 'Texto', 'Image': 'Imagem', 'Video': 'Vídeo', 'Audio': 'Áudio', 'Embedding': 'Embedding', 'Generation': 'Geração', 'Upscale': 'Ampliação', 'Edit': 'Edição', 'Uncensored': 'Sem censura', 'Text to Video': 'Texto para vídeo', 'Image to Video': 'Imagem para vídeo', 'Reasoning': 'Raciocínio', 'Vision': 'Visão', 'Function Calling': 'Chamada de funções', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Mais recentes', 'Oldest': 'Mais antigos', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Preço: menor para maior', 'Price: High to Low': 'Preço: maior para menor', 'Clear filters': 'Limpar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'correspondências mais próximas', 'No close model matches': 'Nenhum modelo próximo encontrado', 'No models match your filters': 'Nenhum modelo corresponde aos seus filtros' },
-    'ar': { 'Model ID': 'معرّف النموذج', 'Configure price': 'تكوين السعر', 'Pricing': 'التسعير', 'Capacity': 'السعة', 'Type': 'النوع', 'Kind': 'الفئة', 'Capability': 'القدرة', 'Content': 'المحتوى', 'Privacy': 'الخصوصية', 'All types': 'كل الأنواع', 'Text': 'نص', 'Image': 'صورة', 'Video': 'فيديو', 'Audio': 'صوت', 'Embedding': 'تضمين', 'Generation': 'توليد', 'Upscale': 'تحسين الدقة', 'Edit': 'تحرير', 'Uncensored': 'بدون رقابة', 'Text to Video': 'نص إلى فيديو', 'Image to Video': 'صورة إلى فيديو', 'Reasoning': 'استدلال', 'Vision': 'رؤية', 'Function Calling': 'استدعاء الدوال', 'Code': 'برمجة', 'Private': 'خاص', 'Anonymized': 'مجهول الهوية', 'Sort': 'ترتيب', 'Sort models': 'ترتيب النماذج', 'Search models': 'بحث في النماذج', 'Recommended': 'موصى به', 'Newest': 'الأحدث', 'Oldest': 'الأقدم', 'Name (A–Z)': 'الاسم (أ–ي)', 'Price: Low to High': 'السعر: من الأقل إلى الأعلى', 'Price: High to Low': 'السعر: من الأعلى إلى الأقل', 'Clear filters': 'مسح عوامل التصفية', 'Search models...': 'بحث في النماذج...', 'models': 'نماذج', 'closest matches': 'أقرب النتائج', 'No close model matches': 'لا توجد نماذج قريبة', 'No models match your filters': 'لا توجد نماذج تطابق عوامل التصفية' },
-    'it': { 'Model ID': 'ID modello', 'Configure price': 'Configura prezzo', 'Pricing': 'Prezzo', 'Capacity': 'Capacità', 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Capacità', 'Content': 'Contenuto', 'Privacy': 'Privacy', 'All types': 'Tutti i tipi', 'Text': 'Testo', 'Image': 'Immagine', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generazione', 'Upscale': 'Upscaling', 'Edit': 'Modifica', 'Uncensored': 'Senza censura', 'Text to Video': 'Testo in video', 'Image to Video': 'Immagine in video', 'Reasoning': 'Ragionamento', 'Vision': 'Visione', 'Function Calling': 'Chiamata di funzioni', 'Code': 'Codice', 'Private': 'Privato', 'Anonymized': 'Anonimizzato', 'Sort': 'Ordina', 'Sort models': 'Ordina modelli', 'Search models': 'Cerca modelli', 'Recommended': 'Consigliati', 'Newest': 'Più recenti', 'Oldest': 'Meno recenti', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Prezzo: dal più basso', 'Price: High to Low': 'Prezzo: dal più alto', 'Clear filters': 'Cancella filtri', 'Search models...': 'Cerca modelli...', 'models': 'modelli', 'closest matches': 'corrispondenze più vicine', 'No close model matches': 'Nessun modello simile trovato', 'No models match your filters': 'Nessun modello corrisponde ai filtri' },
-    'de': { 'Model ID': 'Modell-ID', 'Configure price': 'Preis konfigurieren', 'Pricing': 'Preis', 'Capacity': 'Kapazität', 'Type': 'Typ', 'Kind': 'Art', 'Capability': 'Fähigkeit', 'Content': 'Inhalt', 'Privacy': 'Datenschutz', 'All types': 'Alle Typen', 'Text': 'Text', 'Image': 'Bild', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generierung', 'Upscale': 'Hochskalierung', 'Edit': 'Bearbeiten', 'Uncensored': 'Unzensiert', 'Text to Video': 'Text zu Video', 'Image to Video': 'Bild zu Video', 'Reasoning': 'Reasoning', 'Vision': 'Vision', 'Function Calling': 'Function Calling', 'Code': 'Code', 'Private': 'Privat', 'Anonymized': 'Anonymisiert', 'Sort': 'Sortieren', 'Sort models': 'Modelle sortieren', 'Search models': 'Modelle suchen', 'Recommended': 'Empfohlen', 'Newest': 'Neueste', 'Oldest': 'Älteste', 'Name (A–Z)': 'Name (A–Z)', 'Price: Low to High': 'Preis: aufsteigend', 'Price: High to Low': 'Preis: absteigend', 'Clear filters': 'Filter zurücksetzen', 'Search models...': 'Modelle suchen...', 'models': 'Modelle', 'closest matches': 'nächste Treffer', 'No close model matches': 'Keine ähnlichen Modelle gefunden', 'No models match your filters': 'Keine Modelle entsprechen deinen Filtern' },
-    'es': { 'Model ID': 'ID del modelo', 'Configure price': 'Configurar precio', 'Pricing': 'Precio', 'Capacity': 'Capacidad', 'Type': 'Tipo', 'Kind': 'Categoría', 'Capability': 'Capacidad', 'Content': 'Contenido', 'Privacy': 'Privacidad', 'All types': 'Todos los tipos', 'Text': 'Texto', 'Image': 'Imagen', 'Video': 'Vídeo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generación', 'Upscale': 'Escalado', 'Edit': 'Edición', 'Uncensored': 'Sin censura', 'Text to Video': 'Texto a vídeo', 'Image to Video': 'Imagen a vídeo', 'Reasoning': 'Razonamiento', 'Vision': 'Visión', 'Function Calling': 'Llamada de funciones', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Más recientes', 'Oldest': 'Más antiguos', 'Name (A–Z)': 'Nombre (A–Z)', 'Price: Low to High': 'Precio: de menor a mayor', 'Price: High to Low': 'Precio: de mayor a menor', 'Clear filters': 'Borrar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'coincidencias más cercanas', 'No close model matches': 'No hay modelos parecidos', 'No models match your filters': 'Ningún modelo coincide con tus filtros' },
-    'fr': { 'Model ID': 'ID du modèle', 'Configure price': 'Configurer le prix', 'Pricing': 'Prix', 'Capacity': 'Capacité', 'Type': 'Type', 'Kind': 'Catégorie', 'Capability': 'Capacité', 'Content': 'Contenu', 'Privacy': 'Confidentialité', 'All types': 'Tous les types', 'Text': 'Texte', 'Image': 'Image', 'Video': 'Vidéo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Génération', 'Upscale': 'Agrandissement', 'Edit': 'Édition', 'Uncensored': 'Sans censure', 'Text to Video': 'Texte vers vidéo', 'Image to Video': 'Image vers vidéo', 'Reasoning': 'Raisonnement', 'Vision': 'Vision', 'Function Calling': 'Appel de fonctions', 'Code': 'Code', 'Private': 'Privé', 'Anonymized': 'Anonymisé', 'Sort': 'Trier', 'Sort models': 'Trier les modèles', 'Search models': 'Rechercher des modèles', 'Recommended': 'Recommandé', 'Newest': 'Plus récents', 'Oldest': 'Plus anciens', 'Name (A–Z)': 'Nom (A–Z)', 'Price: Low to High': 'Prix : croissant', 'Price: High to Low': 'Prix : décroissant', 'Clear filters': 'Effacer les filtres', 'Search models...': 'Rechercher des modèles...', 'models': 'modèles', 'closest matches': 'correspondances les plus proches', 'No close model matches': 'Aucun modèle proche', 'No models match your filters': 'Aucun modèle ne correspond à vos filtres' },
-    'zh': { 'Model ID': '模型 ID', 'Configure price': '配置价格', 'Pricing': '价格', 'Capacity': '容量', 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Content': '内容', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
-    'ko': { 'Model ID': '모델 ID', 'Configure price': '가격 설정', 'Pricing': '가격', 'Capacity': '용량', 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Content': '콘텐츠', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
+    'pt-BR': { 'Filters': 'Filtros', 'Done': 'Concluído', 'Uncensored only': 'Somente sem censura', 'Close filters': 'Fechar filtros', 'Model ID': 'ID do modelo', 'Configure price': 'Configurar preço', 'Pricing': 'Preço', 'Capacity': 'Capacidade', 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Recurso', 'Content': 'Conteúdo', 'Privacy': 'Privacidade', 'All types': 'Todos os tipos', 'Text': 'Texto', 'Image': 'Imagem', 'Video': 'Vídeo', 'Audio': 'Áudio', 'Embedding': 'Embedding', 'Generation': 'Geração', 'Upscale': 'Ampliação', 'Edit': 'Edição', 'Uncensored': 'Sem censura', 'Text to Video': 'Texto para vídeo', 'Image to Video': 'Imagem para vídeo', 'Reasoning': 'Raciocínio', 'Vision': 'Visão', 'Function Calling': 'Chamada de funções', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Mais recentes', 'Oldest': 'Mais antigos', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Preço: menor para maior', 'Price: High to Low': 'Preço: maior para menor', 'Clear filters': 'Limpar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'correspondências mais próximas', 'No close model matches': 'Nenhum modelo próximo encontrado', 'No models match your filters': 'Nenhum modelo corresponde aos seus filtros' },
+    'ar': { 'Filters': 'عوامل التصفية', 'Done': 'تم', 'Uncensored only': 'غير خاضع للرقابة فقط', 'Close filters': 'إغلاق عوامل التصفية', 'Model ID': 'معرّف النموذج', 'Configure price': 'تكوين السعر', 'Pricing': 'التسعير', 'Capacity': 'السعة', 'Type': 'النوع', 'Kind': 'الفئة', 'Capability': 'القدرة', 'Content': 'المحتوى', 'Privacy': 'الخصوصية', 'All types': 'كل الأنواع', 'Text': 'نص', 'Image': 'صورة', 'Video': 'فيديو', 'Audio': 'صوت', 'Embedding': 'تضمين', 'Generation': 'توليد', 'Upscale': 'تحسين الدقة', 'Edit': 'تحرير', 'Uncensored': 'بدون رقابة', 'Text to Video': 'نص إلى فيديو', 'Image to Video': 'صورة إلى فيديو', 'Reasoning': 'استدلال', 'Vision': 'رؤية', 'Function Calling': 'استدعاء الدوال', 'Code': 'برمجة', 'Private': 'خاص', 'Anonymized': 'مجهول الهوية', 'Sort': 'ترتيب', 'Sort models': 'ترتيب النماذج', 'Search models': 'بحث في النماذج', 'Recommended': 'موصى به', 'Newest': 'الأحدث', 'Oldest': 'الأقدم', 'Name (A–Z)': 'الاسم (أ–ي)', 'Price: Low to High': 'السعر: من الأقل إلى الأعلى', 'Price: High to Low': 'السعر: من الأعلى إلى الأقل', 'Clear filters': 'مسح عوامل التصفية', 'Search models...': 'بحث في النماذج...', 'models': 'نماذج', 'closest matches': 'أقرب النتائج', 'No close model matches': 'لا توجد نماذج قريبة', 'No models match your filters': 'لا توجد نماذج تطابق عوامل التصفية' },
+    'it': { 'Filters': 'Filtri', 'Done': 'Fine', 'Uncensored only': 'Solo senza censura', 'Close filters': 'Chiudi filtri', 'Model ID': 'ID modello', 'Configure price': 'Configura prezzo', 'Pricing': 'Prezzo', 'Capacity': 'Capacità', 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Capacità', 'Content': 'Contenuto', 'Privacy': 'Privacy', 'All types': 'Tutti i tipi', 'Text': 'Testo', 'Image': 'Immagine', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generazione', 'Upscale': 'Upscaling', 'Edit': 'Modifica', 'Uncensored': 'Senza censura', 'Text to Video': 'Testo in video', 'Image to Video': 'Immagine in video', 'Reasoning': 'Ragionamento', 'Vision': 'Visione', 'Function Calling': 'Chiamata di funzioni', 'Code': 'Codice', 'Private': 'Privato', 'Anonymized': 'Anonimizzato', 'Sort': 'Ordina', 'Sort models': 'Ordina modelli', 'Search models': 'Cerca modelli', 'Recommended': 'Consigliati', 'Newest': 'Più recenti', 'Oldest': 'Meno recenti', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Prezzo: dal più basso', 'Price: High to Low': 'Prezzo: dal più alto', 'Clear filters': 'Cancella filtri', 'Search models...': 'Cerca modelli...', 'models': 'modelli', 'closest matches': 'corrispondenze più vicine', 'No close model matches': 'Nessun modello simile trovato', 'No models match your filters': 'Nessun modello corrisponde ai filtri' },
+    'de': { 'Filters': 'Filter', 'Done': 'Fertig', 'Uncensored only': 'Nur unzensiert', 'Close filters': 'Filter schließen', 'Model ID': 'Modell-ID', 'Configure price': 'Preis konfigurieren', 'Pricing': 'Preis', 'Capacity': 'Kapazität', 'Type': 'Typ', 'Kind': 'Art', 'Capability': 'Fähigkeit', 'Content': 'Inhalt', 'Privacy': 'Datenschutz', 'All types': 'Alle Typen', 'Text': 'Text', 'Image': 'Bild', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generierung', 'Upscale': 'Hochskalierung', 'Edit': 'Bearbeiten', 'Uncensored': 'Unzensiert', 'Text to Video': 'Text zu Video', 'Image to Video': 'Bild zu Video', 'Reasoning': 'Reasoning', 'Vision': 'Vision', 'Function Calling': 'Function Calling', 'Code': 'Code', 'Private': 'Privat', 'Anonymized': 'Anonymisiert', 'Sort': 'Sortieren', 'Sort models': 'Modelle sortieren', 'Search models': 'Modelle suchen', 'Recommended': 'Empfohlen', 'Newest': 'Neueste', 'Oldest': 'Älteste', 'Name (A–Z)': 'Name (A–Z)', 'Price: Low to High': 'Preis: aufsteigend', 'Price: High to Low': 'Preis: absteigend', 'Clear filters': 'Filter zurücksetzen', 'Search models...': 'Modelle suchen...', 'models': 'Modelle', 'closest matches': 'nächste Treffer', 'No close model matches': 'Keine ähnlichen Modelle gefunden', 'No models match your filters': 'Keine Modelle entsprechen deinen Filtern' },
+    'es': { 'Filters': 'Filtros', 'Done': 'Listo', 'Uncensored only': 'Solo sin censura', 'Close filters': 'Cerrar filtros', 'Model ID': 'ID del modelo', 'Configure price': 'Configurar precio', 'Pricing': 'Precio', 'Capacity': 'Capacidad', 'Type': 'Tipo', 'Kind': 'Categoría', 'Capability': 'Capacidad', 'Content': 'Contenido', 'Privacy': 'Privacidad', 'All types': 'Todos los tipos', 'Text': 'Texto', 'Image': 'Imagen', 'Video': 'Vídeo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generación', 'Upscale': 'Escalado', 'Edit': 'Edición', 'Uncensored': 'Sin censura', 'Text to Video': 'Texto a vídeo', 'Image to Video': 'Imagen a vídeo', 'Reasoning': 'Razonamiento', 'Vision': 'Visión', 'Function Calling': 'Llamada de funciones', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Más recientes', 'Oldest': 'Más antiguos', 'Name (A–Z)': 'Nombre (A–Z)', 'Price: Low to High': 'Precio: de menor a mayor', 'Price: High to Low': 'Precio: de mayor a menor', 'Clear filters': 'Borrar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'coincidencias más cercanas', 'No close model matches': 'No hay modelos parecidos', 'No models match your filters': 'Ningún modelo coincide con tus filtros' },
+    'fr': { 'Filters': 'Filtres', 'Done': 'Terminé', 'Uncensored only': 'Sans censure uniquement', 'Close filters': 'Fermer les filtres', 'Model ID': 'ID du modèle', 'Configure price': 'Configurer le prix', 'Pricing': 'Prix', 'Capacity': 'Capacité', 'Type': 'Type', 'Kind': 'Catégorie', 'Capability': 'Capacité', 'Content': 'Contenu', 'Privacy': 'Confidentialité', 'All types': 'Tous les types', 'Text': 'Texte', 'Image': 'Image', 'Video': 'Vidéo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Génération', 'Upscale': 'Agrandissement', 'Edit': 'Édition', 'Uncensored': 'Sans censure', 'Text to Video': 'Texte vers vidéo', 'Image to Video': 'Image vers vidéo', 'Reasoning': 'Raisonnement', 'Vision': 'Vision', 'Function Calling': 'Appel de fonctions', 'Code': 'Code', 'Private': 'Privé', 'Anonymized': 'Anonymisé', 'Sort': 'Trier', 'Sort models': 'Trier les modèles', 'Search models': 'Rechercher des modèles', 'Recommended': 'Recommandé', 'Newest': 'Plus récents', 'Oldest': 'Plus anciens', 'Name (A–Z)': 'Nom (A–Z)', 'Price: Low to High': 'Prix : croissant', 'Price: High to Low': 'Prix : décroissant', 'Clear filters': 'Effacer les filtres', 'Search models...': 'Rechercher des modèles...', 'models': 'modèles', 'closest matches': 'correspondances les plus proches', 'No close model matches': 'Aucun modèle proche', 'No models match your filters': 'Aucun modèle ne correspond à vos filtres' },
+    'zh': { 'Filters': '筛选', 'Done': '完成', 'Uncensored only': '仅无审查', 'Close filters': '关闭筛选', 'Model ID': '模型 ID', 'Configure price': '配置价格', 'Pricing': '价格', 'Capacity': '容量', 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Content': '内容', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
+    'ko': { 'Filters': '필터', 'Done': '완료', 'Uncensored only': '무검열만', 'Close filters': '필터 닫기', 'Model ID': '모델 ID', 'Configure price': '가격 설정', 'Pricing': '가격', 'Capacity': '용량', 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Content': '콘텐츠', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
   };
   function t(s) {
     if (LOCALE === 'en') return s;
@@ -431,7 +431,6 @@
         { value: 'image-gen', label: 'Generation' },
         { value: 'image-upscale', label: 'Upscale' },
         { value: 'image-edit', label: 'Edit' },
-        { value: 'image-uncensored', label: 'Uncensored' },
       ],
     },
     video: {
@@ -450,15 +449,6 @@
         { value: 'code', label: 'Code' },
       ],
     },
-    // Uncensored spans text, image, video, and audio models, so it gets its own
-    // always-available dropdown rather than a slot in the text-only Capability
-    // group.
-    content: {
-      label: 'Content', mode: 'single', default: null,
-      options: [
-        { value: 'uncensored', label: 'Uncensored' },
-      ],
-    },
     privacy: {
       label: 'Privacy', mode: 'single', default: null,
       options: [
@@ -473,6 +463,8 @@
   const FILTER_CHEVRON = '<svg class="vmb-dd-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
   const FILTER_CHECK = '<svg class="vmb-dd-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
   const SORT_ICON = '<svg class="vmb-dd-sort-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"/></svg>';
+  const FILTER_ICON = '<svg class="vmb-mobile-action-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16"/><path d="M7 12h10"/><path d="M10 19h4"/></svg>';
+  const UNCENSORED_ICON = '<svg class="vmb-mobile-action-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/><path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/><path d="m7.8 16.2-2.9 2.9"/><path d="M6 12H2"/><path d="m7.8 7.8-2.9-2.9"/><circle cx="12" cy="12" r="3"/></svg>';
 
   // Sort options (single-select). `default` preserves the API's curated order and
   // is the natural resting state on preset pages; the overview page defaults to
@@ -514,6 +506,35 @@
           `<span class="vmb-dd-label">${t(group.label)}</span>${FILTER_CHEVRON}` +
         `</button>` +
         `<div class="vmb-dd-panel" role="listbox" aria-label="${t(group.label)}" hidden>${opts}</div>` +
+      `</div>`
+    );
+  }
+
+  function renderMobileTypeTabs() {
+    return FILTER_GROUPS.type.options.map(o =>
+      `<button type="button" class="vmb-mobile-type-option" aria-pressed="false" data-group="type" data-value="${o.value}">${t(o.label)}</button>`
+    ).join('');
+  }
+
+  function renderMobileFilterGroup(key) {
+    const group = FILTER_GROUPS[key];
+    const options = group.options.map(o =>
+      `<button type="button" class="vmb-mobile-filter-option" aria-pressed="false" data-group="${key}" data-value="${o.value}">` +
+        `<span>${t(o.label)}</span>${FILTER_CHECK}` +
+      `</button>`
+    ).join('');
+    return `<section class="vmb-mobile-filter-group" data-mobile-group="${key}"><h3>${t(group.label)}</h3><div class="vmb-mobile-filter-options">${options}</div></section>`;
+  }
+
+  function renderMobileFilterLayer() {
+    return (
+      `<div class="vmb-mobile-filter-layer" hidden>` +
+        `<button type="button" class="vmb-mobile-filter-backdrop" aria-label="${t('Close filters')}"></button>` +
+        `<div class="vmb-mobile-filter-sheet" role="dialog" aria-modal="true" aria-label="${t('Filters')}">` +
+          `<div class="vmb-mobile-filter-header"><strong>${t('Filters')}</strong><button type="button" class="vmb-mobile-filter-done">${t('Done')}</button></div>` +
+          `<div class="vmb-mobile-filter-body">${renderMobileFilterGroup('image')}${ENABLE_VIDEO ? renderMobileFilterGroup('video') : ''}${renderMobileFilterGroup('capability')}${renderMobileFilterGroup('privacy')}</div>` +
+          `<button type="button" class="vmb-mobile-filter-clear" hidden>${t('Clear filters')}</button>` +
+        `</div>` +
       `</div>`
     );
   }
@@ -2261,9 +2282,12 @@
           <input type="text" class="vmb-search" placeholder="${t('Search models...')}" aria-label="${t('Search models')}" />
         </div>
       </div>
+      ${presetFilter ? '' : `<div class="vmb-mobile-type-tabs" role="toolbar" aria-label="${t('Type')}">${renderMobileTypeTabs()}</div>`}
       <div class="vmb-controls">
         <span class="vmb-count" aria-live="polite">${hasCachedData ? '' : 'Loading...'}</span>
         <div class="vmb-controls-group">
+          <button type="button" class="vmb-uncensored-toggle" aria-pressed="false">${UNCENSORED_ICON}<span>${t('Uncensored only')}</span></button>
+          <button type="button" class="vmb-mobile-filters-trigger" aria-expanded="false" aria-label="${t('Filters')}">${FILTER_ICON}<span>${t('Filters')}</span><span class="vmb-mobile-filter-count" hidden></span></button>
           ${renderSortDropdown()}
           <div class="vmb-controls-divider" aria-hidden="true"></div>
           <div class="vmb-filters" role="toolbar" aria-label="Model filters">
@@ -2271,12 +2295,12 @@
             ${renderFilterDropdown('image', FILTER_GROUPS.image)}
             ${ENABLE_VIDEO ? renderFilterDropdown('video', FILTER_GROUPS.video) : ''}
             ${renderFilterDropdown('capability', FILTER_GROUPS.capability)}
-            ${renderFilterDropdown('content', FILTER_GROUPS.content)}
             ${renderFilterDropdown('privacy', FILTER_GROUPS.privacy)}
             <button type="button" class="vmb-dd-clear" hidden>${t('Clear filters')}</button>
           </div>
         </div>
       </div>
+      ${renderMobileFilterLayer()}
       <div class="vmb-models" role="list" aria-label="Model list">
         ${hasCachedData ? '' : '<div class="vmb-loading">Loading models...</div>'}
       </div>
@@ -2290,6 +2314,11 @@
     const modelsContainer = container.querySelector('.vmb-models');
     const filtersBar = container.querySelector('.vmb-filters');
     const clearBtn = container.querySelector('.vmb-dd-clear');
+    const uncensoredToggle = container.querySelector('.vmb-uncensored-toggle');
+    const mobileFiltersTrigger = container.querySelector('.vmb-mobile-filters-trigger');
+    const mobileFilterLayer = container.querySelector('.vmb-mobile-filter-layer');
+    const mobileFilterCount = container.querySelector('.vmb-mobile-filter-count');
+    const mobileFilterClear = container.querySelector('.vmb-mobile-filter-clear');
 
     // Map each dropdown group key to its root element.
     const dd = {};
@@ -2332,7 +2361,6 @@
       if (key === 'image') return activeImageType;
       if (key === 'video') return activeVideoType;
       if (key === 'privacy') return activePrivacy;
-      if (key === 'content') return activeContent;
       return null;
     }
     function setSingleState(key, value) {
@@ -2340,7 +2368,6 @@
       else if (key === 'image') activeImageType = value;
       else if (key === 'video') activeVideoType = value;
       else if (key === 'privacy') activePrivacy = value;
-      else if (key === 'content') activeContent = value;
     }
 
     function updateDropdownUI(key) {
@@ -2388,9 +2415,27 @@
     }
 
     function updateClearVisibility() {
-      const any = activeCapabilities.size > 0 || activeVideoType || activeImageType ||
-        activePrivacy || activeContent || (!presetFilter && activeFilter !== 'all');
+      const secondaryCount = activeCapabilities.size + Number(Boolean(activeVideoType)) +
+        Number(Boolean(activeImageType)) + Number(Boolean(activePrivacy));
+      const any = secondaryCount > 0 || activeContent || (!presetFilter && activeFilter !== 'all');
       clearBtn.hidden = !any;
+      mobileFilterClear.hidden = secondaryCount === 0;
+      mobileFilterCount.hidden = secondaryCount === 0;
+      mobileFilterCount.textContent = secondaryCount || '';
+      uncensoredToggle.classList.toggle('active', activeContent === 'uncensored');
+      uncensoredToggle.setAttribute('aria-pressed', activeContent === 'uncensored' ? 'true' : 'false');
+      container.querySelectorAll('.vmb-mobile-type-option').forEach(option => {
+        const on = option.dataset.value === activeFilter;
+        option.classList.toggle('active', on);
+        option.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      container.querySelectorAll('.vmb-mobile-filter-option').forEach(option => {
+        const key = option.dataset.group;
+        const value = option.dataset.value;
+        const on = key === 'capability' ? activeCapabilities.has(value) : getSingleState(key) === value;
+        option.classList.toggle('active', on);
+        option.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
     }
 
     function closeAllPanels(except) {
@@ -2435,9 +2480,19 @@
     }
 
     function syncTypeDependentDropdowns() {
-      if (presetFilter) return;
-      showDd('image', activeFilter === 'image');
-      showDd('video', activeFilter === 'video');
+      if (!presetFilter) {
+        showDd('image', activeFilter === 'image');
+        showDd('video', activeFilter === 'video');
+      }
+      container.querySelectorAll('[data-mobile-group="image"]').forEach(el => {
+        el.hidden = activeFilter !== 'image';
+      });
+      container.querySelectorAll('[data-mobile-group="video"]').forEach(el => {
+        el.hidden = activeFilter !== 'video';
+      });
+      container.querySelectorAll('[data-mobile-group="capability"]').forEach(el => {
+        el.hidden = !categoryAllowsCapabilityFilters(activeFilter);
+      });
     }
 
     function handleOptionSelect(option) {
@@ -2493,6 +2548,36 @@
       renderModels();
     }
 
+    let filterReturnFocus = null;
+    function setMobileFiltersOpen(open, { restoreFocus = true } = {}) {
+      if (open) {
+        filterReturnFocus = document.activeElement;
+        mobileFilterLayer.hidden = false;
+        mobileFiltersTrigger.setAttribute('aria-expanded', 'true');
+        document.documentElement.classList.add('vmb-filters-open');
+        requestAnimationFrame(() => mobileFilterLayer.querySelector('.vmb-mobile-filter-done')?.focus());
+        return;
+      }
+      mobileFilterLayer.hidden = true;
+      mobileFiltersTrigger.setAttribute('aria-expanded', 'false');
+      document.documentElement.classList.remove('vmb-filters-open');
+      if (restoreFocus && filterReturnFocus?.isConnected) filterReturnFocus.focus();
+      filterReturnFocus = null;
+    }
+
+    function clearSecondaryFilters() {
+      activeCapabilities.clear();
+      activeVideoType = null;
+      activeImageType = null;
+      activePrivacy = null;
+      if (!presetFilter) activeFilter = 'all';
+      updateAllDropdownUI();
+      syncTypeDependentDropdowns();
+      syncCapabilityFilterControls();
+      updateClearVisibility();
+      renderModels();
+    }
+
     // ----- Dropdown events -----
     filtersBar.addEventListener('click', (e) => {
       const trigger = e.target.closest('.vmb-dd-trigger');
@@ -2506,11 +2591,64 @@
       if (option) { handleOptionSelect(option); return; }
     });
 
+    container.addEventListener('click', (e) => {
+      const typeOption = e.target.closest('.vmb-mobile-type-option');
+      if (typeOption) {
+        const value = typeOption.dataset.value;
+        if (activeFilter !== value) {
+          activeFilter = value;
+          activeCapabilities.clear();
+          activeVideoType = null;
+          activeImageType = null;
+          updateAllDropdownUI();
+          syncTypeDependentDropdowns();
+          syncCapabilityFilterControls();
+          updateClearVisibility();
+          renderModels();
+        }
+        return;
+      }
+      if (e.target.closest('.vmb-uncensored-toggle')) {
+        activeContent = activeContent === 'uncensored' ? null : 'uncensored';
+        updateClearVisibility();
+        renderModels();
+        return;
+      }
+      if (e.target.closest('.vmb-mobile-filters-trigger')) {
+        setMobileFiltersOpen(true);
+        return;
+      }
+      if (e.target.closest('.vmb-mobile-filter-backdrop, .vmb-mobile-filter-done')) {
+        setMobileFiltersOpen(false);
+        return;
+      }
+      if (e.target.closest('.vmb-mobile-filter-clear')) {
+        clearSecondaryFilters();
+        return;
+      }
+      const mobileOption = e.target.closest('.vmb-mobile-filter-option');
+      if (mobileOption) {
+        handleOptionSelect(mobileOption);
+      }
+    });
+
     document.addEventListener('click', (e) => {
       if (!e.target.closest('.vmb-dd')) closeAllPanels(null);
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeAllPanels(null);
+      if (e.key === 'Escape') { closeAllPanels(null); setMobileFiltersOpen(false); return; }
+      if (e.key !== 'Tab' || mobileFilterLayer.hidden) return;
+      const focusable = [...mobileFilterLayer.querySelectorAll('button:not([hidden]):not([disabled])')];
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     });
 
     updateAllDropdownUI();
@@ -2590,7 +2728,6 @@
       if (activeImageType === 'image-gen') return model.type === 'image' && !modelId.includes('qwen');
       if (activeImageType === 'image-upscale') return model.type === 'upscale';
       if (activeImageType === 'image-edit') return model.type === 'inpaint' || modelId.includes('qwen-image');
-      if (activeImageType === 'image-uncensored') return isUncensoredModel(model);
       return true;
     }
 
@@ -2937,8 +3074,8 @@
               </div>
             </div>
             <div class="vmb-model-info">
-              <span class="vmb-info-left">${leftParts.join('<span class="vmb-dot">·</span>')}</span>
-              <span class="vmb-info-right">${capIcons}${contextMobile}${releaseDateHtml}</span>
+              <span class="vmb-info-left">${leftParts.join('<span class="vmb-dot">·</span>')}${contextMobile}</span>
+              <span class="vmb-info-right">${capIcons}${releaseDateHtml}</span>
             </div>
             </div>
           </div>
@@ -3199,6 +3336,7 @@
 
   function resetAllInitializers() {
     modelsInitialized = false;
+    document.documentElement.classList.remove('vmb-filters-open');
     Object.values(pageInitializers).forEach(state => {
       state.initialized = false;
     });
