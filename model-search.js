@@ -712,13 +712,21 @@
     return list;
   }
 
+  // Each chip carries both the glyph and the name. Wide viewports show the glyph
+  // with a hover tooltip; touch viewports show the name instead, because a hover
+  // tooltip is unreachable on a phone and a bare glyph says nothing.
+  function capabilityChip(icon, tooltip, name = tooltip) {
+    return `<span class="vmb-cap vmb-tooltip" data-tooltip="${tooltip}">${icon}` +
+      `<span class="vmb-cap-name">${t(name)}</span></span>`;
+  }
+
   function getCapabilityIcons(caps) {
     if (!caps) return '';
     const icons = [];
-    if (caps.supportsFunctionCalling) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Function Calling">${CAP_ICONS.function}</span>`);
-    if (caps.supportsReasoning) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Reasoning">${CAP_ICONS.reasoning}</span>`);
-    if (caps.supportsVision) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Vision">${CAP_ICONS.vision}</span>`);
-    if (caps.optimizedForCode) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Code Optimized">${CAP_ICONS.code}</span>`);
+    if (caps.supportsFunctionCalling) icons.push(capabilityChip(CAP_ICONS.function, 'Function Calling'));
+    if (caps.supportsReasoning) icons.push(capabilityChip(CAP_ICONS.reasoning, 'Reasoning'));
+    if (caps.supportsVision) icons.push(capabilityChip(CAP_ICONS.vision, 'Vision'));
+    if (caps.optimizedForCode) icons.push(capabilityChip(CAP_ICONS.code, 'Code Optimized', 'Code'));
     if (icons.length === 0) return '';
     return `<span class="vmb-caps">${icons.join('')}</span>`;
   }
@@ -1275,8 +1283,11 @@
       return cells;
     }
 
+    // Quoted per minute, the way transcription is priced everywhere else: the
+    // per-second rate is below $0.0001 for most models, which formatPrice floors
+    // to a meaningless "$0.0000".
     if (pricing.per_audio_second) {
-      cells.input = priceUnit(formatPrice(pricing.per_audio_second.usd), '/sec');
+      cells.input = priceUnit(formatPrice(pricing.per_audio_second.usd * 60), '/min');
       return cells;
     }
 
@@ -1291,11 +1302,12 @@
 
       const read = pricing.cache_input?.usd;
       const write = pricing.cache_write?.usd;
-      if (read != null || write != null) {
-        cells.cache =
-          `<span class="vmb-cache-line"><span class="vmb-cache-label">Read</span>${read != null ? formatPrice(read) : DASH}</span>` +
-          `<span class="vmb-cache-line"><span class="vmb-cache-label">Write</span>${write != null ? formatPrice(write) : DASH}</span>`;
-      }
+      // Only the halves that exist: nearly every model priced a cache read but
+      // not a write, so the second line was always a labelled em dash.
+      const cacheLines = [];
+      if (read != null) cacheLines.push(`<span class="vmb-cache-line"><span class="vmb-cache-label">Read</span>${formatPrice(read)}</span>`);
+      if (write != null) cacheLines.push(`<span class="vmb-cache-line"><span class="vmb-cache-label">Write</span>${formatPrice(write)}</span>`);
+      if (cacheLines.length) cells.cache = cacheLines.join('');
 
       if (pricing.extended) {
         const ext = pricing.extended;
@@ -2497,6 +2509,13 @@
     const presetFilter = placeholder.dataset.filter || null;
     const hasCachedData = getCachedModels() !== null;
 
+    // The strip's Audio tab spans both speech directions, so the Text to Speech
+    // and Speech to Text pages are a Kind narrowing inside it rather than tabs of
+    // their own. They land on Audio with that Kind preselected: before this the
+    // strip rendered on those two pages with no tab selected at all.
+    const presetAudioKind = presetFilter === 'tts' || presetFilter === 'asr' ? presetFilter : null;
+    const presetTab = presetAudioKind ? 'audio' : presetFilter;
+
     // Create container - show loading only if no data available
     const container = document.createElement('div');
     container.id = 'venice-model-browser';
@@ -2507,7 +2526,7 @@
             ${SEARCH_ICON}
             <input type="text" class="vmb-search" placeholder="${t('Search models...')}" aria-label="${t('Search models')}" />
           </div>
-          ${renderModalityTabs(presetFilter || 'all')}
+          ${renderModalityTabs(presetTab || 'all')}
         </div>
         <div class="vmb-controls-group">
           <div class="vmb-filters" role="toolbar" aria-label="Model filters">
@@ -2546,11 +2565,11 @@
     const showDd = (key, show) => { if (dd[key]) dd[key].style.display = show ? '' : 'none'; };
 
     let allModels = [];
-    let activeFilter = presetFilter || 'all';
+    let activeFilter = presetTab || 'all';
     const activeCapabilities = new Set(); // multi-select
     let activeVideoType = null;
     let activeImageType = null;
-    let activeAudioType = null;
+    let activeAudioType = presetAudioKind;
     let activePrivacy = null;
     let activeContent = null;
     // On overview page (no preset filter), default to newest first
@@ -2563,7 +2582,8 @@
         video: { video: true, image: false, audio: false },
         image: { video: false, image: true, audio: false },
       };
-      const config = filterVisibility[presetFilter] || { video: false, image: false, audio: false };
+      const config = filterVisibility[presetFilter] ||
+        { video: false, image: false, audio: !!presetAudioKind };
       showDd('video', config.video);
       showDd('image', config.image);
       showDd('audio', config.audio);
@@ -2652,15 +2672,19 @@
 
     // The Kind dropdowns only describe one modality each, so they follow the tabs.
     function syncModalityDependentControls() {
-      if (presetFilter) return;
+      // The audio-kind pages follow the tabs like the overview page does, because
+      // their preset narrows a modality instead of locking one.
+      if (presetFilter && !presetAudioKind) return;
       showDd('image', activeFilter === 'image');
       showDd('video', ENABLE_VIDEO && activeFilter === 'video');
       showDd('audio', activeFilter === 'audio');
     }
 
     function updateClearVisibility() {
+      // The preset Kind is the page's own identity, not something the visitor
+      // picked, so it doesn't count as a filter to clear.
       const any = activeCapabilities.size > 0 || activeVideoType || activeImageType ||
-        activeAudioType || activePrivacy || activeContent ||
+        activeAudioType !== presetAudioKind || activePrivacy || activeContent ||
         (!presetFilter && activeFilter !== 'all');
       clearBtn.hidden = !any;
     }
@@ -2755,7 +2779,9 @@
       activeCapabilities.clear();
       activeVideoType = null;
       activeImageType = null;
-      activeAudioType = null;
+      // Back to the page's own default rather than to nothing, the same way
+      // activeFilter stays put on a preset page.
+      activeAudioType = presetAudioKind;
       activePrivacy = null;
       activeContent = null;
       if (!presetFilter) activeFilter = 'all';
@@ -3087,6 +3113,15 @@
 
       const capIcons = getCapabilityIcons(spec.capabilities);
 
+      // A column the row has no value for still needs a placeholder while the
+      // grid keeps its columns aligned, but once the row stacks on a phone it is
+      // just a labelled em dash taking a line. Flagging it here lets the stacked
+      // layout drop it, so a row is as tall as it has facts to show.
+      const cell = (column, label, content) =>
+        `<div class="vmb-td vmb-col-${column}${content === DASH ? ' vmb-empty' : ''}" role="cell">` +
+          `<span class="vmb-cell-label">${label}</span>${content}` +
+        `</div>`;
+
       return `
         <div class="vmb-model vmb-tr" role="row">
           <div class="vmb-td vmb-col-model" role="cell">
@@ -3101,11 +3136,11 @@
               </div>
             </div>
           </div>
-          <div class="vmb-td vmb-col-context" role="cell"><span class="vmb-cell-label">${t('Context')}</span>${contextCell}</div>
-          <div class="vmb-td vmb-col-input" role="cell"><span class="vmb-cell-label">${t('Input')}</span>${priceCells.input}</div>
-          <div class="vmb-td vmb-col-output" role="cell"><span class="vmb-cell-label">${t('Output')}</span>${priceCells.output}</div>
-          <div class="vmb-td vmb-col-cache" role="cell"><span class="vmb-cell-label">${t('Cache')}</span>${priceCells.cache}</div>
-          <div class="vmb-td vmb-col-capabilities" role="cell"><span class="vmb-cell-label">${t('Capabilities')}</span>${capIcons || DASH}</div>
+          ${cell('context', t('Context'), contextCell)}
+          ${cell('input', t('Input'), priceCells.input)}
+          ${cell('output', t('Output'), priceCells.output)}
+          ${cell('cache', t('Cache'), priceCells.cache)}
+          ${cell('capabilities', t('Capabilities'), capIcons || DASH)}
         </div>
       `;
     }
