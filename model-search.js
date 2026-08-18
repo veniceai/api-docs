@@ -2434,6 +2434,12 @@
       }
     }
 
+    function syncTypeDependentDropdowns() {
+      if (presetFilter) return;
+      showDd('image', activeFilter === 'image');
+      showDd('video', activeFilter === 'video');
+    }
+
     function handleOptionSelect(option) {
       const key = option.dataset.group;
       const value = option.dataset.value;
@@ -2466,6 +2472,7 @@
         updateDropdownUI(key);
         closeAllPanels(null);
       }
+      syncTypeDependentDropdowns();
       syncCapabilityFilterControls();
       updateClearVisibility();
       renderModels();
@@ -2479,6 +2486,7 @@
       activeContent = null;
       if (!presetFilter) activeFilter = 'all';
       updateAllDropdownUI();
+      syncTypeDependentDropdowns();
       syncCapabilityFilterControls();
       updateClearVisibility();
       closeAllPanels(null);
@@ -2506,6 +2514,7 @@
     });
 
     updateAllDropdownUI();
+    syncTypeDependentDropdowns();
     syncCapabilityFilterControls();
     updateClearVisibility();
 
@@ -2546,7 +2555,7 @@
       if (activeFilter === 'text') return model.type === 'text';
       if (activeFilter === 'image') return model.type === 'image' || model.type === 'upscale' || model.type === 'inpaint';
       if (activeFilter === 'video') return model.type === 'video';
-      if (activeFilter === 'audio') return model.type === 'tts' || model.type === 'asr';
+      if (activeFilter === 'audio') return model.type === 'tts' || model.type === 'asr' || model.type === 'music';
       if (activeFilter === 'tts') return model.type === 'tts';
       if (activeFilter === 'asr') return model.type === 'asr';
       if (activeFilter === 'embedding') return model.type === 'embedding';
