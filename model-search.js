@@ -111,7 +111,7 @@
 
     return staticModelsPromise;
   }
-  
+
   // Privacy types that are always private (no API privacy field needed)
   const PRIVATE_TYPES = new Set(['upscale']);
 
@@ -176,7 +176,7 @@
     'sora-2-text-to-video': { resPricing: false },
     'sora-2-image-to-video': { resPricing: false },
   };
-  
+
   function getVideoModelConfig(modelId) {
     return VIDEO_MODEL_CONFIG[modelId] || {};
   }
@@ -234,13 +234,13 @@
 
   function isFixedPriceModel(modelId, model) {
     if (!model) return false;
-    
+
     const constraints = model.model_spec?.constraints || {};
     const config = getVideoModelConfig(modelId);
     const durations = constraints.durations || [];
     const resolutions = constraints.resolutions || [];
     const resPricing = config.resPricing !== false;
-    
+
     // Fixed if: single duration AND (single/no resolution OR resolution doesn't affect price)
     return durations.length <= 1 && (resolutions.length <= 1 || !resPricing);
   }
@@ -316,11 +316,11 @@
     const inferredDuration = inferredVideoDurations.get(modelId);
     const inferredAspectRatio = inferredVideoAspectRatios.get(modelId);
     const defaultDuration = Array.isArray(constraints.durations) ? constraints.durations[0] : inferredDuration;
-    
+
     const effectiveDuration = duration || defaultDuration;
     const aspectRatios = getAspectRatios(constraints);
     const aspectRatio = aspectRatios[0] || inferredAspectRatio;
-    
+
     const cacheKey = `${modelId}:${resolution || 'default'}:${effectiveDuration || 'default'}:${aspectRatio || 'default'}:${audio ?? 'default'}`;
     if (videoQuoteCache.has(cacheKey)) {
       return videoQuoteCache.get(cacheKey);
@@ -394,14 +394,14 @@
   }
   const LOCALE = detectLocale();
   const I18N = {
-    'pt-BR': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Recurso', 'Content': 'Conteúdo', 'Privacy': 'Privacidade', 'All types': 'Todos os tipos', 'Text': 'Texto', 'Image': 'Imagem', 'Video': 'Vídeo', 'Audio': 'Áudio', 'Embedding': 'Embedding', 'Generation': 'Geração', 'Upscale': 'Ampliação', 'Edit': 'Edição', 'Uncensored': 'Sem censura', 'Text to Video': 'Texto para vídeo', 'Image to Video': 'Imagem para vídeo', 'Reasoning': 'Raciocínio', 'Vision': 'Visão', 'Function Calling': 'Chamada de funções', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Mais recentes', 'Oldest': 'Mais antigos', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Preço: menor para maior', 'Price: High to Low': 'Preço: maior para menor', 'Clear filters': 'Limpar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'correspondências mais próximas', 'No close model matches': 'Nenhum modelo próximo encontrado', 'No models match your filters': 'Nenhum modelo corresponde aos seus filtros' },
-    'ar': { 'Type': 'النوع', 'Kind': 'الفئة', 'Capability': 'القدرة', 'Content': 'المحتوى', 'Privacy': 'الخصوصية', 'All types': 'كل الأنواع', 'Text': 'نص', 'Image': 'صورة', 'Video': 'فيديو', 'Audio': 'صوت', 'Embedding': 'تضمين', 'Generation': 'توليد', 'Upscale': 'تحسين الدقة', 'Edit': 'تحرير', 'Uncensored': 'بدون رقابة', 'Text to Video': 'نص إلى فيديو', 'Image to Video': 'صورة إلى فيديو', 'Reasoning': 'استدلال', 'Vision': 'رؤية', 'Function Calling': 'استدعاء الدوال', 'Code': 'برمجة', 'Private': 'خاص', 'Anonymized': 'مجهول الهوية', 'Sort': 'ترتيب', 'Sort models': 'ترتيب النماذج', 'Search models': 'بحث في النماذج', 'Recommended': 'موصى به', 'Newest': 'الأحدث', 'Oldest': 'الأقدم', 'Name (A–Z)': 'الاسم (أ–ي)', 'Price: Low to High': 'السعر: من الأقل إلى الأعلى', 'Price: High to Low': 'السعر: من الأعلى إلى الأقل', 'Clear filters': 'مسح عوامل التصفية', 'Search models...': 'بحث في النماذج...', 'models': 'نماذج', 'closest matches': 'أقرب النتائج', 'No close model matches': 'لا توجد نماذج قريبة', 'No models match your filters': 'لا توجد نماذج تطابق عوامل التصفية' },
-    'it': { 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Capacità', 'Content': 'Contenuto', 'Privacy': 'Privacy', 'All types': 'Tutti i tipi', 'Text': 'Testo', 'Image': 'Immagine', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generazione', 'Upscale': 'Upscaling', 'Edit': 'Modifica', 'Uncensored': 'Senza censura', 'Text to Video': 'Testo in video', 'Image to Video': 'Immagine in video', 'Reasoning': 'Ragionamento', 'Vision': 'Visione', 'Function Calling': 'Chiamata di funzioni', 'Code': 'Codice', 'Private': 'Privato', 'Anonymized': 'Anonimizzato', 'Sort': 'Ordina', 'Sort models': 'Ordina modelli', 'Search models': 'Cerca modelli', 'Recommended': 'Consigliati', 'Newest': 'Più recenti', 'Oldest': 'Meno recenti', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Prezzo: dal più basso', 'Price: High to Low': 'Prezzo: dal più alto', 'Clear filters': 'Cancella filtri', 'Search models...': 'Cerca modelli...', 'models': 'modelli', 'closest matches': 'corrispondenze più vicine', 'No close model matches': 'Nessun modello simile trovato', 'No models match your filters': 'Nessun modello corrisponde ai filtri' },
-    'de': { 'Type': 'Typ', 'Kind': 'Art', 'Capability': 'Fähigkeit', 'Content': 'Inhalt', 'Privacy': 'Datenschutz', 'All types': 'Alle Typen', 'Text': 'Text', 'Image': 'Bild', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generierung', 'Upscale': 'Hochskalierung', 'Edit': 'Bearbeiten', 'Uncensored': 'Unzensiert', 'Text to Video': 'Text zu Video', 'Image to Video': 'Bild zu Video', 'Reasoning': 'Reasoning', 'Vision': 'Vision', 'Function Calling': 'Function Calling', 'Code': 'Code', 'Private': 'Privat', 'Anonymized': 'Anonymisiert', 'Sort': 'Sortieren', 'Sort models': 'Modelle sortieren', 'Search models': 'Modelle suchen', 'Recommended': 'Empfohlen', 'Newest': 'Neueste', 'Oldest': 'Älteste', 'Name (A–Z)': 'Name (A–Z)', 'Price: Low to High': 'Preis: aufsteigend', 'Price: High to Low': 'Preis: absteigend', 'Clear filters': 'Filter zurücksetzen', 'Search models...': 'Modelle suchen...', 'models': 'Modelle', 'closest matches': 'nächste Treffer', 'No close model matches': 'Keine ähnlichen Modelle gefunden', 'No models match your filters': 'Keine Modelle entsprechen deinen Filtern' },
-    'es': { 'Type': 'Tipo', 'Kind': 'Categoría', 'Capability': 'Capacidad', 'Content': 'Contenido', 'Privacy': 'Privacidad', 'All types': 'Todos los tipos', 'Text': 'Texto', 'Image': 'Imagen', 'Video': 'Vídeo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generación', 'Upscale': 'Escalado', 'Edit': 'Edición', 'Uncensored': 'Sin censura', 'Text to Video': 'Texto a vídeo', 'Image to Video': 'Imagen a vídeo', 'Reasoning': 'Razonamiento', 'Vision': 'Visión', 'Function Calling': 'Llamada de funciones', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Más recientes', 'Oldest': 'Más antiguos', 'Name (A–Z)': 'Nombre (A–Z)', 'Price: Low to High': 'Precio: de menor a mayor', 'Price: High to Low': 'Precio: de mayor a menor', 'Clear filters': 'Borrar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'coincidencias más cercanas', 'No close model matches': 'No hay modelos parecidos', 'No models match your filters': 'Ningún modelo coincide con tus filtros' },
-    'fr': { 'Type': 'Type', 'Kind': 'Catégorie', 'Capability': 'Capacité', 'Content': 'Contenu', 'Privacy': 'Confidentialité', 'All types': 'Tous les types', 'Text': 'Texte', 'Image': 'Image', 'Video': 'Vidéo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Génération', 'Upscale': 'Agrandissement', 'Edit': 'Édition', 'Uncensored': 'Sans censure', 'Text to Video': 'Texte vers vidéo', 'Image to Video': 'Image vers vidéo', 'Reasoning': 'Raisonnement', 'Vision': 'Vision', 'Function Calling': 'Appel de fonctions', 'Code': 'Code', 'Private': 'Privé', 'Anonymized': 'Anonymisé', 'Sort': 'Trier', 'Sort models': 'Trier les modèles', 'Search models': 'Rechercher des modèles', 'Recommended': 'Recommandé', 'Newest': 'Plus récents', 'Oldest': 'Plus anciens', 'Name (A–Z)': 'Nom (A–Z)', 'Price: Low to High': 'Prix : croissant', 'Price: High to Low': 'Prix : décroissant', 'Clear filters': 'Effacer les filtres', 'Search models...': 'Rechercher des modèles...', 'models': 'modèles', 'closest matches': 'correspondances les plus proches', 'No close model matches': 'Aucun modèle proche', 'No models match your filters': 'Aucun modèle ne correspond à vos filtres' },
-    'zh': { 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Content': '内容', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
-    'ko': { 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Content': '콘텐츠', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
+    'pt-BR': { 'Model ID': 'ID do modelo', 'Configure price': 'Configurar preço', 'Pricing': 'Preço', 'Capacity': 'Capacidade', 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Recurso', 'Content': 'Conteúdo', 'Privacy': 'Privacidade', 'All types': 'Todos os tipos', 'Text': 'Texto', 'Image': 'Imagem', 'Video': 'Vídeo', 'Audio': 'Áudio', 'Embedding': 'Embedding', 'Generation': 'Geração', 'Upscale': 'Ampliação', 'Edit': 'Edição', 'Uncensored': 'Sem censura', 'Text to Video': 'Texto para vídeo', 'Image to Video': 'Imagem para vídeo', 'Reasoning': 'Raciocínio', 'Vision': 'Visão', 'Function Calling': 'Chamada de funções', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Mais recentes', 'Oldest': 'Mais antigos', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Preço: menor para maior', 'Price: High to Low': 'Preço: maior para menor', 'Clear filters': 'Limpar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'correspondências mais próximas', 'No close model matches': 'Nenhum modelo próximo encontrado', 'No models match your filters': 'Nenhum modelo corresponde aos seus filtros' },
+    'ar': { 'Model ID': 'معرّف النموذج', 'Configure price': 'تكوين السعر', 'Pricing': 'التسعير', 'Capacity': 'السعة', 'Type': 'النوع', 'Kind': 'الفئة', 'Capability': 'القدرة', 'Content': 'المحتوى', 'Privacy': 'الخصوصية', 'All types': 'كل الأنواع', 'Text': 'نص', 'Image': 'صورة', 'Video': 'فيديو', 'Audio': 'صوت', 'Embedding': 'تضمين', 'Generation': 'توليد', 'Upscale': 'تحسين الدقة', 'Edit': 'تحرير', 'Uncensored': 'بدون رقابة', 'Text to Video': 'نص إلى فيديو', 'Image to Video': 'صورة إلى فيديو', 'Reasoning': 'استدلال', 'Vision': 'رؤية', 'Function Calling': 'استدعاء الدوال', 'Code': 'برمجة', 'Private': 'خاص', 'Anonymized': 'مجهول الهوية', 'Sort': 'ترتيب', 'Sort models': 'ترتيب النماذج', 'Search models': 'بحث في النماذج', 'Recommended': 'موصى به', 'Newest': 'الأحدث', 'Oldest': 'الأقدم', 'Name (A–Z)': 'الاسم (أ–ي)', 'Price: Low to High': 'السعر: من الأقل إلى الأعلى', 'Price: High to Low': 'السعر: من الأعلى إلى الأقل', 'Clear filters': 'مسح عوامل التصفية', 'Search models...': 'بحث في النماذج...', 'models': 'نماذج', 'closest matches': 'أقرب النتائج', 'No close model matches': 'لا توجد نماذج قريبة', 'No models match your filters': 'لا توجد نماذج تطابق عوامل التصفية' },
+    'it': { 'Model ID': 'ID modello', 'Configure price': 'Configura prezzo', 'Pricing': 'Prezzo', 'Capacity': 'Capacità', 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Capacità', 'Content': 'Contenuto', 'Privacy': 'Privacy', 'All types': 'Tutti i tipi', 'Text': 'Testo', 'Image': 'Immagine', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generazione', 'Upscale': 'Upscaling', 'Edit': 'Modifica', 'Uncensored': 'Senza censura', 'Text to Video': 'Testo in video', 'Image to Video': 'Immagine in video', 'Reasoning': 'Ragionamento', 'Vision': 'Visione', 'Function Calling': 'Chiamata di funzioni', 'Code': 'Codice', 'Private': 'Privato', 'Anonymized': 'Anonimizzato', 'Sort': 'Ordina', 'Sort models': 'Ordina modelli', 'Search models': 'Cerca modelli', 'Recommended': 'Consigliati', 'Newest': 'Più recenti', 'Oldest': 'Meno recenti', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Prezzo: dal più basso', 'Price: High to Low': 'Prezzo: dal più alto', 'Clear filters': 'Cancella filtri', 'Search models...': 'Cerca modelli...', 'models': 'modelli', 'closest matches': 'corrispondenze più vicine', 'No close model matches': 'Nessun modello simile trovato', 'No models match your filters': 'Nessun modello corrisponde ai filtri' },
+    'de': { 'Model ID': 'Modell-ID', 'Configure price': 'Preis konfigurieren', 'Pricing': 'Preis', 'Capacity': 'Kapazität', 'Type': 'Typ', 'Kind': 'Art', 'Capability': 'Fähigkeit', 'Content': 'Inhalt', 'Privacy': 'Datenschutz', 'All types': 'Alle Typen', 'Text': 'Text', 'Image': 'Bild', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generierung', 'Upscale': 'Hochskalierung', 'Edit': 'Bearbeiten', 'Uncensored': 'Unzensiert', 'Text to Video': 'Text zu Video', 'Image to Video': 'Bild zu Video', 'Reasoning': 'Reasoning', 'Vision': 'Vision', 'Function Calling': 'Function Calling', 'Code': 'Code', 'Private': 'Privat', 'Anonymized': 'Anonymisiert', 'Sort': 'Sortieren', 'Sort models': 'Modelle sortieren', 'Search models': 'Modelle suchen', 'Recommended': 'Empfohlen', 'Newest': 'Neueste', 'Oldest': 'Älteste', 'Name (A–Z)': 'Name (A–Z)', 'Price: Low to High': 'Preis: aufsteigend', 'Price: High to Low': 'Preis: absteigend', 'Clear filters': 'Filter zurücksetzen', 'Search models...': 'Modelle suchen...', 'models': 'Modelle', 'closest matches': 'nächste Treffer', 'No close model matches': 'Keine ähnlichen Modelle gefunden', 'No models match your filters': 'Keine Modelle entsprechen deinen Filtern' },
+    'es': { 'Model ID': 'ID del modelo', 'Configure price': 'Configurar precio', 'Pricing': 'Precio', 'Capacity': 'Capacidad', 'Type': 'Tipo', 'Kind': 'Categoría', 'Capability': 'Capacidad', 'Content': 'Contenido', 'Privacy': 'Privacidad', 'All types': 'Todos los tipos', 'Text': 'Texto', 'Image': 'Imagen', 'Video': 'Vídeo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generación', 'Upscale': 'Escalado', 'Edit': 'Edición', 'Uncensored': 'Sin censura', 'Text to Video': 'Texto a vídeo', 'Image to Video': 'Imagen a vídeo', 'Reasoning': 'Razonamiento', 'Vision': 'Visión', 'Function Calling': 'Llamada de funciones', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Más recientes', 'Oldest': 'Más antiguos', 'Name (A–Z)': 'Nombre (A–Z)', 'Price: Low to High': 'Precio: de menor a mayor', 'Price: High to Low': 'Precio: de mayor a menor', 'Clear filters': 'Borrar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'coincidencias más cercanas', 'No close model matches': 'No hay modelos parecidos', 'No models match your filters': 'Ningún modelo coincide con tus filtros' },
+    'fr': { 'Model ID': 'ID du modèle', 'Configure price': 'Configurer le prix', 'Pricing': 'Prix', 'Capacity': 'Capacité', 'Type': 'Type', 'Kind': 'Catégorie', 'Capability': 'Capacité', 'Content': 'Contenu', 'Privacy': 'Confidentialité', 'All types': 'Tous les types', 'Text': 'Texte', 'Image': 'Image', 'Video': 'Vidéo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Génération', 'Upscale': 'Agrandissement', 'Edit': 'Édition', 'Uncensored': 'Sans censure', 'Text to Video': 'Texte vers vidéo', 'Image to Video': 'Image vers vidéo', 'Reasoning': 'Raisonnement', 'Vision': 'Vision', 'Function Calling': 'Appel de fonctions', 'Code': 'Code', 'Private': 'Privé', 'Anonymized': 'Anonymisé', 'Sort': 'Trier', 'Sort models': 'Trier les modèles', 'Search models': 'Rechercher des modèles', 'Recommended': 'Recommandé', 'Newest': 'Plus récents', 'Oldest': 'Plus anciens', 'Name (A–Z)': 'Nom (A–Z)', 'Price: Low to High': 'Prix : croissant', 'Price: High to Low': 'Prix : décroissant', 'Clear filters': 'Effacer les filtres', 'Search models...': 'Rechercher des modèles...', 'models': 'modèles', 'closest matches': 'correspondances les plus proches', 'No close model matches': 'Aucun modèle proche', 'No models match your filters': 'Aucun modèle ne correspond à vos filtres' },
+    'zh': { 'Model ID': '模型 ID', 'Configure price': '配置价格', 'Pricing': '价格', 'Capacity': '容量', 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Content': '内容', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
+    'ko': { 'Model ID': '모델 ID', 'Configure price': '가격 설정', 'Pricing': '가격', 'Capacity': '용량', 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Content': '콘텐츠', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
   };
   function t(s) {
     if (LOCALE === 'en') return s;
@@ -567,13 +567,13 @@
     const diffMs = now - date;
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    
+
     // Format: "Jan 15, 2025"
     const dateStr = `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
-    
+
     // New models (< 30 days) get a "NEW" badge
     const isNew = diffDays <= 30;
-    
+
     return { dateStr, isNew };
   }
 
@@ -592,9 +592,9 @@
   async function updateVideoPrice(modelId, model, { resolution, duration, audio } = {}, container) {
     const priceEl = (container || document).querySelector(`.vmb-video-price[data-model="${modelId}"]`);
     if (!priceEl) return;
-    
+
     const price = await fetchVideoQuote(modelId, model, { resolution, duration, audio });
-    
+
     if (price !== null) {
       priceEl.textContent = formatPrice(price);
     } else {
@@ -627,10 +627,10 @@
   function getCapabilityIcons(caps) {
     if (!caps) return '';
     const icons = [];
-    if (caps.supportsFunctionCalling) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Function Calling">${CAP_ICONS.function}</span>`);
-    if (caps.supportsReasoning) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Reasoning">${CAP_ICONS.reasoning}</span>`);
-    if (caps.supportsVision) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Vision">${CAP_ICONS.vision}</span>`);
-    if (caps.optimizedForCode) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Code Optimized">${CAP_ICONS.code}</span>`);
+    if (caps.supportsFunctionCalling) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Function Calling">${CAP_ICONS.function}<span class="vmb-cap-label">${t('Function Calling')}</span></span>`);
+    if (caps.supportsReasoning) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Reasoning">${CAP_ICONS.reasoning}<span class="vmb-cap-label">${t('Reasoning')}</span></span>`);
+    if (caps.supportsVision) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Vision">${CAP_ICONS.vision}<span class="vmb-cap-label">${t('Vision')}</span></span>`);
+    if (caps.optimizedForCode) icons.push(`<span class="vmb-cap vmb-tooltip" data-tooltip="Code Optimized">${CAP_ICONS.code}<span class="vmb-cap-label">${t('Code')}</span></span>`);
     if (icons.length === 0) return '';
     return `<span class="vmb-caps">${icons.join('')}</span>`;
   }
@@ -1026,16 +1026,19 @@
     // variant: 'vmb' for main model browser, 'vpt' for pricing tables
     const cls = variant === 'vpt' ? 'vpt-cap-tag' : 'vmb-privacy-badge';
     const tipCls = variant === 'vpt' ? 'vpt-tooltip' : 'vmb-tooltip';
+    const focusAttrs = (label, tooltip) => variant === 'vmb'
+      ? ` tabindex="0" aria-label="${label}: ${tooltip}"`
+      : '';
     if (isE2EEModel(model)) {
-      return `<span class="${cls} ${tipCls} e2ee" data-tooltip="${TOOLTIPS.e2ee}">E2EE</span><span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      return `<span class="${cls} ${tipCls} e2ee" data-tooltip="${TOOLTIPS.e2ee}"${focusAttrs('E2EE', TOOLTIPS.e2ee)}>E2EE</span><span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}"${focusAttrs('Private', TOOLTIPS.private)}>Private</span>`;
     }
     if (isTEEModel(model)) {
-      return `<span class="${cls} ${tipCls} tee" data-tooltip="${TOOLTIPS.tee}">TEE</span><span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      return `<span class="${cls} ${tipCls} tee" data-tooltip="${TOOLTIPS.tee}"${focusAttrs('TEE', TOOLTIPS.tee)}>TEE</span><span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}"${focusAttrs('Private', TOOLTIPS.private)}>Private</span>`;
     }
     if (isAnonymizedModel(model)) {
-      return `<span class="${cls} ${tipCls} anonymized" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>`;
+      return `<span class="${cls} ${tipCls} anonymized" data-tooltip="${TOOLTIPS.anonymized}"${focusAttrs('Anonymized', TOOLTIPS.anonymized)}>Anonymized</span>`;
     }
-    return `<span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+    return `<span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}"${focusAttrs('Private', TOOLTIPS.private)}>Private</span>`;
   }
 
   function isBetaModel(model) {
@@ -1063,8 +1066,8 @@
   function matchesCodeFilter(model) {
     const spec = model.model_spec || {};
     const modelId = model.id.toLowerCase();
-    return (spec.capabilities && spec.capabilities.optimizedForCode) || 
-           modelId.includes('coder') || 
+    return (spec.capabilities && spec.capabilities.optimizedForCode) ||
+           modelId.includes('coder') ||
            modelId.includes('grok');
   }
 
@@ -1096,7 +1099,7 @@
   }
 
   async function fetchModelsFromAPI() {
-    const fetchPromises = MODEL_TYPES.map(type => 
+    const fetchPromises = MODEL_TYPES.map(type =>
       fetch(`${API_BASE}?type=${type}`)
         .then(r => {
           if (!r.ok) throw new Error(`API returned ${r.status}`);
@@ -1106,7 +1109,7 @@
     );
     const results = await Promise.all(fetchPromises);
     const rawModels = results.flatMap(r => r.data || []);
-    
+
     // Deduplicate by model ID
     const seen = new Set();
     const models = rawModels.filter(m => {
@@ -1227,7 +1230,7 @@
     if (!resolutions) return '';
     const keys = Object.keys(resolutions);
     const def = defaultRes || keys[0];
-    const options = keys.map(res => 
+    const options = keys.map(res =>
       `<option value="${res}"${res === def ? ' selected' : ''}>${res}</option>`
     ).join('');
     const defaultPrice = resolutions[def]?.usd;
@@ -1255,12 +1258,12 @@
       const privacyTag = getPrivacyTag(model, 'vpt');
       const resPricing = spec.pricing?.resolutions;
       const defaultRes = spec.constraints?.defaultResolution;
-      
+
       let priceItems = '';
       if (resPricing) {
         // Show each resolution price separately
         const resKeys = Object.keys(resPricing);
-        priceItems = resKeys.map(res => 
+        priceItems = resKeys.map(res =>
           `<span class="vpt-price-item"><span class="vpt-price-label">${res}</span><span class="vpt-price-value">${formatPrice(resPricing[res]?.usd)}</span></span>`
         ).join('');
       } else {
@@ -1592,7 +1595,7 @@
     const depDate = new Date(deprecationDate);
     const thirtyDaysAfter = new Date(depDate);
     thirtyDaysAfter.setDate(thirtyDaysAfter.getDate() + 30);
-    
+
     if (now < depDate) return 'retiring';
     if (now <= thirtyDaysAfter) return 'deprecated';
     return 'expired'; // More than 30 days past deprecation date
@@ -2214,7 +2217,7 @@
     const imageEl = document.getElementById('pricing-image-placeholder');
     const audioEl = document.getElementById('pricing-audio-placeholder');
     const musicEl = document.getElementById('pricing-music-placeholder');
-    
+
     if (!chatEl && !embeddingEl && !imageEl && !audioEl && !musicEl) return;
 
     // Replace the static markdown tables with the interactive version, from the
@@ -2225,7 +2228,7 @@
     } else {
       renderPricingTables(await ensureStaticModels());
     }
-    
+
     // Fetch fresh data in background and update when ready
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
@@ -2238,13 +2241,13 @@
 
   async function init() {
     if (isInitializing) return;
-    
+
     const placeholder = document.getElementById('model-search-placeholder');
     if (!placeholder) {
       setTimeout(init, 200);
       return;
     }
-    
+
     isInitializing = true;
     const presetFilter = placeholder.dataset.filter || null;
     const hasCachedData = getCachedModels() !== null;
@@ -2278,7 +2281,7 @@
         ${hasCachedData ? '' : '<div class="vmb-loading">Loading models...</div>'}
       </div>
     `;
-    
+
     placeholder.replaceWith(container);
 
     // Get elements
@@ -2574,7 +2577,7 @@
     function matchesImageType(model) {
       if (!activeImageType) return true;
       const modelId = model.id.toLowerCase();
-      
+
       if (activeImageType === 'image-gen') return model.type === 'image' && !modelId.includes('qwen');
       if (activeImageType === 'image-upscale') return model.type === 'upscale';
       if (activeImageType === 'image-edit') return model.type === 'inpaint' || modelId.includes('qwen-image');
@@ -2604,7 +2607,7 @@
 
     function sortModels(models) {
       if (activeSort === 'default') return models; // Keep API order
-      
+
       const sorted = [...models];
       switch (activeSort) {
         case 'newest':
@@ -2628,7 +2631,7 @@
 
     function renderModels() {
       const query = buildSearchQuery(searchInput.value);
-      
+
       const filtered = allModels.filter(model => {
         return matchesCategory(model) &&
                matchesCapability(model) &&
@@ -2695,7 +2698,7 @@
       const caps = getCapabilities(spec.capabilities);
         const pricing = spec.pricing || model.pricing || {};
         const constraints = spec.constraints || {};
-        
+
       // Context/info string
         let contextStr = '';
         if (spec.availableContextTokens) {
@@ -2705,7 +2708,7 @@
           const config = getVideoModelConfig(model.id);
           const resolutions = constraints.resolutions || [];
           const durations = constraints.durations || [];
-          
+
           model._videoConfig = config;
           model._hasResDropdown = resolutions.length > 1 && config.resPricing !== false;
           model._hasDurDropdown = durations.length > 1;
@@ -2717,7 +2720,7 @@
         } else if (model.type === 'embedding' && spec.embeddingDimensions) {
           contextStr = `${spec.embeddingDimensions} dimensions`;
         }
-        
+
       // Pricing display
         let priceStr = '';
         let videoControlsHtml = '';
@@ -2725,15 +2728,15 @@
           // Build video controls for info row
           const resolutions = model._resolutions || [];
           const durations = model._durations || [];
-          
+
           if (model._hasResDropdown) {
-            const resOptions = resolutions.map((r, i) => 
+            const resOptions = resolutions.map((r, i) =>
               `<option value="${r}"${i === 0 ? ' selected' : ''}>${r}</option>`
             ).join('');
             videoControlsHtml += `<select class="vmb-res-select vmb-video-select" data-model="${model.id}">${resOptions}</select>`;
           }
           if (model._hasDurDropdown) {
-            const durOptions = durations.map((d, i) => 
+            const durOptions = durations.map((d, i) =>
               `<option value="${d}"${i === 0 ? ' selected' : ''}>${d}</option>`
             ).join('');
             videoControlsHtml += `<select class="vmb-dur-select vmb-video-select" data-model="${model.id}">${durOptions}</select>`;
@@ -2748,7 +2751,7 @@
           const defaultRes = constraints.defaultResolution || resolutions[0];
           const defaultPrice = pricing.resolutions[defaultRes]?.usd;
           if (resolutions.length > 1) {
-            const resOptions = resolutions.map(r => 
+            const resOptions = resolutions.map(r =>
               `<option value="${r}"${r === defaultRes ? ' selected' : ''}>${r}</option>`
             ).join('');
             contextStr = `<select class="vmb-res-select vmb-img-res" data-model="${model.id}">${resOptions}</select>`;
@@ -2807,16 +2810,16 @@
         } else if (pricing.per_audio_second) {
           priceStr = `${formatPrice(pricing.per_audio_second.usd)}/sec`;
         }
-        
+
         const modelNameRaw = spec.name || model.id;
         const modelIdRaw = model.id;
         const modelName = highlightSearchText(modelNameRaw, searchQuery);
         const modelId = escapeHtml(modelIdRaw);
         const modelIdDisplay = highlightSearchText(modelIdRaw, searchQuery);
-      
+
       // Release date for NEW badge
       const dateInfo = formatAddedDate(model.created);
-      
+
       const hasLink = spec.modelSource?.length > 0;
         const nameLink = hasLink
           ? `<a href="${escapeHtml(spec.modelSource)}" target="_blank" rel="noopener" class="vmb-model-name">${modelName}</a>`
@@ -2824,39 +2827,39 @@
 
       // Badges (skip type badge for video - we use video type badge instead)
       const typeBadge = model.type !== 'text' && model.type !== 'video'
-        ? `<span class="vmb-type-badge">${escapeHtml(model.type)}</span>` 
+        ? `<span class="vmb-type-badge">${escapeHtml(model.type)}</span>`
         : '';
-      
+
       const videoTypeBadge = model.type === 'video' && constraints.model_type
         ? `<span class="vmb-video-type-badge ${constraints.model_type === 'text-to-video' ? 'ttv' : 'itv'}">${constraints.model_type === 'text-to-video' ? 'TEXT TO VIDEO' : 'IMAGE TO VIDEO'}</span>`
         : '';
-      
+
       const privacyBadge = getPrivacyTag(model, 'vmb');
-      
+
       const betaBadge = isBetaModel(model)
-        ? `<span class="vmb-beta-badge vmb-tooltip" data-tooltip="${TOOLTIPS.beta}">Beta</span>` 
+        ? `<span class="vmb-beta-badge vmb-tooltip" data-tooltip="${TOOLTIPS.beta}" tabindex="0" aria-label="Beta: ${TOOLTIPS.beta}">Beta</span>`
         : '';
-      
+
       const deprecatedBadge = isDeprecatedModel(model)
-        ? `<span class="vmb-deprecated-badge vmb-tooltip" data-tooltip="Scheduled for removal on ${formatDeprecationDate(getModelRemovalDate(model))}. See the deprecations page for details.">Deprecated</span>` 
+        ? `<span class="vmb-deprecated-badge vmb-tooltip" data-tooltip="Scheduled for removal on ${formatDeprecationDate(getModelRemovalDate(model))}. See the deprecations page for details." tabindex="0" aria-label="Deprecated. Scheduled for removal on ${formatDeprecationDate(getModelRemovalDate(model))}.">Deprecated</span>`
         : '';
-      
+
       const uncensoredBadge = isUncensoredModel(model)
-        ? `<span class="vmb-uncensored-badge vmb-tooltip" data-tooltip="${TOOLTIPS.uncensored}">Uncensored</span>` 
+        ? `<span class="vmb-uncensored-badge vmb-tooltip" data-tooltip="${TOOLTIPS.uncensored}" tabindex="0" aria-label="Uncensored: ${TOOLTIPS.uncensored}">Uncensored</span>`
         : '';
-      
+
       const upgradedBadge = isUpgradedModel(model)
-        ? `<span class="vmb-upgraded-badge vmb-tooltip" data-tooltip="${TOOLTIPS.upgraded}">Upgraded</span>` 
+        ? `<span class="vmb-upgraded-badge vmb-tooltip" data-tooltip="${TOOLTIPS.upgraded}" tabindex="0" aria-label="Upgraded: ${TOOLTIPS.upgraded}">Upgraded</span>`
         : '';
-      
+
       const moderationBadge = hasContentModeration(model.id)
-        ? `<span class="vmb-moderation-badge vmb-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>`
+        ? `<span class="vmb-moderation-badge vmb-tooltip" data-tooltip="${TOOLTIPS.content_moderation}" tabindex="0" aria-label="Moderated: ${TOOLTIPS.content_moderation}">Moderated</span>`
         : '';
-      
+
       const newBadge = dateInfo?.isNew
         ? '<span class="vmb-new-badge">NEW</span>'
         : '';
-      
+
       // Rate limit tier badge (text/embedding only)
       const rateTier = getModelRateLimitTier(model.id, model.type);
       const rateLimitBadge = rateTier
@@ -2870,14 +2873,14 @@
 
       // Video-specific metadata (show items not already in controls, always show audio capability)
       const aspectRatios = getAspectRatios(constraints);
-      const aspectRatioHtml = aspectRatios.length > 0 
+      const aspectRatioHtml = aspectRatios.length > 0
         ? `<span class="vmb-aspect-ratios">${aspectRatios.map(ar => {
             const [w, h] = ar.split(':').map(Number);
             const isLandscape = w > h;
             const isPortrait = h > w;
             const cls = isLandscape ? 'landscape' : isPortrait ? 'portrait' : 'square';
             return `<span class="vmb-ar ${cls}" title="${ar}"></span>`;
-          }).join('')}</span>` 
+          }).join('')}</span>`
         : '';
       const videoMeta = model.type === 'video' ? [
         aspectRatioHtml,
@@ -2888,19 +2891,19 @@
 
       // Capability icons
       const capIcons = getCapabilityIcons(spec.capabilities);
-      
+
       // Copy button for model ID
       const idCopyBtn = `<button class="vmb-id-copy-btn" data-model-id="${modelId}" title="Copy model ID" aria-label="Copy model ID">
         <svg class="copy-icon" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
         <svg class="check-icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
       </button>`;
-      
+
       // Left side: model-id and pricing (or video controls)
       const leftParts = [
-        `<span class="vmb-model-id"><span class="vmb-id-text">${modelIdDisplay}</span>${idCopyBtn}</span>`,
-        model.type === 'video' && videoControlsHtml 
-          ? `<span class="vmb-video-controls">${videoControlsHtml}</span>` 
-          : (priceStr ? `<span class="vmb-pricing">${priceStr}</span>` : ''),
+        `<span class="vmb-model-id"><span class="vmb-meta-label">${t('Model ID')}</span><span class="vmb-id-value"><span class="vmb-id-text">${modelIdDisplay}</span>${idCopyBtn}</span></span>`,
+        model.type === 'video' && videoControlsHtml
+          ? `<span class="vmb-meta-block"><span class="vmb-meta-label">${t('Configure price')}</span><span class="vmb-video-controls">${videoControlsHtml}</span></span>`
+          : (priceStr ? `<span class="vmb-meta-block"><span class="vmb-meta-label">${t('Pricing')}</span><span class="vmb-pricing">${priceStr}</span></span>` : ''),
         videoMeta && model.type !== 'video' ? `<span class="vmb-video-info">${videoMeta}</span>` : ''
       ].filter(Boolean);
 
@@ -2908,8 +2911,8 @@
       const releaseDateHtml = dateInfo ? `<span class="vmb-release-date">Added ${dateInfo.dateStr}</span>` : '';
 
         // Context for mobile bottom row
-      const contextMobile = contextStr ? `<span class="vmb-context vmb-context-mobile">${contextStr}</span>` : '';
-      
+      const contextMobile = contextStr ? `<span class="vmb-context vmb-context-mobile"><span class="vmb-meta-label">${t('Capacity')}</span>${contextStr}</span>` : '';
+
       return `
         <div class="vmb-model" role="listitem">
           <div class="vmb-model-shell">
@@ -2957,20 +2960,20 @@
     modelsContainer.addEventListener('click', async (e) => {
       const copyBtn = e.target.closest('.vmb-copy-btn, .vmb-id-copy-btn');
       if (!copyBtn) return;
-      
+
       const modelId = copyBtn.dataset.modelId;
       await navigator.clipboard.writeText(modelId).catch(() => {});
       copyBtn.classList.add('copied');
-      
+
       // Show copied tooltip
       const existingTooltip = copyBtn.querySelector('.vmb-copied-tooltip');
       if (existingTooltip) existingTooltip.remove();
-      
+
       const tooltip = document.createElement('span');
       tooltip.className = 'vmb-copied-tooltip';
       tooltip.textContent = 'Copied';
       copyBtn.appendChild(tooltip);
-      
+
       setTimeout(() => {
         copyBtn.classList.remove('copied');
         tooltip.remove();
@@ -2983,13 +2986,13 @@
       const isResSelect = target.classList.contains('vmb-res-select');
       const isDurSelect = target.classList.contains('vmb-dur-select');
       const isImgRes = target.classList.contains('vmb-img-res');
-      
+
       if (!isResSelect && !isDurSelect) return;
-      
+
       const modelId = target.dataset.model;
       const model = allModels.find(m => m.id === modelId);
       if (!model) return;
-      
+
       // Handle image resolution pricing
       if (isImgRes) {
         const resolution = target.value;
@@ -3000,17 +3003,17 @@
         }
         return;
       }
-      
+
       // Handle video pricing
       const card = target.closest('.vmb-model');
       const resSelect = card.querySelector('.vmb-res-select');
       const durSelect = card.querySelector('.vmb-dur-select');
       const audioToggle = card.querySelector('.vmb-audio-toggle');
-      
+
       const resolution = resSelect?.value;
       const duration = durSelect?.value;
       const audio = audioToggle ? audioToggle.dataset.audio === 'true' : undefined;
-      
+
       updateVideoPrice(modelId, model, { resolution, duration, audio }, modelsContainer);
     });
 
@@ -3018,24 +3021,24 @@
     modelsContainer.addEventListener('click', (e) => {
       const toggle = e.target.closest('.vmb-audio-toggle');
       if (!toggle) return;
-      
+
       const isOn = toggle.dataset.audio === 'true';
       toggle.dataset.audio = isOn ? 'false' : 'true';
       toggle.textContent = isOn ? '♪ No Audio' : '♪ Audio';
       toggle.classList.toggle('off', isOn);
-      
+
       const modelId = toggle.dataset.model;
       const model = allModels.find(m => m.id === modelId);
       if (!model) return;
-      
+
       const card = toggle.closest('.vmb-model');
       const resSelect = card.querySelector('.vmb-res-select');
       const durSelect = card.querySelector('.vmb-dur-select');
-      
-      updateVideoPrice(modelId, model, { 
-        resolution: resSelect?.value, 
-        duration: durSelect?.value, 
-        audio: !isOn 
+
+      updateVideoPrice(modelId, model, {
+        resolution: resSelect?.value,
+        duration: durSelect?.value,
+        audio: !isOn
       }, modelsContainer);
     });
   }
@@ -3109,17 +3112,17 @@
 
     return function tryInit() {
       if (!window.location.pathname.toLowerCase().includes(pathMatch)) return;
-      
+
       const el = document.getElementById(elementId);
       if (!el) return;
-      
+
       if (state.rendered && resetCheck(el)) {
         state.initialized = false;
         state.rendered = false;
       }
-      
+
       if (state.initialized || state.promise) return;
-      
+
       state.initialized = true;
       state.promise = initFn().then(() => {
         state.rendered = true;
@@ -3226,7 +3229,7 @@
   function retryInit(pathMatch, checkFn, tryFn, maxRetries = 20) {
     if (!window.location.pathname.toLowerCase().includes(pathMatch)) return;
     if (checkFn()) return;
-    
+
     let retries = 0;
     const interval = setInterval(() => {
       if (checkFn() || retries++ > maxRetries) {
@@ -3240,7 +3243,7 @@
   function start() {
     tryInitAll();
     setupObserver();
-    
+
     // Retry for pages where elements may load late
     retryInit('pricing', () => pageInitializers.pricing.initialized, tryInitPricing);
     retryInit('deprecation', () => pageInitializers.deprecations.initialized, tryInitDeprecations);
@@ -3250,7 +3253,7 @@
     retryInit('reasoning-models', () => pageInitializers.reasoningModels.initialized, tryInitReasoningModels);
     retryInit('text-to-speech', () => pageInitializers.voicePicker.initialized, tryInitVoicePicker);
   }
-  
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start);
   } else {
