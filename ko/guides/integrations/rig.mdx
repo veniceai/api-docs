@@ -1,0 +1,295 @@
+---
+title: "Rig"
+description: "Rig의 네이티브 Venice 프로바이더로 툴, 구조화된 출력, 스트리밍, 임베딩, venice_parameters를 활용하는 타입 안전한 Rust 에이전트를 구축하세요."
+"og:title": "Rig | Venice API Docs"
+"og:description": "Venice의 first-party 프로바이더로 Rust에서 Rig 에이전트를 구축하세요"
+---
+
+[Rig](https://rig.rs/)는 LLM 앱과 에이전트를 구축하기 위한 Rust 라이브러리입니다. Rig 0.42부터 first-party [`venice`](https://docs.rs/rig/latest/rig/providers/venice/) 프로바이더가 기본 제공되며, 채팅 완성, 스트리밍, 툴, 구조화된 출력, 임베딩, 트랜스크립션, 이미지 생성, 스피치가 OpenAI 클라이언트를 우회하지 않고 Venice API에 직접 연결됩니다.
+
+에이전트 프레임워크가 아니라 순수 Axum 프록시가 필요하다면 [Building a Rust LLM Gateway](/guides/projects/rust-llm-gateway)를 참조하세요.
+
+## 사전 요구 사항
+
+- 최신 stable Rust 툴체인 (Rig 0.42는 edition 2024 사용)
+- Rig 0.42 이상
+- [Venice API 키](/guides/getting-started/generating-api-key)
+
+## 설정
+
+```bash
+cargo add rig
+cargo add tokio --features macros,rt-multi-thread
+cargo add serde --features derive
+cargo add schemars anyhow
+```
+
+Venice API 키를 환경에 추가하세요. 선택적으로 `VENICE_BASE_URL`로 API 호스트를 재정의할 수 있습니다(프로바이더 기본값은 `https://api.venice.ai/api/v1`):
+
+```bash
+export VENICE_API_KEY=your-venice-api-key
+```
+
+<Warning>
+API 키를 소스 관리에 포함하지 마세요. 프로덕션에서는 환경 변수나 시크릿 매니저를 선호하세요.
+</Warning>
+
+## Venice 클라이언트 구성
+
+`venice::Client::from_env()`는 `VENICE_API_KEY`를 읽습니다. `ProviderClient`를 스코프에 가져오세요:
+
+```rust
+use anyhow::Result;
+use rig::client::{AgentClientExt, ProviderClient};
+use rig::completion::Prompt;
+use rig::providers::venice;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let client = venice::Client::from_env()?;
+
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("You are a concise, privacy-respecting assistant.")
+        .build();
+
+    let response = agent
+        .prompt("Explain zero data retention in two sentences.")
+        .await?;
+    println!("{response}");
+
+    Ok(())
+}
+```
+
+<Note>
+Rig의 OpenAI 클라이언트를 Venice로 지정하는 방식보다 `venice::Client`를 선호하세요. 기본 `openai::Client`는 OpenAI의 Responses API를 대상으로 합니다. Venice 프로바이더는 `/chat/completions`를 사용하며 [`VeniceParameters`](#venice-specific-parameters)를 노출합니다.
+</Note>
+
+아래 스니펫들은 `from_env()`에서 얻은 `&venice::Client`를 받습니다. `venice::QWEN3_5_9B` 같은 크레이트 상수는 출발점일 뿐이므로 [`GET /models`](/api-reference/endpoint/models/list)로 현재 ID를 확인하세요.
+
+## 응답 스트리밍
+
+`stream_prompt`는 `.await`하여 스트림으로 만들 수 있는 요청을 반환합니다. 토큰이 도착하는 대로 출력하려면 `rig::agent::stream_to_stdout`을 사용하세요:
+
+```rust
+use anyhow::Result;
+use rig::agent::stream_to_stdout;
+use rig::client::AgentClientExt;
+use rig::providers::venice;
+use rig::streaming::StreamingPrompt;
+
+async fn stream_poem(client: &venice::Client) -> Result<()> {
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("You are a concise, privacy-respecting assistant.")
+        .build();
+
+    let mut stream = agent
+        .stream_prompt("Write a short poem about private AI.")
+        .await;
+    stream_to_stdout(&mut stream).await?;
+
+    Ok(())
+}
+```
+
+`stream_prompt`의 `.await` 뒤에 `?`를 추가하지 마세요. `Result`가 아니라 스트림을 직접 반환합니다.
+
+## 구조화된 출력
+
+`JsonSchema` 타입과 함께 익스트랙터를 사용하여 모델 답변을 검증하세요:
+
+```rust
+use anyhow::Result;
+use rig::client::AgentClientExt;
+use rig::providers::venice;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct PrivacySummary {
+    /// One-sentence overview
+    summary: String,
+    /// Key privacy benefits
+    benefits: Vec<String>,
+    /// When to choose this approach
+    recommendation: String,
+}
+
+async fn extract_privacy_summary(client: &venice::Client) -> Result<PrivacySummary> {
+    let extractor = client
+        .extractor::<PrivacySummary>(venice::QWEN3_5_9B)
+        .preamble("Extract a structured summary from the user's request.")
+        .build();
+
+    Ok(extractor
+        .extract("Compare private inference with providers that retain chat logs.")
+        .await?)
+}
+```
+
+프로덕션에서 툴 기반 추출에 의존하기 전에 [구조화된 응답](/guides/features/structured-responses)과 [함수 호출](/guides/features/function-calling)을 지원하는 모델을 살펴보세요.
+
+## 툴
+
+`#[rig_tool]`(Rig의 기본 `derive` 기능에 포함됨)로 툴을 정의하세요. 생성되는 타입은 함수명을 PascalCase로 변환한 이름입니다:
+
+```rust
+use anyhow::Result;
+use rig::client::AgentClientExt;
+use rig::completion::Prompt;
+use rig::providers::venice;
+use rig::rig_tool;
+
+#[rig_tool(description = "Return budget-friendly Venice text model IDs")]
+fn list_budget_models() -> Result<Vec<&'static str>, rig::tool::ToolExecutionError> {
+    Ok(vec![venice::QWEN3_5_9B, venice::VENICE_UNCENSORED_1_2])
+}
+
+async fn recommend_models(client: &venice::Client) -> Result<String> {
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("Help users pick a Venice model. Use tools when you need facts.")
+        .tool(ListBudgetModels)
+        .build();
+
+    Ok(agent
+        .prompt("Which cheap Venice models should I try?")
+        .await?)
+}
+```
+
+커스텀 인자 타입이나 오류 처리가 필요할 때는 `rig::tool::Tool`을 직접 구현할 수도 있습니다. [Rig의 툴 문서](https://docs.rig.rs/docs/concepts/tools)를 참조하세요.
+
+## 임베딩
+
+```rust
+use anyhow::Result;
+use rig::client::EmbeddingsClient;
+use rig::embeddings::EmbeddingModel;
+use rig::providers::venice;
+
+async fn embed_documents(client: &venice::Client) -> Result<()> {
+    let model = client.embedding_model(venice::TEXT_EMBEDDING_BGE_M3);
+    let embeddings = model
+        .embed_texts([
+            "Venice AI provides private inference.".to_owned(),
+            "Zero data retention guaranteed.".to_owned(),
+        ])
+        .await?;
+
+    for embedding in &embeddings {
+        println!("{}: {} dims", embedding.document, embedding.vec.len());
+    }
+
+    Ok(())
+}
+```
+
+Venice는 OpenAI의 `dimensions` 필드를 존중합니다. 모델의 기본 크기가 아닌 특정 차원 수가 필요하다면 `embedding_model_with_ndims`를 사용하세요.
+
+## Venice 전용 파라미터
+
+Venice 전용 옵션은 `VeniceParameters`로 전달하고 `additional_params`와 병합하세요. 예를 들어 내장 웹 검색을 활성화하려면:
+
+```rust
+use anyhow::Result;
+use rig::client::AgentClientExt;
+use rig::completion::Prompt;
+use rig::providers::venice::{self, VeniceParameters, WebSearchMode};
+
+async fn search_recent_news(client: &venice::Client) -> Result<String> {
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("You are a concise, privacy-respecting assistant.")
+        .additional_params(
+            VeniceParameters::new()
+                .enable_web_search(WebSearchMode::Auto)
+                .into_additional_params(),
+        )
+        .build();
+
+    Ok(agent
+        .prompt("What are notable AI privacy developments this week?")
+        .await?)
+}
+```
+
+웹 검색 인용(및 요청별 `cost` 블록)을 유지하려면 완성 모델에서 `raw_completion`을 호출하세요. 정규화된 에이전트 경로는 이런 Venice 전용 필드를 삭제합니다:
+
+```rust
+use anyhow::Result;
+use rig::client::CompletionClient;
+use rig::completion::CompletionModel;
+use rig::providers::venice::{self, VeniceParameters, WebSearchMode};
+
+async fn search_with_citations(client: &venice::Client) -> Result<()> {
+    let model = client.completion_model(venice::QWEN3_5_9B);
+    let request = model
+        .completion_request("In one sentence, what is the Rust programming language?")
+        .additional_params(
+            VeniceParameters::new()
+                .enable_web_search(WebSearchMode::On)
+                .enable_web_citations(true)
+                .into_additional_params(),
+        )
+        .build();
+
+    let response = model.raw_completion(request).await?;
+    for citation in response.web_search_citations() {
+        println!("{} — {}", citation.title, citation.url);
+    }
+
+    Ok(())
+}
+```
+
+`VeniceParameters`는 캐릭터 슬러그, 사고(thinking) 제어, 웹 스크래핑, X 검색, Venice의 기본 시스템 프롬프트 포함 여부도 함께 다룹니다. 전체 `venice_parameters` 목록은 [API 스펙](/api-reference/api-spec)을 참조하세요.
+
+## 기타 기능
+
+동일한 `venice::Client`는 다음도 구동합니다:
+
+- **트랜스크립션** — `client.transcription_model(venice::WHISPER_LARGE_V3)`
+- **이미지 생성** — `client.image_generation_model(...)` (Rig의 `image` 기능 활성화 필요)
+- **스피치** — `client.audio_generation_model(venice::TTS_KOKORO)` (Rig의 `audio` 기능 활성화 필요)
+
+비디오, 음악, 이미지 편집, `/augment/*`, 크립토 RPC에는 Rig 트레이트가 없어 래핑되지 않습니다. 해당 Venice 엔드포인트는 직접 호출하세요.
+
+## 프라이버시 이점
+
+Rig는 애플리케이션 데이터, 사용자 컨텍스트 또는 내부 툴을 다루는 에이전트에 자주 사용됩니다. Venice와 결합하면 해당 워크플로가 프라이빗하고 검열 없는 추론 위에서 유지됩니다:
+
+- 프라이빗 모델에서의 **제로 데이터 보존** — 요청 이후 프롬프트와 툴 페이로드가 보관되지 않음
+- 에이전트가 직설적인 비평이나 레드팀 활동이 필요할 때의 **검열 없는 분석**
+- OpenAI 타입을 Venice 방언에 재매핑할 필요가 없는 **first-party 프로바이더**
+
+## 문제 해결
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized">
+    에이전트를 실행하는 프로세스에 `VENICE_API_KEY`가 설정되어 있는지 확인하세요. 환경 변수를 변경한 후에는 쉘이나 프로세스를 재시작하세요. `from_env()`는 `OPENAI_API_KEY`를 읽지 않습니다.
+  </Accordion>
+
+  <Accordion title="모델을 찾을 수 없거나 예상치 못한 엔드포인트 오류">
+    [모델 페이지](/models/overview) 또는 `GET /models`에서 현재 모델 ID를 사용하세요. `venice::QWEN3_5_9B` 같은 크레이트 상수는 라이브 카탈로그보다 뒤처질 수 있습니다.
+  </Accordion>
+
+  <Accordion title="Responses API 실패">
+    `openai::Client`가 아니라 `venice::Client`를 사용하세요. OpenAI 클라이언트는 기본적으로 Responses API를 사용하는데, Venice에서는 알파 단계일 뿐입니다.
+  </Accordion>
+
+  <Accordion title="툴이나 구조화된 출력이 무시됨">
+    [함수 호출](/guides/features/function-calling)을 지원하는 모델을 선택하고, 프리앰블에서 툴이 실행되어야 하는 시점을 설명하며, 툴 설명을 정확하게 유지하세요 — Rig는 `#[rig_tool]` 시그니처와 문서에서 JSON 스키마를 생성합니다.
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Rig 문서" icon="book" href="https://docs.rig.rs/">
+    에이전트, 툴, 익스트랙터, 프로바이더
+  </Card>
+  <Card title="Venice 모델" icon="database" href="/models/overview">
+    모델과 지원 기능을 살펴보세요
+  </Card>
+</CardGroup>

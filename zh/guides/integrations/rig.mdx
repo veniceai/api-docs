@@ -1,0 +1,295 @@
+---
+title: "Rig"
+description: "使用 Rig 原生的 Venice 提供程序构建类型化的 Rust 智能体，支持工具、结构化输出、流式传输、嵌入以及 venice_parameters。"
+"og:title": "Rig | Venice API 文档"
+"og:description": "使用 Venice 一方提供程序在 Rust 中构建 Rig 智能体"
+---
+
+[Rig](https://rig.rs/) 是一个用于构建 LLM 应用和智能体的 Rust 库。自 Rig 0.42 起，它内置了一方 [`venice`](https://docs.rs/rig/latest/rig/providers/venice/) 提供程序——支持对话补全、流式传输、工具、结构化输出、嵌入、转录、图像生成和语音——直接对接 Venice API，而不是通过 OpenAI 客户端进行转发。
+
+如果你想要的是一个原始的 Axum 代理而非智能体框架，请参见 [构建 Rust LLM 网关](/guides/projects/rust-llm-gateway)。
+
+## 前置条件
+
+- 较新的稳定版 Rust 工具链（Rig 0.42 使用 edition 2024）
+- Rig 0.42 或更高版本
+- 一个 [Venice API 密钥](/guides/getting-started/generating-api-key)
+
+## 安装配置
+
+```bash
+cargo add rig
+cargo add tokio --features macros,rt-multi-thread
+cargo add serde --features derive
+cargo add schemars anyhow
+```
+
+将你的 Venice API 密钥添加到环境变量中。可选地，通过 `VENICE_BASE_URL` 覆盖 API 主机地址（提供程序默认使用 `https://api.venice.ai/api/v1`）：
+
+```bash
+export VENICE_API_KEY=your-venice-api-key
+```
+
+<Warning>
+请勿将 API 密钥提交到源码库。生产环境中应优先使用环境变量或密钥管理工具。
+</Warning>
+
+## 配置 Venice 客户端
+
+`venice::Client::from_env()` 会读取 `VENICE_API_KEY`。请将 `ProviderClient` 引入作用域：
+
+```rust
+use anyhow::Result;
+use rig::client::{AgentClientExt, ProviderClient};
+use rig::completion::Prompt;
+use rig::providers::venice;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let client = venice::Client::from_env()?;
+
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("You are a concise, privacy-respecting assistant.")
+        .build();
+
+    let response = agent
+        .prompt("Explain zero data retention in two sentences.")
+        .await?;
+    println!("{response}");
+
+    Ok(())
+}
+```
+
+<Note>
+优先使用 `venice::Client`，而不是让 Rig 的 OpenAI 客户端指向 Venice。默认的 `openai::Client` 面向 OpenAI 的 Responses API，而 Venice 提供程序对接的是 `/chat/completions`，并暴露了 [`VeniceParameters`](#venice-specific-parameters)。
+</Note>
+
+下面的代码片段接收一个由 `from_env()` 返回的 `&venice::Client`。诸如 `venice::QWEN3_5_9B` 这样的 crate 常量只是起点——请通过 [`GET /models`](/api-reference/endpoint/models/list) 确认当前的模型 ID。
+
+## 流式响应
+
+`stream_prompt` 返回一个请求，你可以 `.await` 得到一个流。使用 `rig::agent::stream_to_stdout` 可以在 token 到达时逐个打印：
+
+```rust
+use anyhow::Result;
+use rig::agent::stream_to_stdout;
+use rig::client::AgentClientExt;
+use rig::providers::venice;
+use rig::streaming::StreamingPrompt;
+
+async fn stream_poem(client: &venice::Client) -> Result<()> {
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("You are a concise, privacy-respecting assistant.")
+        .build();
+
+    let mut stream = agent
+        .stream_prompt("Write a short poem about private AI.")
+        .await;
+    stream_to_stdout(&mut stream).await?;
+
+    Ok(())
+}
+```
+
+请勿在 `stream_prompt` 的 `.await` 后添加 `?`——它直接返回流，而不是一个 `Result`。
+
+## 结构化输出
+
+使用带有 `JsonSchema` 类型的提取器来校验模型的回答：
+
+```rust
+use anyhow::Result;
+use rig::client::AgentClientExt;
+use rig::providers::venice;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct PrivacySummary {
+    /// One-sentence overview
+    summary: String,
+    /// Key privacy benefits
+    benefits: Vec<String>,
+    /// When to choose this approach
+    recommendation: String,
+}
+
+async fn extract_privacy_summary(client: &venice::Client) -> Result<PrivacySummary> {
+    let extractor = client
+        .extractor::<PrivacySummary>(venice::QWEN3_5_9B)
+        .preamble("Extract a structured summary from the user's request.")
+        .build();
+
+    Ok(extractor
+        .extract("Compare private inference with providers that retain chat logs.")
+        .await?)
+}
+```
+
+在生产环境依赖基于工具的提取之前，请浏览支持 [结构化响应](/guides/features/structured-responses) 和 [函数调用](/guides/features/function-calling) 的模型。
+
+## 工具
+
+使用 `#[rig_tool]`（随 Rig 默认的 `derive` 特性一起提供）定义一个工具。生成的类型名称是函数名的 PascalCase 形式：
+
+```rust
+use anyhow::Result;
+use rig::client::AgentClientExt;
+use rig::completion::Prompt;
+use rig::providers::venice;
+use rig::rig_tool;
+
+#[rig_tool(description = "Return budget-friendly Venice text model IDs")]
+fn list_budget_models() -> Result<Vec<&'static str>, rig::tool::ToolExecutionError> {
+    Ok(vec![venice::QWEN3_5_9B, venice::VENICE_UNCENSORED_1_2])
+}
+
+async fn recommend_models(client: &venice::Client) -> Result<String> {
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("Help users pick a Venice model. Use tools when you need facts.")
+        .tool(ListBudgetModels)
+        .build();
+
+    Ok(agent
+        .prompt("Which cheap Venice models should I try?")
+        .await?)
+}
+```
+
+当你需要自定义参数类型或错误处理时，也可以手动实现 `rig::tool::Tool`。参见 [Rig 的工具文档](https://docs.rig.rs/docs/concepts/tools)。
+
+## 嵌入
+
+```rust
+use anyhow::Result;
+use rig::client::EmbeddingsClient;
+use rig::embeddings::EmbeddingModel;
+use rig::providers::venice;
+
+async fn embed_documents(client: &venice::Client) -> Result<()> {
+    let model = client.embedding_model(venice::TEXT_EMBEDDING_BGE_M3);
+    let embeddings = model
+        .embed_texts([
+            "Venice AI provides private inference.".to_owned(),
+            "Zero data retention guaranteed.".to_owned(),
+        ])
+        .await?;
+
+    for embedding in &embeddings {
+        println!("{}: {} dims", embedding.document, embedding.vec.len());
+    }
+
+    Ok(())
+}
+```
+
+Venice 遵循 OpenAI 的 `dimensions` 字段。当你想要指定一个特定的向量维度而不是使用模型的原生维度时，请使用 `embedding_model_with_ndims`。
+
+## Venice 特有参数
+
+通过 `VeniceParameters` 传入 Venice 专有的选项，并使用 `additional_params` 进行合并。例如，启用内置的网络搜索：
+
+```rust
+use anyhow::Result;
+use rig::client::AgentClientExt;
+use rig::completion::Prompt;
+use rig::providers::venice::{self, VeniceParameters, WebSearchMode};
+
+async fn search_recent_news(client: &venice::Client) -> Result<String> {
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("You are a concise, privacy-respecting assistant.")
+        .additional_params(
+            VeniceParameters::new()
+                .enable_web_search(WebSearchMode::Auto)
+                .into_additional_params(),
+        )
+        .build();
+
+    Ok(agent
+        .prompt("What are notable AI privacy developments this week?")
+        .await?)
+}
+```
+
+若要保留网络搜索引用（以及每次请求的 `cost` 数据块），请在补全模型上调用 `raw_completion`。标准化的智能体路径会丢弃这些 Venice 特有字段：
+
+```rust
+use anyhow::Result;
+use rig::client::CompletionClient;
+use rig::completion::CompletionModel;
+use rig::providers::venice::{self, VeniceParameters, WebSearchMode};
+
+async fn search_with_citations(client: &venice::Client) -> Result<()> {
+    let model = client.completion_model(venice::QWEN3_5_9B);
+    let request = model
+        .completion_request("In one sentence, what is the Rust programming language?")
+        .additional_params(
+            VeniceParameters::new()
+                .enable_web_search(WebSearchMode::On)
+                .enable_web_citations(true)
+                .into_additional_params(),
+        )
+        .build();
+
+    let response = model.raw_completion(request).await?;
+    for citation in response.web_search_citations() {
+        println!("{} — {}", citation.title, citation.url);
+    }
+
+    Ok(())
+}
+```
+
+`VeniceParameters` 还涵盖角色 slug、思考控制、网页抓取、X 搜索，以及是否包含 Venice 的默认系统提示词。完整的 `venice_parameters` 列表请参见 [API 规范](/api-reference/api-spec)。
+
+## 其他能力
+
+同一个 `venice::Client` 还可以驱动：
+
+- **转录** — `client.transcription_model(venice::WHISPER_LARGE_V3)`
+- **图像生成** — `client.image_generation_model(...)`（需启用 Rig 的 `image` 特性）
+- **语音** — `client.audio_generation_model(venice::TTS_KOKORO)`（需启用 Rig 的 `audio` 特性）
+
+视频、音乐、图像编辑、`/augment/*` 和 crypto RPC 目前没有对应的 Rig trait，也未被封装。请直接调用这些 Venice 端点。
+
+## 隐私优势
+
+Rig 常用于会接触应用数据、用户上下文或内部工具的智能体。将它与 Venice 搭配，可以让整个工作流运行在私密、无审查的推理之上：
+
+- 私有模型的**零数据保留**——请求结束后不会保留提示词和工具的输入输出
+- 当智能体需要直言不讳的批评或红队测试时提供**无审查分析**
+- **一方提供程序**——你无需将 OpenAI 类型强行映射到 Venice 的方言上
+
+## 疑难排查
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized">
+    请确认运行智能体的进程中已设置 `VENICE_API_KEY`。修改环境变量后请重启 shell 或进程。`from_env()` 不会读取 `OPENAI_API_KEY`。
+  </Accordion>
+
+  <Accordion title="找不到模型或出现意外的端点错误">
+    请使用来自 [模型页面](/models/overview) 或 `GET /models` 的最新模型 ID。诸如 `venice::QWEN3_5_9B` 这样的 crate 常量可能滞后于线上目录。
+  </Accordion>
+
+  <Accordion title="Responses API 失败">
+    请使用 `venice::Client`，而不是 `openai::Client`。OpenAI 客户端默认使用 Responses API，而该 API 在 Venice 上仅为 alpha 状态。
+  </Accordion>
+
+  <Accordion title="工具或结构化输出被忽略">
+    请选择一个支持 [函数调用](/guides/features/function-calling) 的模型，在 preamble 中说明何时应运行工具，并让工具描述保持精确——Rig 会根据 `#[rig_tool]` 的签名和文档来构建 JSON schema。
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Rig 文档" icon="book" href="https://docs.rig.rs/">
+    智能体、工具、提取器与提供程序
+  </Card>
+  <Card title="Venice 模型" icon="database" href="/models/overview">
+    浏览模型及其支持的能力
+  </Card>
+</CardGroup>
