@@ -2312,11 +2312,13 @@
         </div>
       </div>
       ${renderMobileFilterLayer()}
-      <div class="vmb-table-header" role="row">
-        <span role="columnheader">${t('Model')}</span><span role="columnheader">${t('Type')}</span><span role="columnheader">${t('Pricing')}</span><span role="columnheader">${t('Capacity')}</span><span role="columnheader">${t('Capabilities')}</span><span role="columnheader">${t('Status')}</span>
-      </div>
-      <div class="vmb-models" role="list" aria-label="Model list">
-        ${hasCachedData ? '' : '<div class="vmb-loading">Loading models...</div>'}
+      <div class="vmb-comparison" role="table" aria-label="Venice API models, pricing, limits, features, and access status">
+        <div class="vmb-table-header" role="row">
+          <span role="columnheader">${t('Model')}</span><span role="columnheader">${t('Type')}</span><span role="columnheader">${t('Pricing')}</span><span role="columnheader">${t('Capacity')}</span><span role="columnheader">${t('Capabilities')}</span><span role="columnheader">${t('Status')}</span>
+        </div>
+        <div class="vmb-models" role="rowgroup">
+          ${hasCachedData ? '' : '<div class="vmb-loading">Loading models...</div>'}
+        </div>
       </div>
     `;
 
@@ -3060,34 +3062,16 @@
       const desktopStatus = `${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${moderationBadge}${releaseDateHtml}`;
 
       return `
-        <div class="vmb-model" role="listitem">
+        <div class="vmb-model" role="row">
           <div class="vmb-model-shell">
-            <div class="vmb-table-cell vmb-table-identity" aria-label="${t('Model')}">${getModelLogoHtml(model)}<span class="vmb-table-identity-copy"><span class="vmb-table-name-line">${nameLink}${dateInfo?.isNew ? '<span class="vmb-new-dot" title="Recently added">New</span>' : ''}</span><span class="vmb-table-id-line"><span class="vmb-id-text">${modelIdDisplay}</span>${copyBtn}</span></span></div>
-            <div class="vmb-table-cell vmb-table-type" aria-label="${t('Type')}">${modalityBadge}${videoTypeBadge}</div>
-            <div class="vmb-table-cell vmb-table-price" aria-label="${t('Pricing')}">${desktopPrice}</div>
-            <div class="vmb-table-cell vmb-table-capacity" aria-label="${t('Capacity')}">${desktopCapacity}</div>
-            <div class="vmb-table-cell vmb-table-capabilities" aria-label="${t('Capabilities')}">${capIcons || '<span class="vmb-table-empty">—</span>'}</div>
-            <div class="vmb-table-cell vmb-table-status" aria-label="${t('Status')}">${desktopStatus || '<span class="vmb-table-empty">—</span>'}</div>
-            <div class="vmb-model-mobile">
-            ${getModelLogoHtml(model)}
-            <div class="vmb-model-body">
-            <div class="vmb-model-row">
-              <div class="vmb-model-left">
-                ${nameLink}${copyBtn}${dateInfo?.isNew ? '<span class="vmb-new-dot" title="Recently added">New</span>' : ''}
-              </div>
-              <div class="vmb-model-right">
-                ${contextStr ? `<span class="vmb-context vmb-context-desktop">${contextStr}</span>` : ''}
-                ${modalityBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${moderationBadge}${rateLimitBadge}
-              </div>
-            </div>
-            <div class="vmb-model-info">
-              <span class="vmb-info-left">${leftParts.join('<span class="vmb-dot">·</span>')}${contextMobile}</span>
-              <span class="vmb-info-right">${capIcons}${releaseDateHtml}</span>
-            </div>
-            </div>
-            </div>
+            <div class="vmb-table-cell vmb-table-identity" role="cell" data-label="${t('Model')}">${getModelLogoHtml(model)}<span class="vmb-table-identity-copy"><span class="vmb-table-name-line">${nameLink}${dateInfo?.isNew ? '<span class="vmb-new-dot" title="Recently added">New</span>' : ''}</span><span class="vmb-table-id-line"><span class="vmb-id-text">${modelIdDisplay}</span>${copyBtn}</span></span></div>
+            <div class="vmb-table-cell vmb-table-type" role="cell" data-label="${t('Type')}">${modalityBadge}${videoTypeBadge}</div>
+            <div class="vmb-table-cell vmb-table-price" role="cell" data-label="${t('Pricing')}">${desktopPrice}</div>
+            <div class="vmb-table-cell vmb-table-capacity" role="cell" data-label="${t('Capacity')}">${desktopCapacity}</div>
+            <div class="vmb-table-cell vmb-table-capabilities" role="cell" data-label="${t('Capabilities')}">${capIcons || '<span class="vmb-table-empty">—</span>'}</div>
+            <div class="vmb-table-cell vmb-table-status" role="cell" data-label="${t('Status')}">${desktopStatus || '<span class="vmb-table-empty">—</span>'}</div>
           </div>
-          </div>
+        </div>
         `;
     }
 
