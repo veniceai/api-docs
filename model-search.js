@@ -410,14 +410,14 @@
   }
   const LOCALE = detectLocale();
   const I18N = {
-    'pt-BR': { 'Audio on': 'Áudio ligado', 'Audio off': 'Áudio desligado', 'Variable': 'Variável', 'Text to Speech': 'Texto para voz', 'Speech to Text': 'Voz para texto', 'Music': 'Música', 'Video resolution': 'Resolução do vídeo', 'Video duration': 'Duração do vídeo', 'Filters': 'Filtros', 'Done': 'Concluído', 'Close filters': 'Fechar filtros', 'Model ID': 'ID do modelo', 'Configure price': 'Configurar preço', 'Pricing': 'Preço', 'Capacity': 'Capacidade', 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Recurso', 'Content': 'Conteúdo', 'Privacy': 'Privacidade', 'All types': 'Todos os tipos', 'Text': 'Texto', 'Image': 'Imagem', 'Video': 'Vídeo', 'Audio': 'Áudio', 'Embedding': 'Embedding', 'Generation': 'Geração', 'Upscale': 'Ampliação', 'Edit': 'Edição', 'Uncensored': 'Sem censura', 'Text to Video': 'Texto para vídeo', 'Image to Video': 'Imagem para vídeo', 'Reasoning': 'Raciocínio', 'Vision': 'Visão', 'Function Calling': 'Chamada de funções', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Mais recentes', 'Oldest': 'Mais antigos', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Preço: menor para maior', 'Price: High to Low': 'Preço: maior para menor', 'Clear filters': 'Limpar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'correspondências mais próximas', 'No close model matches': 'Nenhum modelo próximo encontrado', 'No models match your filters': 'Nenhum modelo corresponde aos seus filtros' },
-    'ar': { 'Audio on': 'الصوت مفعّل', 'Audio off': 'الصوت متوقف', 'Variable': 'متغير', 'Text to Speech': 'تحويل النص إلى كلام', 'Speech to Text': 'تحويل الكلام إلى نص', 'Music': 'موسيقى', 'Video resolution': 'دقة الفيديو', 'Video duration': 'مدة الفيديو', 'Filters': 'عوامل التصفية', 'Done': 'تم', 'Close filters': 'إغلاق عوامل التصفية', 'Model ID': 'معرّف النموذج', 'Configure price': 'تكوين السعر', 'Pricing': 'التسعير', 'Capacity': 'السعة', 'Type': 'النوع', 'Kind': 'الفئة', 'Capability': 'القدرة', 'Content': 'المحتوى', 'Privacy': 'الخصوصية', 'All types': 'كل الأنواع', 'Text': 'نص', 'Image': 'صورة', 'Video': 'فيديو', 'Audio': 'صوت', 'Embedding': 'تضمين', 'Generation': 'توليد', 'Upscale': 'تحسين الدقة', 'Edit': 'تحرير', 'Uncensored': 'بدون رقابة', 'Text to Video': 'نص إلى فيديو', 'Image to Video': 'صورة إلى فيديو', 'Reasoning': 'استدلال', 'Vision': 'رؤية', 'Function Calling': 'استدعاء الدوال', 'Code': 'برمجة', 'Private': 'خاص', 'Anonymized': 'مجهول الهوية', 'Sort': 'ترتيب', 'Sort models': 'ترتيب النماذج', 'Search models': 'بحث في النماذج', 'Recommended': 'موصى به', 'Newest': 'الأحدث', 'Oldest': 'الأقدم', 'Name (A–Z)': 'الاسم (أ–ي)', 'Price: Low to High': 'السعر: من الأقل إلى الأعلى', 'Price: High to Low': 'السعر: من الأعلى إلى الأقل', 'Clear filters': 'مسح عوامل التصفية', 'Search models...': 'بحث في النماذج...', 'models': 'نماذج', 'closest matches': 'أقرب النتائج', 'No close model matches': 'لا توجد نماذج قريبة', 'No models match your filters': 'لا توجد نماذج تطابق عوامل التصفية' },
-    'it': { 'Audio on': 'Audio attivo', 'Audio off': 'Audio disattivo', 'Variable': 'Variabile', 'Text to Speech': 'Da testo a voce', 'Speech to Text': 'Da voce a testo', 'Music': 'Musica', 'Video resolution': 'Risoluzione video', 'Video duration': 'Durata video', 'Filters': 'Filtri', 'Done': 'Fine', 'Close filters': 'Chiudi filtri', 'Model ID': 'ID modello', 'Configure price': 'Configura prezzo', 'Pricing': 'Prezzo', 'Capacity': 'Capacità', 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Capacità', 'Content': 'Contenuto', 'Privacy': 'Privacy', 'All types': 'Tutti i tipi', 'Text': 'Testo', 'Image': 'Immagine', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generazione', 'Upscale': 'Upscaling', 'Edit': 'Modifica', 'Uncensored': 'Senza censura', 'Text to Video': 'Testo in video', 'Image to Video': 'Immagine in video', 'Reasoning': 'Ragionamento', 'Vision': 'Visione', 'Function Calling': 'Chiamata di funzioni', 'Code': 'Codice', 'Private': 'Privato', 'Anonymized': 'Anonimizzato', 'Sort': 'Ordina', 'Sort models': 'Ordina modelli', 'Search models': 'Cerca modelli', 'Recommended': 'Consigliati', 'Newest': 'Più recenti', 'Oldest': 'Meno recenti', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Prezzo: dal più basso', 'Price: High to Low': 'Prezzo: dal più alto', 'Clear filters': 'Cancella filtri', 'Search models...': 'Cerca modelli...', 'models': 'modelli', 'closest matches': 'corrispondenze più vicine', 'No close model matches': 'Nessun modello simile trovato', 'No models match your filters': 'Nessun modello corrisponde ai filtri' },
-    'de': { 'Audio on': 'Audio an', 'Audio off': 'Audio aus', 'Variable': 'Variabel', 'Text to Speech': 'Text zu Sprache', 'Speech to Text': 'Sprache zu Text', 'Music': 'Musik', 'Video resolution': 'Videoauflösung', 'Video duration': 'Videodauer', 'Filters': 'Filter', 'Done': 'Fertig', 'Close filters': 'Filter schließen', 'Model ID': 'Modell-ID', 'Configure price': 'Preis konfigurieren', 'Pricing': 'Preis', 'Capacity': 'Kapazität', 'Type': 'Typ', 'Kind': 'Art', 'Capability': 'Fähigkeit', 'Content': 'Inhalt', 'Privacy': 'Datenschutz', 'All types': 'Alle Typen', 'Text': 'Text', 'Image': 'Bild', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generierung', 'Upscale': 'Hochskalierung', 'Edit': 'Bearbeiten', 'Uncensored': 'Unzensiert', 'Text to Video': 'Text zu Video', 'Image to Video': 'Bild zu Video', 'Reasoning': 'Reasoning', 'Vision': 'Vision', 'Function Calling': 'Function Calling', 'Code': 'Code', 'Private': 'Privat', 'Anonymized': 'Anonymisiert', 'Sort': 'Sortieren', 'Sort models': 'Modelle sortieren', 'Search models': 'Modelle suchen', 'Recommended': 'Empfohlen', 'Newest': 'Neueste', 'Oldest': 'Älteste', 'Name (A–Z)': 'Name (A–Z)', 'Price: Low to High': 'Preis: aufsteigend', 'Price: High to Low': 'Preis: absteigend', 'Clear filters': 'Filter zurücksetzen', 'Search models...': 'Modelle suchen...', 'models': 'Modelle', 'closest matches': 'nächste Treffer', 'No close model matches': 'Keine ähnlichen Modelle gefunden', 'No models match your filters': 'Keine Modelle entsprechen deinen Filtern' },
-    'es': { 'Audio on': 'Audio activado', 'Audio off': 'Audio desactivado', 'Variable': 'Variable', 'Text to Speech': 'Texto a voz', 'Speech to Text': 'Voz a texto', 'Music': 'Música', 'Video resolution': 'Resolución de vídeo', 'Video duration': 'Duración del vídeo', 'Filters': 'Filtros', 'Done': 'Listo', 'Close filters': 'Cerrar filtros', 'Model ID': 'ID del modelo', 'Configure price': 'Configurar precio', 'Pricing': 'Precio', 'Capacity': 'Capacidad', 'Type': 'Tipo', 'Kind': 'Categoría', 'Capability': 'Capacidad', 'Content': 'Contenido', 'Privacy': 'Privacidad', 'All types': 'Todos los tipos', 'Text': 'Texto', 'Image': 'Imagen', 'Video': 'Vídeo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generación', 'Upscale': 'Escalado', 'Edit': 'Edición', 'Uncensored': 'Sin censura', 'Text to Video': 'Texto a vídeo', 'Image to Video': 'Imagen a vídeo', 'Reasoning': 'Razonamiento', 'Vision': 'Visión', 'Function Calling': 'Llamada de funciones', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Más recientes', 'Oldest': 'Más antiguos', 'Name (A–Z)': 'Nombre (A–Z)', 'Price: Low to High': 'Precio: de menor a mayor', 'Price: High to Low': 'Precio: de mayor a menor', 'Clear filters': 'Borrar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'coincidencias más cercanas', 'No close model matches': 'No hay modelos parecidos', 'No models match your filters': 'Ningún modelo coincide con tus filtros' },
-    'fr': { 'Audio on': 'Audio activé', 'Audio off': 'Audio désactivé', 'Variable': 'Variable', 'Text to Speech': 'Texte vers parole', 'Speech to Text': 'Parole vers texte', 'Music': 'Musique', 'Video resolution': 'Résolution vidéo', 'Video duration': 'Durée vidéo', 'Filters': 'Filtres', 'Done': 'Terminé', 'Close filters': 'Fermer les filtres', 'Model ID': 'ID du modèle', 'Configure price': 'Configurer le prix', 'Pricing': 'Prix', 'Capacity': 'Capacité', 'Type': 'Type', 'Kind': 'Catégorie', 'Capability': 'Capacité', 'Content': 'Contenu', 'Privacy': 'Confidentialité', 'All types': 'Tous les types', 'Text': 'Texte', 'Image': 'Image', 'Video': 'Vidéo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Génération', 'Upscale': 'Agrandissement', 'Edit': 'Édition', 'Uncensored': 'Sans censure', 'Text to Video': 'Texte vers vidéo', 'Image to Video': 'Image vers vidéo', 'Reasoning': 'Raisonnement', 'Vision': 'Vision', 'Function Calling': 'Appel de fonctions', 'Code': 'Code', 'Private': 'Privé', 'Anonymized': 'Anonymisé', 'Sort': 'Trier', 'Sort models': 'Trier les modèles', 'Search models': 'Rechercher des modèles', 'Recommended': 'Recommandé', 'Newest': 'Plus récents', 'Oldest': 'Plus anciens', 'Name (A–Z)': 'Nom (A–Z)', 'Price: Low to High': 'Prix : croissant', 'Price: High to Low': 'Prix : décroissant', 'Clear filters': 'Effacer les filtres', 'Search models...': 'Rechercher des modèles...', 'models': 'modèles', 'closest matches': 'correspondances les plus proches', 'No close model matches': 'Aucun modèle proche', 'No models match your filters': 'Aucun modèle ne correspond à vos filtres' },
-    'zh': { 'Audio on': '音频开启', 'Audio off': '音频关闭', 'Variable': '可变', 'Text to Speech': '文本转语音', 'Speech to Text': '语音转文本', 'Music': '音乐', 'Video resolution': '视频分辨率', 'Video duration': '视频时长', 'Filters': '筛选', 'Done': '完成', 'Close filters': '关闭筛选', 'Model ID': '模型 ID', 'Configure price': '配置价格', 'Pricing': '价格', 'Capacity': '容量', 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Content': '内容', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
-    'ko': { 'Audio on': '오디오 켜짐', 'Audio off': '오디오 꺼짐', 'Variable': '변동', 'Text to Speech': '텍스트 음성 변환', 'Speech to Text': '음성 텍스트 변환', 'Music': '음악', 'Video resolution': '비디오 해상도', 'Video duration': '비디오 길이', 'Filters': '필터', 'Done': '완료', 'Close filters': '필터 닫기', 'Model ID': '모델 ID', 'Configure price': '가격 설정', 'Pricing': '가격', 'Capacity': '용량', 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Content': '콘텐츠', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
+    'pt-BR': { 'Model': 'Modelo', 'Capabilities': 'Recursos', 'Status': 'Status', 'Audio on': 'Áudio ligado', 'Audio off': 'Áudio desligado', 'Variable': 'Variável', 'Text to Speech': 'Texto para voz', 'Speech to Text': 'Voz para texto', 'Music': 'Música', 'Video resolution': 'Resolução do vídeo', 'Video duration': 'Duração do vídeo', 'Filters': 'Filtros', 'Done': 'Concluído', 'Close filters': 'Fechar filtros', 'Model ID': 'ID do modelo', 'Configure price': 'Configurar preço', 'Pricing': 'Preço', 'Capacity': 'Capacidade', 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Recurso', 'Content': 'Conteúdo', 'Privacy': 'Privacidade', 'All types': 'Todos os tipos', 'Text': 'Texto', 'Image': 'Imagem', 'Video': 'Vídeo', 'Audio': 'Áudio', 'Embedding': 'Embedding', 'Generation': 'Geração', 'Upscale': 'Ampliação', 'Edit': 'Edição', 'Uncensored': 'Sem censura', 'Text to Video': 'Texto para vídeo', 'Image to Video': 'Imagem para vídeo', 'Reasoning': 'Raciocínio', 'Vision': 'Visão', 'Function Calling': 'Chamada de funções', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Mais recentes', 'Oldest': 'Mais antigos', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Preço: menor para maior', 'Price: High to Low': 'Preço: maior para menor', 'Clear filters': 'Limpar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'correspondências mais próximas', 'No close model matches': 'Nenhum modelo próximo encontrado', 'No models match your filters': 'Nenhum modelo corresponde aos seus filtros' },
+    'ar': { 'Model': 'النموذج', 'Capabilities': 'القدرات', 'Status': 'الحالة', 'Audio on': 'الصوت مفعّل', 'Audio off': 'الصوت متوقف', 'Variable': 'متغير', 'Text to Speech': 'تحويل النص إلى كلام', 'Speech to Text': 'تحويل الكلام إلى نص', 'Music': 'موسيقى', 'Video resolution': 'دقة الفيديو', 'Video duration': 'مدة الفيديو', 'Filters': 'عوامل التصفية', 'Done': 'تم', 'Close filters': 'إغلاق عوامل التصفية', 'Model ID': 'معرّف النموذج', 'Configure price': 'تكوين السعر', 'Pricing': 'التسعير', 'Capacity': 'السعة', 'Type': 'النوع', 'Kind': 'الفئة', 'Capability': 'القدرة', 'Content': 'المحتوى', 'Privacy': 'الخصوصية', 'All types': 'كل الأنواع', 'Text': 'نص', 'Image': 'صورة', 'Video': 'فيديو', 'Audio': 'صوت', 'Embedding': 'تضمين', 'Generation': 'توليد', 'Upscale': 'تحسين الدقة', 'Edit': 'تحرير', 'Uncensored': 'بدون رقابة', 'Text to Video': 'نص إلى فيديو', 'Image to Video': 'صورة إلى فيديو', 'Reasoning': 'استدلال', 'Vision': 'رؤية', 'Function Calling': 'استدعاء الدوال', 'Code': 'برمجة', 'Private': 'خاص', 'Anonymized': 'مجهول الهوية', 'Sort': 'ترتيب', 'Sort models': 'ترتيب النماذج', 'Search models': 'بحث في النماذج', 'Recommended': 'موصى به', 'Newest': 'الأحدث', 'Oldest': 'الأقدم', 'Name (A–Z)': 'الاسم (أ–ي)', 'Price: Low to High': 'السعر: من الأقل إلى الأعلى', 'Price: High to Low': 'السعر: من الأعلى إلى الأقل', 'Clear filters': 'مسح عوامل التصفية', 'Search models...': 'بحث في النماذج...', 'models': 'نماذج', 'closest matches': 'أقرب النتائج', 'No close model matches': 'لا توجد نماذج قريبة', 'No models match your filters': 'لا توجد نماذج تطابق عوامل التصفية' },
+    'it': { 'Model': 'Modello', 'Capabilities': 'Capacità', 'Status': 'Stato', 'Audio on': 'Audio attivo', 'Audio off': 'Audio disattivo', 'Variable': 'Variabile', 'Text to Speech': 'Da testo a voce', 'Speech to Text': 'Da voce a testo', 'Music': 'Musica', 'Video resolution': 'Risoluzione video', 'Video duration': 'Durata video', 'Filters': 'Filtri', 'Done': 'Fine', 'Close filters': 'Chiudi filtri', 'Model ID': 'ID modello', 'Configure price': 'Configura prezzo', 'Pricing': 'Prezzo', 'Capacity': 'Capacità', 'Type': 'Tipo', 'Kind': 'Categoria', 'Capability': 'Capacità', 'Content': 'Contenuto', 'Privacy': 'Privacy', 'All types': 'Tutti i tipi', 'Text': 'Testo', 'Image': 'Immagine', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generazione', 'Upscale': 'Upscaling', 'Edit': 'Modifica', 'Uncensored': 'Senza censura', 'Text to Video': 'Testo in video', 'Image to Video': 'Immagine in video', 'Reasoning': 'Ragionamento', 'Vision': 'Visione', 'Function Calling': 'Chiamata di funzioni', 'Code': 'Codice', 'Private': 'Privato', 'Anonymized': 'Anonimizzato', 'Sort': 'Ordina', 'Sort models': 'Ordina modelli', 'Search models': 'Cerca modelli', 'Recommended': 'Consigliati', 'Newest': 'Più recenti', 'Oldest': 'Meno recenti', 'Name (A–Z)': 'Nome (A–Z)', 'Price: Low to High': 'Prezzo: dal più basso', 'Price: High to Low': 'Prezzo: dal più alto', 'Clear filters': 'Cancella filtri', 'Search models...': 'Cerca modelli...', 'models': 'modelli', 'closest matches': 'corrispondenze più vicine', 'No close model matches': 'Nessun modello simile trovato', 'No models match your filters': 'Nessun modello corrisponde ai filtri' },
+    'de': { 'Model': 'Modell', 'Capabilities': 'Fähigkeiten', 'Status': 'Status', 'Audio on': 'Audio an', 'Audio off': 'Audio aus', 'Variable': 'Variabel', 'Text to Speech': 'Text zu Sprache', 'Speech to Text': 'Sprache zu Text', 'Music': 'Musik', 'Video resolution': 'Videoauflösung', 'Video duration': 'Videodauer', 'Filters': 'Filter', 'Done': 'Fertig', 'Close filters': 'Filter schließen', 'Model ID': 'Modell-ID', 'Configure price': 'Preis konfigurieren', 'Pricing': 'Preis', 'Capacity': 'Kapazität', 'Type': 'Typ', 'Kind': 'Art', 'Capability': 'Fähigkeit', 'Content': 'Inhalt', 'Privacy': 'Datenschutz', 'All types': 'Alle Typen', 'Text': 'Text', 'Image': 'Bild', 'Video': 'Video', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generierung', 'Upscale': 'Hochskalierung', 'Edit': 'Bearbeiten', 'Uncensored': 'Unzensiert', 'Text to Video': 'Text zu Video', 'Image to Video': 'Bild zu Video', 'Reasoning': 'Reasoning', 'Vision': 'Vision', 'Function Calling': 'Function Calling', 'Code': 'Code', 'Private': 'Privat', 'Anonymized': 'Anonymisiert', 'Sort': 'Sortieren', 'Sort models': 'Modelle sortieren', 'Search models': 'Modelle suchen', 'Recommended': 'Empfohlen', 'Newest': 'Neueste', 'Oldest': 'Älteste', 'Name (A–Z)': 'Name (A–Z)', 'Price: Low to High': 'Preis: aufsteigend', 'Price: High to Low': 'Preis: absteigend', 'Clear filters': 'Filter zurücksetzen', 'Search models...': 'Modelle suchen...', 'models': 'Modelle', 'closest matches': 'nächste Treffer', 'No close model matches': 'Keine ähnlichen Modelle gefunden', 'No models match your filters': 'Keine Modelle entsprechen deinen Filtern' },
+    'es': { 'Model': 'Modelo', 'Capabilities': 'Capacidades', 'Status': 'Estado', 'Audio on': 'Audio activado', 'Audio off': 'Audio desactivado', 'Variable': 'Variable', 'Text to Speech': 'Texto a voz', 'Speech to Text': 'Voz a texto', 'Music': 'Música', 'Video resolution': 'Resolución de vídeo', 'Video duration': 'Duración del vídeo', 'Filters': 'Filtros', 'Done': 'Listo', 'Close filters': 'Cerrar filtros', 'Model ID': 'ID del modelo', 'Configure price': 'Configurar precio', 'Pricing': 'Precio', 'Capacity': 'Capacidad', 'Type': 'Tipo', 'Kind': 'Categoría', 'Capability': 'Capacidad', 'Content': 'Contenido', 'Privacy': 'Privacidad', 'All types': 'Todos los tipos', 'Text': 'Texto', 'Image': 'Imagen', 'Video': 'Vídeo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Generación', 'Upscale': 'Escalado', 'Edit': 'Edición', 'Uncensored': 'Sin censura', 'Text to Video': 'Texto a vídeo', 'Image to Video': 'Imagen a vídeo', 'Reasoning': 'Razonamiento', 'Vision': 'Visión', 'Function Calling': 'Llamada de funciones', 'Code': 'Código', 'Private': 'Privado', 'Anonymized': 'Anonimizado', 'Sort': 'Ordenar', 'Sort models': 'Ordenar modelos', 'Search models': 'Buscar modelos', 'Recommended': 'Recomendado', 'Newest': 'Más recientes', 'Oldest': 'Más antiguos', 'Name (A–Z)': 'Nombre (A–Z)', 'Price: Low to High': 'Precio: de menor a mayor', 'Price: High to Low': 'Precio: de mayor a menor', 'Clear filters': 'Borrar filtros', 'Search models...': 'Buscar modelos...', 'models': 'modelos', 'closest matches': 'coincidencias más cercanas', 'No close model matches': 'No hay modelos parecidos', 'No models match your filters': 'Ningún modelo coincide con tus filtros' },
+    'fr': { 'Model': 'Modèle', 'Capabilities': 'Capacités', 'Status': 'Statut', 'Audio on': 'Audio activé', 'Audio off': 'Audio désactivé', 'Variable': 'Variable', 'Text to Speech': 'Texte vers parole', 'Speech to Text': 'Parole vers texte', 'Music': 'Musique', 'Video resolution': 'Résolution vidéo', 'Video duration': 'Durée vidéo', 'Filters': 'Filtres', 'Done': 'Terminé', 'Close filters': 'Fermer les filtres', 'Model ID': 'ID du modèle', 'Configure price': 'Configurer le prix', 'Pricing': 'Prix', 'Capacity': 'Capacité', 'Type': 'Type', 'Kind': 'Catégorie', 'Capability': 'Capacité', 'Content': 'Contenu', 'Privacy': 'Confidentialité', 'All types': 'Tous les types', 'Text': 'Texte', 'Image': 'Image', 'Video': 'Vidéo', 'Audio': 'Audio', 'Embedding': 'Embedding', 'Generation': 'Génération', 'Upscale': 'Agrandissement', 'Edit': 'Édition', 'Uncensored': 'Sans censure', 'Text to Video': 'Texte vers vidéo', 'Image to Video': 'Image vers vidéo', 'Reasoning': 'Raisonnement', 'Vision': 'Vision', 'Function Calling': 'Appel de fonctions', 'Code': 'Code', 'Private': 'Privé', 'Anonymized': 'Anonymisé', 'Sort': 'Trier', 'Sort models': 'Trier les modèles', 'Search models': 'Rechercher des modèles', 'Recommended': 'Recommandé', 'Newest': 'Plus récents', 'Oldest': 'Plus anciens', 'Name (A–Z)': 'Nom (A–Z)', 'Price: Low to High': 'Prix : croissant', 'Price: High to Low': 'Prix : décroissant', 'Clear filters': 'Effacer les filtres', 'Search models...': 'Rechercher des modèles...', 'models': 'modèles', 'closest matches': 'correspondances les plus proches', 'No close model matches': 'Aucun modèle proche', 'No models match your filters': 'Aucun modèle ne correspond à vos filtres' },
+    'zh': { 'Model': '模型', 'Capabilities': '能力', 'Status': '状态', 'Audio on': '音频开启', 'Audio off': '音频关闭', 'Variable': '可变', 'Text to Speech': '文本转语音', 'Speech to Text': '语音转文本', 'Music': '音乐', 'Video resolution': '视频分辨率', 'Video duration': '视频时长', 'Filters': '筛选', 'Done': '完成', 'Close filters': '关闭筛选', 'Model ID': '模型 ID', 'Configure price': '配置价格', 'Pricing': '价格', 'Capacity': '容量', 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Content': '内容', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
+    'ko': { 'Model': '모델', 'Capabilities': '기능', 'Status': '상태', 'Audio on': '오디오 켜짐', 'Audio off': '오디오 꺼짐', 'Variable': '변동', 'Text to Speech': '텍스트 음성 변환', 'Speech to Text': '음성 텍스트 변환', 'Music': '음악', 'Video resolution': '비디오 해상도', 'Video duration': '비디오 길이', 'Filters': '필터', 'Done': '완료', 'Close filters': '필터 닫기', 'Model ID': '모델 ID', 'Configure price': '가격 설정', 'Pricing': '가격', 'Capacity': '용량', 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Content': '콘텐츠', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
   };
   function t(s) {
     if (LOCALE === 'en') return s;
@@ -627,16 +627,12 @@
   }
 
   async function updateVideoPrice(modelId, model, { resolution, duration, audio } = {}, container) {
-    const priceEl = (container || document).querySelector(`.vmb-video-price[data-model="${modelId}"]`);
-    if (!priceEl) return;
+    const priceEls = [...(container || document).querySelectorAll(`.vmb-video-price[data-model="${modelId}"]`)];
+    if (priceEls.length === 0) return;
 
     const price = await fetchVideoQuote(modelId, model, { resolution, duration, audio });
-
-    if (price !== null) {
-      priceEl.textContent = formatPrice(price);
-    } else {
-      priceEl.textContent = t('Variable');
-    }
+    const label = price !== null ? formatPrice(price) : t('Variable');
+    priceEls.forEach(priceEl => { priceEl.textContent = label; });
   }
 
   // Capability icons (simple SVG line icons)
@@ -2316,6 +2312,9 @@
         </div>
       </div>
       ${renderMobileFilterLayer()}
+      <div class="vmb-table-header" role="row">
+        <span role="columnheader">${t('Model')}</span><span role="columnheader">${t('Type')}</span><span role="columnheader">${t('Pricing')}</span><span role="columnheader">${t('Capacity')}</span><span role="columnheader">${t('Capabilities')}</span><span role="columnheader">${t('Status')}</span>
+      </div>
       <div class="vmb-models" role="list" aria-label="Model list">
         ${hasCachedData ? '' : '<div class="vmb-loading">Loading models...</div>'}
       </div>
@@ -3052,10 +3051,24 @@
 
         // Context for mobile bottom row
       const contextMobile = contextStr ? `<span class="vmb-context vmb-context-mobile"><span class="vmb-meta-label">${t('Capacity')}</span>${contextStr}</span>` : '';
+      const desktopPrice = model.type === 'video'
+        ? `<span class="vmb-table-video">${videoControlsHtml}</span>`
+        : (priceStr ? `<span class="vmb-pricing">${priceStr}</span>` : '<span class="vmb-table-empty">—</span>');
+      const desktopCapacity = contextStr
+        ? `<span class="vmb-context">${contextStr}</span>`
+        : (videoMeta ? `<span class="vmb-video-static-meta">${videoMeta}</span>` : '<span class="vmb-table-empty">—</span>');
+      const desktopStatus = `${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${moderationBadge}${releaseDateHtml}`;
 
       return `
         <div class="vmb-model" role="listitem">
           <div class="vmb-model-shell">
+            <div class="vmb-table-cell vmb-table-identity" aria-label="${t('Model')}">${getModelLogoHtml(model)}<span class="vmb-table-identity-copy"><span class="vmb-table-name-line">${nameLink}${dateInfo?.isNew ? '<span class="vmb-new-dot" title="Recently added">New</span>' : ''}</span><span class="vmb-table-id-line"><span class="vmb-id-text">${modelIdDisplay}</span>${copyBtn}</span></span></div>
+            <div class="vmb-table-cell vmb-table-type" aria-label="${t('Type')}">${modalityBadge}${videoTypeBadge}</div>
+            <div class="vmb-table-cell vmb-table-price" aria-label="${t('Pricing')}">${desktopPrice}</div>
+            <div class="vmb-table-cell vmb-table-capacity" aria-label="${t('Capacity')}">${desktopCapacity}</div>
+            <div class="vmb-table-cell vmb-table-capabilities" aria-label="${t('Capabilities')}">${capIcons || '<span class="vmb-table-empty">—</span>'}</div>
+            <div class="vmb-table-cell vmb-table-status" aria-label="${t('Status')}">${desktopStatus || '<span class="vmb-table-empty">—</span>'}</div>
+            <div class="vmb-model-mobile">
             ${getModelLogoHtml(model)}
             <div class="vmb-model-body">
             <div class="vmb-model-row">
@@ -3070,6 +3083,7 @@
             <div class="vmb-model-info">
               <span class="vmb-info-left">${leftParts.join('<span class="vmb-dot">·</span>')}${contextMobile}</span>
               <span class="vmb-info-right">${capIcons}${releaseDateHtml}</span>
+            </div>
             </div>
             </div>
           </div>
@@ -3137,24 +3151,33 @@
       if (isImgRes) {
         const resolution = target.value;
         const price = model.model_spec?.pricing?.resolutions?.[resolution]?.usd;
-        const priceEl = target.closest('.vmb-model')?.querySelector('.vmb-img-price-val');
-        if (priceEl && price !== undefined) {
-          priceEl.textContent = formatPrice(price);
+        const scope = target.closest('.vmb-model-mobile, .vmb-table-capacity, .vmb-table-price') || target.closest('.vmb-model');
+        const row = target.closest('.vmb-model');
+        row?.querySelectorAll('.vmb-img-res').forEach(select => {
+          if (select !== target) select.value = resolution;
+        });
+        const priceEls = row ? [...row.querySelectorAll('.vmb-img-price-val')] : [];
+        if (price !== undefined) {
+          priceEls.forEach(priceEl => { priceEl.textContent = formatPrice(price); });
         }
         return;
       }
 
       // Handle video pricing
-      const card = target.closest('.vmb-model');
-      const resSelect = card.querySelector('.vmb-res-select');
-      const durSelect = card.querySelector('.vmb-dur-select');
-      const audioToggle = card.querySelector('.vmb-audio-toggle');
+      const scope = target.closest('.vmb-model-mobile, .vmb-table-price') || target.closest('.vmb-model');
+      const resSelect = scope.querySelector('.vmb-res-select');
+      const durSelect = scope.querySelector('.vmb-dur-select');
+      const audioToggle = scope.querySelector('.vmb-audio-toggle');
 
       const resolution = resSelect?.value;
       const duration = durSelect?.value;
       const audio = audioToggle ? audioToggle.dataset.audio === 'true' : undefined;
+      const row = target.closest('.vmb-model');
+      row.querySelectorAll(`.${isResSelect ? 'vmb-res-select' : 'vmb-dur-select'}`).forEach(select => {
+        if (select !== target) select.value = target.value;
+      });
 
-      updateVideoPrice(modelId, model, { resolution, duration, audio }, modelsContainer);
+      updateVideoPrice(modelId, model, { resolution, duration, audio }, row);
     });
 
     // Event: Audio toggle click
@@ -3164,23 +3187,28 @@
 
       const isOn = toggle.dataset.audio === 'true';
       toggle.dataset.audio = isOn ? 'false' : 'true';
-      toggle.textContent = `♪ ${t(isOn ? 'Audio off' : 'Audio on')}`;
-      toggle.classList.toggle('off', isOn);
-      toggle.setAttribute('aria-pressed', isOn ? 'false' : 'true');
+      const nextAudio = !isOn;
+      const row = toggle.closest('.vmb-model');
+      row.querySelectorAll('.vmb-audio-toggle').forEach(audioToggle => {
+        audioToggle.dataset.audio = nextAudio ? 'true' : 'false';
+        audioToggle.textContent = `♪ ${t(nextAudio ? 'Audio on' : 'Audio off')}`;
+        audioToggle.classList.toggle('off', !nextAudio);
+        audioToggle.setAttribute('aria-pressed', nextAudio ? 'true' : 'false');
+      });
 
       const modelId = toggle.dataset.model;
       const model = allModels.find(m => m.id === modelId);
       if (!model) return;
 
-      const card = toggle.closest('.vmb-model');
-      const resSelect = card.querySelector('.vmb-res-select');
-      const durSelect = card.querySelector('.vmb-dur-select');
+      const activeScope = toggle.closest('.vmb-model-mobile, .vmb-table-price') || row;
+      const resSelect = activeScope.querySelector('.vmb-res-select');
+      const durSelect = activeScope.querySelector('.vmb-dur-select');
 
       updateVideoPrice(modelId, model, {
         resolution: resSelect?.value,
         duration: durSelect?.value,
-        audio: !isOn
-      }, modelsContainer);
+        audio: nextAudio
+      }, row);
     });
   }
 
