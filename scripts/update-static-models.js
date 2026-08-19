@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Fetch models from Venice API and update the snapshot in data/static-models.json.
- * Then regenerate pricing.mdx.
+ * Fetch models and text traits from the Venice API, update their snapshots,
+ * and regenerate model-driven static documentation.
  * 
  * Usage: node scripts/update-static-models.js
  */
@@ -12,6 +12,7 @@ const path = require('path');
 const API_BASE = 'https://api.venice.ai/api/v1/models';
 const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video', 'music'];
 const SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-models.json');
+const TRAITS_SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-traits.json');
 
 async function fetchAllModels() {
   const results = await Promise.all(MODEL_TYPES.map(async type => {
@@ -35,6 +36,29 @@ async function fetchAllModels() {
     seen.add(m.id);
     return true;
   });
+}
+
+async function fetchTextTraits() {
+  const res = await fetch(`${API_BASE}/traits?type=text`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch text traits: API returned ${res.status}`);
+  }
+
+  const json = await res.json();
+  const traits = json.data;
+  if (!traits || typeof traits !== 'object' || Array.isArray(traits)) {
+    throw new Error('Failed to fetch text traits: API returned invalid data');
+  }
+
+  for (const [trait, modelId] of Object.entries(traits)) {
+    if (typeof trait !== 'string' || typeof modelId !== 'string') {
+      throw new Error('Failed to fetch text traits: expected string mappings');
+    }
+  }
+
+  return Object.fromEntries(
+    Object.entries(traits).sort(([a], [b]) => a.localeCompare(b))
+  );
 }
 
 function cleanModel(m) {
@@ -72,33 +96,45 @@ function sortModels(models) {
 }
 
 async function main() {
-  const currentJson = fs.existsSync(SNAPSHOT_PATH)
-    ? fs.readFileSync(SNAPSHOT_PATH, 'utf-8')
-    : null;
-
-  console.log('Fetching models from API...');
-  const models = await fetchAllModels();
+  console.log('Fetching models and text traits from API...');
+  const [models, traits] = await Promise.all([
+    fetchAllModels(),
+    fetchTextTraits()
+  ]);
   console.log(`Fetched ${models.length} models`);
+  console.log(`Fetched ${Object.keys(traits).length} text traits`);
 
   const cleaned = sortModels(models.map(cleanModel));
-  const json = JSON.stringify(cleaned);
-
-  if (currentJson === json) {
-    console.log('Model snapshot already up to date. Skipping pricing regeneration.');
-    return;
-  }
+  const modelsJson = JSON.stringify(cleaned);
+  const traitsJson = JSON.stringify(traits);
 
   fs.mkdirSync(path.dirname(SNAPSHOT_PATH), { recursive: true });
-  fs.writeFileSync(SNAPSHOT_PATH, json, 'utf-8');
-  console.log('Updated data/static-models.json');
+  writeIfChanged(SNAPSHOT_PATH, modelsJson, 'data/static-models.json');
+  writeIfChanged(TRAITS_SNAPSHOT_PATH, traitsJson, 'data/static-traits.json');
 
-  // Runs before the pricing generator, which exits the process when it has
-  // nothing to write.
+  // Pricing is last because its generator exits the process when unchanged.
   console.log('Regenerating Popular models cards...');
   require('./generate-popular-models.js');
 
+  console.log('Regenerating traits and deprecations...');
+  require('./generate-deprecations-static.js');
+
   console.log('Regenerating pricing.mdx...');
   require('./generate-pricing-static.js');
+}
+
+function writeIfChanged(filePath, contents, label) {
+  const current = fs.existsSync(filePath)
+    ? fs.readFileSync(filePath, 'utf-8')
+    : null;
+
+  if (current === contents) {
+    console.log(`${label} already up to date`);
+    return;
+  }
+
+  fs.writeFileSync(filePath, contents, 'utf-8');
+  console.log(`Updated ${label}`);
 }
 
 main().catch(e => {
