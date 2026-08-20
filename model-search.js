@@ -2876,7 +2876,7 @@
             const isLandscape = w > h;
             const isPortrait = h > w;
             const cls = isLandscape ? 'landscape' : isPortrait ? 'portrait' : 'square';
-            return `<span class="vmb-ar ${cls}" title="${ar}"></span>`;
+            return `<span class="vmb-ar ${cls}" title="${escapeHtml(ar)}"></span>`;
           }).join('')}</span>` 
         : '';
       const videoMeta = model.type === 'video' ? [
