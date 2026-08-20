@@ -1,0 +1,401 @@
+---
+title: "基于网页搜索的带引用回答"
+sidebarTitle: "带引用回答"
+description: "将 Venice 的 Web Search、Web Scrape 和聊天补全组合成一个脚本，用带引用的简报回答问题，每条论断都可追溯到来源。"
+"og:title": "基于网页搜索的带引用回答 | Venice API 文档"
+"og:description": "将 Venice 的 Web Search 与 Web Scrape 串联到一次聊天补全中，生成带引用的研究简报。"
+---
+
+语言模型擅长总结文本，却不擅长记住事实。本教程将事实从模型记忆中移出，放入提示词中，使输出的每一句话都能追溯到你刚刚获取的页面。
+
+我们将构建一个命令行工具，用一份简短、带引用的简报来回答问题：
+
+```bash
+python research.py "What privacy guarantees does the Venice API provide for inference?"
+```
+
+在此过程中，我们会：
+
+1. 使用 `/augment/search` 搜索实时网络
+2. 决定其中哪些结果值得阅读
+3. 使用 `/augment/scrape` 将选中的页面转换为 Markdown
+4. 让聊天模型撰写简报，并按编号引用来源
+5. 将四个阶段串联成一个脚本
+
+我们自己进行检索，而不是让模型来做，正是为了让结果可审计。我们保留了进入提示词的确切页面列表，可以向读者展示每条论断的出处。如果你更希望 Venice 在单次请求中处理检索，可以在聊天补全上设置 `venice_parameters.enable_web_search`。[网页搜索与抓取](/guides/tools/web-retrieval) 指南对这两种方式做了对比。
+
+## 环境准备
+
+你需要 Python 3.9 或更新版本、`requests` 包，以及一个 Venice API 密钥。如果还没有密钥，请参阅 [生成 API 密钥](/guides/getting-started/generating-api-key)。
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+创建 `research.py`，先写入导入语句以及每次调用都会复用的共享请求头：
+
+```python
+from __future__ import annotations
+
+import os
+import re
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+    "Content-Type": "application/json",
+}
+```
+
+## 1. 搜索网络
+
+`/augment/search` 接收一个查询，最多返回 20 条排序后的结果。Brave 是默认的提供商，并采用零数据保留。Google 也可用，其查询会通过 Venice 代理，因此查询永远不会与你关联。
+
+<CodeGroup>
+```python Python
+HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def search(query: str, limit: int = 10, provider: str = "brave") -> list[dict]:
+    response = requests.post(
+        f"{BASE_URL}/augment/search",
+        headers=HEADERS,
+        json={"query": query, "limit": limit, "search_provider": provider},
+        timeout=60,
+    )
+    response.raise_for_status()
+
+    results = response.json()["results"]
+    for result in results:
+        result["content"] = HTML_TAG.sub("", result["content"]).strip()
+    return results
+```
+
+```javascript Node.js
+const BASE_URL = "https://api.venice.ai/api/v1";
+const headers = {
+  Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+  "Content-Type": "application/json",
+};
+
+async function search(query, limit = 10, provider = "brave") {
+  const response = await fetch(`${BASE_URL}/augment/search`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ query, limit, search_provider: provider }),
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${await response.text()}`);
+  }
+
+  const { results } = await response.json();
+  return results.map((result) => ({
+    ...result,
+    content: result.content.replace(/<[^>]+>/g, "").trim(),
+  }));
+}
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/augment/search \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "venice api privacy guarantees",
+    "limit": 10,
+    "search_provider": "brave"
+  }'
+```
+</CodeGroup>
+
+每条结果都是一个包含四个字段的对象：
+
+```python
+import json
+
+results = search("Venice API privacy guarantees for inference", limit=10)
+print(json.dumps(results[0], indent=2))
+```
+
+```json
+{
+  "title": "Privacy | Venice API Docs",
+  "url": "https://docs.venice.ai/overview/privacy",
+  "content": "The Venice API replicates the same backend privacy architecture as the Venice platform: requests pass through the Venice...",
+  "date": ""
+}
+```
+
+在此基础上构建之前，有两点值得了解。
+
+`content` 字段返回时会带有 HTML，因为提供商会用 `<strong>` 标签包裹匹配到的词语。上面的 `HTML_TAG` 替换会将其剥离，使摘要以纯文本形式传给模型。
+
+`date` 字段经常是空字符串。许多页面没有发布机器可读的日期，因此请将 `date` 视为一个仅在存在时可以参考的提示，而不是可以用来排序或过滤的字段。
+
+<Warning>
+  `limit` 必须介于 1 和 20 之间，`query` 长度必须在 1 到 400 个字符之间。超出范围的值会返回 HTTP `400` 及校验错误响应体，不会自动截断。
+</Warning>
+
+## 2. 选择要阅读的来源
+
+抓取全部十条结果既慢又昂贵，而且大多重复。搜索引擎经常返回同一站点的多个页面，尤其是文档站点会以多种语言返回同一页面，因此相同内容可能会以不同 URL 出现三到四次。
+
+只保留每个域名中排名最高的一条结果，几行代码就能消除大部分重复：
+
+```python
+def select_sources(results: list[dict], max_sources: int = 4) -> list[dict]:
+    """Keep the highest-ranked result per domain, up to max_sources."""
+    selected: list[dict] = []
+    seen_domains: set[str] = set()
+
+    for result in results:
+        domain = urlparse(result["url"]).netloc.removeprefix("www.")
+        if domain in seen_domains:
+            continue
+        seen_domains.add(domain)
+        selected.append(result)
+        if len(selected) == max_sources:
+            break
+
+    return selected
+```
+
+对上述十条结果运行后，会缩减为四个不同的站点：
+
+```python
+sources = select_sources(results)
+for source in sources:
+    print(source["url"])
+```
+
+```
+https://docs.venice.ai/overview/privacy
+https://venice.ai/privacy
+https://www.timtis.com/blog/veniceai-a-deep-dive-into-the-privacy-first-generative-ai-platform/
+https://www.youtube.com/watch?v=i40GJxyHgT8
+```
+
+这里正是加入你自己判断的自然位置。你可以将信任的域名列入白名单、丢弃摘要中从未提及关键词的结果，或偏好带有较新 `date` 的结果。你在这里加的每一层过滤，都是模型没有机会出错的一个决策。
+
+## 3. 抓取选定的页面
+
+`/augment/scrape` 会获取一个公开 URL 并以 Markdown 返回。它会先向站点请求原生的 Markdown 版本，如果没有则回退到基于浏览器的提取方式。
+
+有些页面会失败，研究工具应把这视为常态而非致命错误：
+
+```python
+def scrape(url: str) -> str | None:
+    """Return the page as Markdown, or None if the page cannot be extracted."""
+    try:
+        response = requests.post(
+            f"{BASE_URL}/augment/scrape",
+            headers=HEADERS,
+            json={"url": url},
+            timeout=120,
+        )
+    except requests.RequestException as error:
+        print(f"  skipped {url}: {error}", file=sys.stderr)
+        return None
+
+    if response.status_code != 200:
+        reason = response.json().get("error", response.text)
+        print(f"  skipped {url}: {reason}", file=sys.stderr)
+        return None
+
+    content = response.json()["content"]
+    if len(content) < 200:
+        print(f"  skipped {url}: only {len(content)} characters returned", file=sys.stderr)
+        return None
+
+    return content
+```
+
+这两处保护措施都值得保留。状态码检查可以捕获拒绝自动访问的站点，长度检查可以捕获返回 `200` 但只给回一个 cookie 提示或空壳而非文章的页面。
+
+<Note>
+  抓取失败会返回一个简单的 `{"error": "..."}` 响应体，包含可读的信息，例如 `X (formerly Twitter) blocks automated access to their content.`。X 和 Reddit 被完全屏蔽。如需在回答中包含 X 上的帖子，请在聊天补全上使用 `venice_parameters.enable_x_search`。
+</Note>
+
+这些请求之间没有依赖关系，因此可以并行执行。顺便也限制一下每个页面保留的字符数：
+
+```python
+def gather(sources: list[dict], char_budget: int = 12000) -> list[dict]:
+    """Scrape every source in parallel and drop the ones that fail."""
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        pages = pool.map(scrape, [source["url"] for source in sources])
+
+    gathered = []
+    for source, page in zip(sources, pages):
+        if page is None:
+            continue
+        gathered.append({**source, "markdown": page[:char_budget]})
+
+    return gathered
+```
+
+```python
+gathered = gather(sources)
+for source in gathered:
+    print(f"{len(source['markdown']):>6} chars  {source['url']}")
+```
+
+```
+  7582 chars  https://docs.venice.ai/overview/privacy
+  5111 chars  https://venice.ai/privacy
+ 12000 chars  https://www.timtis.com/blog/veniceai-a-deep-dive-into-the-privacy-first-generative-ai-platform/
+ 10764 chars  https://www.youtube.com/watch?v=i40GJxyHgT8
+```
+
+第三个页面刚好返回了 12000 个字符，这意味着它比预算长，被截断了。
+
+<Warning>
+  `char_budget` 并非可有可无。搜索结果中经常出现聚合类页面，例如站点地图、变更日志和 `llms-full.txt` 文件，其中任何一个都可能返回接近百万字符的内容。如果不设上限，一条运气不好的结果就会决定整个请求的成本。
+</Warning>
+
+## 4. 撰写简报
+
+现在我们把收集到的页面按编号交给模型，并要求它使用这些编号进行引用。提示词中的编号让我们能够将输出中的 `[2]` 追溯回 URL。
+
+```python
+def write_brief(question: str, sources: list[dict], model: str = "zai-org-glm-5-1") -> str:
+    numbered = "\n\n".join(
+        f"[{index}] {source['title']}\nURL: {source['url']}\n\n{source['markdown']}"
+        for index, source in enumerate(sources, start=1)
+    )
+
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=HEADERS,
+        json={
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You write short research briefs from supplied sources. "
+                        "Use only the numbered sources given to you. "
+                        "Cite every claim with its source number in square brackets, like [2]. "
+                        "If the sources do not answer part of the question, say so explicitly."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Question: {question}\n\nSources:\n\n{numbered}",
+                },
+            ],
+            "temperature": 0.2,
+            "venice_parameters": {"enable_web_search": "off"},
+        },
+        timeout=180,
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+```
+
+较低的 `temperature` 会让措辞更贴近原文。将 `enable_web_search` 设为 `off` 与默认行为一致，但明确写出来可以确保模型不会悄悄引入不在我们参考列表中的来源。
+
+## 5. 把它们串联起来
+
+最后一部分按顺序执行各阶段，并附上用于解析引用编号的参考列表：
+
+```python
+def research(question: str) -> str:
+    print(f"Searching: {question}", file=sys.stderr)
+    results = search(question, limit=10)
+    sources = select_sources(results)
+
+    print(f"Scraping {len(sources)} sources", file=sys.stderr)
+    gathered = gather(sources)
+    if not gathered:
+        raise RuntimeError("No sources could be scraped. Try a different query.")
+
+    print(f"Writing brief from {len(gathered)} sources", file=sys.stderr)
+    brief = write_brief(question, gathered)
+
+    references = "\n".join(
+        f"{index}. [{source['title']}]({source['url']})"
+        for index, source in enumerate(gathered, start=1)
+    )
+    return f"{brief}\n\n## Sources\n\n{references}\n"
+
+
+if __name__ == "__main__":
+    question = " ".join(sys.argv[1:]) or "What is the Venice API and what does it offer?"
+    print(research(question))
+```
+
+进度信息会输出到 `stderr`，因此你可以将简报本身重定向到文件：
+
+```bash
+python research.py "What privacy guarantees does the Venice API provide for inference?" > brief.md
+```
+
+```
+Searching: What privacy guarantees does the Venice API provide for inference?
+Scraping 4 sources
+Writing brief from 4 sources
+```
+
+以下是生成的简报开头部分（已缩略）：
+
+```markdown
+## Core Architecture Guarantees
+
+The Venice API replicates the same backend privacy architecture as the Venice
+platform [1]. At its foundation:
+
+- Requests pass through the Venice proxy over HTTPS/TLS encrypted connections [1]
+- Venice does not store or log prompt and response content for normal inference [1]
+- The proxy maintains memory only during the active session stream and destroys
+  the state immediately upon completion [4]
+
+## Sources
+
+1. [Privacy | Venice API Docs](https://docs.venice.ai/overview/privacy)
+2. [Privacy in Venice | Venice AI](https://venice.ai/privacy)
+3. [Venice.ai: A Deep Dive into the Privacy First Generative AI Platform](https://www.timtis.com/blog/veniceai-a-deep-dive-into-the-privacy-first-generative-ai-platform/)
+4. [Venice AI API Review: Private AI Agents For Autonomous Workflows](https://www.youtube.com/watch?v=i40GJxyHgT8)
+```
+
+注意，在这段摘录中来源 3 从未被引用。这正是我们想要的行为。模型使用了相关的来源，其余的置之不理，而由于引用是编号的，你可以一眼看出这一点。
+
+## 调整流水线
+
+大部分实际耗时都花在最后一次聊天补全上，因为四个抓取到的页面加起来有数万个 token。以下是首先值得尝试的调节点：
+
+| 目标 | 修改内容 |
+|---|---|
+| 更快、更便宜的响应 | 调小 `char_budget`，或将 `max_sources` 从 4 减至 2 |
+| 更广的覆盖范围 | 提高搜索调用中的 `limit`，保持 `max_sources` 较小，并在 `select_sources` 中加大过滤力度 |
+| 更可靠的提取 | 优先选择文档和文章类域名。聚合类和依赖大量 JavaScript 的页面更容易失败 |
+| 不同的排序方式 | 试试 `search_provider: "google"`，它会呈现与 Brave 不同的页面，但响应速度更慢 |
+
+## 后续步骤
+
+你现在得到的这套流水线是一个基础，而非成品。以下是几个值得探索的方向：
+
+- 按 URL 缓存抓取到的 Markdown，这样重复的问题就不会再次拉取同样的页面。
+- 使用 [嵌入](/guides/features/embeddings) 将 Markdown 存为向量，从而检索段落而非整页。
+- 让模型先规划多个查询再进行搜索，就像 [私密研究 Agent](/guides/projects/private-research-agent) 示例那样。
+- 通过将简报接入 [使用文本转语音朗读文章](/guides/media/article-narration) 来朗读出简报内容。
+
+<CardGroup cols={2}>
+  <Card title="网页搜索与抓取" icon="search" href="/guides/tools/web-retrieval">
+    Search 和 Scrape 端点的参考文档。
+  </Card>
+  <Card title="使用文本转语音朗读文章" icon="volume-2" href="/guides/media/article-narration">
+    将你刚生成的文本转换为音频。
+  </Card>
+  <Card title="嵌入" icon="stack" href="/guides/features/embeddings">
+    对抓取到的 Markdown 建立索引，而不是反复获取。
+  </Card>
+  <Card title="私密研究 Agent" icon="robot" href="/guides/projects/private-research-agent">
+    一个能自行规划搜索的更完整 agent。
+  </Card>
+</CardGroup>

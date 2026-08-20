@@ -1,0 +1,490 @@
+---
+title: "Narrare articoli con il Text-to-Speech"
+sidebarTitle: "Narrazione di articoli"
+description: "Trasforma qualsiasi articolo web in un file audio narrato con il text-to-speech di Venice, coprendo la scelta della voce, il limite di 4096 caratteri, l'unione senza pause dell'audio e lo streaming."
+"og:title": "Narrare articoli con il Text-to-Speech | Venice API Docs"
+"og:description": "Suddividi testi lunghi in blocchi, sintetizzali con il text-to-speech di Venice e unisci l'audio in un unico file narrato."
+---
+
+Fare una singola chiamata a `/audio/speech` è facile. Narrare un articolo vero e proprio è il momento in cui emergono i problemi interessanti: l'endpoint accetta al massimo 4096 caratteri per richiesta, ogni voce appartiene a un modello specifico, i formati audio variano da modello a modello, e un testo scritto per essere letto non assomiglia affatto a un testo scritto per essere ascoltato.
+
+In questo tutorial affronteremo tutti e quattro gli aspetti. Il risultato è uno script che trasforma un URL in un singolo file audio:
+
+```bash
+python article_to_audio.py https://docs.venice.ai/overview/privacy
+```
+
+Faremo così:
+
+1. Scegliere un modello e una voce adatti a una narrazione di forma lunga
+2. Fare una singola richiesta di sintesi e salvare l'audio
+3. Suddividere un articolo lungo in blocchi che rientrano nel limite di caratteri
+4. Unire i blocchi sintetizzati in un unico file senza giunte udibili
+5. Riscrivere l'articolo in qualcosa che valga la pena ascoltare
+6. Combinare i pezzi e poi vedere lo streaming per l'uso interattivo
+
+## Setup
+
+Ti servono Python 3.9 o più recente, il pacchetto `requests` e una chiave API Venice.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+## 1. Scegliere un modello e una voce
+
+Le voci appartengono ai modelli. Inviare una voce di una famiglia a un modello di un'altra è il primo errore più comune, quindi inizia elencando ciò che ciascun modello accetta davvero:
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=tts" \
+  -H "Authorization: Bearer $VENICE_API_KEY" |
+  jq -r '.data[] | "\(.id)  formats=\(.model_spec.supported_formats)  voices=\(.model_spec.voices | length)"'
+```
+
+```
+tts-kokoro  formats=["mp3","opus","aac","flac","wav","pcm"]  voices=54
+tts-qwen3-1-7b  formats=["mp3"]  voices=9
+tts-xai-v1  formats=["mp3","wav","pcm"]  voices=26
+tts-inworld-1-5-max  formats=["wav"]  voices=14
+tts-chatterbox-hd  formats=["wav"]  voices=9
+tts-orpheus  formats=["wav"]  voices=8
+tts-elevenlabs-turbo-v2-5  formats=["mp3"]  voices=21
+tts-minimax-speech-02-hd  formats=["mp3","pcm","flac"]  voices=15
+tts-gemini-3-1-flash  formats=["mp3","opus","wav"]  voices=30
+tts-gradium-v1  formats=["wav","pcm","opus"]  voices=12
+```
+
+`model_spec.voices` è l'elenco autorevole delle voci per un modello, e `supported_formats` ti dice quali valori di `response_format` accetta. Togli `| length` dalla query per stampare i nomi delle voci.
+
+Useremo `tts-xai-v1` con la voce `eve`. Supporta `pcm`, che è ciò che rende semplice unire i blocchi nella sezione 4.
+
+<Note>
+  La velocità di sintesi varia tra i modelli TTS molto più della qualità dell'output, e il divario è abbastanza ampio da modificare la tua architettura. Cronometra una richiesta realistica su due o tre candidati prima di scegliere. Un blocco che un modello restituisce in pochi secondi può richiedere a un altro diversi minuti.
+</Note>
+
+## 2. Fare una singola richiesta
+
+Il corpo della risposta è audio grezzo invece che JSON, quindi scrivi i byte direttamente su un file.
+
+<CodeGroup>
+```python Python
+import os
+from pathlib import Path
+
+import requests
+
+response = requests.post(
+    "https://api.venice.ai/api/v1/audio/speech",
+    headers={
+        "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "model": "tts-xai-v1",
+        "voice": "eve",
+        "input": "Hello from Venice.",
+        "response_format": "mp3",
+    },
+    timeout=300,
+)
+
+response.raise_for_status()
+Path("hello.mp3").write_bytes(response.content)
+```
+
+```javascript Node.js
+import { writeFile } from "node:fs/promises";
+
+const response = await fetch("https://api.venice.ai/api/v1/audio/speech", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    model: "tts-xai-v1",
+    voice: "eve",
+    input: "Hello from Venice.",
+    response_format: "mp3",
+  }),
+});
+
+if (!response.ok) {
+  throw new Error(`${response.status}: ${await response.text()}`);
+}
+
+await writeFile("hello.mp3", Buffer.from(await response.arrayBuffer()));
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/audio/speech \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tts-xai-v1",
+    "voice": "eve",
+    "input": "Hello from Venice.",
+    "response_format": "mp3"
+  }' \
+  --output hello.mp3
+```
+</CodeGroup>
+
+Le combinazioni non compatibili vengono rifiutate prima ancora che venga generato audio, e l'errore ti indica cosa avrebbe funzionato:
+
+```json
+{"error":"Voice \"eve\" is not supported by model \"tts-kokoro\". Try using a supported voice: af_alloy, af_aoede, af_bella, af_heart, af_jadzia, ...."}
+```
+
+```json
+{"error":"response_format \"wav\" is not supported by model \"tts-elevenlabs-turbo-v2-5\". Supported formats: mp3."}
+```
+
+## 3. Dividere il testo al limite di 4096 caratteri
+
+Il campo `input` accetta al massimo 4096 caratteri. Un testo più lungo viene rifiutato del tutto invece di essere troncato in silenzio:
+
+```json
+{"error":"Invalid request parameters","issues":[{"code":"too_big","maximum":4096,"path":["input"]}]}
+```
+
+Quindi prima dividiamo l'articolo. Suddividere ai confini delle frasi conta, perché un blocco che termina a metà di una frase produce un'interruzione udibile in corrispondenza della giunzione. Crea `narrate.py`:
+
+```python
+from __future__ import annotations
+
+import os
+import re
+import sys
+import wave
+from concurrent.futures import ThreadPoolExecutor
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+    "Content-Type": "application/json",
+}
+
+MODEL = "tts-xai-v1"
+VOICE = "eve"
+SAMPLE_RATE = 24000  # tts-xai-v1 returns 24 kHz mono signed 16-bit PCM.
+
+SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def split_into_chunks(text: str, max_chars: int = 1500) -> list[str]:
+    """Split text on sentence boundaries into chunks under the 4096-character cap."""
+    chunks: list[str] = []
+    current = ""
+
+    for sentence in SENTENCE_END.split(text.strip()):
+        if not sentence:
+            continue
+        if len(sentence) > max_chars:
+            raise ValueError(f"Sentence longer than {max_chars} characters: {sentence[:80]}...")
+        if len(current) + len(sentence) + 1 > max_chars:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = f"{current} {sentence}" if current else sentence
+
+    if current:
+        chunks.append(current)
+    return chunks
+```
+
+Su uno script di 5362 caratteri questo produce quattro blocchi, ognuno terminante su una frase:
+
+```python
+chunks = split_into_chunks(script)
+print(f"len(chunks) = {len(chunks)}")
+for index, chunk in enumerate(chunks):
+    print(f"chunk {index}: {len(chunk)} chars")
+```
+
+```
+len(chunks) = 4
+chunk 0: 1428 chars
+chunk 1: 1410 chars
+chunk 2: 1489 chars
+chunk 3: 1015 chars
+```
+
+Il valore predefinito di `max_chars` è 1500 anziché qualcosa vicino al tetto di 4096, ed è una scelta voluta. Il tempo di sintesi cresce con la lunghezza dell'input, quindi blocchi più piccoli tornano prima e, poiché girano in parallelo, completano l'intero lavoro più in fretta. Rendono anche i retry economici quando una richiesta fallisce.
+
+## 4. Unire i blocchi in un unico file
+
+Concatenare audio codificato come MP3 è inaffidabile, perché ogni blocco porta con sé i propri header dei frame. Richiedere `pcm` evita del tutto il problema. Il PCM è composto da campioni grezzi senza contenitore, quindi unirli è solo un'aggiunta di byte, e il modulo `wave` della libreria standard di Python scrive l'header al posto nostro.
+
+```python
+def synthesize(text: str, speed: float = 1.0) -> bytes:
+    """Return raw PCM audio for one chunk."""
+    response = requests.post(
+        f"{BASE_URL}/audio/speech",
+        headers=HEADERS,
+        json={
+            "model": MODEL,
+            "voice": VOICE,
+            "input": text,
+            "response_format": "pcm",
+            "speed": speed,
+        },
+        timeout=300,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"TTS failed ({response.status_code}): {response.text}")
+    return response.content
+
+
+def narrate(text: str, out_path: str) -> str:
+    chunks = split_into_chunks(text)
+    print(f"Synthesizing {len(chunks)} chunks", file=sys.stderr)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        audio = list(pool.map(synthesize, chunks))
+
+    with wave.open(out_path, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(SAMPLE_RATE)
+        for part in audio:
+            output.writeframes(part)
+
+    seconds = sum(len(part) for part in audio) / 2 / SAMPLE_RATE
+    print(f"Wrote {out_path} ({seconds:.1f}s of audio)", file=sys.stderr)
+    return out_path
+```
+
+Un singolo blocco torna in fretta rispetto a quanto audio contiene:
+
+```python
+pcm = synthesize(chunks[0])
+print(f"bytes   = {len(pcm)}")
+print(f"audio   = {len(pcm) / 2 / SAMPLE_RATE:.1f}s")
+```
+
+```
+bytes   = 4269376
+audio   = 88.9s
+```
+
+Quella richiesta ha impiegato circa 13 secondi per produrre 89 secondi di parlato. Eseguire i quattro blocchi in concorrenza è ciò che mantiene ragionevole il totale: la narrazione completa qui sotto ha richiesto 15 secondi di tempo reale.
+
+`ThreadPoolExecutor.map` restituisce i risultati nell'ordine in cui gli input sono stati inviati, quindi i blocchi arrivano nell'ordine di lettura anche se sono stati sintetizzati nello stesso momento.
+
+<Warning>
+  Il PCM grezzo non porta con sé la sample rate, quindi devi fornirla correttamente al momento di scrivere l'header WAV, ed è specifica per modello. `tts-xai-v1` restituisce 24 kHz mentre `tts-gradium-v1` restituisce 48 kHz. Sbaglia e la narrazione verrà riprodotta alla velocità e tonalità sbagliata.
+</Warning>
+
+Per scoprire la rate di un qualunque modello, chiedi un breve clip in `wav` e leggi l'header con cui torna:
+
+```python
+import wave
+
+with wave.open("probe.wav") as probe:
+    print(probe.getframerate(), probe.getnchannels(), probe.getsampwidth())
+```
+
+```
+24000 1 2
+```
+
+## 5. Preparare un testo che suoni bene
+
+Del Markdown estratto letto ad alta voce parola per parola è quasi inascoltabile. Gli URL ne sono l'esempio più chiaro. Un modello vocale li pronuncia carattere per carattere, quindi `https://docs.venice.ai/llms.txt` viene fuori come:
+
+> h t t p s due punti barra barra docs punto venice punto a i l l m s punto t x t
+
+Titoli, elenchi puntati, tabelle e blocchi di codice provocano versioni più piccole dello stesso problema. Invece di combattere il Markdown con espressioni regolari, possiamo chiedere a un chat model di riscrivere l'articolo come qualcosa pensato per essere detto. Crea `article_to_audio.py`:
+
+```python
+from __future__ import annotations
+
+import os
+import re
+import sys
+
+import requests
+
+from narrate import narrate
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+    "Content-Type": "application/json",
+}
+
+URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
+
+
+def scrape(url: str) -> str:
+    response = requests.post(
+        f"{BASE_URL}/augment/scrape", headers=HEADERS, json={"url": url}, timeout=120
+    )
+    response.raise_for_status()
+    return response.json()["content"]
+
+
+def write_script(markdown: str, minutes: int = 6) -> str:
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=HEADERS,
+        json={
+            "model": "zai-org-glm-5-1",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You rewrite articles as scripts to be read aloud. Output plain prose only: "
+                        "no Markdown, no headings, no bullet points, no URLs, no code, no emoji. "
+                        "Spell out abbreviations and numbers the way a narrator would say them. "
+                        "Use short sentences with clear punctuation so speech synthesis paces well."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Rewrite this article as a {minutes}-minute spoken summary.\n\n{markdown[:20000]}",
+                },
+            ],
+            "temperature": 0.4,
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    script = response.json()["choices"][0]["message"]["content"]
+    return URL_PATTERN.sub("", script).strip()
+```
+
+La sostituzione con `URL_PATTERN` rimane come rete di sicurezza per l'occasionale link che il modello si lascia dietro.
+
+## 6. Mettere tutto insieme
+
+Il punto di ingresso fa scraping, scrive lo script, lo salva e narra:
+
+```python
+if __name__ == "__main__":
+    url = sys.argv[1]
+
+    print("Scraping", url, file=sys.stderr)
+    markdown = scrape(url)
+
+    print(f"Writing script from {len(markdown)} characters of Markdown", file=sys.stderr)
+    script = write_script(markdown)
+
+    with open("script.txt", "w") as handle:
+        handle.write(script)
+
+    narrate(script, "article.wav")
+```
+
+Salvare `script.txt` accanto all'audio vale le due righe in più. Quando una narrazione suona sbagliata, lo script ne mostra quasi sempre il motivo, e puoi correggerla senza pagare una nuova sintesi.
+
+```bash
+python article_to_audio.py https://docs.venice.ai/overview/privacy
+```
+
+```
+Scraping https://docs.venice.ai/overview/privacy
+Writing script from 7582 characters of Markdown
+Synthesizing 4 chunks
+Wrote article.wav (355.0s of audio)
+```
+
+Poco meno di sei minuti di narrazione, prodotti in circa quindici secondi. Ora lo script si apre con prosa vera invece di elementi di navigazione:
+
+> Venice è costruita su un principio semplice ma potente. La privacy dell'utente viene prima di tutto. L'intera architettura della piattaforma discende da questo impegno filosofico.
+
+<Tip>
+  Per controllare una narrazione senza starla ad ascoltare, rimanda l'audio a [`/audio/transcriptions`](/guides/media/speech-to-text) e confronta la trascrizione con `script.txt`. Trascrivere gli ultimi venti secondi è un modo rapido per confermare che i blocchi sono stati uniti nell'ordine giusto, e coglie in pochi secondi i blocchi persi e gli URL letti carattere per carattere.
+</Tip>
+
+## Streaming per l'uso interattivo
+
+La narrazione in batch ottimizza il tempo totale. Un'interfaccia vocale ha la priorità opposta, cioè far uscire il primo audio il più in fretta possibile. Impostando `streaming: true` il corpo viene restituito frase per frase man mano che viene generato, quindi la riproduzione può iniziare in circa un secondo invece di aspettare la clip completa.
+
+```python
+import time
+
+import requests
+
+start = time.time()
+first_byte = None
+
+with requests.post(
+    "https://api.venice.ai/api/v1/audio/speech",
+    headers=HEADERS,
+    json={
+        "model": "tts-xai-v1",
+        "voice": "eve",
+        "input": "Streaming returns audio while the rest is still being generated.",
+        "response_format": "mp3",
+        "streaming": True,
+    },
+    stream=True,
+    timeout=300,
+) as response:
+    response.raise_for_status()
+    with open("streamed.mp3", "wb") as audio:
+        for chunk in response.iter_content(chunk_size=4096):
+            if first_byte is None:
+                first_byte = time.time() - start
+            audio.write(chunk)
+
+print(f"first byte: {first_byte:.2f}s   complete: {time.time() - start:.2f}s")
+```
+
+```
+first byte: 0.85s   complete: 1.43s
+```
+
+Preferisci `pcm` a `mp3` quando alimenti la Web Audio API di un browser o un dispositivo audio direttamente, perché non richiede alcun passaggio di decodifica.
+
+## Opzioni della richiesta che vale la pena conoscere
+
+| Parametro | Note |
+|---|---|
+| `speed` | Accetta da `0.25` a `4.0`, default `1.0`. Resta all'incirca tra `0.8` e `1.3` per la narrazione. Oltre, la resa smette di sembrare naturale. |
+| `language` | Suggerimento facoltativo il cui formato accettato è specifico per modello. xAI ed ElevenLabs accettano codici ISO 639-1 come `en`, mentre Qwen 3 e MiniMax accettano nomi completi come `English`. I valori non supportati vengono ignorati. |
+| `prompt` | Indicazione di stile ed emozione, fino a 500 caratteri, attualmente onorata solo dai modelli Qwen 3. Per le altre famiglie è la scelta della voce a portare il tono. |
+| `temperature` | Intervallo da `0` a `2`, supportato da Qwen 3, Orpheus e Chatterbox HD. Alzalo per una maggiore variazione tra le riprese. |
+
+## Errori
+
+| Status | Causa | Soluzione |
+|---|---|---|
+| `400` | `input` oltre 4096 caratteri | Suddividi il testo come nella sezione 3 |
+| `400` | Voce non valida per il modello | Usa una voce dal `model_spec.voices` di quel modello |
+| `400` | Formato non supportato dal modello | Controlla `model_spec.supported_formats` |
+| `401` | Chiave mancante o non valida | Verifica l'header `Authorization: Bearer` |
+| `402` | Saldo insufficiente | Ricarica l'account |
+| `429` | Rate limit | Abbassa `max_workers` e riprova con backoff |
+| `500` o `503` | Capacità o errore di inferenza | Ritenta il blocco interessato con jitter |
+
+Poiché i blocchi sono indipendenti, un fallimento costa sempre e solo uno di essi, e ripetere `synthesize` per quel blocco è sempre sicuro.
+
+## Prossimi passi
+
+Alcune estensioni naturali da qui:
+
+- Metti in cache l'audio tramite un hash del testo, della voce e del modello, così i paragrafi invariati non vengono mai risintetizzati.
+- Sostituisci con una voce clonata da [Voice Cloning](/guides/media/voice-cloning) in modo che la narrazione usi la tua.
+- Genera il testo sorgente invece di farne lo scraping, usando [Risposte con citazioni tramite Web Search](/guides/tools/cited-web-answers).
+- Aggiungi audio di intro o di sottofondo con [Musica ed effetti sonori](/guides/media/music-and-sound-effects).
+
+<CardGroup cols={2}>
+  <Card title="Text-to-Speech" icon="volume-2" href="/guides/media/text-to-speech">
+    Riferimento per l'endpoint speech e i suoi parametri.
+  </Card>
+  <Card title="Voice Cloning" icon="user" href="/guides/media/voice-cloning">
+    Narra con una voce personalizzata invece di un preset.
+  </Card>
+  <Card title="Risposte con citazioni tramite Web Search" icon="search" href="/guides/tools/cited-web-answers">
+    Genera il testo che questo strumento narra.
+  </Card>
+  <Card title="Speech-to-Text" icon="microphone" href="/guides/media/speech-to-text">
+    Trascrivi l'audio per verificare una narrazione da capo a fondo.
+  </Card>
+</CardGroup>
