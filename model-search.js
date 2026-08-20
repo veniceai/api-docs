@@ -85,8 +85,11 @@
   // Static fallback data for fast first paint. Loaded from a cacheable JSON file
   // rather than inlined here, because Mintlify injects this script into every page.
   const STATIC_MODELS_URL = '/data/static-models.json';
+  const STATIC_TRAITS_URL = '/data/static-traits.json';
   let STATIC_MODELS = [];
+  let STATIC_TRAITS = null;
   let staticModelsPromise = null;
+  let staticTraitsPromise = null;
 
   // Resolves once STATIC_MODELS is populated. Falls back to the live API so the
   // tables still render if the snapshot is unavailable.
@@ -110,6 +113,23 @@
         .catch(() => STATIC_MODELS));
 
     return staticModelsPromise;
+  }
+
+  function ensureStaticTraits() {
+    if (staticTraitsPromise) return staticTraitsPromise;
+
+    staticTraitsPromise = fetch(STATIC_TRAITS_URL)
+      .then(r => {
+        if (!r.ok) throw new Error(`traits snapshot returned ${r.status}`);
+        return r.json();
+      })
+      .then(traits => {
+        if (traits && typeof traits === 'object' && !Array.isArray(traits)) STATIC_TRAITS = traits;
+        return STATIC_TRAITS;
+      })
+      .catch(() => STATIC_TRAITS);
+
+    return staticTraitsPromise;
   }
   
   // Privacy types that are always private (no API privacy field needed)
@@ -2058,8 +2078,11 @@
     }
   }
 
-  // Static fallback traits (updated when STATIC_MODELS changes)
+  // Prefer the committed traits snapshot from #427. Deriving the map from each
+  // model's traits[] array is a last resort: several models can share a trait
+  // name, and last-write-wins is not the live routing table.
   function getStaticTraits() {
+    if (STATIC_TRAITS && Object.keys(STATIC_TRAITS).length > 0) return STATIC_TRAITS;
     const traits = {};
     STATIC_MODELS.forEach(model => {
       if (model.type === 'text' && model.model_spec?.traits) {
@@ -2116,8 +2139,13 @@
     if (cachedTraits) {
       el.innerHTML = renderTraitsList(cachedTraits);
     } else {
-      await ensureStaticModels();
-      el.innerHTML = renderTraitsList(getStaticTraits());
+      const snapshot = await ensureStaticTraits();
+      if (snapshot && Object.keys(snapshot).length > 0) {
+        el.innerHTML = renderTraitsList(snapshot);
+      } else {
+        await ensureStaticModels();
+        el.innerHTML = renderTraitsList(getStaticTraits());
+      }
     }
     ensurePlaceholderVisible(el);
 
