@@ -1,0 +1,401 @@
+---
+title: "Réponses sourcées avec la recherche web"
+sidebarTitle: "Réponses sourcées"
+description: "Combinez Venice Web Search, Web Scrape et les chat completions dans un script qui répond à une question par une synthèse où chaque affirmation renvoie à une source."
+"og:title": "Réponses sourcées avec la recherche web | Documentation de l'API Venice"
+"og:description": "Enchaînez Venice Web Search et Web Scrape dans une chat completion qui produit une synthèse de recherche avec citations."
+---
+
+Les modèles de langage sont doués pour résumer du texte et mauvais pour mémoriser des faits. Ce tutoriel sort les faits de la mémoire du modèle et les place dans le prompt, de sorte que chaque phrase de la sortie puisse être retracée jusqu'à une page que vous avez récupérée quelques instants plus tôt.
+
+Nous allons construire un outil en ligne de commande qui répond à une question par une courte synthèse sourcée :
+
+```bash
+python research.py "What privacy guarantees does the Venice API provide for inference?"
+```
+
+En chemin, nous allons :
+
+1. Rechercher sur le web en direct avec `/augment/search`
+2. Décider lesquels de ces résultats méritent d'être lus
+3. Convertir les pages sélectionnées en Markdown avec `/augment/scrape`
+4. Demander à un modèle de chat de rédiger la synthèse, en citant les sources par numéro
+5. Assembler les quatre étapes dans un seul script
+
+Effectuer nous-mêmes la récupération, plutôt que de laisser le modèle le faire, est ce qui rend le résultat auditable. Nous conservons la liste exacte des pages qui ont alimenté le prompt et pouvons montrer au lecteur d'où provient chaque affirmation. Si vous préférez laisser Venice gérer la récupération dans une seule requête, définissez plutôt `venice_parameters.enable_web_search` sur une chat completion. Le guide [Recherche et extraction web](/guides/tools/web-retrieval) compare les deux approches.
+
+## Configuration
+
+Vous avez besoin de Python 3.9 ou plus récent, du paquet `requests` et d'une clé API Venice. Consultez [Générer une clé API](/guides/getting-started/generating-api-key) si vous n'en avez pas.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+Créez `research.py` et commencez par les imports et un bloc d'en-têtes partagé que chaque appel réutilise :
+
+```python
+from __future__ import annotations
+
+import os
+import re
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+    "Content-Type": "application/json",
+}
+```
+
+## 1. Rechercher sur le web
+
+`/augment/search` prend une requête et renvoie jusqu'à 20 résultats classés. Brave est le fournisseur par défaut et applique la non-conservation des données (Zero Data Retention). Google est également disponible et est acheminé via Venice, de sorte que la requête n'est jamais liée à vous.
+
+<CodeGroup>
+```python Python
+HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def search(query: str, limit: int = 10, provider: str = "brave") -> list[dict]:
+    response = requests.post(
+        f"{BASE_URL}/augment/search",
+        headers=HEADERS,
+        json={"query": query, "limit": limit, "search_provider": provider},
+        timeout=60,
+    )
+    response.raise_for_status()
+
+    results = response.json()["results"]
+    for result in results:
+        result["content"] = HTML_TAG.sub("", result["content"]).strip()
+    return results
+```
+
+```javascript Node.js
+const BASE_URL = "https://api.venice.ai/api/v1";
+const headers = {
+  Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+  "Content-Type": "application/json",
+};
+
+async function search(query, limit = 10, provider = "brave") {
+  const response = await fetch(`${BASE_URL}/augment/search`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ query, limit, search_provider: provider }),
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${await response.text()}`);
+  }
+
+  const { results } = await response.json();
+  return results.map((result) => ({
+    ...result,
+    content: result.content.replace(/<[^>]+>/g, "").trim(),
+  }));
+}
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/augment/search \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "venice api privacy guarantees",
+    "limit": 10,
+    "search_provider": "brave"
+  }'
+```
+</CodeGroup>
+
+Chaque résultat est un objet comportant quatre champs :
+
+```python
+import json
+
+results = search("Venice API privacy guarantees for inference", limit=10)
+print(json.dumps(results[0], indent=2))
+```
+
+```json
+{
+  "title": "Privacy | Venice API Docs",
+  "url": "https://docs.venice.ai/overview/privacy",
+  "content": "The Venice API replicates the same backend privacy architecture as the Venice platform: requests pass through the Venice...",
+  "date": ""
+}
+```
+
+Deux points de cette réponse méritent d'être connus avant d'aller plus loin.
+
+Le champ `content` arrive avec du HTML à l'intérieur, car le fournisseur enveloppe les termes correspondants dans des balises `<strong>`. La substitution `HTML_TAG` ci-dessus les supprime pour que l'extrait parvienne au modèle en texte brut.
+
+Le champ `date` est fréquemment une chaîne vide. Beaucoup de pages ne publient aucune date lisible par machine, donc traitez `date` comme un indice utilisable lorsqu'il est présent plutôt que comme un champ sur lequel vous pouvez trier ou filtrer.
+
+<Warning>
+  `limit` doit être compris entre 1 et 20, et `query` doit contenir entre 1 et 400 caractères. Des valeurs hors de ces plages renvoient un HTTP `400` avec un corps de validation. Elles ne sont pas ajustées automatiquement pour vous.
+</Warning>
+
+## 2. Choisir les sources à lire
+
+Extraire les dix résultats serait lent, coûteux et largement redondant. Les moteurs de recherche renvoient plusieurs pages du même site, et les sites de documentation en particulier renvoient la même page dans plusieurs langues, si bien qu'un même contenu peut apparaître trois ou quatre fois sous des URL différentes.
+
+Ne conserver que le résultat le mieux classé par domaine élimine l'essentiel de cette duplication en quelques lignes :
+
+```python
+def select_sources(results: list[dict], max_sources: int = 4) -> list[dict]:
+    """Keep the highest-ranked result per domain, up to max_sources."""
+    selected: list[dict] = []
+    seen_domains: set[str] = set()
+
+    for result in results:
+        domain = urlparse(result["url"]).netloc.removeprefix("www.")
+        if domain in seen_domains:
+            continue
+        seen_domains.add(domain)
+        selected.append(result)
+        if len(selected) == max_sources:
+            break
+
+    return selected
+```
+
+L'exécuter sur les dix résultats ci-dessus les réduit à quatre sites distincts :
+
+```python
+sources = select_sources(results)
+for source in sources:
+    print(source["url"])
+```
+
+```
+https://docs.venice.ai/overview/privacy
+https://venice.ai/privacy
+https://www.timtis.com/blog/veniceai-a-deep-dive-into-the-privacy-first-generative-ai-platform/
+https://www.youtube.com/watch?v=i40GJxyHgT8
+```
+
+C'est l'endroit naturel pour ajouter votre propre jugement. Vous pourriez autoriser explicitement les domaines auxquels vous faites confiance, écarter les résultats dont l'extrait ne mentionne jamais les termes clés, ou préférer les résultats portant une `date` récente. Chaque filtre que vous appliquez ici est une décision que le modèle n'aura plus l'occasion de mal prendre.
+
+## 3. Extraire les pages sélectionnées
+
+`/augment/scrape` récupère une URL publique et la renvoie en Markdown. Il demande d'abord au site sa représentation Markdown native et se rabat sur une extraction basée sur un navigateur lorsqu'il n'y en a pas.
+
+Certaines pages échoueront, et un outil de recherche devrait traiter cela comme une routine plutôt que comme un incident fatal :
+
+```python
+def scrape(url: str) -> str | None:
+    """Return the page as Markdown, or None if the page cannot be extracted."""
+    try:
+        response = requests.post(
+            f"{BASE_URL}/augment/scrape",
+            headers=HEADERS,
+            json={"url": url},
+            timeout=120,
+        )
+    except requests.RequestException as error:
+        print(f"  skipped {url}: {error}", file=sys.stderr)
+        return None
+
+    if response.status_code != 200:
+        reason = response.json().get("error", response.text)
+        print(f"  skipped {url}: {reason}", file=sys.stderr)
+        return None
+
+    content = response.json()["content"]
+    if len(content) < 200:
+        print(f"  skipped {url}: only {len(content)} characters returned", file=sys.stderr)
+        return None
+
+    return content
+```
+
+Les deux garde-fous ont leur place. La vérification du statut attrape les sites qui refusent l'accès automatisé, et la vérification de la longueur attrape les pages qui renvoient `200` mais rendent une bannière de cookies ou une coquille vide au lieu d'un article.
+
+<Note>
+  Les échecs d'extraction renvoient un corps simple `{"error": "..."}` avec un message lisible, par exemple `X (formerly Twitter) blocks automated access to their content.` X et Reddit sont bloqués purement et simplement. Pour inclure des publications de X dans une réponse, utilisez plutôt `venice_parameters.enable_x_search` sur une chat completion.
+</Note>
+
+Les requêtes ne dépendent pas les unes des autres, donc exécutez-les en parallèle. Pendant que nous y sommes, plafonnons la portion de chaque page que nous conservons :
+
+```python
+def gather(sources: list[dict], char_budget: int = 12000) -> list[dict]:
+    """Scrape every source in parallel and drop the ones that fail."""
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        pages = pool.map(scrape, [source["url"] for source in sources])
+
+    gathered = []
+    for source, page in zip(sources, pages):
+        if page is None:
+            continue
+        gathered.append({**source, "markdown": page[:char_budget]})
+
+    return gathered
+```
+
+```python
+gathered = gather(sources)
+for source in gathered:
+    print(f"{len(source['markdown']):>6} chars  {source['url']}")
+```
+
+```
+  7582 chars  https://docs.venice.ai/overview/privacy
+  5111 chars  https://venice.ai/privacy
+ 12000 chars  https://www.timtis.com/blog/veniceai-a-deep-dive-into-the-privacy-first-generative-ai-platform/
+ 10764 chars  https://www.youtube.com/watch?v=i40GJxyHgT8
+```
+
+La troisième page est revenue à exactement 12000 caractères, ce qui signifie qu'elle dépassait le budget et a été tronquée.
+
+<Warning>
+  Le `char_budget` n'est pas un simple confort. Les résultats de recherche incluent régulièrement des pages agrégées telles que des sitemaps, des changelogs et des fichiers `llms-full.txt`, et une seule d'entre elles peut renvoyer près d'un million de caractères. Sans plafond, un résultat malchanceux détermine le coût de toute la requête.
+</Warning>
+
+## 4. Rédiger la synthèse
+
+Nous transmettons maintenant au modèle les pages que nous avons collectées, numérotées, et demandons des citations qui renvoient à ces numéros. La numérotation dans le prompt est ce qui nous permettra plus tard de retrouver, à partir d'un `[2]` dans la sortie, l'URL correspondante.
+
+```python
+def write_brief(question: str, sources: list[dict], model: str = "zai-org-glm-5-1") -> str:
+    numbered = "\n\n".join(
+        f"[{index}] {source['title']}\nURL: {source['url']}\n\n{source['markdown']}"
+        for index, source in enumerate(sources, start=1)
+    )
+
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=HEADERS,
+        json={
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You write short research briefs from supplied sources. "
+                        "Use only the numbered sources given to you. "
+                        "Cite every claim with its source number in square brackets, like [2]. "
+                        "If the sources do not answer part of the question, say so explicitly."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Question: {question}\n\nSources:\n\n{numbered}",
+                },
+            ],
+            "temperature": 0.2,
+            "venice_parameters": {"enable_web_search": "off"},
+        },
+        timeout=180,
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+```
+
+Une `temperature` basse maintient la formulation proche du texte source. Régler `enable_web_search` sur `off` correspond à la valeur par défaut, mais l'expliciter garantit que le modèle ne peut pas introduire discrètement une source absente de notre liste de références.
+
+## 5. Assembler le tout
+
+La dernière pièce exécute les étapes dans l'ordre et ajoute la liste de références qui résout les numéros de citation :
+
+```python
+def research(question: str) -> str:
+    print(f"Searching: {question}", file=sys.stderr)
+    results = search(question, limit=10)
+    sources = select_sources(results)
+
+    print(f"Scraping {len(sources)} sources", file=sys.stderr)
+    gathered = gather(sources)
+    if not gathered:
+        raise RuntimeError("No sources could be scraped. Try a different query.")
+
+    print(f"Writing brief from {len(gathered)} sources", file=sys.stderr)
+    brief = write_brief(question, gathered)
+
+    references = "\n".join(
+        f"{index}. [{source['title']}]({source['url']})"
+        for index, source in enumerate(gathered, start=1)
+    )
+    return f"{brief}\n\n## Sources\n\n{references}\n"
+
+
+if __name__ == "__main__":
+    question = " ".join(sys.argv[1:]) or "What is the Venice API and what does it offer?"
+    print(research(question))
+```
+
+Les messages de progression vont sur `stderr`, ce qui vous permet de rediriger la synthèse seule vers un fichier :
+
+```bash
+python research.py "What privacy guarantees does the Venice API provide for inference?" > brief.md
+```
+
+```
+Searching: What privacy guarantees does the Venice API provide for inference?
+Scraping 4 sources
+Writing brief from 4 sources
+```
+
+Voici le début de la synthèse produite, abrégée :
+
+```markdown
+## Core Architecture Guarantees
+
+The Venice API replicates the same backend privacy architecture as the Venice
+platform [1]. At its foundation:
+
+- Requests pass through the Venice proxy over HTTPS/TLS encrypted connections [1]
+- Venice does not store or log prompt and response content for normal inference [1]
+- The proxy maintains memory only during the active session stream and destroys
+  the state immediately upon completion [4]
+
+## Sources
+
+1. [Privacy | Venice API Docs](https://docs.venice.ai/overview/privacy)
+2. [Privacy in Venice | Venice AI](https://venice.ai/privacy)
+3. [Venice.ai: A Deep Dive into the Privacy First Generative AI Platform](https://www.timtis.com/blog/veniceai-a-deep-dive-into-the-privacy-first-generative-ai-platform/)
+4. [Venice AI API Review: Private AI Agents For Autonomous Workflows](https://www.youtube.com/watch?v=i40GJxyHgT8)
+```
+
+Notez que la source 3 n'est jamais citée dans cet extrait. C'est le comportement souhaité. Le modèle a utilisé les sources pertinentes et laissé les autres de côté, et parce que les citations sont numérotées, vous pouvez le voir d'un coup d'œil.
+
+## Ajuster le pipeline
+
+L'essentiel du temps d'horloge est consacré à la dernière chat completion, car quatre pages extraites cumulent des dizaines de milliers de tokens. Voici les leviers vers lesquels se tourner en premier :
+
+| Objectif | Que modifier |
+|---|---|
+| Réponses plus rapides et moins coûteuses | Baissez `char_budget`, ou faites passer `max_sources` de 4 à 2 |
+| Couverture plus large | Augmentez `limit` sur l'appel de recherche, gardez `max_sources` bas et filtrez plus sévèrement dans `select_sources` |
+| Extraction plus fiable | Privilégiez les domaines de documentation et d'articles. Les pages agrégées et fortement dépendantes de JavaScript échouent plus souvent |
+| Classement différent | Essayez `search_provider: "google"`, qui fait remonter des pages différentes mais répond plus lentement que Brave |
+
+## Étapes suivantes
+
+Le pipeline dont vous disposez maintenant est une base plutôt qu'un produit fini. Quelques directions à explorer :
+
+- Mettez en cache le Markdown extrait par URL afin que les questions répétées ne récupèrent pas les mêmes pages.
+- Stockez le Markdown sous forme de vecteurs avec les [Embeddings](/guides/features/embeddings) et récupérez des passages plutôt que des pages entières.
+- Laissez le modèle planifier plusieurs requêtes avant de rechercher, comme le fait la démo [Agent de recherche privé](/guides/projects/private-research-agent).
+- Lisez la synthèse à voix haute en la faisant passer dans [Narrer des articles avec la synthèse vocale](/guides/media/article-narration).
+
+<CardGroup cols={2}>
+  <Card title="Recherche et extraction web" icon="search" href="/guides/tools/web-retrieval">
+    Référence des points de terminaison Search et Scrape.
+  </Card>
+  <Card title="Narrer des articles avec la synthèse vocale" icon="volume-2" href="/guides/media/article-narration">
+    Transformez le texte que vous venez de générer en audio.
+  </Card>
+  <Card title="Embeddings" icon="stack" href="/guides/features/embeddings">
+    Indexez le Markdown extrait au lieu de le récupérer à nouveau.
+  </Card>
+  <Card title="Agent de recherche privé" icon="robot" href="/guides/projects/private-research-agent">
+    Un agent plus large qui planifie ses propres recherches.
+  </Card>
+</CardGroup>

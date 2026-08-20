@@ -1,0 +1,401 @@
+---
+title: "웹 검색으로 인용 답변 만들기"
+sidebarTitle: "인용 답변"
+description: "Venice Web Search, Web Scrape, 채팅 완성(chat completions)을 하나의 스크립트로 엮어, 모든 주장이 출처로 연결되는 짧은 브리핑으로 질문에 답변하세요."
+"og:title": "웹 검색으로 인용 답변 만들기 | Venice API 문서"
+"og:description": "Venice Web Search와 Web Scrape를 채팅 완성과 결합해 인용이 포함된 리서치 브리핑을 만드세요."
+---
+
+언어 모델은 텍스트 요약에는 강하지만 사실을 기억하는 데는 약합니다. 이 튜토리얼은 사실을 모델의 기억이 아니라 프롬프트에 두어, 출력의 모든 문장을 조금 전에 가져온 페이지로 되짚을 수 있도록 합니다.
+
+우리는 짧고 인용이 달린 브리핑으로 질문에 답변하는 명령줄 도구를 만들 것입니다:
+
+```bash
+python research.py "What privacy guarantees does the Venice API provide for inference?"
+```
+
+진행 과정에서 다음을 수행합니다:
+
+1. `/augment/search`로 실시간 웹을 검색합니다
+2. 그 결과 중 어느 것을 읽을 가치가 있는지 결정합니다
+3. 선택한 페이지를 `/augment/scrape`로 Markdown으로 변환합니다
+4. 채팅 모델에게 번호로 소스를 인용하는 브리핑을 작성하도록 요청합니다
+5. 네 단계를 하나의 스크립트로 연결합니다
+
+모델에게 맡기지 않고 우리가 직접 검색을 수행하면 결과를 감사(audit)할 수 있게 됩니다. 프롬프트에 들어간 페이지의 정확한 목록을 우리가 보관하며, 각 주장이 어디서 나왔는지 독자에게 보여줄 수 있습니다. 만약 Venice가 단일 요청 내에서 검색을 처리하도록 하고 싶다면, 채팅 완성에 `venice_parameters.enable_web_search`를 설정하세요. [웹 검색 및 스크래핑](/guides/tools/web-retrieval) 가이드에서 두 접근 방식을 비교합니다.
+
+## 준비 사항
+
+Python 3.9 이상, `requests` 패키지, 그리고 Venice API 키가 필요합니다. 아직 키가 없다면 [API 키 생성하기](/guides/getting-started/generating-api-key)를 참조하세요.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+`research.py`를 만들고, import 문과 모든 호출에서 재사용할 공통 헤더 블록으로 시작하세요:
+
+```python
+from __future__ import annotations
+
+import os
+import re
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+    "Content-Type": "application/json",
+}
+```
+
+## 1. 웹 검색하기
+
+`/augment/search`는 쿼리를 받아 최대 20개의 순위가 매겨진 결과를 반환합니다. Brave가 기본 제공자이며 Zero Data Retention을 적용합니다. Google도 사용 가능하며 Venice를 통해 프록시되므로 쿼리는 사용자와 결코 연결되지 않습니다.
+
+<CodeGroup>
+```python Python
+HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def search(query: str, limit: int = 10, provider: str = "brave") -> list[dict]:
+    response = requests.post(
+        f"{BASE_URL}/augment/search",
+        headers=HEADERS,
+        json={"query": query, "limit": limit, "search_provider": provider},
+        timeout=60,
+    )
+    response.raise_for_status()
+
+    results = response.json()["results"]
+    for result in results:
+        result["content"] = HTML_TAG.sub("", result["content"]).strip()
+    return results
+```
+
+```javascript Node.js
+const BASE_URL = "https://api.venice.ai/api/v1";
+const headers = {
+  Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+  "Content-Type": "application/json",
+};
+
+async function search(query, limit = 10, provider = "brave") {
+  const response = await fetch(`${BASE_URL}/augment/search`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ query, limit, search_provider: provider }),
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${await response.text()}`);
+  }
+
+  const { results } = await response.json();
+  return results.map((result) => ({
+    ...result,
+    content: result.content.replace(/<[^>]+>/g, "").trim(),
+  }));
+}
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/augment/search \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "venice api privacy guarantees",
+    "limit": 10,
+    "search_provider": "brave"
+  }'
+```
+</CodeGroup>
+
+각 결과는 네 개의 필드를 가진 객체입니다:
+
+```python
+import json
+
+results = search("Venice API privacy guarantees for inference", limit=10)
+print(json.dumps(results[0], indent=2))
+```
+
+```json
+{
+  "title": "Privacy | Venice API Docs",
+  "url": "https://docs.venice.ai/overview/privacy",
+  "content": "The Venice API replicates the same backend privacy architecture as the Venice platform: requests pass through the Venice...",
+  "date": ""
+}
+```
+
+응답에 대해 알아두면 좋은 두 가지가 있습니다.
+
+`content` 필드는 HTML이 포함된 채로 도착합니다. 제공자가 일치한 용어를 `<strong>` 태그로 감싸기 때문입니다. 위의 `HTML_TAG` 치환은 이를 제거해 스니펫이 일반 텍스트로 모델에 도달하도록 합니다.
+
+`date` 필드는 종종 빈 문자열입니다. 많은 페이지가 기계가 읽을 수 있는 날짜를 게시하지 않으므로, `date`는 정렬하거나 필터링할 수 있는 필드라기보다는, 값이 있을 때 참고할 수 있는 힌트로 취급하세요.
+
+<Warning>
+  `limit`은 1과 20 사이여야 하고, `query`는 1자에서 400자 사이여야 합니다. 해당 범위를 벗어나는 값은 검증 본문과 함께 HTTP `400`을 반환합니다. 자동으로 조정(clamp)되지 않습니다.
+</Warning>
+
+## 2. 읽을 소스 선택하기
+
+열 개의 결과를 모두 스크래핑하는 것은 느리고, 비싸고, 대체로 중복됩니다. 검색 엔진은 같은 사이트에서 여러 페이지를 반환하며, 특히 문서 사이트는 같은 페이지를 여러 언어로 반환하기 때문에 동일한 콘텐츠가 서로 다른 URL 아래 서너 번 나타날 수 있습니다.
+
+도메인별로 가장 높은 순위의 결과만 유지하면 몇 줄의 코드로 대부분의 중복을 제거할 수 있습니다:
+
+```python
+def select_sources(results: list[dict], max_sources: int = 4) -> list[dict]:
+    """Keep the highest-ranked result per domain, up to max_sources."""
+    selected: list[dict] = []
+    seen_domains: set[str] = set()
+
+    for result in results:
+        domain = urlparse(result["url"]).netloc.removeprefix("www.")
+        if domain in seen_domains:
+            continue
+        seen_domains.add(domain)
+        selected.append(result)
+        if len(selected) == max_sources:
+            break
+
+    return selected
+```
+
+위의 열 개 결과에 대해 실행하면 네 개의 서로 다른 사이트로 좁혀집니다:
+
+```python
+sources = select_sources(results)
+for source in sources:
+    print(source["url"])
+```
+
+```
+https://docs.venice.ai/overview/privacy
+https://venice.ai/privacy
+https://www.timtis.com/blog/veniceai-a-deep-dive-into-the-privacy-first-generative-ai-platform/
+https://www.youtube.com/watch?v=i40GJxyHgT8
+```
+
+이 단계는 여러분의 판단을 더하기에 자연스러운 지점입니다. 신뢰하는 도메인을 허용 목록에 넣거나, 스니펫에 핵심 용어가 전혀 언급되지 않는 결과를 버리거나, 최근 `date`를 가진 결과를 선호할 수 있습니다. 여기서 적용하는 각 필터는 모델이 잘못 판단할 기회를 없애는 결정입니다.
+
+## 3. 선택한 페이지 스크래핑하기
+
+`/augment/scrape`는 공개 URL을 가져와 Markdown으로 반환합니다. 먼저 사이트에게 네이티브 Markdown 표현을 요청하고, 없으면 브라우저 기반 추출로 대체(fallback)합니다.
+
+일부 페이지는 실패할 것이며, 리서치 도구는 이를 치명적이 아닌 일상적인 일로 다뤄야 합니다:
+
+```python
+def scrape(url: str) -> str | None:
+    """Return the page as Markdown, or None if the page cannot be extracted."""
+    try:
+        response = requests.post(
+            f"{BASE_URL}/augment/scrape",
+            headers=HEADERS,
+            json={"url": url},
+            timeout=120,
+        )
+    except requests.RequestException as error:
+        print(f"  skipped {url}: {error}", file=sys.stderr)
+        return None
+
+    if response.status_code != 200:
+        reason = response.json().get("error", response.text)
+        print(f"  skipped {url}: {reason}", file=sys.stderr)
+        return None
+
+    content = response.json()["content"]
+    if len(content) < 200:
+        print(f"  skipped {url}: only {len(content)} characters returned", file=sys.stderr)
+        return None
+
+    return content
+```
+
+두 가드는 모두 존재할 이유가 있습니다. 상태 코드 검사는 자동 접근을 거부하는 사이트를 걸러내고, 길이 검사는 `200`을 반환하지만 기사 대신 쿠키 배너나 빈 껍데기만 돌려주는 페이지를 걸러냅니다.
+
+<Note>
+  스크래핑 실패는 읽을 수 있는 메시지가 담긴 단순한 `{"error": "..."}` 본문을 반환합니다. 예를 들어 `X (formerly Twitter) blocks automated access to their content.` 같은 형태입니다. X와 Reddit은 완전히 차단됩니다. 답변에 X의 게시글을 포함하려면 대신 채팅 완성에 `venice_parameters.enable_x_search`를 사용하세요.
+</Note>
+
+요청들은 서로 의존하지 않으므로 병렬로 실행합니다. 이 김에 각 페이지에서 유지할 분량에 상한을 두겠습니다:
+
+```python
+def gather(sources: list[dict], char_budget: int = 12000) -> list[dict]:
+    """Scrape every source in parallel and drop the ones that fail."""
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        pages = pool.map(scrape, [source["url"] for source in sources])
+
+    gathered = []
+    for source, page in zip(sources, pages):
+        if page is None:
+            continue
+        gathered.append({**source, "markdown": page[:char_budget]})
+
+    return gathered
+```
+
+```python
+gathered = gather(sources)
+for source in gathered:
+    print(f"{len(source['markdown']):>6} chars  {source['url']}")
+```
+
+```
+  7582 chars  https://docs.venice.ai/overview/privacy
+  5111 chars  https://venice.ai/privacy
+ 12000 chars  https://www.timtis.com/blog/veniceai-a-deep-dive-into-the-privacy-first-generative-ai-platform/
+ 10764 chars  https://www.youtube.com/watch?v=i40GJxyHgT8
+```
+
+세 번째 페이지가 정확히 12000자로 돌아왔다는 것은 예산보다 길어서 잘렸다는 뜻입니다.
+
+<Warning>
+  `char_budget`은 있으면 좋은 정도의 옵션이 아닙니다. 검색 결과에는 sitemap, changelog, `llms-full.txt` 파일 같은 집계 페이지가 자주 포함되며, 그 중 하나가 백만 자에 가까운 분량을 반환할 수 있습니다. 상한이 없다면 운 나쁜 결과 하나가 전체 요청 비용을 좌우하게 됩니다.
+</Warning>
+
+## 4. 브리핑 작성하기
+
+이제 우리가 수집한 페이지에 번호를 매겨 모델에 넘기고, 그 번호를 참조하는 인용을 요청합니다. 프롬프트의 번호 매기기가 나중에 출력의 `[2]`를 URL로 되돌릴 수 있게 해주는 것입니다.
+
+```python
+def write_brief(question: str, sources: list[dict], model: str = "zai-org-glm-5-1") -> str:
+    numbered = "\n\n".join(
+        f"[{index}] {source['title']}\nURL: {source['url']}\n\n{source['markdown']}"
+        for index, source in enumerate(sources, start=1)
+    )
+
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=HEADERS,
+        json={
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You write short research briefs from supplied sources. "
+                        "Use only the numbered sources given to you. "
+                        "Cite every claim with its source number in square brackets, like [2]. "
+                        "If the sources do not answer part of the question, say so explicitly."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Question: {question}\n\nSources:\n\n{numbered}",
+                },
+            ],
+            "temperature": 0.2,
+            "venice_parameters": {"enable_web_search": "off"},
+        },
+        timeout=180,
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+```
+
+낮은 `temperature`는 표현을 소스 텍스트에 가깝게 유지합니다. `enable_web_search`를 `off`로 설정하는 것은 기본값과 동일하지만, 명시적으로 지정하면 모델이 참조 목록에 없는 소스를 몰래 도입할 수 없다는 것이 보장됩니다.
+
+## 5. 하나로 합치기
+
+마지막 조각은 각 단계를 순서대로 실행하고 인용 번호를 해석하는 참조 목록을 덧붙입니다:
+
+```python
+def research(question: str) -> str:
+    print(f"Searching: {question}", file=sys.stderr)
+    results = search(question, limit=10)
+    sources = select_sources(results)
+
+    print(f"Scraping {len(sources)} sources", file=sys.stderr)
+    gathered = gather(sources)
+    if not gathered:
+        raise RuntimeError("No sources could be scraped. Try a different query.")
+
+    print(f"Writing brief from {len(gathered)} sources", file=sys.stderr)
+    brief = write_brief(question, gathered)
+
+    references = "\n".join(
+        f"{index}. [{source['title']}]({source['url']})"
+        for index, source in enumerate(gathered, start=1)
+    )
+    return f"{brief}\n\n## Sources\n\n{references}\n"
+
+
+if __name__ == "__main__":
+    question = " ".join(sys.argv[1:]) or "What is the Venice API and what does it offer?"
+    print(research(question))
+```
+
+진행 메시지는 `stderr`로 나가므로 브리핑만 파일로 리디렉션할 수 있습니다:
+
+```bash
+python research.py "What privacy guarantees does the Venice API provide for inference?" > brief.md
+```
+
+```
+Searching: What privacy guarantees does the Venice API provide for inference?
+Scraping 4 sources
+Writing brief from 4 sources
+```
+
+다음은 생성된 브리핑의 앞부분을 요약한 것입니다:
+
+```markdown
+## Core Architecture Guarantees
+
+The Venice API replicates the same backend privacy architecture as the Venice
+platform [1]. At its foundation:
+
+- Requests pass through the Venice proxy over HTTPS/TLS encrypted connections [1]
+- Venice does not store or log prompt and response content for normal inference [1]
+- The proxy maintains memory only during the active session stream and destroys
+  the state immediately upon completion [4]
+
+## Sources
+
+1. [Privacy | Venice API Docs](https://docs.venice.ai/overview/privacy)
+2. [Privacy in Venice | Venice AI](https://venice.ai/privacy)
+3. [Venice.ai: A Deep Dive into the Privacy First Generative AI Platform](https://www.timtis.com/blog/veniceai-a-deep-dive-into-the-privacy-first-generative-ai-platform/)
+4. [Venice AI API Review: Private AI Agents For Autonomous Workflows](https://www.youtube.com/watch?v=i40GJxyHgT8)
+```
+
+이 발췌본에서 소스 3이 전혀 인용되지 않았음을 눈여겨보세요. 이것이 우리가 원하는 동작입니다. 모델은 관련성 있는 소스만 사용하고 나머지는 그대로 두었으며, 인용에 번호가 매겨져 있기 때문에 그것을 한눈에 확인할 수 있습니다.
+
+## 파이프라인 튜닝하기
+
+전체 시간 대부분은 마지막 채팅 완성에서 소요됩니다. 네 개의 스크랩된 페이지가 수만 토큰에 이르기 때문입니다. 가장 먼저 손댈 만한 조정 지점은 다음과 같습니다:
+
+| 목표 | 변경할 부분 |
+|---|---|
+| 더 빠르고 저렴한 응답 | `char_budget`을 낮추거나, `max_sources`를 4에서 2로 줄이기 |
+| 더 폭넓은 커버리지 | 검색 호출의 `limit`을 높이고, `max_sources`는 낮게 유지하며, `select_sources` 안에서 더 엄격하게 필터링 |
+| 더 안정적인 추출 | 문서 및 기사 도메인을 우선하기. 집계 페이지와 JavaScript 의존적인 페이지는 실패 빈도가 더 높음 |
+| 다른 랭킹 | `search_provider: "google"`을 시도. 다른 페이지가 노출되지만 Brave보다 응답이 느림 |
+
+## 다음 단계
+
+지금까지 만든 파이프라인은 완성된 제품이라기보다는 기초입니다. 살펴볼 만한 몇 가지 방향은 다음과 같습니다:
+
+- 스크랩된 Markdown을 URL별로 캐시해서 같은 질문이 반복될 때 같은 페이지를 다시 가져오지 않도록 합니다.
+- [임베딩](/guides/features/embeddings)으로 Markdown을 벡터로 저장하고, 전체 페이지 대신 구절을 검색합니다.
+- [프라이빗 리서치 에이전트](/guides/projects/private-research-agent) 데모처럼, 모델이 검색하기 전에 여러 쿼리를 계획하도록 합니다.
+- 브리핑을 [텍스트-음성 변환으로 기사 낭독하기](/guides/media/article-narration)에 파이프해 낭독하게 합니다.
+
+<CardGroup cols={2}>
+  <Card title="웹 검색 및 스크래핑" icon="search" href="/guides/tools/web-retrieval">
+    Search와 Scrape 엔드포인트에 대한 레퍼런스.
+  </Card>
+  <Card title="텍스트-음성 변환으로 기사 낭독하기" icon="volume-2" href="/guides/media/article-narration">
+    방금 생성한 텍스트를 오디오로 바꾸세요.
+  </Card>
+  <Card title="임베딩" icon="stack" href="/guides/features/embeddings">
+    스크랩한 Markdown을 다시 가져오는 대신 색인하세요.
+  </Card>
+  <Card title="프라이빗 리서치 에이전트" icon="robot" href="/guides/projects/private-research-agent">
+    스스로 검색을 계획하는 더 큰 에이전트.
+  </Card>
+</CardGroup>
