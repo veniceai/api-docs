@@ -434,10 +434,24 @@
     'zh': { 'Type': '类型', 'Kind': '类别', 'Capability': '能力', 'Content': '内容', 'All': '全部', 'Music': '音乐', 'Model': '模型', 'Context': '上下文', 'Input': '输入', 'Output': '输出', 'Cache': '缓存', 'Capabilities': '能力', 'Privacy': '隐私', 'All types': '全部类型', 'Text': '文本', 'Image': '图像', 'Video': '视频', 'Audio': '音频', 'Embedding': '嵌入', 'Generation': '生成', 'Upscale': '放大', 'Edit': '编辑', 'Uncensored': '无审查', 'Text to Video': '文本转视频', 'Image to Video': '图像转视频', 'Text to Speech': '文本转语音', 'Speech to Text': '语音转文本', 'Audio Input': '音频输入', 'Video Input': '视频输入', 'Voice Selection': '语音选择', 'Reasoning': '推理', 'Vision': '视觉', 'Function Calling': '函数调用', 'Code': '代码', 'Private': '私有', 'Anonymized': '匿名化', 'Sort': '排序', 'Sort models': '排序模型', 'Search models': '搜索模型', 'Recommended': '推荐', 'Newest': '最新', 'Oldest': '最早', 'Name (A–Z)': '名称 (A–Z)', 'Price: Low to High': '价格：从低到高', 'Price: High to Low': '价格：从高到低', 'Clear filters': '清除筛选', 'Search models...': '搜索模型...', 'models': '个模型', 'closest matches': '最接近的结果', 'No close model matches': '没有相近的模型', 'No models match your filters': '没有符合筛选条件的模型' },
     'ko': { 'Type': '유형', 'Kind': '종류', 'Capability': '기능', 'Content': '콘텐츠', 'All': '전체', 'Music': '음악', 'Model': '모델', 'Context': '컨텍스트', 'Input': '입력', 'Output': '출력', 'Cache': '캐시', 'Capabilities': '기능', 'Privacy': '개인정보', 'All types': '모든 유형', 'Text': '텍스트', 'Image': '이미지', 'Video': '비디오', 'Audio': '오디오', 'Embedding': '임베딩', 'Generation': '생성', 'Upscale': '업스케일', 'Edit': '편집', 'Uncensored': '무검열', 'Text to Video': '텍스트→비디오', 'Image to Video': '이미지→비디오', 'Text to Speech': '텍스트 음성 변환', 'Speech to Text': '음성 텍스트 변환', 'Audio Input': '오디오 입력', 'Video Input': '비디오 입력', 'Voice Selection': '음성 선택', 'Reasoning': '추론', 'Vision': '비전', 'Function Calling': '함수 호출', 'Code': '코드', 'Private': '프라이빗', 'Anonymized': '익명화', 'Sort': '정렬', 'Sort models': '모델 정렬', 'Search models': '모델 검색', 'Recommended': '추천', 'Newest': '최신순', 'Oldest': '오래된순', 'Name (A–Z)': '이름 (A–Z)', 'Price: Low to High': '가격: 낮은순', 'Price: High to Low': '가격: 높은순', 'Clear filters': '필터 지우기', 'Search models...': '모델 검색...', 'models': '개 모델', 'closest matches': '가장 근접한 결과', 'No close model matches': '유사한 모델이 없습니다', 'No models match your filters': '필터와 일치하는 모델이 없습니다' }
   };
+  // Localized chrome that 422 added for video/audio controls. Kept separate so
+  // the existing filter dictionaries stay a single source of truth.
+  const I18N_CONTROLS = {
+    'pt-BR': { 'Video resolution': 'Resolução do vídeo', 'Video duration': 'Duração do vídeo', 'Audio on': 'Áudio ligado', 'Audio off': 'Áudio desligado' },
+    'ar': { 'Video resolution': 'دقة الفيديو', 'Video duration': 'مدة الفيديو', 'Audio on': 'الصوت مفعّل', 'Audio off': 'الصوت متوقف' },
+    'it': { 'Video resolution': 'Risoluzione video', 'Video duration': 'Durata video', 'Audio on': 'Audio attivo', 'Audio off': 'Audio disattivo' },
+    'de': { 'Video resolution': 'Videoauflösung', 'Video duration': 'Videodauer', 'Audio on': 'Audio an', 'Audio off': 'Audio aus' },
+    'es': { 'Video resolution': 'Resolución de vídeo', 'Video duration': 'Duración del vídeo', 'Audio on': 'Audio activado', 'Audio off': 'Audio desactivado' },
+    'fr': { 'Video resolution': 'Résolution vidéo', 'Video duration': 'Durée vidéo', 'Audio on': 'Audio activé', 'Audio off': 'Audio désactivé' },
+    'zh': { 'Video resolution': '视频分辨率', 'Video duration': '视频时长', 'Audio on': '音频开启', 'Audio off': '音频关闭' },
+    'ko': { 'Video resolution': '비디오 해상도', 'Video duration': '비디오 길이', 'Audio on': '오디오 켜짐', 'Audio off': '오디오 꺼짐' }
+  };
   function t(s) {
     if (LOCALE === 'en') return s;
     const table = I18N[LOCALE];
-    return (table && table[s] != null) ? table[s] : s;
+    if (table && table[s] != null) return table[s];
+    const extra = I18N_CONTROLS[LOCALE];
+    return (extra && extra[s] != null) ? extra[s] : s;
   }
 
   // ========== FILTER DROPDOWNS ==========
@@ -712,11 +726,19 @@
     return list;
   }
 
+  function tooltipFocusAttrs(label, tooltip) {
+    return ` tabindex="0" aria-label="${label}: ${tooltip}"`;
+  }
+
+  function statusBadge(className, label, tooltip) {
+    return `<span class="${className} vmb-tooltip" data-tooltip="${tooltip}"${tooltipFocusAttrs(label, tooltip)}>${label}</span>`;
+  }
+
   // Each chip carries both the glyph and the name. Wide viewports show the glyph
   // with a hover tooltip; touch viewports show the name instead, because a hover
   // tooltip is unreachable on a phone and a bare glyph says nothing.
   function capabilityChip(icon, tooltip, name = tooltip) {
-    return `<span class="vmb-cap vmb-tooltip" data-tooltip="${tooltip}">${icon}` +
+    return `<span class="vmb-cap vmb-tooltip" data-tooltip="${tooltip}"${tooltipFocusAttrs(name, tooltip)}>${icon}` +
       `<span class="vmb-cap-name">${t(name)}</span></span>`;
   }
 
@@ -1122,16 +1144,19 @@
     // variant: 'vmb' for main model browser, 'vpt' for pricing tables
     const cls = variant === 'vpt' ? 'vpt-cap-tag' : 'vmb-privacy-badge';
     const tipCls = variant === 'vpt' ? 'vpt-tooltip' : 'vmb-tooltip';
+    const focusAttrs = (label, tooltip) => variant === 'vmb'
+      ? tooltipFocusAttrs(t(label), tooltip)
+      : '';
     if (isE2EEModel(model)) {
-      return `<span class="${cls} ${tipCls} e2ee" data-tooltip="${TOOLTIPS.e2ee}">E2EE</span><span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      return `<span class="${cls} ${tipCls} e2ee" data-tooltip="${TOOLTIPS.e2ee}"${focusAttrs('E2EE', TOOLTIPS.e2ee)}>E2EE</span><span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}"${focusAttrs('Private', TOOLTIPS.private)}>${t('Private')}</span>`;
     }
     if (isTEEModel(model)) {
-      return `<span class="${cls} ${tipCls} tee" data-tooltip="${TOOLTIPS.tee}">TEE</span><span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+      return `<span class="${cls} ${tipCls} tee" data-tooltip="${TOOLTIPS.tee}"${focusAttrs('TEE', TOOLTIPS.tee)}>TEE</span><span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}"${focusAttrs('Private', TOOLTIPS.private)}>${t('Private')}</span>`;
     }
     if (isAnonymizedModel(model)) {
-      return `<span class="${cls} ${tipCls} anonymized" data-tooltip="${TOOLTIPS.anonymized}">Anonymized</span>`;
+      return `<span class="${cls} ${tipCls} anonymized" data-tooltip="${TOOLTIPS.anonymized}"${focusAttrs('Anonymized', TOOLTIPS.anonymized)}>${t('Anonymized')}</span>`;
     }
-    return `<span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}">Private</span>`;
+    return `<span class="${cls} ${tipCls} private" data-tooltip="${TOOLTIPS.private}"${focusAttrs('Private', TOOLTIPS.private)}>${t('Private')}</span>`;
   }
 
   function isBetaModel(model) {
@@ -1206,14 +1231,14 @@
     let controls = '';
     if (hasRes) {
       const opts = resolutions.map((r, i) => `<option value="${r}"${i === 0 ? ' selected' : ''}>${r}</option>`).join('');
-      controls += `<select class="vmb-res-select vmb-video-select vmb-cell-select" data-model="${model.id}" aria-label="Resolution">${opts}</select>`;
+      controls += `<select class="vmb-res-select vmb-video-select vmb-cell-select" data-model="${model.id}" aria-label="${t('Video resolution')}" title="${t('Video resolution')}">${opts}</select>`;
     }
     if (hasDur) {
       const opts = durations.map((d, i) => `<option value="${d}"${i === 0 ? ' selected' : ''}>${d}</option>`).join('');
-      controls += `<select class="vmb-dur-select vmb-video-select vmb-cell-select" data-model="${model.id}" aria-label="Duration">${opts}</select>`;
+      controls += `<select class="vmb-dur-select vmb-video-select vmb-cell-select" data-model="${model.id}" aria-label="${t('Video duration')}" title="${t('Video duration')}">${opts}</select>`;
     }
     if (config.audioPricing) {
-      controls += `<span class="vmb-audio-toggle" data-model="${model.id}" data-audio="true" role="button" tabindex="0">&#9834; Audio</span>`;
+      controls += `<button type="button" class="vmb-audio-toggle" data-model="${model.id}" data-audio="true" aria-pressed="true" aria-label="${t('Audio on')}">♪ ${t('Audio on')}</button>`;
     }
 
     return `<span class="vmb-video-price" data-model="${model.id}">Variable</span>` +
@@ -1832,7 +1857,8 @@
     const videoModels = models.filter(m => m.type === 'video').filter(m => !isDeprecatedModel(m));
     for (const model of videoModels) {
       const constraints = model.model_spec?.constraints || {};
-      // Skip if no constraints (static data doesn't have them)
+      // Skip if no constraints (older snapshots omit them; update-static-models
+      // now keeps them so the next sync fills this in).
       if (!constraints.resolutions && !constraints.durations) continue;
       const defaultRes = constraints.resolutions?.[0];
       const defaultDur = constraints.durations?.[0];
@@ -2866,7 +2892,8 @@
       ? cachedModels
       : await ensureStaticModels();
     // The Capability panel is derived from the catalog, so it can only be built
-    // once there is one. The live list adds constraints the snapshot omits.
+    // once there is one. Fresh API data still wins for constraints the current
+    // snapshot has not been regenerated with.
     syncCapabilityFilterControls();
     renderModels();
 
@@ -3067,11 +3094,11 @@
         typeBadge,
         videoTypeBadge,
         getPrivacyTag(model, 'vmb'),
-        isBetaModel(model) ? `<span class="vmb-beta-badge vmb-tooltip" data-tooltip="${TOOLTIPS.beta}">Beta</span>` : '',
-        isDeprecatedModel(model) ? `<span class="vmb-deprecated-badge vmb-tooltip" data-tooltip="Scheduled for removal on ${formatDeprecationDate(getModelRemovalDate(model))}. See the deprecations page for details.">Deprecated</span>` : '',
-        isUpgradedModel(model) ? `<span class="vmb-upgraded-badge vmb-tooltip" data-tooltip="${TOOLTIPS.upgraded}">Upgraded</span>` : '',
-        isUncensoredModel(model) ? `<span class="vmb-uncensored-badge vmb-tooltip" data-tooltip="${TOOLTIPS.uncensored}">Uncensored</span>` : '',
-        hasContentModeration(model.id) ? `<span class="vmb-moderation-badge vmb-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '',
+        isBetaModel(model) ? statusBadge('vmb-beta-badge', 'Beta', TOOLTIPS.beta) : '',
+        isDeprecatedModel(model) ? statusBadge('vmb-deprecated-badge', 'Deprecated', `Scheduled for removal on ${formatDeprecationDate(getModelRemovalDate(model))}. See the deprecations page for details.`) : '',
+        isUpgradedModel(model) ? statusBadge('vmb-upgraded-badge', 'Upgraded', TOOLTIPS.upgraded) : '',
+        isUncensoredModel(model) ? statusBadge('vmb-uncensored-badge', 'Uncensored', TOOLTIPS.uncensored) : '',
+        hasContentModeration(model.id) ? statusBadge('vmb-moderation-badge', 'Moderated', TOOLTIPS.content_moderation) : '',
         rateTier ? `<span class="vmb-ratelimit-badge vmb-tooltip tier-${rateTier}" data-tooltip="${RATE_LIMIT_TIERS[rateTier].tooltip}">${RATE_LIMIT_TIERS[rateTier].label}</span>` : ''
       ].filter(Boolean).join('');
 
@@ -3081,7 +3108,7 @@
         ? '<span class="vmb-new-dot" title="Recently added">New</span>'
         : '';
 
-      const idCopyBtn = `<button class="vmb-id-copy-btn" data-model-id="${modelId}" title="Copy model ID" aria-label="Copy model ID">
+      const idCopyBtn = `<button class="vmb-id-copy-btn" data-model-id="${modelId}" title="Copy model ID" aria-label="Copy model ID ${modelId}">
         <svg class="copy-icon" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
         <svg class="check-icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
       </button>`;
@@ -3231,9 +3258,12 @@
       if (!toggle) return;
       
       const isOn = toggle.dataset.audio === 'true';
-      toggle.dataset.audio = isOn ? 'false' : 'true';
-      toggle.textContent = isOn ? '♪ No Audio' : '♪ Audio';
-      toggle.classList.toggle('off', isOn);
+      const nextOn = !isOn;
+      toggle.dataset.audio = nextOn ? 'true' : 'false';
+      toggle.textContent = `♪ ${t(nextOn ? 'Audio on' : 'Audio off')}`;
+      toggle.setAttribute('aria-pressed', nextOn ? 'true' : 'false');
+      toggle.setAttribute('aria-label', t(nextOn ? 'Audio on' : 'Audio off'));
+      toggle.classList.toggle('off', !nextOn);
       
       const modelId = toggle.dataset.model;
       const model = allModels.find(m => m.id === modelId);
@@ -3246,7 +3276,7 @@
       updateVideoPrice(modelId, model, { 
         resolution: resSelect?.value, 
         duration: durSelect?.value, 
-        audio: !isOn 
+        audio: nextOn 
       }, modelsContainer);
     });
   }
