@@ -78,11 +78,6 @@ function cleanModel(m) {
   clean.model_spec.traits = spec.traits || [];
   if (spec.name) clean.model_spec.name = spec.name;
   if (spec.capabilities) clean.model_spec.capabilities = spec.capabilities;
-  // Offline catalog rows need these: video selects/T2V badges read constraints,
-  // embedding context cells read dimensions, and model names link through modelSource.
-  if (spec.constraints) clean.model_spec.constraints = spec.constraints;
-  if (spec.embeddingDimensions) clean.model_spec.embeddingDimensions = spec.embeddingDimensions;
-  if (spec.modelSource) clean.model_spec.modelSource = spec.modelSource;
   if (spec.deprecation) clean.model_spec.deprecation = spec.deprecation;
   if (spec.voices) clean.model_spec.voices = spec.voices;
   return clean;
