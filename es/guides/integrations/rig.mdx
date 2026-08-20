@@ -1,0 +1,295 @@
+---
+title: "Rig"
+description: "Crea agentes tipados en Rust con el proveedor nativo de Venice de Rig, con soporte para herramientas, salida estructurada, streaming, embeddings y venice_parameters."
+"og:title": "Rig | Documentación de la API de Venice"
+"og:description": "Crea agentes de Rig en Rust con el proveedor nativo de Venice"
+---
+
+[Rig](https://rig.rs/) es una biblioteca de Rust para crear aplicaciones y agentes de LLM. A partir de Rig 0.42, incluye un proveedor nativo [`venice`](https://docs.rs/rig/latest/rig/providers/venice/) — chat completions, streaming, herramientas, salida estructurada, embeddings, transcripción, generación de imágenes y voz — conectado directamente a la API de Venice en lugar de canalizarse a través del cliente de OpenAI.
+
+Si prefieres un proxy Axum en crudo en lugar de un framework de agentes, consulta [Cómo crear un LLM Gateway en Rust](/guides/projects/rust-llm-gateway).
+
+## Requisitos previos
+
+- Un toolchain estable reciente de Rust (Rig 0.42 utiliza edition 2024)
+- Rig 0.42 o posterior
+- Una [clave de API de Venice](/guides/getting-started/generating-api-key)
+
+## Configuración
+
+```bash
+cargo add rig
+cargo add tokio --features macros,rt-multi-thread
+cargo add serde --features derive
+cargo add schemars anyhow
+```
+
+Añade tu clave de API de Venice al entorno. Opcionalmente puedes sobrescribir el host de la API con `VENICE_BASE_URL` (el proveedor usa por defecto `https://api.venice.ai/api/v1`):
+
+```bash
+export VENICE_API_KEY=your-venice-api-key
+```
+
+<Warning>
+Mantén las claves de API fuera del control de código fuente. En producción, es preferible utilizar variables de entorno o un gestor de secretos.
+</Warning>
+
+## Configurar el cliente de Venice
+
+`venice::Client::from_env()` lee `VENICE_API_KEY`. Trae `ProviderClient` al ámbito:
+
+```rust
+use anyhow::Result;
+use rig::client::{AgentClientExt, ProviderClient};
+use rig::completion::Prompt;
+use rig::providers::venice;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let client = venice::Client::from_env()?;
+
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("You are a concise, privacy-respecting assistant.")
+        .build();
+
+    let response = agent
+        .prompt("Explain zero data retention in two sentences.")
+        .await?;
+    println!("{response}");
+
+    Ok(())
+}
+```
+
+<Note>
+Utiliza `venice::Client` en lugar de apuntar el cliente de OpenAI de Rig a Venice. El cliente `openai::Client` predeterminado apunta a la API Responses de OpenAI. El proveedor de Venice habla `/chat/completions` y expone [`VeniceParameters`](#venice-specific-parameters).
+</Note>
+
+Los fragmentos siguientes toman un `&venice::Client` de `from_env()`. Las constantes del crate como `venice::QWEN3_5_9B` son un punto de partida — confirma los IDs actuales con [`GET /models`](/api-reference/endpoint/models/list).
+
+## Transmitir una respuesta
+
+`stream_prompt` devuelve una solicitud que puedes usar con `.await` para convertirla en un stream. Usa `rig::agent::stream_to_stdout` para imprimir los tokens a medida que llegan:
+
+```rust
+use anyhow::Result;
+use rig::agent::stream_to_stdout;
+use rig::client::AgentClientExt;
+use rig::providers::venice;
+use rig::streaming::StreamingPrompt;
+
+async fn stream_poem(client: &venice::Client) -> Result<()> {
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("You are a concise, privacy-respecting assistant.")
+        .build();
+
+    let mut stream = agent
+        .stream_prompt("Write a short poem about private AI.")
+        .await;
+    stream_to_stdout(&mut stream).await?;
+
+    Ok(())
+}
+```
+
+No añadas `?` después de `.await` en `stream_prompt` — produce el stream directamente, no un `Result`.
+
+## Salida estructurada
+
+Usa un extractor con un tipo `JsonSchema` para validar la respuesta del modelo:
+
+```rust
+use anyhow::Result;
+use rig::client::AgentClientExt;
+use rig::providers::venice;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct PrivacySummary {
+    /// One-sentence overview
+    summary: String,
+    /// Key privacy benefits
+    benefits: Vec<String>,
+    /// When to choose this approach
+    recommendation: String,
+}
+
+async fn extract_privacy_summary(client: &venice::Client) -> Result<PrivacySummary> {
+    let extractor = client
+        .extractor::<PrivacySummary>(venice::QWEN3_5_9B)
+        .preamble("Extract a structured summary from the user's request.")
+        .build();
+
+    Ok(extractor
+        .extract("Compare private inference with providers that retain chat logs.")
+        .await?)
+}
+```
+
+Explora los modelos que admiten [respuestas estructuradas](/guides/features/structured-responses) y [llamadas a funciones](/guides/features/function-calling) antes de basarte en la extracción por herramientas en producción.
+
+## Herramientas
+
+Define una herramienta con `#[rig_tool]` (incluido con la feature `derive` predeterminada de Rig). El tipo generado es el nombre de la función en PascalCase:
+
+```rust
+use anyhow::Result;
+use rig::client::AgentClientExt;
+use rig::completion::Prompt;
+use rig::providers::venice;
+use rig::rig_tool;
+
+#[rig_tool(description = "Return budget-friendly Venice text model IDs")]
+fn list_budget_models() -> Result<Vec<&'static str>, rig::tool::ToolExecutionError> {
+    Ok(vec![venice::QWEN3_5_9B, venice::VENICE_UNCENSORED_1_2])
+}
+
+async fn recommend_models(client: &venice::Client) -> Result<String> {
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("Help users pick a Venice model. Use tools when you need facts.")
+        .tool(ListBudgetModels)
+        .build();
+
+    Ok(agent
+        .prompt("Which cheap Venice models should I try?")
+        .await?)
+}
+```
+
+También puedes implementar `rig::tool::Tool` a mano cuando necesites tipos de argumentos o manejo de errores personalizados. Consulta la [documentación de herramientas de Rig](https://docs.rig.rs/docs/concepts/tools).
+
+## Embeddings
+
+```rust
+use anyhow::Result;
+use rig::client::EmbeddingsClient;
+use rig::embeddings::EmbeddingModel;
+use rig::providers::venice;
+
+async fn embed_documents(client: &venice::Client) -> Result<()> {
+    let model = client.embedding_model(venice::TEXT_EMBEDDING_BGE_M3);
+    let embeddings = model
+        .embed_texts([
+            "Venice AI provides private inference.".to_owned(),
+            "Zero data retention guaranteed.".to_owned(),
+        ])
+        .await?;
+
+    for embedding in &embeddings {
+        println!("{}: {} dims", embedding.document, embedding.vec.len());
+    }
+
+    Ok(())
+}
+```
+
+Venice respeta el campo `dimensions` de OpenAI. Utiliza `embedding_model_with_ndims` cuando quieras un ancho específico en lugar del tamaño nativo del modelo.
+
+## Parámetros específicos de Venice
+
+Pasa las opciones exclusivas de Venice a través de `VeniceParameters` y combínalas con `additional_params`. Por ejemplo, habilita la búsqueda web integrada:
+
+```rust
+use anyhow::Result;
+use rig::client::AgentClientExt;
+use rig::completion::Prompt;
+use rig::providers::venice::{self, VeniceParameters, WebSearchMode};
+
+async fn search_recent_news(client: &venice::Client) -> Result<String> {
+    let agent = client
+        .agent(venice::QWEN3_5_9B)
+        .preamble("You are a concise, privacy-respecting assistant.")
+        .additional_params(
+            VeniceParameters::new()
+                .enable_web_search(WebSearchMode::Auto)
+                .into_additional_params(),
+        )
+        .build();
+
+    Ok(agent
+        .prompt("What are notable AI privacy developments this week?")
+        .await?)
+}
+```
+
+Para conservar las citas de la búsqueda web (y el bloque `cost` por solicitud), llama a `raw_completion` en el modelo de completions. La ruta de agente normalizada elimina esos campos exclusivos de Venice:
+
+```rust
+use anyhow::Result;
+use rig::client::CompletionClient;
+use rig::completion::CompletionModel;
+use rig::providers::venice::{self, VeniceParameters, WebSearchMode};
+
+async fn search_with_citations(client: &venice::Client) -> Result<()> {
+    let model = client.completion_model(venice::QWEN3_5_9B);
+    let request = model
+        .completion_request("In one sentence, what is the Rust programming language?")
+        .additional_params(
+            VeniceParameters::new()
+                .enable_web_search(WebSearchMode::On)
+                .enable_web_citations(true)
+                .into_additional_params(),
+        )
+        .build();
+
+    let response = model.raw_completion(request).await?;
+    for citation in response.web_search_citations() {
+        println!("{} — {}", citation.title, citation.url);
+    }
+
+    Ok(())
+}
+```
+
+`VeniceParameters` también cubre slugs de personajes, controles de pensamiento (thinking), web scraping, búsqueda en X, y si se debe incluir el prompt de sistema predeterminado de Venice. Consulta la [especificación de la API](/api-reference/api-spec) para ver la lista completa de `venice_parameters`.
+
+## Otras capacidades
+
+El mismo `venice::Client` también cubre transcripción, generación de imágenes y voz. Trae al scope el trait de cliente correspondiente (`TranscriptionClient`, `ImageGenerationClient` o `AudioGenerationClient`) antes de llamar al constructor:
+
+- **Transcripción** — `client.transcription_model(venice::WHISPER_LARGE_V3)`
+- **Generación de imágenes** — `client.image_generation_model(venice::Z_IMAGE_TURBO)` (habilita la feature `image` de Rig)
+- **Voz** — `client.audio_generation_model(venice::TTS_KOKORO)` (habilita la feature `audio` de Rig)
+
+Video, música, edición de imágenes, `/augment/*` y crypto RPC no tienen un trait de Rig y no están envueltos. Llama a esos endpoints de Venice directamente.
+
+## Ventaja de privacidad
+
+Rig se utiliza a menudo para agentes que acceden a datos de aplicaciones, contexto del usuario o herramientas internas. Combinarlo con Venice mantiene ese flujo de trabajo sobre inferencia privada y sin censura:
+
+- **Retención cero de datos** en modelos privados — los prompts y las cargas útiles de herramientas no se conservan después de la solicitud
+- **Análisis sin censura** cuando los agentes necesitan una crítica directa o red-teaming
+- **Un proveedor nativo** para que no tengas que remapear los tipos de OpenAI al dialecto de Venice
+
+## Solución de problemas
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized">
+    Confirma que `VENICE_API_KEY` esté establecida en el proceso que ejecuta el agente. Reinicia la shell o el proceso después de cambiar las variables de entorno. `from_env()` no lee `OPENAI_API_KEY`.
+  </Accordion>
+
+  <Accordion title="Modelo no encontrado o errores de endpoint inesperados">
+    Utiliza un ID de modelo actual de la [página de modelos](/models/overview) o de `GET /models`. Las constantes del crate como `venice::QWEN3_5_9B` pueden estar desactualizadas respecto al catálogo en vivo.
+  </Accordion>
+
+  <Accordion title="Errores de la API Responses">
+    Utiliza `venice::Client`, no `openai::Client`. El cliente de OpenAI usa por defecto la API Responses, que solo está en alfa en Venice.
+  </Accordion>
+
+  <Accordion title="Se ignoran las herramientas o la salida estructurada">
+    Elige un modelo que admita [llamadas a funciones](/guides/features/function-calling), describe en el preámbulo cuándo deben ejecutarse las herramientas y mantén las descripciones de las herramientas precisas — Rig construye los esquemas JSON a partir de las firmas y la documentación de `#[rig_tool]`.
+  </Accordion>
+</AccordionGroup>
+
+<CardGroup cols={2}>
+  <Card title="Documentación de Rig" icon="book" href="https://docs.rig.rs/">
+    Agentes, herramientas, extractores y proveedores
+  </Card>
+  <Card title="Modelos de Venice" icon="database" href="/models/overview">
+    Explora los modelos y las capacidades compatibles
+  </Card>
+</CardGroup>
