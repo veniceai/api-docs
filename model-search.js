@@ -392,7 +392,8 @@
 
   // Capability options are data-driven: every entry knows how to test a model, so
   // the dropdown can offer whatever actually discriminates inside the modality on
-  // screen instead of being hard-wired to text models.
+  // screen instead of being hard-wired to text models. Uncensored is the
+  // exception: it spans text, image, video, and audio, so it is always offered.
   const CAPABILITY_FILTERS = [
     { value: 'reasoning', label: 'Reasoning', match: m => !!m.model_spec?.capabilities?.supportsReasoning },
     { value: 'vision', label: 'Vision', match: m => !!m.model_spec?.capabilities?.supportsVision },
@@ -404,6 +405,7 @@
     { value: 'video-input', label: 'Video Input', match: m => !!m.model_spec?.capabilities?.supportsVideoInput },
     { value: 'audio-output', label: 'Audio', match: m => generatesAudio(m) },
     { value: 'voices', label: 'Voice Selection', match: m => (m.model_spec?.voices?.length || 0) > 1 },
+    { value: 'uncensored', label: 'Uncensored', match: m => isUncensoredModel(m) },
   ];
   const CAPABILITY_BY_VALUE = new Map(CAPABILITY_FILTERS.map(c => [c.value, c]));
 
@@ -418,9 +420,11 @@
 
   // An option earns a slot only when it splits the visible set: no matches means
   // it says nothing about this modality, and matching everything filters nothing.
+  // Uncensored stays in the menu on every tab so the control never disappears.
   function relevantCapabilities(models) {
-    if (!models.length) return [];
     return CAPABILITY_FILTERS.filter(cap => {
+      if (cap.value === 'uncensored') return true;
+      if (!models.length) return false;
       const hits = models.reduce((n, m) => n + (cap.match(m) ? 1 : 0), 0);
       return hits > 0 && hits < models.length;
     });
@@ -496,7 +500,6 @@
         { value: 'image-gen', label: 'Generation' },
         { value: 'image-upscale', label: 'Upscale' },
         { value: 'image-edit', label: 'Edit' },
-        { value: 'image-uncensored', label: 'Uncensored' },
       ],
     },
     video: {
@@ -516,19 +519,11 @@
       ],
     },
     // Options are the full registry; the panel is narrowed to the ones that
-    // discriminate within the active modality when it renders.
+    // discriminate within the active modality when it renders, except Uncensored
+    // which is always listed.
     capability: {
       label: 'Capability', mode: 'multi', default: null,
       options: CAPABILITY_FILTERS.map(({ value, label }) => ({ value, label })),
-    },
-    // Uncensored spans text, image, video, and audio models, so it gets its own
-    // always-available dropdown rather than a slot in the text-only Capability
-    // group.
-    content: {
-      label: 'Content', mode: 'single', default: null,
-      options: [
-        { value: 'uncensored', label: 'Uncensored' },
-      ],
     },
     privacy: {
       label: 'Privacy', mode: 'single', default: null,
@@ -2588,7 +2583,6 @@
             ${ENABLE_VIDEO ? renderFilterDropdown('video', FILTER_GROUPS.video) : ''}
             ${renderFilterDropdown('audio', FILTER_GROUPS.audio)}
             ${renderFilterDropdown('capability', FILTER_GROUPS.capability)}
-            ${renderFilterDropdown('content', FILTER_GROUPS.content)}
             ${renderFilterDropdown('privacy', FILTER_GROUPS.privacy)}
             <button type="button" class="vmb-dd-clear" hidden>${t('Clear filters')}</button>
           </div>
@@ -2625,12 +2619,11 @@
     let activeImageType = null;
     let activeAudioType = presetAudioKind;
     let activePrivacy = null;
-    let activeContent = null;
     // On overview page (no preset filter), default to newest first
     let activeSort = presetFilter ? 'default' : 'newest';
 
     // Configure which Kind dropdowns are visible for the current page context.
-    // Capability owns its own visibility (see syncCapabilityFilterControls).
+    // Capability stays visible on every page: Uncensored is always in the menu.
     if (presetFilter) {
       const filterVisibility = {
         video: { video: true, image: false, audio: false },
@@ -2646,7 +2639,7 @@
       showDd('image', false);
       showDd('audio', false);
     }
-    // Privacy and Content dropdowns are always available. Type is no longer a
+    // Privacy dropdown is always available. Type is no longer a
     // dropdown; the modality tab strip owns it on every models page.
 
     const modalityBar = container.querySelector('.vmb-modality');
@@ -2658,7 +2651,6 @@
       if (key === 'video') return activeVideoType;
       if (key === 'audio') return activeAudioType;
       if (key === 'privacy') return activePrivacy;
-      if (key === 'content') return activeContent;
       return null;
     }
     function setSingleState(key, value) {
@@ -2667,7 +2659,6 @@
       else if (key === 'video') activeVideoType = value;
       else if (key === 'audio') activeAudioType = value;
       else if (key === 'privacy') activePrivacy = value;
-      else if (key === 'content') activeContent = value;
     }
 
     function updateDropdownUI(key) {
@@ -2738,7 +2729,7 @@
       // The preset Kind is the page's own identity, not something the visitor
       // picked, so it doesn't count as a filter to clear.
       const any = activeCapabilities.size > 0 || activeVideoType || activeImageType ||
-        activeAudioType !== presetAudioKind || activePrivacy || activeContent ||
+        activeAudioType !== presetAudioKind || activePrivacy ||
         (!presetFilter && activeFilter !== 'all');
       clearBtn.hidden = !any;
     }
@@ -2765,9 +2756,9 @@
     }
 
     // Capability used to grey itself out on every modality except text, which
-    // read as broken. Instead the panel is rebuilt from whatever discriminates
-    // among the models on screen, and the control steps aside entirely when
-    // nothing does.
+    // read as broken. The panel is rebuilt from whatever discriminates among the
+    // models on screen, and Uncensored stays listed so the control never steps
+    // aside.
     let capabilitySignature = null;
     function syncCapabilityFilterControls() {
       const capDd = dd.capability;
@@ -2786,13 +2777,14 @@
         capabilitySignature = signature;
       }
 
-      capDd.style.display = available.length ? '' : 'none';
-      if (!available.length) {
-        capDd.classList.remove('open');
-        capDd.querySelector('.vmb-dd-trigger').setAttribute('aria-expanded', 'false');
-        panel.hidden = true;
-      }
+      capDd.style.display = '';
       updateDropdownUI('capability');
+    }
+
+    function resetCapabilities({ keepUncensored = false } = {}) {
+      const keep = keepUncensored && activeCapabilities.has('uncensored');
+      activeCapabilities.clear();
+      if (keep) activeCapabilities.add('uncensored');
     }
 
     function handleOptionSelect(option) {
@@ -2810,9 +2802,10 @@
         const def = key === 'type' ? 'all' : null;
         const next = cur === value ? def : value;
         setSingleState(key, next);
-        // Changing type resets the type-dependent filters.
+        // Changing type resets the type-dependent filters. Uncensored spans
+        // modalities, so it survives the switch the way Privacy does.
         if (key === 'type') {
-          activeCapabilities.clear();
+          resetCapabilities({ keepUncensored: true });
           activeVideoType = null;
           activeImageType = null;
           activeAudioType = null;
@@ -2837,7 +2830,6 @@
       // activeFilter stays put on a preset page.
       activeAudioType = presetAudioKind;
       activePrivacy = null;
-      activeContent = null;
       if (!presetFilter) activeFilter = 'all';
       updateAllDropdownUI();
       syncModalityDependentControls();
@@ -2854,8 +2846,8 @@
         if (!tab || tab.dataset.value === activeFilter) return;
         activeFilter = tab.dataset.value;
         // Mirrors the old Type dropdown: switching modality drops the filters
-        // that only applied to the previous one.
-        activeCapabilities.clear();
+        // that only applied to the previous one. Uncensored spans modalities.
+        resetCapabilities({ keepUncensored: true });
         activeVideoType = null;
         activeImageType = null;
         activeAudioType = null;
@@ -2975,7 +2967,6 @@
       if (activeImageType === 'image-gen') return model.type === 'image' && !modelId.includes('qwen');
       if (activeImageType === 'image-upscale') return model.type === 'upscale';
       if (activeImageType === 'image-edit') return model.type === 'inpaint' || modelId.includes('qwen-image');
-      if (activeImageType === 'image-uncensored') return isUncensoredModel(model);
       return true;
     }
 
@@ -2985,12 +2976,6 @@
       if (activePrivacy === 'tee') return isTEEModel(model);
       if (activePrivacy === 'private') return model.model_spec?.privacy === 'private' || PRIVATE_TYPES.has(model.type);
       if (activePrivacy === 'anonymized') return model.model_spec?.privacy === 'anonymized';
-      return true;
-    }
-
-    function matchesContent(model) {
-      if (!activeContent) return true;
-      if (activeContent === 'uncensored') return isUncensoredModel(model);
       return true;
     }
 
@@ -3032,8 +3017,7 @@
                matchesVideoType(model) &&
                matchesImageType(model) &&
                matchesAudioType(model) &&
-               matchesPrivacy(model) &&
-               matchesContent(model);
+               matchesPrivacy(model);
       });
 
       let candidates = filtered;
