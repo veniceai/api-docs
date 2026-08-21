@@ -119,9 +119,6 @@ async function main() {
   console.log('Regenerating traits and deprecations...');
   require('./generate-deprecations-static.js');
 
-  console.log('Regenerating static model catalogs...');
-  require('./generate-models-static.js');
-
   console.log('Regenerating pricing.mdx...');
   require('./generate-pricing-static.js');
 }
