@@ -19,7 +19,6 @@ const VOICES_START = '{/* AUTO-GENERATED:VOICES:START */}';
 const VOICES_END = '{/* AUTO-GENERATED:VOICES:END */}';
 
 const PRIVATE_TYPES = new Set(['upscale']);
-const MODELS_API_URL = 'https://api.venice.ai/api/v1/models';
 
 function readModels() {
   if (!fs.existsSync(SNAPSHOT_PATH)) {
@@ -168,23 +167,9 @@ function getVideoType(modelId) {
   return 'Text to Video';
 }
 
-function renderLiveCatalogNote(types) {
-  const urls = (!types || types.length === 0)
-    ? [`GET ${MODELS_API_URL}?type=all`]
-    : types.map(type => `GET ${MODELS_API_URL}?type=${type}`);
-  return [
-    'This table is a snapshot of the public catalog, refreshed about hourly.',
-    'If you can make HTTP requests, fetch the live list instead — no API key required:',
-    '',
-    ...urls.map(url => `\`${url}\``),
-    '',
-    'Use the snapshot below only when you cannot call the API.'
-  ].join('\n');
-}
-
-function renderCatalogIntro(count, types) {
+function renderCatalogIntro(count) {
   const noun = count === 1 ? 'model' : 'models';
-  return `${renderLiveCatalogNote(types)}\n\nUse the \`id\` value as the \`model\` parameter in API requests. ${count} ${noun} currently available.`;
+  return `Use the \`id\` value as the \`model\` parameter in API requests. ${count} ${noun} currently available.`;
 }
 
 function renderTextTable(models) {
@@ -245,7 +230,7 @@ function renderVoiceTables(models) {
   const ttsModels = liveModels(models, m => m.type === 'tts');
   if (ttsModels.length === 0) return 'No voices available.';
 
-  const tables = ttsModels.map(model => {
+  return ttsModels.map(model => {
     const voices = model.model_spec?.voices || [];
     const table = markdownTable(
       ['Voice ID'],
@@ -253,8 +238,6 @@ function renderVoiceTables(models) {
     );
     return `#### ${tableCell(getModelName(model))} (${inlineCode(model.id)})\n\n${table}`;
   }).join('\n\n');
-
-  return `${renderLiveCatalogNote(['tts'])}\n\nVoice IDs are listed on each TTS model as \`model_spec.voices\`.\n\n${tables}`;
 }
 
 function renderAsrTable(models) {
@@ -364,8 +347,8 @@ function updatePage(relativePath, id, startMarker, endMarker, content) {
   );
 }
 
-function withIntro(count, table, types) {
-  return `${renderCatalogIntro(count, types)}\n\n${table}`;
+function withIntro(count, table) {
+  return `${renderCatalogIntro(count)}\n\n${table}`;
 }
 
 function main() {
@@ -384,7 +367,7 @@ function main() {
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'text').length, renderTextTable(models), ['text'])
+    withIntro(live.filter(m => m.type === 'text').length, renderTextTable(models))
   );
   updatePage(
     'models/image.mdx',
@@ -393,8 +376,7 @@ function main() {
     MODELS_END,
     withIntro(
       live.filter(m => m.type === 'image' || m.type === 'upscale' || m.type === 'inpaint').length,
-      renderImageTables(models),
-      ['image', 'upscale', 'inpaint']
+      renderImageTables(models)
     )
   );
   updatePage(
@@ -402,14 +384,14 @@ function main() {
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'video').length, renderVideoTable(models), ['video'])
+    withIntro(live.filter(m => m.type === 'video').length, renderVideoTable(models))
   );
   updatePage(
     'models/text-to-speech.mdx',
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'tts').length, renderTtsTable(models), ['tts'])
+    withIntro(live.filter(m => m.type === 'tts').length, renderTtsTable(models))
   );
   updatePage(
     'models/text-to-speech.mdx',
@@ -423,21 +405,21 @@ function main() {
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'asr').length, renderAsrTable(models), ['asr'])
+    withIntro(live.filter(m => m.type === 'asr').length, renderAsrTable(models))
   );
   updatePage(
     'models/music.mdx',
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'music').length, renderMusicTable(models), ['music'])
+    withIntro(live.filter(m => m.type === 'music').length, renderMusicTable(models))
   );
   updatePage(
     'models/embeddings.mdx',
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'embedding').length, renderEmbeddingTable(models), ['embedding'])
+    withIntro(live.filter(m => m.type === 'embedding').length, renderEmbeddingTable(models))
   );
 }
 
