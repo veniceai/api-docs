@@ -297,9 +297,7 @@ function upsertVisibilityBlock(page, { id, startMarker, endMarker, content, huma
   const inner = humanFallback ?? '';
 
   const block = [
-    `<Visibility for="humans">`,
     `<div id="${id}"${attrs}>${inner}</div>`,
-    `</Visibility>`,
     '',
     `<Visibility for="agents">`,
     startMarker,
@@ -310,8 +308,15 @@ function upsertVisibilityBlock(page, { id, startMarker, endMarker, content, huma
     `</Visibility>`
   ].join('\n');
 
-  const visibilityPattern = new RegExp(
+  const wrappedPattern = new RegExp(
     `<Visibility for="humans">\\s*<div id="${escapeRegExp(id)}"[^>]*>[\\s\\S]*?<\\/div>\\s*<\\/Visibility>\\s*<Visibility for="agents">[\\s\\S]*?${escapeRegExp(endMarker)}\\s*<\\/Visibility>`
+  );
+  if (wrappedPattern.test(page)) {
+    return page.replace(wrappedPattern, () => block);
+  }
+
+  const visibilityPattern = new RegExp(
+    `<div id="${escapeRegExp(id)}"[^>]*>[\\s\\S]*?<\\/div>\\s*<Visibility for="agents">[\\s\\S]*?${escapeRegExp(endMarker)}\\s*<\\/Visibility>`
   );
   if (visibilityPattern.test(page)) {
     return page.replace(visibilityPattern, () => block);

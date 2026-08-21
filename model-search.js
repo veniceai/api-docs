@@ -3125,9 +3125,17 @@
     }
   });
 
+  function hideStaleModelPlaceholders() {
+    if (!document.getElementById('venice-model-browser')) return;
+    document.querySelectorAll('#model-search-placeholder').forEach(el => {
+      el.hidden = true;
+    });
+  }
+
   function tryInitModels() {
-    if (modelsInitialized) return;
     if (!window.location.pathname.includes('/models')) return;
+    hideStaleModelPlaceholders();
+    if (modelsInitialized) return;
     const placeholder = document.getElementById('model-search-placeholder');
     if (placeholder && !document.getElementById('venice-model-browser')) {
       modelsInitialized = true;
