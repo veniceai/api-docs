@@ -230,21 +230,7 @@ NARRATION = [
         "To find the rate for any model, ask for one short clip as `wav` and read the header it "
         "comes back with."
     ),
-    extra(
-        "import wave\n"
-        "\n"
-        "probe = requests.post(\n"
-        "    f'{BASE_URL}/audio/speech',\n"
-        "    headers=HEADERS,\n"
-        "    json={'model': MODEL, 'voice': VOICE, 'input': 'Probe.', 'response_format': 'wav'},\n"
-        "    timeout=300,\n"
-        ")\n"
-        "probe.raise_for_status()\n"
-        "open('probe.wav', 'wb').write(probe.content)\n"
-        "\n"
-        "with wave.open('probe.wav') as handle:\n"
-        "    print(handle.getframerate(), handle.getnchannels(), handle.getsampwidth())"
-    ),
+    mdx("4. Join the chunks into one file", 2),
     md(
         "## 5. Prepare text that sounds right\n"
         "\n"
