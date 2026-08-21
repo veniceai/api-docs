@@ -306,7 +306,7 @@ NARRATION = [
 # notebooks/audio-research-notebook.ipynb
 # --------------------------------------------------------------------------
 
-RESEARCH_PAGE = "guides/projects/audio-research-notebook.mdx"
+RESEARCH_PAGE = "learn/audio-research-notebook.mdx"
 
 RESEARCH = [
     md(
@@ -316,7 +316,7 @@ RESEARCH = [
         "and play it back here.\n"
         "\n"
         "This notebook accompanies "
-        f"[Building an Audio Research Notebook]({DOCS_URL}/guides/projects/audio-research-notebook), "
+        f"[Building an Audio Research Notebook]({DOCS_URL}/learn/audio-research-notebook), "
         "which explains the reasoning behind each step. Run the cells in order.\n"
         "\n"
         "You need a Venice API key from "
@@ -481,7 +481,7 @@ RESEARCH = [
     md(
         "## Next steps\n"
         "\n"
-        f"- [Building a Private RAG Bot]({DOCS_URL}/guides/projects/private-rag-bot), the same "
+        f"- [Building a Private RAG Bot]({DOCS_URL}/learn/private-rag-bot), the same "
         "retrieval pipeline with a real vector database and re-ranking\n"
         f"- [Cited Answers with Web Search]({DOCS_URL}/guides/tools/cited-web-answers), find the "
         "sources automatically instead of naming them\n"

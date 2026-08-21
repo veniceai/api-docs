@@ -10,7 +10,7 @@
 // restoration. Scoped to this one route so it can't affect anchor links or
 // scroll behavior anywhere else.
 (function() {
-  var DEMOS_PATH = '/guides/projects/overview';
+  var DEMOS_PATH = '/learn';
 
   function resetIfDemos() {
     if (document.documentElement.getAttribute('data-current-path') === DEMOS_PATH) {
