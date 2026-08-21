@@ -85,11 +85,8 @@
   // Static fallback data for fast first paint. Loaded from a cacheable JSON file
   // rather than inlined here, because Mintlify injects this script into every page.
   const STATIC_MODELS_URL = '/data/static-models.json';
-  const STATIC_TRAITS_URL = '/data/static-traits.json';
   let STATIC_MODELS = [];
-  let STATIC_TRAITS = null;
   let staticModelsPromise = null;
-  let staticTraitsPromise = null;
 
   // Resolves once STATIC_MODELS is populated. Falls back to the live API so the
   // tables still render if the snapshot is unavailable.
@@ -113,28 +110,6 @@
         .catch(() => STATIC_MODELS));
 
     return staticModelsPromise;
-  }
-
-  function ensureStaticTraits() {
-    if (staticTraitsPromise) return staticTraitsPromise;
-
-    staticTraitsPromise = fetch(STATIC_TRAITS_URL)
-      .then(r => {
-        if (!r.ok) throw new Error(`traits snapshot returned ${r.status}`);
-        return r.json();
-      })
-      .then(traits => {
-        if (traits && typeof traits === 'object' && !Array.isArray(traits)) STATIC_TRAITS = traits;
-        return STATIC_TRAITS;
-      })
-      .catch(() => fetchTraitsFromAPI()
-        .then(traits => {
-          if (traits) STATIC_TRAITS = traits;
-          return STATIC_TRAITS;
-        })
-        .catch(() => STATIC_TRAITS));
-
-    return staticTraitsPromise;
   }
   
   // Privacy types that are always private (no API privacy field needed)
@@ -1844,7 +1819,7 @@
       return `<li><code>${escapeHtml(label)}</code> → currently routes to <code>${escapeHtml(modelId)}</code></li>`;
     }).join('\n');
 
-    return `<ul class="vpt-traits-list">\n${items}\n</ul>`;
+    return `<ul>\n${items}\n</ul>`;
   }
 
   async function initTraitsList() {
@@ -1854,22 +1829,14 @@
     const cachedTraits = getCachedTraits();
     if (cachedTraits) {
       el.innerHTML = renderTraitsList(cachedTraits);
-    } else if (!el.querySelector('li')) {
-      const snapshot = await ensureStaticTraits();
-      if (!snapshot || Object.keys(snapshot).length === 0) {
-        await ensureStaticModels();
-      }
-      const fallback = snapshot && Object.keys(snapshot).length > 0
-        ? snapshot
-        : getStaticTraits();
-      if (fallback && Object.keys(fallback).length > 0) {
-        el.innerHTML = renderTraitsList(fallback);
-      }
+    } else {
+      await ensureStaticModels();
+      el.innerHTML = renderTraitsList(getStaticTraits());
     }
     ensurePlaceholderVisible(el);
 
     const freshTraits = await fetchTraitsFromAPI();
-    if (freshTraits && document.body.contains(el)) {
+    if (freshTraits) {
       el.innerHTML = renderTraitsList(freshTraits);
     }
   }
@@ -3125,17 +3092,9 @@
     }
   });
 
-  function hideStaleModelPlaceholders() {
-    if (!document.getElementById('venice-model-browser')) return;
-    document.querySelectorAll('#model-search-placeholder').forEach(el => {
-      el.hidden = true;
-    });
-  }
-
   function tryInitModels() {
-    if (!window.location.pathname.includes('/models')) return;
-    hideStaleModelPlaceholders();
     if (modelsInitialized) return;
+    if (!window.location.pathname.includes('/models')) return;
     const placeholder = document.getElementById('model-search-placeholder');
     if (placeholder && !document.getElementById('venice-model-browser')) {
       modelsInitialized = true;
@@ -3149,11 +3108,7 @@
     const state = pageInitializers[config.name];
 
     return function tryInit() {
-      const path = window.location.pathname.toLowerCase();
-      const matches = Array.isArray(pathMatch)
-        ? pathMatch.some(part => path.includes(part))
-        : path.includes(pathMatch);
-      if (!matches) return;
+      if (!window.location.pathname.toLowerCase().includes(pathMatch)) return;
       
       const el = document.getElementById(elementId);
       if (!el) return;
@@ -3192,10 +3147,10 @@
 
   const tryInitTraitsList = createPageInitializer({
     name: 'traitsList',
-    pathMatch: ['deprecation', 'models/traits'],
+    pathMatch: 'deprecation',
     elementId: 'traits-list-placeholder',
     initFn: initTraitsList,
-    resetCheck: el => !el.querySelector('.vpt-traits-list')
+    resetCheck: el => el.innerHTML === ''
   });
 
   const tryInitBetaModels = createPageInitializer({
@@ -3227,7 +3182,7 @@
     pathMatch: 'text-to-speech',
     elementId: 'tts-voice-picker-placeholder',
     initFn: initVoicePicker,
-    resetCheck: el => !el.querySelector('.vtp-picker')
+    resetCheck: el => el.textContent.includes('Loading') || el.innerHTML === ''
   });
 
   function resetAllInitializers() {
@@ -3290,7 +3245,6 @@
     retryInit('pricing', () => pageInitializers.pricing.initialized, tryInitPricing);
     retryInit('deprecation', () => pageInitializers.deprecations.initialized, tryInitDeprecations);
     retryInit('deprecation', () => pageInitializers.traitsList.initialized, tryInitTraitsList);
-    retryInit('models/traits', () => pageInitializers.traitsList.initialized, tryInitTraitsList);
     retryInit('beta-models', () => pageInitializers.betaModels.initialized, tryInitBetaModels);
     retryInit('prompt-caching', () => pageInitializers.cachePricing.initialized, tryInitCachePricing);
     retryInit('reasoning-models', () => pageInitializers.reasoningModels.initialized, tryInitReasoningModels);
