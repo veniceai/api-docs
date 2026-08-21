@@ -1,0 +1,399 @@
+---
+title: "오디오 리서치 노트북 만들기"
+description: "Venice로 여러분의 자료를 인용이 포함된 답변과 두 명의 진행자가 이끄는 오디오 요약으로 바꿔보세요."
+slug: audio-research-notebook-venice
+"og:title": "Venice로 오디오 리서치 노트북 만들기"
+"og:description": "Venice 위에 구축한 NotebookLM 스타일의 노트북. URL과 PDF를 ingest하고, 자료를 인용하는 답변을 얻고, 두 명의 진행자로 구성된 오디오 요약을 생성합니다."
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Sabrina Aquino" date="20 August 2026"/>
+
+NotebookLM 같은 도구는 쌓여 있는 연구 자료에 대해 사람들이 기대하는 바를 바꿔 놓았습니다. 자료를 추가하고, 질문을 하면 원자료를 가리키는 답변을 받으며, 이어서 산책하면서 들을 수 있는 두 진행자의 대화를 생성합니다.
+
+이 가이드는 그것을 Python 약 200줄, 그리고 Venice의 다섯 개 엔드포인트로 만듭니다. 요청 그 자체를 제외하면 여러분의 기기 밖에 저장되는 것은 없으며, Venice는 그 요청조차 보관하지 않습니다.
+
+<Card title="Google Colab에서 이 노트북 실행하기" icon="notebook" href="https://colab.research.google.com/github/veniceai/api-docs/blob/main/notebooks/audio-research-notebook.ipynb">
+  아래의 모든 단계를 실행 가능한 노트북 형태로, 오디오 요약을 인라인으로 재생하며 확인할 수 있습니다. 설치할 것이 없습니다.
+</Card>
+
+## 동작 방식
+
+각각 하나의 역할을 담당하는 다섯 개의 엔드포인트:
+
+| 단계 | 엔드포인트 | 이유 |
+| --- | --- | --- |
+| 웹 페이지 읽기 | `/augment/scrape` | 정리해야 하는 HTML이 아니라 Markdown을 반환 |
+| PDF 또는 문서 읽기 | `/augment/text-parser` | 단일 multipart 업로드로 텍스트 반환 |
+| 텍스트 인덱싱 | `/embeddings` | 키워드가 아닌 의미로 검색 가능 |
+| 질문에 답하기 | `/chat/completions` | 검색된 구절에 근거해 인용과 함께 답변 |
+| 요약 낭독 | `/audio/speech` | 진행자마다 하나씩, 두 목소리 |
+
+여기서의 검색은 의도적으로 단순합니다. Python 리스트에 담긴 벡터, 반복문으로 계산하는 코사인 유사도. 몇 십 개의 자료라면 이 정도의 기계 장치가 적당하며, 움직이는 부품이 눈에 보이는 상태를 유지할 수 있습니다. 이를 넘어서는 규모라면 [프라이빗 RAG 봇 만들기](/guides/projects/private-rag-bot)에서 같은 파이프라인을 실제 벡터 데이터베이스와 재순위화 단계와 함께 다룹니다.
+
+## 준비하기
+
+의존성 하나, 그리고 [API 설정 페이지](/guides/getting-started/generating-api-key)에서 얻은 키.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-key-here"
+```
+
+`notebook.py`를 만들고 import와 설정부터 시작합니다. 맨 아래의 두 리스트가 노트북의 전체 상태입니다. `sources`는 여러분이 추가한 것을 기록하고, `chunks`는 검색 가능한 조각들을 담습니다.
+
+```python
+import io
+import json
+import os
+import re
+import wave
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+
+EMBED_MODEL = "text-embedding-bge-m3"
+TTS_MODEL = "tts-xai-v1"
+HOSTS = {"Ana": "luna", "Marco": "orion"}
+
+sources = []
+chunks = []
+```
+
+`HOSTS`는 진행자 이름을 목소리에 매핑합니다. 두 목소리 모두 `tts-xai-v1`에서 온 것이며, 이는 중요합니다. 목소리는 모델에 속하고, 한 계열의 목소리를 다른 계열의 모델로 보내는 것이 speech 엔드포인트에서 가장 흔한 첫 실수입니다.
+
+## 오래되지 않을 모델 고르기
+
+프로젝트에 chat 모델을 하드코딩하면 그 프로젝트는 반드시 낡습니다. Venice는 `/models/traits`를 통해 각 역할을 현재 어떤 모델이 맡고 있는지 공개하므로, 특정 이름을 지정하는 대신 현재의 기본값을 요청할 수 있습니다.
+
+```python
+def default_text_model():
+    response = requests.get(
+        f"{BASE_URL}/models/traits", headers=HEADERS, params={"type": "text"}, timeout=60
+    )
+    response.raise_for_status()
+    return response.json()["data"]["default"]
+
+
+CHAT_MODEL = default_text_model()
+
+
+def chat(messages, **options):
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=HEADERS,
+        json={"model": CHAT_MODEL, "messages": messages, **options},
+        timeout=300,
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+```
+
+이 노트북이 원하는 형태가 아니라면 다른 trait도 사용할 수 있습니다. `most_intelligent`는 추론이 많이 필요한 요약을 위한 더 강한 모델을 골라주고, `default_reasoning`은 사고 과정을 드러내며 사고하는 모델을 제공합니다. 전체 목록은 [Models](/models/overview)를 참고하세요.
+
+## 자료 추가하기
+
+자료는 URL이거나 디스크의 파일이며, Venice에는 각각을 위한 엔드포인트가 있습니다. 둘 다 평문 텍스트를 반환합니다. 그게 핵심입니다. 이후의 노트북은 자료가 어디서 왔는지 신경 쓰지 않습니다.
+
+```python
+def read_url(url):
+    response = requests.post(
+        f"{BASE_URL}/augment/scrape", headers=HEADERS, json={"url": url}, timeout=180
+    )
+    response.raise_for_status()
+    return response.json()["content"]
+
+
+def read_file(path):
+    with open(path, "rb") as handle:
+        response = requests.post(
+            f"{BASE_URL}/augment/text-parser",
+            headers=HEADERS,
+            files={"file": (Path(path).name, handle)},
+            timeout=180,
+        )
+    response.raise_for_status()
+    return response.json()["text"]
+```
+
+`/augment/scrape`는 원본 HTML 대신 Markdown을 반환하므로 상용구를 벗겨낼 필요가 없습니다. `/augment/text-parser`는 PDF, Word, Excel, 그리고 최대 25 MB의 평문 텍스트를 받아들이며, 텍스트와 함께 토큰 수도 알려줍니다. 옵션 전체는 [문서 처리](/guides/tools/document-processing)에서 다룹니다.
+
+## 청크 분할과 임베딩
+
+문서 전체를 임베딩하면 그 안의 모든 내용을 평균 낸 벡터 하나가 나오는데, 이는 특정 주장을 검색하기에는 너무 뭉툭합니다. 나누면 각각이 무언가를 의미하는 벡터가 됩니다.
+
+고정된 글자 수가 아니라 문단 경계로 나누세요. 문장 중간에서 잘린 청크는 검색이 잘 되지 않습니다. 임베딩이 조각의 임베딩이 되기 때문입니다.
+
+```python
+def split(text, limit=1200):
+    """문단을 반으로 자르지 않고 청크로 묶어 담는다."""
+    packed, current = [], ""
+    for para in re.split(r"\n\s*\n", text):
+        para = para.strip()
+        if not para:
+            continue
+        if current and len(current) + len(para) + 2 > limit:
+            packed.append(current)
+            current = para
+        else:
+            current = f"{current}\n\n{para}" if current else para
+    if current:
+        packed.append(current)
+    return packed
+
+
+def embed(texts):
+    vectors = []
+    for start in range(0, len(texts), 64):
+        response = requests.post(
+            f"{BASE_URL}/embeddings",
+            headers=HEADERS,
+            json={"model": EMBED_MODEL, "input": texts[start : start + 64]},
+            timeout=180,
+        )
+        response.raise_for_status()
+        vectors.extend(row["embedding"] for row in response.json()["data"])
+    return vectors
+```
+
+`embed`는 배치로 처리합니다. 엔드포인트가 리스트를 받기 때문이며, 64개 청크에 대한 한 번의 요청이 64번의 요청보다 실제 소요 시간에서 훨씬 저렴합니다. `text-embedding-bge-m3`는 1024차원을 반환하며 다국어 자료를 잘 처리합니다.
+
+이제 자료를 추가하는 것은 읽고, 나누고, 임베딩하고, 기록하는 일입니다. 각 벡터의 크기는 함께 저장해 둡니다. 그 값은 변하지 않으며, 유사도 반복문 안에서 다시 계산하는 것은 낭비이기 때문입니다.
+
+```python
+def add_source(title, ref):
+    text = read_url(ref) if ref.startswith("http") else read_file(ref)
+    number = len(sources) + 1
+    sources.append({"number": number, "title": title, "ref": ref})
+
+    pieces = split(text)
+    for piece, vector in zip(pieces, embed(pieces)):
+        magnitude = sum(x * x for x in vector) ** 0.5
+        chunks.append(
+            {"source": number, "title": title, "text": piece,
+             "vector": vector, "magnitude": magnitude}
+        )
+    print(f"[{number}] {title}: {len(text)} characters, {len(pieces)} chunks")
+```
+
+`number`가 이후 인용을 가능하게 하는 것입니다. 각 청크는 자신이 어느 자료에서 왔는지 기억하므로, 답변이 그 자료를 가리킬 수 있습니다.
+
+## 적절한 구절 검색하기
+
+질문 벡터와 모든 청크 벡터 사이의 코사인 유사도, 정렬, 상위 k개. 수천 개의 청크 정도라면 질문 벡터를 만들어낸 네트워크 호출보다 이 계산이 더 빠르게 실행됩니다.
+
+```python
+def retrieve(question, k=6):
+    query = embed([question])[0]
+    query_magnitude = sum(x * x for x in query) ** 0.5
+
+    def similarity(chunk):
+        dot = sum(a * b for a, b in zip(query, chunk["vector"]))
+        return dot / (query_magnitude * chunk["magnitude"])
+
+    return sorted(chunks, key=similarity, reverse=True)[:k]
+```
+
+## 인용과 함께 답하기
+
+근거 있는 답변과 자신만만한 추측의 차이는 전적으로 프롬프트에 달려 있습니다. 두 개의 지시가 그 일을 합니다. 노트에서만 답하라는 것, 그리고 노트가 부족하면 그렇다고 말하라는 것. 두 번째가 없으면 모델은 조용히 기억으로 그 빈틈을 채우는데, 그것이 바로 여러분이 설계로 배제하고자 하는 실패 모드입니다.
+
+프롬프트에서 노트에 번호를 매기면 모델에게 인용 어휘를 제공하는 셈이 됩니다. 모델이 `[2]`라고 쓰면, 여러분은 그것을 자료로 되돌려 풀 수 있습니다.
+
+```python
+def ask(question, k=6):
+    hits = retrieve(question, k)
+    notes = "\n\n".join(f"[{h['source']}] {h['title']}\n{h['text']}" for h in hits)
+    answer = chat(
+        [
+            {"role": "system", "content": (
+                "Answer only from the numbered notes. Cite every claim with the bracket number "
+                "of the note it came from. If the notes do not answer the question, say so "
+                "instead of filling the gap.")},
+            {"role": "user", "content": f"Notes:\n\n{notes}\n\nQuestion: {question}"},
+        ],
+        temperature=0.2,
+    )
+    cited = sorted({int(n) for n in re.findall(r"\[(\d+)\]", answer)})
+    return answer, [s for s in sources if s["number"] in cited]
+```
+
+괄호를 다시 파싱해 꺼내는 한 줄은 그만한 값어치가 있습니다. 그것은 실제로 어떤 자료가 답변을 실어 날랐는지 알려주며, 이는 여러분이 중심적이라고 생각했던 자료가 결국 한 번도 인용되지 않는 상황을 알아차리는 방법이기도 합니다.
+
+## 요약 대본 쓰기
+
+여기서부터 노트북은 검색창이기를 그만둡니다. 요약(summary)은 읽는 것이고, 오디오 요약(overview)은 듣는 것이며, 둘은 서로 다른 문체를 원합니다. 대화는 오디오에서 더 잘 작동합니다. 서로 주고받는 흐름이 페이스를 대신 만들어 주고, 한 진행자의 질문이 다음 아이디어를 소개하는 자연스러운 방식이 되기 때문입니다.
+
+세 가지 제약이 중요하며, 셋 모두 텍스트가 아니라 오디오에서 비롯됩니다:
+
+- **markdown 없음, URL 없음.** speech 모델은 `https://docs.venice.ai`를 한 글자씩 읽습니다.
+- **약어는 풀어서 표기.** 처음 등장할 때는 *tee*가 아니라 *T E E*.
+- **턴 길이를 다양하게.** 균일한 길이의 턴은 두 사람이 서로에게 목록을 읽어주는 것처럼 들립니다.
+
+스키마를 함께 지정한 JSON을 요청하는 것이 결과를 렌더링 가능하게 만듭니다. 자유 형식 텍스트라면 파싱이 필요하고, 발화자 라벨은 정확히 모델이 창의성을 발휘하는 지점입니다. `speaker`의 `enum`은 모든 턴이 여러분이 가진 목소리 중 하나에 매핑되도록 보장합니다.
+
+```python
+DIALOGUE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "dialogue",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["turns"],
+            "properties": {
+                "turns": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["speaker", "text"],
+                        "properties": {
+                            "speaker": {"type": "string", "enum": list(HOSTS)},
+                            "text": {"type": "string"},
+                        },
+                    },
+                }
+            },
+        },
+    },
+}
+
+
+def write_script(turns=16):
+    """자료에 근거한 두 진행자의 대화를 chat 모델에 요청한다."""
+    spread = chunks[:: max(1, len(chunks) // 12)][:12]
+    notes = "\n\n".join(f"{c['title']}\n{c['text']}" for c in spread)
+    hosts = " and ".join(HOSTS)
+    raw = chat(
+        [
+            {"role": "system", "content": (
+                f"You write podcast dialogue for two hosts, {hosts}. Ground every statement in "
+                "the supplied notes. Write for the ear: no markdown, no URLs, no bracket "
+                "citations, no stage directions. Spell out abbreviations the first time they "
+                "appear. Vary the length of turns. Open with a hook and close with a takeaway.")},
+            {"role": "user", "content": f"Notes:\n\n{notes}\n\nWrite about {turns} turns."},
+        ],
+        temperature=0.7,
+        response_format=DIALOGUE_SCHEMA,
+    )
+    return json.loads(raw)["turns"]
+```
+
+이 요약은 하나의 질문에 답하기보다 자료 전체를 폭넓게 다루므로, `spread`는 유사도로 검색하는 대신 컬렉션 전체에서 청크를 표본으로 뽑습니다. n번째 청크마다 하나씩 고르는 것은 조악하지만 잘 통합니다. 긴 문서의 끝부분에 도달하는데, 앞의 열두 개만 취하는 방식으로는 결코 그럴 수 없기 때문입니다.
+
+턴 수는 지시가 아니라 힌트로 취급하세요. 여기서 16개를 요청하면 자료가 할 말이 얼마나 많은지에 따라 16개부터 28개까지 나온 적이 있습니다. 딱딱한 상한이 필요하면 프롬프트와 씨름하는 대신 렌더링 전에 `turns`를 잘라내세요.
+
+## 두 목소리를 하나의 트랙으로 렌더링하기
+
+각 턴은 하나의 speech 요청이 되며, 목소리는 누가 말하고 있는지에 따라 정해집니다.
+
+```python
+def speak(turn):
+    response = requests.post(
+        f"{BASE_URL}/audio/speech",
+        headers=HEADERS,
+        json={"model": TTS_MODEL, "voice": HOSTS[turn["speaker"]],
+              "input": turn["text"], "response_format": "wav"},
+        timeout=300,
+    )
+    response.raise_for_status()
+    with wave.open(io.BytesIO(response.content)) as clip:
+        return clip.getparams(), clip.readframes(clip.getnframes())
+```
+
+파일 20개를 저장한 뒤에 이어붙이는 대신 각 클립의 프레임을 읽어내는 것이 이음새를 깔끔하게 유지해 줍니다. MP3 같은 인코딩된 오디오를 이어붙이는 것은 안정적으로 동작하지 않습니다. 모든 파일이 자신의 헤더를 갖고 있기 때문입니다. 디코딩된 프레임은 그저 샘플이므로, 이어붙이는 것은 바이트를 붙이는 것과 같습니다.
+
+두 가지 디테일이 결과를 의도된 소리처럼 들리게 합니다. 출력 파일의 헤더는 상수가 아니라 첫 번째 클립에서 가져오므로, 어떤 모델을 선택했든 샘플 레이트가 항상 맞습니다. 그리고 턴 사이의 0.25초 정적은 발화자가 바뀌었음을 귀가 인지할 박자를 줍니다. 이것이 없으면 진행자들이 서로의 끝말 위로 겹쳐 말합니다.
+
+```python
+def audio_overview(turns, path="overview.wav", pause_seconds=0.25):
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        rendered = list(pool.map(speak, turns))
+
+    params = rendered[0][0]
+    silence = b"\x00" * int(params.framerate * params.sampwidth * params.nchannels * pause_seconds)
+    with wave.open(path, "wb") as out:
+        out.setnchannels(params.nchannels)
+        out.setsampwidth(params.sampwidth)
+        out.setframerate(params.framerate)
+        for position, (_, frames) in enumerate(rendered):
+            if position:
+                out.writeframes(silence)
+            out.writeframes(frames)
+    return path
+```
+
+`pool.map`은 입력 순서를 유지하므로, 어떤 요청이 먼저 끝나든 턴은 작성된 순서대로 돌아옵니다. 워커 4개는 최대치가 아니라 의도적인 상한입니다. 그 이상으로 동시에 실행하면 낮은 티어에서는 429가 발생하기 시작하며, 작업 시간은 이미 가장 긴 단일 턴에 지배되기 때문입니다.
+
+## 실행하기
+
+```python
+if __name__ == "__main__":
+    add_source("Venice Privacy", "https://docs.venice.ai/overview/privacy")
+    add_source("TEE and E2EE Models", "https://docs.venice.ai/guides/features/tee-e2ee-models")
+    add_source("VVV and DIEM", "https://docs.venice.ai/overview/vvv-diem")
+
+    answer, cited = ask("How does Venice keep my prompts private, and what do I give up?")
+    print(answer)
+    print("\nSources:", ", ".join(f"[{s['number']}] {s['title']}" for s in cited))
+
+    turns = write_script()
+    print(f"\nWriting {len(turns)} turns to overview.wav")
+    audio_overview(turns)
+```
+
+```bash
+python notebook.py
+```
+
+```
+[1] Venice Privacy: 7507 characters, 7 chunks
+[2] TEE and E2EE Models: 43859 characters, 40 chunks
+[3] VVV and DIEM: 9609 characters, 11 chunks
+
+Venice's privacy architecture is built around a proxy foundation. All requests pass
+through Venice over HTTPS and are relayed to the model provider without Venice storing
+your prompt or response content [1]. On top of that proxy, each model offers one of four
+progressively stronger privacy modes [1]...
+
+Sources: [1] Venice Privacy
+
+Writing 23 turns to overview.wav
+```
+
+Ingest와 답변에는 몇 초가 걸립니다. 느린 부분은 오디오이며, 부하에 따라 달라집니다. 약 6분 분량의 발화가 렌더링되는 데 30초부터 3분까지 걸릴 수 있습니다.
+
+## 여러분의 것으로 만들기
+
+**자료가 전부입니다.** 이후의 모든 것은 여러분이 넣은 것에 의해 한계가 정해집니다. 스크래핑된 페이지는 내비게이션과 푸터를 함께 가져오는데, 이는 답변에는 무해하지만 오디오 요약에서는 진행자가 진지하게 문서 목차를 논하는 모습으로 드러납니다. 그런 일이 생기면 임베딩 전에 길이 임계값 이하의 청크를 버리거나 뻔한 상용구를 걸러내세요.
+
+**목소리를 바꿔 보세요.** `HOSTS`는 딕셔너리의 두 개 항목입니다. `tts-xai-v1`은 26개의 목소리를 제공하며, 다른 계열에도 자체 목소리가 있습니다. `GET /models?type=tts`는 모델별 `voices`를 나열합니다. 뚜렷하게 대비되는 두 목소리가 그저 다르기만 한 두 목소리보다 따라가기 쉽습니다.
+
+**자신의 목소리를 복제하세요.** [음성 복제](/guides/media/voice-cloning)는 짧은 샘플을 `HOSTS`에 곧바로 넣을 수 있는 음성 핸들로 바꿔줍니다.
+
+**세 번째 참여자를 추가하세요.** 파이프라인에서 발화자가 둘이라고 가정하는 것은 스키마의 `enum`뿐입니다. 오직 질문만 하는 인터뷰어를 추가하면 분위기가 상당히 달라집니다.
+
+**대본을 보관하세요.** `turns`를 오디오 옆의 JSON 파일로 쓰는 데는 두 줄이 들지만, 한 문장을 손보고 싶을 때마다 다시 렌더링해야 하는 수고를 덜어줍니다.
+
+## 다음으로 볼 만한 것
+
+<CardGroup cols={2}>
+  <Card title="프라이빗 RAG 봇" icon="database" href="/guides/projects/private-rag-bot">
+    실제 벡터 데이터베이스와 재순위화를 갖춘 동일한 검색 파이프라인입니다.
+  </Card>
+  <Card title="웹 검색으로 인용된 답변" icon="search" href="/guides/tools/cited-web-answers">
+    자료를 직접 지정하는 대신 자동으로 찾아냅니다.
+  </Card>
+  <Card title="텍스트 음성 변환" icon="microphone" href="/guides/media/text-to-speech">
+    speech 엔드포인트, 목소리, 스트리밍에 대한 레퍼런스.
+  </Card>
+  <Card title="문서 처리" icon="file-text" href="/guides/tools/document-processing">
+    text parser가 받아들이는 것 모두와 반환하는 것.
+  </Card>
+</CardGroup>

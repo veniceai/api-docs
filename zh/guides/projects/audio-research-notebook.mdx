@@ -1,0 +1,399 @@
+---
+title: "构建音频研究笔记本"
+description: "使用 Venice 将你的资料变为带引用的答案和一段双主持人音频概览。"
+slug: audio-research-notebook-venice
+"og:title": "使用 Venice 构建音频研究笔记本"
+"og:description": "在 Venice 上打造类 NotebookLM 的笔记本。摄取 URL 和 PDF，提问并得到指向原始资料的答案，再生成一段双主持人音频概览。"
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Sabrina Aquino" date="20 August 2026"/>
+
+像 NotebookLM 这样的工具改变了人们对一堆研究资料的期待。你添加资料，提问并得到能够指回原文的答案，然后再生成一段两位主持人之间的对话，可以在散步时听。
+
+本指南将用大约两百行 Python 代码、基于五个 Venice 端点来实现这一切。除了请求本身之外，没有任何数据存储在你的机器之外，而 Venice 也不会保留这些请求。
+
+<Card title="在 Google Colab 中运行此笔记本" icon="notebook" href="https://colab.research.google.com/github/veniceai/api-docs/blob/main/notebooks/audio-research-notebook.ipynb">
+  以下每一步都是一个可执行的笔记本，概览音频在页面中直接播放。无需安装任何东西。
+</Card>
+
+## 工作原理
+
+五个端点，各司其职：
+
+| 步骤 | 端点 | 用途 |
+| --- | --- | --- |
+| 读取网页 | `/augment/scrape` | 返回 Markdown，而不是需要你清理的 HTML |
+| 读取 PDF 或文档 | `/augment/text-parser` | 一次 multipart 上传，返回文本 |
+| 索引文本 | `/embeddings` | 让你能按语义而非关键字进行检索 |
+| 回答问题 | `/chat/completions` | 基于检索到的段落作答并附带引用 |
+| 朗读概览 | `/audio/speech` | 两种声音，每位主持人一种 |
+
+这里的检索故意保持简单：向量放在 Python 列表里，余弦相似度用循环计算。对几十份资料来说，这是恰到好处的机制，也能让各个环节保持一目了然。当你发现规模不够用时，[构建私有 RAG 机器人](/guides/projects/private-rag-bot)介绍了同一条流水线，但使用真正的向量数据库和重排序步骤。
+
+## 环境准备
+
+只需一个依赖，以及从 [API 设置页](/guides/getting-started/generating-api-key) 获取的密钥。
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-key-here"
+```
+
+创建 `notebook.py`，先写好导入和配置。文件末尾的两个列表就是整个笔记本的全部状态：`sources` 记录你添加了什么，`chunks` 保存可检索的片段。
+
+```python
+import io
+import json
+import os
+import re
+import wave
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+
+EMBED_MODEL = "text-embedding-bge-m3"
+TTS_MODEL = "tts-xai-v1"
+HOSTS = {"Ana": "luna", "Marco": "orion"}
+
+sources = []
+chunks = []
+```
+
+`HOSTS` 将一位主持人的名字映射到一种声音。两种声音都来自 `tts-xai-v1`，这一点很关键：声音归属于模型，把某个家族的声音发送给另一个家族的模型，是使用语音端点时最常见的第一个错误。
+
+## 选择一个不会过时的模型
+
+在项目中硬编码一个聊天模型，等于保证这个项目会老化。Venice 通过 `/models/traits` 公布当前哪个模型担任每种角色，因此你可以请求当前的默认模型，而不必点名指定。
+
+```python
+def default_text_model():
+    response = requests.get(
+        f"{BASE_URL}/models/traits", headers=HEADERS, params={"type": "text"}, timeout=60
+    )
+    response.raise_for_status()
+    return response.json()["data"]["default"]
+
+
+CHAT_MODEL = default_text_model()
+
+
+def chat(messages, **options):
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=HEADERS,
+        json={"model": CHAT_MODEL, "messages": messages, **options},
+        timeout=300,
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+```
+
+如果这个笔记本不太符合你想要的形态，还有其他 trait 可用。`most_intelligent` 让你获得一个更强的模型，用于推理密集型的总结；`default_reasoning` 则给你一个会公开思考的模型。完整列表参见[模型](/models/overview)。
+
+## 添加资料
+
+一份资料要么是 URL，要么是磁盘上的文件，而 Venice 为两者各提供了一个端点。两者都返回纯文本，这正是重点：笔记本的其余部分并不关心资料从哪里来。
+
+```python
+def read_url(url):
+    response = requests.post(
+        f"{BASE_URL}/augment/scrape", headers=HEADERS, json={"url": url}, timeout=180
+    )
+    response.raise_for_status()
+    return response.json()["content"]
+
+
+def read_file(path):
+    with open(path, "rb") as handle:
+        response = requests.post(
+            f"{BASE_URL}/augment/text-parser",
+            headers=HEADERS,
+            files={"file": (Path(path).name, handle)},
+            timeout=180,
+        )
+    response.raise_for_status()
+    return response.json()["text"]
+```
+
+`/augment/scrape` 返回 Markdown 而不是原始 HTML，所以不用写模板代码去剥离样板内容。`/augment/text-parser` 接受 PDF、Word、Excel 和纯文本，最大 25 MB，除了返回文本之外还会给出一个 token 计数。[文档处理](/guides/tools/document-processing)完整介绍了它的选项。
+
+## 切分与嵌入
+
+把整个文档嵌入会产生一个向量，是文档所有内容的平均值，用来检索某个具体论断就太钝了。切分之后产生的向量，每一个都表达具体的意义。
+
+要按段落边界切分，而不是按固定字符数切。在句子中间被切断的 chunk 检索效果很差，因为它的嵌入只是一个片段的嵌入。
+
+```python
+def split(text, limit=1200):
+    """将段落打包为不切断任何一段的 chunk。"""
+    packed, current = [], ""
+    for para in re.split(r"\n\s*\n", text):
+        para = para.strip()
+        if not para:
+            continue
+        if current and len(current) + len(para) + 2 > limit:
+            packed.append(current)
+            current = para
+        else:
+            current = f"{current}\n\n{para}" if current else para
+    if current:
+        packed.append(current)
+    return packed
+
+
+def embed(texts):
+    vectors = []
+    for start in range(0, len(texts), 64):
+        response = requests.post(
+            f"{BASE_URL}/embeddings",
+            headers=HEADERS,
+            json={"model": EMBED_MODEL, "input": texts[start : start + 64]},
+            timeout=180,
+        )
+        response.raise_for_status()
+        vectors.extend(row["embedding"] for row in response.json()["data"])
+    return vectors
+```
+
+`embed` 之所以做批处理，是因为端点接受一个列表；为六十四个 chunk 发一次请求，在实际耗时上比发六十四次请求便宜得多。`text-embedding-bge-m3` 返回 1024 维，且对多语言资料处理良好。
+
+现在添加一份资料就是：读取、切分、嵌入并记录。每个向量的模长会和它一起存储，因为这个值不会改变，把它放在相似度循环里反复计算就是浪费。
+
+```python
+def add_source(title, ref):
+    text = read_url(ref) if ref.startswith("http") else read_file(ref)
+    number = len(sources) + 1
+    sources.append({"number": number, "title": title, "ref": ref})
+
+    pieces = split(text)
+    for piece, vector in zip(pieces, embed(pieces)):
+        magnitude = sum(x * x for x in vector) ** 0.5
+        chunks.append(
+            {"source": number, "title": title, "text": piece,
+             "vector": vector, "magnitude": magnitude}
+        )
+    print(f"[{number}] {title}: {len(text)} characters, {len(pieces)} chunks")
+```
+
+`number` 是后面能做引用的关键。每个 chunk 都记得自己来自哪份资料，答案就能指回它。
+
+## 检索合适的段落
+
+问题向量与每个 chunk 向量之间的余弦相似度，排序，取前 k 个。对于几千个 chunk 而言，它比生成问题向量的那次网络调用还要快。
+
+```python
+def retrieve(question, k=6):
+    query = embed([question])[0]
+    query_magnitude = sum(x * x for x in query) ** 0.5
+
+    def similarity(chunk):
+        dot = sum(a * b for a, b in zip(query, chunk["vector"]))
+        return dot / (query_magnitude * chunk["magnitude"])
+
+    return sorted(chunks, key=similarity, reverse=True)[:k]
+```
+
+## 带引用的回答
+
+有依据的答案和自信的猜测之间的差别，完全在于 prompt。两条指令完成这件事：只从这些笔记里作答；笔记不够时也要说出来。缺少后者的话，模型会安静地用记忆填补空缺，而这正是你想要设计规避的失败模式。
+
+在 prompt 里给笔记编号，就给了模型一套引用词汇。它写 `[2]`，你就能解析回一个资料源。
+
+```python
+def ask(question, k=6):
+    hits = retrieve(question, k)
+    notes = "\n\n".join(f"[{h['source']}] {h['title']}\n{h['text']}" for h in hits)
+    answer = chat(
+        [
+            {"role": "system", "content": (
+                "Answer only from the numbered notes. Cite every claim with the bracket number "
+                "of the note it came from. If the notes do not answer the question, say so "
+                "instead of filling the gap.")},
+            {"role": "user", "content": f"Notes:\n\n{notes}\n\nQuestion: {question}"},
+        ],
+        temperature=0.2,
+    )
+    cited = sorted({int(n) for n in re.findall(r"\[(\d+)\]", answer)})
+    return answer, [s for s in sources if s["number"] in cited]
+```
+
+多写这一行去把括号解析出来是值得的。它告诉你哪些资料真正参与了答案，由此你会注意到：某份你以为很关键的资料，其实从未被引用过。
+
+## 撰写概览脚本
+
+正是在这里，这个笔记本不再是一个搜索框。摘要是你去读的东西；概览是你去听的东西，两者需要不同风格的文字。对话在音频里表现更好，因为轮流发言本身就能带节奏，而一位主持人的提问也是自然地引入下一个观点的方式。
+
+有三条限制很重要，而三条都源自音频形式而非文本形式：
+
+- **不要 markdown，不要 URL。** 语音模型会一个字符一个字符地读 `https://docs.venice.ai`。
+- **拼出缩写。** 第一次出现时读 *T E E*，而不是 *tee*。
+- **让每一轮长度有变化。** 长度均等的轮次听起来像两个人在互相念清单。
+
+用 schema 要求 JSON 输出，是让结果可被渲染的关键。自由格式的文本需要解析，而说话人标签恰恰是模型会自作聪明的地方。`speaker` 上的 `enum` 保证每一轮都映射到你已有的一种声音。
+
+```python
+DIALOGUE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "dialogue",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["turns"],
+            "properties": {
+                "turns": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["speaker", "text"],
+                        "properties": {
+                            "speaker": {"type": "string", "enum": list(HOSTS)},
+                            "text": {"type": "string"},
+                        },
+                    },
+                }
+            },
+        },
+    },
+}
+
+
+def write_script(turns=16):
+    """请聊天模型基于资料生成一段双主持人对话。"""
+    spread = chunks[:: max(1, len(chunks) // 12)][:12]
+    notes = "\n\n".join(f"{c['title']}\n{c['text']}" for c in spread)
+    hosts = " and ".join(HOSTS)
+    raw = chat(
+        [
+            {"role": "system", "content": (
+                f"You write podcast dialogue for two hosts, {hosts}. Ground every statement in "
+                "the supplied notes. Write for the ear: no markdown, no URLs, no bracket "
+                "citations, no stage directions. Spell out abbreviations the first time they "
+                "appear. Vary the length of turns. Open with a hook and close with a takeaway.")},
+            {"role": "user", "content": f"Notes:\n\n{notes}\n\nWrite about {turns} turns."},
+        ],
+        temperature=0.7,
+        response_format=DIALOGUE_SCHEMA,
+    )
+    return json.loads(raw)["turns"]
+```
+
+概览要广泛地覆盖资料而不是回答某一个问题，所以 `spread` 是在整个集合里均匀采样 chunk，而不是按相似度检索。每隔第 n 个取一次 chunk 虽然粗糙，但效果不错：它能触及长文档的末尾，而只取前十二个永远做不到。
+
+把轮次数量当作一种提示，而不是一条指令。在这里，要求十六轮的结果可能是十六到二十八轮之间的任意数字，取决于资料的分量。如果你需要一个硬性上限，就在渲染前截断 `turns`，而不是在 prompt 里跟模型争论。
+
+## 把两种声音渲染成一段音轨
+
+每一轮变成一次语音请求，声音由发言人决定。
+
+```python
+def speak(turn):
+    response = requests.post(
+        f"{BASE_URL}/audio/speech",
+        headers=HEADERS,
+        json={"model": TTS_MODEL, "voice": HOSTS[turn["speaker"]],
+              "input": turn["text"], "response_format": "wav"},
+        timeout=300,
+    )
+    response.raise_for_status()
+    with wave.open(io.BytesIO(response.content)) as clip:
+        return clip.getparams(), clip.readframes(clip.getnframes())
+```
+
+从每个片段中读出帧数据，而不是把二十个文件保存到磁盘再拼接，是让拼接干净的关键。像 MP3 这类已编码音频直接拼接是不可靠的，因为每个文件都自带头部。而解码后的帧只是采样点，拼接它们就是拼字节。
+
+有两个细节让最终结果听起来像是有意为之。输出的头部信息取自第一个片段，而不是取自常量，所以采样率无论你用哪个模型都是正确的。而在每一轮之间插入四分之一秒静音，给耳朵一个停顿去意识到说话人换了。没有它，主持人们的收尾会互相盖过。
+
+```python
+def audio_overview(turns, path="overview.wav", pause_seconds=0.25):
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        rendered = list(pool.map(speak, turns))
+
+    params = rendered[0][0]
+    silence = b"\x00" * int(params.framerate * params.sampwidth * params.nchannels * pause_seconds)
+    with wave.open(path, "wb") as out:
+        out.setnchannels(params.nchannels)
+        out.setsampwidth(params.sampwidth)
+        out.setframerate(params.framerate)
+        for position, (_, frames) in enumerate(rendered):
+            if position:
+                out.writeframes(silence)
+            out.writeframes(frames)
+    return path
+```
+
+`pool.map` 会保持输入顺序，所以无论哪一轮先完成，轮次都会按写好的顺序返回。四个 worker 是刻意设的天花板，而不是最大值：并发再高一些就会在较低套餐上开始收到 429，而作业时长本来就受最长那一轮支配。
+
+## 运行它
+
+```python
+if __name__ == "__main__":
+    add_source("Venice Privacy", "https://docs.venice.ai/overview/privacy")
+    add_source("TEE and E2EE Models", "https://docs.venice.ai/guides/features/tee-e2ee-models")
+    add_source("VVV and DIEM", "https://docs.venice.ai/overview/vvv-diem")
+
+    answer, cited = ask("How does Venice keep my prompts private, and what do I give up?")
+    print(answer)
+    print("\nSources:", ", ".join(f"[{s['number']}] {s['title']}" for s in cited))
+
+    turns = write_script()
+    print(f"\nWriting {len(turns)} turns to overview.wav")
+    audio_overview(turns)
+```
+
+```bash
+python notebook.py
+```
+
+```
+[1] Venice Privacy: 7507 characters, 7 chunks
+[2] TEE and E2EE Models: 43859 characters, 40 chunks
+[3] VVV and DIEM: 9609 characters, 11 chunks
+
+Venice's privacy architecture is built around a proxy foundation. All requests pass
+through Venice over HTTPS and are relayed to the model provider without Venice storing
+your prompt or response content [1]. On top of that proxy, each model offers one of four
+progressively stronger privacy modes [1]...
+
+Sources: [1] Venice Privacy
+
+Writing 23 turns to overview.wav
+```
+
+摄取和回答只需几秒钟。音频是慢的部分，而且随负载波动：大约六分钟的语音，渲染时间在半分钟到三分钟之间。
+
+## 让它成为你自己的
+
+**资料就是整个游戏。** 下游的一切都被你输入的内容所限定。抓取来的网页会带上导航和页脚，这对回答问题无害，但在概览里会以主持人一本正经地讨论文档索引的形式暴露出来。如果出现这种情况，就在嵌入之前丢弃低于某个长度阈值的 chunk，或者过滤掉明显的样板内容。
+
+**换掉声音。** `HOSTS` 只是字典里两个条目。`tts-xai-v1` 附带二十六种声音，其他家族也有各自的声音；`GET /models?type=tts` 会列出每个模型的 `voices`。两个对比鲜明的声音，比两个仅仅是不同的声音更容易跟上。
+
+**克隆你自己的声音。** [声音克隆](/guides/media/voice-cloning) 把一段短样本变成一个声音句柄，可以直接放进 `HOSTS`。
+
+**加入第三位参与者。** 流水线里除了 schema 的 `enum` 之外，没有任何地方假设只有两位说话人。加入一个只提问的采访者，会让整体感觉变得相当不同。
+
+**保留脚本。** 把 `turns` 写到音频旁边的一个 JSON 文件里，只要两行代码，却能让你每次想调整一个句子时省下一次重新渲染。
+
+## 下一步
+
+<CardGroup cols={2}>
+  <Card title="私有 RAG 机器人" icon="database" href="/guides/projects/private-rag-bot">
+    同样的检索流水线，配以真正的向量数据库和重排序。
+  </Card>
+  <Card title="带引用的网页搜索答案" icon="search" href="/guides/tools/cited-web-answers">
+    自动找到资料，而不是自己指定。
+  </Card>
+  <Card title="文本转语音" icon="microphone" href="/guides/media/text-to-speech">
+    语音端点的参考、可用声音以及流式传输。
+  </Card>
+  <Card title="文档处理" icon="file-text" href="/guides/tools/document-processing">
+    文本解析器接受的所有格式，以及它返回的内容。
+  </Card>
+</CardGroup>
