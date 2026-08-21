@@ -5,7 +5,7 @@ Colab notebooks that accompany the tutorial pages.
 | Notebook | Tutorial |
 |---|---|
 | [`article-narration.ipynb`](article-narration.ipynb) | [Narrating Articles with Text-to-Speech](../guides/media/article-narration.mdx) |
-| [`audio-research-notebook.ipynb`](audio-research-notebook.ipynb) | [Building an Audio Research Notebook](../guides/projects/audio-research-notebook.mdx) |
+| [`audio-research-notebook.ipynb`](audio-research-notebook.ipynb) | [Building an Audio Research Notebook](../learn/audio-research-notebook.mdx) |
 
 ## These are generated
 
