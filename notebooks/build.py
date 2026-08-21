@@ -302,7 +302,200 @@ NARRATION = [
     ),
 ]
 
-BUILDS = [(NARRATION_PAGE, "notebooks/article-narration.ipynb", NARRATION)]
+# --------------------------------------------------------------------------
+# notebooks/audio-research-notebook.ipynb
+# --------------------------------------------------------------------------
+
+RESEARCH_PAGE = "guides/projects/audio-research-notebook.mdx"
+
+RESEARCH = [
+    md(
+        "# An Audio Research Notebook on Venice\n"
+        "\n"
+        "Add sources, ask questions that cite them, then generate a two-host audio overview "
+        "and play it back here.\n"
+        "\n"
+        "This notebook accompanies "
+        f"[Building an Audio Research Notebook]({DOCS_URL}/guides/projects/audio-research-notebook), "
+        "which explains the reasoning behind each step. Run the cells in order.\n"
+        "\n"
+        "You need a Venice API key from "
+        f"[venice.ai/settings/api]({DOCS_URL}/guides/getting-started/generating-api-key). "
+        "A full run scrapes three pages, embeds them, makes two chat completions, and "
+        "synthesizes about six minutes of speech, so it consumes a small amount of credit."
+    ),
+    md(
+        "## Setup\n"
+        "\n"
+        "Store the key with the key icon in the Colab sidebar, as a secret named "
+        "`VENICE_API_KEY`, so it is not saved into the notebook when you share it. "
+        "If no secret is set you will be prompted for it, and the value stays in memory.\n"
+        "\n"
+        "Run this cell first. The configuration cell below reads the key as it is imported."
+    ),
+    extra(
+        "%pip install -q requests\n"
+        "\n"
+        "import os\n"
+        "\n"
+        "\n"
+        "def load_api_key() -> str:\n"
+        "    try:\n"
+        "        from google.colab import userdata\n"
+        "\n"
+        "        return userdata.get('VENICE_API_KEY')\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    if os.environ.get('VENICE_API_KEY'):\n"
+        "        return os.environ['VENICE_API_KEY']\n"
+        "    from getpass import getpass\n"
+        "\n"
+        "    return getpass('Venice API key: ')\n"
+        "\n"
+        "\n"
+        "os.environ['VENICE_API_KEY'] = load_api_key()\n"
+        "print('Key loaded.')"
+    ),
+    md(
+        "## Configuration\n"
+        "\n"
+        "`HOSTS` maps a host name to a voice. Both voices belong to `tts-xai-v1`, and that "
+        "matters: voices belong to models, and sending a voice from one family to a model from "
+        "another is the most common first mistake with the speech endpoint.\n"
+        "\n"
+        "`sources` and `chunks` are the entire state of the notebook."
+    ),
+    mdx("Setting Up"),
+    md(
+        "## Pick the current model\n"
+        "\n"
+        "Hardcoding a chat model guarantees the project ages. `/models/traits` reports which "
+        "model currently holds each role, so this asks for the current default instead of "
+        "naming one."
+    ),
+    mdx("Choosing a Model That Will Not Go Stale"),
+    extra("print('Using', CHAT_MODEL)"),
+    md(
+        "## Add sources\n"
+        "\n"
+        "A source is a URL or a file on disk, and Venice has an endpoint for each. Both return "
+        "plain text, so nothing downstream cares which one you used."
+    ),
+    mdx("Adding Sources"),
+    md(
+        "## Chunk and embed\n"
+        "\n"
+        "Embedding a whole document produces one vector that averages everything it says, which "
+        "is too blunt to retrieve a specific claim. Splitting on paragraph boundaries produces "
+        "vectors that each mean something."
+    ),
+    mdx("Chunking and Embedding"),
+    mdx("Chunking and Embedding", 1),
+    md(
+        "Now add some sources. These three Venice pages cover overlapping ground, which makes "
+        "the citations in the next section more interesting. Swap in your own URLs."
+    ),
+    extra(
+        "add_source('Venice Privacy', 'https://docs.venice.ai/overview/privacy')\n"
+        "add_source('TEE and E2EE Models', 'https://docs.venice.ai/guides/features/tee-e2ee-models')\n"
+        "add_source('VVV and DIEM', 'https://docs.venice.ai/overview/vvv-diem')\n"
+        "\n"
+        "print(f'{len(chunks)} chunks from {len(sources)} sources')"
+    ),
+    md(
+        "### Optional: add a PDF from your machine\n"
+        "\n"
+        "This cell waits for you to choose a file, so skip it if you only want web sources. "
+        "The text parser accepts PDF, Word, Excel, and plain text up to 25 MB."
+    ),
+    extra(
+        "try:\n"
+        "    from google.colab import files\n"
+        "\n"
+        "    for name in files.upload():\n"
+        "        add_source(name, name)\n"
+        "except ImportError:\n"
+        "    print('Not running in Colab, skipping the upload.')"
+    ),
+    md(
+        "## Ask a question\n"
+        "\n"
+        "Two instructions do the work of grounding: answer only from the notes, and say so when "
+        "the notes fall short. Without the second one a model quietly fills the gap from memory, "
+        "which is the failure mode you are designing out.\n"
+        "\n"
+        "Numbering the notes gives the model a citation vocabulary, and parsing the brackets back "
+        "out tells you which sources actually carried the answer."
+    ),
+    mdx("Retrieving the Right Passages"),
+    mdx("Answering with Citations"),
+    extra(
+        "from IPython.display import Markdown, display\n"
+        "\n"
+        "answer, cited = ask('How does Venice keep my prompts private, and what do I give up?')\n"
+        "\n"
+        "display(Markdown(answer))\n"
+        "print('Sources:', ', '.join(f\"[{s['number']}] {s['title']}\" for s in cited))"
+    ),
+    md(
+        "## Write the overview script\n"
+        "\n"
+        "A summary is something you read; an overview is something you listen to. Dialogue works "
+        "better in audio because the turn-taking does the pacing, and a question from one host "
+        "introduces the next idea naturally.\n"
+        "\n"
+        "Asking for JSON with a schema is what makes the result renderable: the `enum` on "
+        "`speaker` guarantees every turn maps to a voice you have."
+    ),
+    mdx("Writing the Overview Script"),
+    extra(
+        "turns = write_script(16)\n"
+        "\n"
+        "print(f'{len(turns)} turns\\n')\n"
+        "for turn in turns[:4]:\n"
+        "    print(f\"{turn['speaker']}: {turn['text']}\\n\")"
+    ),
+    md(
+        "## Render it\n"
+        "\n"
+        "Each turn is one speech request, with the voice chosen by who is speaking. Reading the "
+        "frames out of each clip rather than saving files and stitching them afterwards is what "
+        "keeps the join clean, because concatenating encoded audio such as MP3 does not work "
+        "reliably.\n"
+        "\n"
+        "The output header comes from the first clip rather than from constants, so the sample "
+        "rate is right for whichever model you chose, and a quarter second of silence between "
+        "turns gives the ear a beat to register that the speaker changed.\n"
+        "\n"
+        "Rendering six minutes of speech takes somewhere between half a minute and three minutes."
+    ),
+    mdx("Rendering Two Voices into One Track"),
+    mdx("Rendering Two Voices into One Track", 1),
+    extra(
+        "from IPython.display import Audio\n"
+        "\n"
+        "audio_overview(turns, 'overview.wav')\n"
+        "\n"
+        "Audio('overview.wav')"
+    ),
+    md(
+        "## Next steps\n"
+        "\n"
+        f"- [Building a Private RAG Bot]({DOCS_URL}/guides/projects/private-rag-bot), the same "
+        "retrieval pipeline with a real vector database and re-ranking\n"
+        f"- [Cited Answers with Web Search]({DOCS_URL}/guides/tools/cited-web-answers), find the "
+        "sources automatically instead of naming them\n"
+        f"- [Voice Cloning]({DOCS_URL}/guides/media/voice-cloning), host the overview in your own "
+        "voice\n"
+        f"- [Document Processing]({DOCS_URL}/guides/tools/document-processing), everything the "
+        "text parser accepts and what it returns"
+    ),
+]
+
+BUILDS = [
+    (NARRATION_PAGE, "notebooks/article-narration.ipynb", NARRATION),
+    (RESEARCH_PAGE, "notebooks/audio-research-notebook.ipynb", RESEARCH),
+]
 
 
 def main() -> int:
