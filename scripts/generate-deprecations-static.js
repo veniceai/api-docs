@@ -58,10 +58,6 @@ function tableCell(value) {
   return String(value).replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function renderTraitsList(traits) {
   const entries = sortTraits(traits);
   if (entries.length === 0) return 'No text model traits are currently available.';
@@ -135,6 +131,10 @@ function renderDeprecationTable(models, now = new Date()) {
   ].join('\n');
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function replacePlaceholder(page, id, startMarker, endMarker, content) {
   const pattern = new RegExp(
     `<div id="${id}">[\\s\\S]*?<\\/div>`
@@ -147,6 +147,39 @@ function replacePlaceholder(page, id, startMarker, endMarker, content) {
     pattern,
     `<div id="${id}">\n${startMarker}\n\n${content}\n\n${endMarker}\n</div>`
   );
+}
+
+function upsertVisibilityBlock(page, { id, startMarker, endMarker, content }) {
+  const attrMatch = page.match(new RegExp(`<div id="${escapeRegExp(id)}"([^>]*)>`));
+  const attrs = attrMatch ? attrMatch[1] : '';
+
+  const block = [
+    `<Visibility for="humans">`,
+    `<div id="${id}"${attrs}></div>`,
+    `</Visibility>`,
+    '',
+    `<Visibility for="agents">`,
+    startMarker,
+    '',
+    content,
+    '',
+    endMarker,
+    `</Visibility>`
+  ].join('\n');
+
+  const visibilityPattern = new RegExp(
+    `<Visibility for="humans">\\s*<div id="${escapeRegExp(id)}"[^>]*>[\\s\\S]*?<\\/div>\\s*<\\/Visibility>\\s*<Visibility for="agents">[\\s\\S]*?${escapeRegExp(endMarker)}\\s*<\\/Visibility>`
+  );
+  if (visibilityPattern.test(page)) {
+    return page.replace(visibilityPattern, () => block);
+  }
+
+  const divPattern = new RegExp(`<div id="${escapeRegExp(id)}"[^>]*>[\\s\\S]*?<\\/div>`);
+  if (divPattern.test(page)) {
+    return page.replace(divPattern, () => block);
+  }
+
+  throw new Error(`Missing ${id} placeholder`);
 }
 
 function updateDeprecationsPage(page, traits, models) {
@@ -167,29 +200,12 @@ function updateDeprecationsPage(page, traits, models) {
 }
 
 function updateTraitsApiPage(page, traits) {
-  const section = [
-    API_TRAITS_START,
-    '## Current text trait mappings',
-    '',
-    'These mappings are refreshed automatically from the public API.',
-    '',
-    renderTraitsList(traits),
-    API_TRAITS_END
-  ].join('\n');
-
-  const legacyStart = '<!-- AUTO-GENERATED:API-TRAITS:START -->';
-  const legacyEnd = '<!-- AUTO-GENERATED:API-TRAITS:END -->';
-  const existingPattern = new RegExp([
-    `${escapeRegExp(API_TRAITS_START)}[\\s\\S]*?${escapeRegExp(API_TRAITS_END)}`,
-    `${escapeRegExp(legacyStart)}[\\s\\S]*?${escapeRegExp(legacyEnd)}`
-  ].join('|'));
-  if (existingPattern.test(page)) return page.replace(existingPattern, section);
-
-  const separator = '-------';
-  if (!page.includes(separator)) {
-    throw new Error('Missing OpenAPI separator in traits endpoint page');
-  }
-  return page.replace(separator, `${section}\n\n${separator}`);
+  return upsertVisibilityBlock(page, {
+    id: 'traits-list-placeholder',
+    startMarker: API_TRAITS_START,
+    endMarker: API_TRAITS_END,
+    content: renderTraitsList(traits)
+  });
 }
 
 function writeIfChanged(filePath, content) {
