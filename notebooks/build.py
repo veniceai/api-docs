@@ -492,9 +492,130 @@ RESEARCH = [
     ),
 ]
 
+# --------------------------------------------------------------------------
+# notebooks/wallet-budget-agent.ipynb
+# --------------------------------------------------------------------------
+
+WALLET_PAGE = "learn/wallet-budget-agent.mdx"
+
+WALLET = [
+    md(
+        "# An Agent With Its Own Wallet and a Budget\n"
+        "\n"
+        "Pay for inference with a wallet signature instead of an API key, and cap what the "
+        "agent can spend.\n"
+        "\n"
+        "This notebook accompanies "
+        f"[Giving an Agent a Wallet and a Budget]({DOCS_URL}/learn/wallet-budget-agent), "
+        "which explains the reasoning behind each step. Run the cells in order.\n"
+        "\n"
+        "**You do not need a funded wallet to run this.** Without one the notebook generates a "
+        "disposable address, signs in with it, reads a zero balance, and stops at the payment "
+        "wall. Every step except the payment itself is real."
+    ),
+    md(
+        "## Setup\n"
+        "\n"
+        "If you do want to spend, put a funded wallet's private key in the Colab sidebar under "
+        "the key icon, as a secret named `WALLET_KEY`. Leave it unset to run unfunded.\n"
+        "\n"
+        "The wallet needs at least five dollars of USDC on Base, which is the minimum top-up "
+        "Venice will settle."
+    ),
+    extra(
+        '%pip install -q "x402[evm]" eth-account requests\n'
+        "\n"
+        "import os\n"
+        "\n"
+        "try:\n"
+        "    from google.colab import userdata\n"
+        "\n"
+        "    # Absent secret raises, which leaves the notebook on the disposable path.\n"
+        "    os.environ['WALLET_KEY'] = userdata.get('WALLET_KEY')\n"
+        "    print('Funded wallet key loaded.')\n"
+        "except Exception:\n"
+        "    print('No WALLET_KEY secret. Running with a disposable wallet.')"
+    ),
+    md("## Configuration"),
+    mdx("Setting Up"),
+    md(
+        "## The wallet\n"
+        "\n"
+        "In production this is a wallet you funded deliberately, with the key in a secret "
+        "manager. While building, a throwaway is safer, because a wallet with no money cannot "
+        "do anything expensive by accident."
+    ),
+    mdx("A Wallet the Agent Owns"),
+    md(
+        "## Signing in\n"
+        "\n"
+        "There is no key to send, so every request carries a signed "
+        "[EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) message proving the wallet owner "
+        "made it. Venice rebuilds these exact bytes and verifies your signature against them, "
+        "so the format is not negotiable.\n"
+        "\n"
+        "Signatures last five minutes and each nonce is single use, so we sign a fresh header "
+        "per request. Signing is local and costs nothing."
+    ),
+    mdx("Signing In Instead of Authenticating"),
+    md("Read the balance back. `canConsume` already accounts for the ten cent floor."),
+    mdx("Signing In Instead of Authenticating", 1),
+    md(
+        "## Putting money in\n"
+        "\n"
+        "Two requests: discover what Venice accepts, then settle a signed USDC transfer. The "
+        "cell below only defines the function."
+    ),
+    mdx("Putting Money In"),
+    md(
+        "Running `top_up()` moves real money, so it is commented out. Uncomment it once "
+        "`WALLET_KEY` points at a wallet holding at least five dollars of USDC on Base.\n"
+        "\n"
+        "From an empty wallet it returns `400 PAYMENT_VERIFICATION_FAILED`, which means the "
+        "signature was fine and the transfer was not."
+    ),
+    extra(
+        "# print(top_up())"
+    ),
+    md(
+        "## Paying per call\n"
+        "\n"
+        "Ordinary inference that happens to carry a signature. Turning off the Venice system "
+        "prompt is worth about seventeen hundred input tokens per call, which dwarfs the "
+        "question itself."
+    ),
+    mdx("Paying Per Call"),
+    md(
+        "## Reading what it spent\n"
+        "\n"
+        "The ledger is authoritative, so ask what was charged rather than estimating from "
+        "token counts."
+    ),
+    mdx("Reading What It Spent"),
+    md(
+        "## The budgeted run\n"
+        "\n"
+        "Before each call the agent checks what it has spent and declines work it cannot pay "
+        "for. Unfunded, this stops immediately and tells you the minimum top-up."
+    ),
+    mdx("The Budgeted Run"),
+    mdx("The Budgeted Run", 1),
+    md(
+        "## Next steps\n"
+        "\n"
+        f"- [Authentication]({DOCS_URL}/guides/getting-started/authentication), both auth modes "
+        "side by side\n"
+        f"- [x402 top-up]({DOCS_URL}/api-reference/endpoint/x402/top-up), the endpoint reference\n"
+        f"- [Building an Audio Research Notebook]({DOCS_URL}/learn/audio-research-notebook), "
+        "a longer project to point this agent's budget at\n"
+        "- `venice-x402-client` on npm, which wraps catch-402, top-up, and retry for TypeScript"
+    ),
+]
+
 BUILDS = [
     (NARRATION_PAGE, "notebooks/article-narration.ipynb", NARRATION),
     (RESEARCH_PAGE, "notebooks/audio-research-notebook.ipynb", RESEARCH),
+    (WALLET_PAGE, "notebooks/wallet-budget-agent.ipynb", WALLET),
 ]
 
 
