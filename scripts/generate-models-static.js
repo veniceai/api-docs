@@ -169,7 +169,7 @@ function getVideoType(modelId) {
 
 function renderCatalogIntro(count) {
   const noun = count === 1 ? 'model' : 'models';
-  return `This is the current model catalog, not a dynamic widget. Use the \`id\` value as the \`model\` parameter in API requests. ${count} ${noun} currently available.`;
+  return `Use the \`id\` value as the \`model\` parameter in API requests. ${count} ${noun} currently available.`;
 }
 
 function renderTextTable(models) {
@@ -289,23 +289,21 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Humans get a JS mount point. Agents get top-level markdown: Mintlify's
-// assistant indexes the .md export and often drops markdown nested in <div>s.
-function upsertVisibilityBlock(page, { id, startMarker, endMarker, content, humanFallback }) {
+// Mintlify's .md export keeps markdown tables inside a plain placeholder
+// <div> (same pattern as overview/pricing.mdx). Visibility-for-agents
+// dropped the model catalogs on the published export.
+function upsertCatalogBlock(page, { id, startMarker, endMarker, content }) {
   const attrMatch = page.match(new RegExp(`<div id="${escapeRegExp(id)}"([^>]*)>`));
   const attrs = attrMatch ? attrMatch[1] : '';
-  const inner = humanFallback ?? '';
 
   const block = [
-    `<div id="${id}"${attrs}>${inner}</div>`,
-    '',
-    `<Visibility for="agents">`,
+    `<div id="${id}"${attrs}>`,
     startMarker,
     '',
     content,
     '',
     endMarker,
-    `</Visibility>`
+    `</div>`
   ].join('\n');
 
   const wrappedPattern = new RegExp(
@@ -340,12 +338,12 @@ function writeIfChanged(filePath, content) {
   console.log(`Updated ${path.relative(ROOT, filePath)}`);
 }
 
-function updatePage(relativePath, id, startMarker, endMarker, content, humanFallback) {
+function updatePage(relativePath, id, startMarker, endMarker, content) {
   const filePath = path.join(ROOT, relativePath);
   const page = fs.readFileSync(filePath, 'utf-8');
   writeIfChanged(
     filePath,
-    upsertVisibilityBlock(page, { id, startMarker, endMarker, content, humanFallback })
+    upsertCatalogBlock(page, { id, startMarker, endMarker, content })
   );
 }
 
@@ -362,16 +360,14 @@ function main() {
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    renderOverviewTables(models),
-    'Loading models...'
+    renderOverviewTables(models)
   );
   updatePage(
     'models/text.mdx',
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'text').length, renderTextTable(models)),
-    'Loading models...'
+    withIntro(live.filter(m => m.type === 'text').length, renderTextTable(models))
   );
   updatePage(
     'models/image.mdx',
@@ -381,56 +377,49 @@ function main() {
     withIntro(
       live.filter(m => m.type === 'image' || m.type === 'upscale' || m.type === 'inpaint').length,
       renderImageTables(models)
-    ),
-    'Loading models...'
+    )
   );
   updatePage(
     'models/video.mdx',
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'video').length, renderVideoTable(models)),
-    'Loading models...'
+    withIntro(live.filter(m => m.type === 'video').length, renderVideoTable(models))
   );
   updatePage(
     'models/text-to-speech.mdx',
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'tts').length, renderTtsTable(models)),
-    'Loading models...'
+    withIntro(live.filter(m => m.type === 'tts').length, renderTtsTable(models))
   );
   updatePage(
     'models/text-to-speech.mdx',
     'tts-voice-picker-placeholder',
     VOICES_START,
     VOICES_END,
-    renderVoiceTables(models),
-    'Loading voices...'
+    renderVoiceTables(models)
   );
   updatePage(
     'models/speech-to-text.mdx',
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'asr').length, renderAsrTable(models)),
-    'Loading models...'
+    withIntro(live.filter(m => m.type === 'asr').length, renderAsrTable(models))
   );
   updatePage(
     'models/music.mdx',
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'music').length, renderMusicTable(models)),
-    'Loading models...'
+    withIntro(live.filter(m => m.type === 'music').length, renderMusicTable(models))
   );
   updatePage(
     'models/embeddings.mdx',
     'model-search-placeholder',
     MODELS_START,
     MODELS_END,
-    withIntro(live.filter(m => m.type === 'embedding').length, renderEmbeddingTable(models)),
-    'Loading models...'
+    withIntro(live.filter(m => m.type === 'embedding').length, renderEmbeddingTable(models))
   );
 }
 
