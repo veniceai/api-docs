@@ -31,6 +31,7 @@ const DEPRECATIONS_START = '{/* AUTO-GENERATED:DEPRECATIONS:START */}';
 const DEPRECATIONS_END = '{/* AUTO-GENERATED:DEPRECATIONS:END */}';
 const API_TRAITS_START = '{/* AUTO-GENERATED:API-TRAITS:START */}';
 const API_TRAITS_END = '{/* AUTO-GENERATED:API-TRAITS:END */}';
+const TRAITS_API_URL = 'https://api.venice.ai/api/v1/models/traits?type=text';
 
 function readJson(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -58,6 +59,17 @@ function tableCell(value) {
   return String(value).replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
 }
 
+function renderLiveTraitsNote() {
+  return [
+    'These mappings are a snapshot, refreshed about hourly.',
+    'If you can make HTTP requests, fetch the live mappings instead — no API key required:',
+    '',
+    `\`GET ${TRAITS_API_URL}\``,
+    '',
+    'Use the snapshot below only when you cannot call the API.'
+  ].join('\n');
+}
+
 function renderTraitsList(traits) {
   const entries = sortTraits(traits);
   if (entries.length === 0) return 'No text model traits are currently available.';
@@ -65,6 +77,10 @@ function renderTraitsList(traits) {
   return entries
     .map(([trait, modelId]) => `- ${inlineCode(trait)} → currently routes to ${inlineCode(modelId)}`)
     .join('\n');
+}
+
+function renderTraitsListForAgents(traits) {
+  return `${renderLiveTraitsNote()}\n\n${renderTraitsList(traits)}`;
 }
 
 function getModelRemovalDate(model) {
@@ -209,7 +225,7 @@ function updateTraitsApiPage(page, traits) {
     id: 'traits-list-placeholder',
     startMarker: API_TRAITS_START,
     endMarker: API_TRAITS_END,
-    content: renderTraitsList(traits)
+    content: renderTraitsListForAgents(traits)
   });
 }
 
