@@ -6,10 +6,12 @@ This repo holds the documentation for the Venice API. The doc-site itself is bui
 
 Our documentation is organized into several key sections:
 
-- **Welcome** - Introduction to venice and getting started guides
-- **API Reference** - Detailed API endpoint documentation
-- **Guides** - Step-by-step tutorials and integration examples
+- **Docs** - Overview, getting started, and the capability guides for text, image, video, audio, search, and integrations
+- **Models** - The model catalog, by modality
+- **Learn** - Complete, runnable walkthroughs and projects built on the API
+- **API Reference** - Endpoint documentation generated from `swagger.yaml`
 - **Changelog** - Latest updates and API changes
+- **Status Page** - Live service status
 
 ## 🚀 Getting Started
 
@@ -64,13 +66,13 @@ Changes are automatically deployed when pushed to the main branch. Just:
 1. Push changes to your default branch
 3. Your documentation will automatically update at your deployment URL
 
-NOTE that this repo does not have preview branches at the moment. So you'll need to test your changes locally before submitting a PR. The person reviewing the PR will have to pull the branch and test it locally.
+Pull requests get a Mintlify preview deployment, linked from the checks on the PR, so a reviewer can read the rendered pages without pulling the branch. Mintlify also runs a link-rot check and a spellcheck on each PR. Testing locally with `yarn dev` is still the fastest loop while you are writing.
 
 ## 🛠 Troubleshooting
 
 If you encounter any issues:
 
-- **404 Errors**: Ensure you're running the dev server in a directory containing `mint.json`
+- **404 Errors**: Ensure you're running the dev server in a directory containing `docs.json`
 - **Development Server Issues**: Run `yarn install` to reinstall dependencies
 - **Content Not Updating**: Clear your browser cache or try a hard refresh
 

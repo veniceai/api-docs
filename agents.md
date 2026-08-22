@@ -11,7 +11,7 @@
 - **Default text model trait:** `GET /models/traits` maps traits like `text:default`, `text:uncensored`, `image:fast` to current model IDs
 - **OpenAPI spec:** https://docs.venice.ai/swagger.yaml
 - **Full docs index:** https://docs.venice.ai/llms.txt (one-line-per-page) and https://docs.venice.ai/llms-full.txt (entire docs in one file)
-- **Markdown pages:** append `.md` to any docs URL for the raw Markdown version, e.g. `https://docs.venice.ai/overview/getting-started.md`
+- **Markdown pages:** append `.md` to any docs URL for the raw Markdown version, e.g. `https://docs.venice.ai/getting-started/quick-start.md`
 - **Agent skill file:** https://docs.venice.ai/skill.md — install with `npx skills add docs.venice.ai`
 - **Canonical Agent Skills repo:** https://github.com/veniceai/skills
 - **MCP server:** https://github.com/veniceai/venice-mcp-server (31 tools, any MCP host)
@@ -73,7 +73,7 @@ Feature suffixes also work on model IDs, e.g. `venice-uncensored:web` enables we
 
 ## Key guides
 
-- Getting started: https://docs.venice.ai/overview/getting-started.md
+- Getting started: https://docs.venice.ai/getting-started/quick-start.md
 - VVV & DIEM (stake for daily Venice credit): https://docs.venice.ai/overview/vvv-diem.md
 - AI agents (apps, coding tools, agent tooling, SDKs, and frameworks): https://docs.venice.ai/guides/integrations/ai-agents.md
 - Crypto RPC for agents: https://docs.venice.ai/guides/integrations/crypto-rpc-agents.md
