@@ -69,6 +69,87 @@
   relocate();
 })();
 
+// Drag to scroll the Learn card rows.
+//
+// Each row is an overflow-x container with its scrollbar hidden, which leaves a
+// mouse user with no way to move it: there is no bar to grab, a vertical wheel
+// does nothing to a horizontal overflow, and only trackpads emit horizontal
+// deltas. That left the arrow keys, and only once a card had taken focus.
+// Pointer events close the gap without changing the markup.
+//
+// Touch is left alone because native swipe already works there. The threshold
+// is what separates a drag from a click, which matters because every card is a
+// link: once past it we capture the pointer, suppress the click that would
+// otherwise navigate on release, and drop snapping so the row tracks the cursor
+// instead of pulling against it.
+(function() {
+  const DRAG_THRESHOLD = 5;
+
+  function enableDragScroll(row) {
+    if (row.dataset.dragScroll) return;
+    row.dataset.dragScroll = 'on';
+
+    let pointerId = null;
+    let startX = 0;
+    let startScrollLeft = 0;
+    let dragged = false;
+
+    row.addEventListener('pointerdown', function(event) {
+      if (event.pointerType === 'touch' || event.button !== 0) return;
+      pointerId = event.pointerId;
+      startX = event.clientX;
+      startScrollLeft = row.scrollLeft;
+      dragged = false;
+    });
+
+    row.addEventListener('pointermove', function(event) {
+      if (pointerId === null || event.pointerId !== pointerId) return;
+      const travelled = event.clientX - startX;
+      if (!dragged) {
+        if (Math.abs(travelled) < DRAG_THRESHOLD) return;
+        dragged = true;
+        row.classList.add('is-dragging');
+        try { row.setPointerCapture(pointerId); } catch (error) {}
+      }
+      row.scrollLeft = startScrollLeft - travelled;
+      event.preventDefault();
+    });
+
+    function endDrag(event) {
+      if (pointerId === null || event.pointerId !== pointerId) return;
+      try { row.releasePointerCapture(pointerId); } catch (error) {}
+      pointerId = null;
+      row.classList.remove('is-dragging');
+      // `dragged` has to survive into the click that follows this same gesture,
+      // so it is cleared a tick later rather than here.
+      if (dragged) setTimeout(function() { dragged = false; }, 0);
+    }
+
+    row.addEventListener('pointerup', endDrag);
+    row.addEventListener('pointercancel', endDrag);
+
+    row.addEventListener('click', function(event) {
+      if (!dragged) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
+
+    // Links start a native drag of their own, which kills the gesture midway.
+    row.addEventListener('dragstart', function(event) { event.preventDefault(); });
+  }
+
+  function scanForRows() {
+    document.querySelectorAll('.venice-learn-row').forEach(enableDragScroll);
+  }
+
+  new MutationObserver(scanForRows).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
+  scanForRows();
+})();
+
 // Venice AI Model Browser & Pricing Tables - Fetches from API
 (function() {
 
