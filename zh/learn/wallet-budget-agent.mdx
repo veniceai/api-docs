@@ -1,0 +1,358 @@
+---
+title: "给智能体一个钱包和一份预算"
+description: "不用 API key，直接从钱包里付推理费，并给智能体设置一个花费上限。"
+slug: wallet-budget-agent-venice-x402
+"og:title": "用 Venice x402 给智能体一个钱包和一份预算"
+"og:description": "一个用钱包签名做身份认证的智能体，按请求以 USDC 支付、打印每一笔扣费，并在你设定的上限处停下。"
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Sabrina Aquino" date="21 August 2026"/>
+
+一个拿着 API key 的智能体，能花掉这把 key 能花掉的一切。有人盯着的时候没事，没人盯着的时候就很尴尬。通常的补救办法都在智能体外部——在某个面板里，或是在一个事后才告诉你出事了的账单告警里。
+
+Venice 支持第二种进入方式。智能体不持有 key，而是持有一个钱包。它通过签名一条消息来做身份认证，每次请求从这个钱包地址关联的 USDC 余额中扣款，每一笔扣费都进入一个它能读回的账本。没有账户、没有面板、也没有会泄露的 key。上限就是余额，而余额是你决定要放多少的。
+
+本指南搭一个正好这么做的智能体，让它在自己强制执行的预算下运行。
+
+<Card title="在 Google Colab 中运行这个 notebook" icon="notebook" href="https://colab.research.google.com/github/veniceai/api-docs/blob/main/notebooks/wallet-budget-agent.ipynb">
+  下面每一步都是可运行的 notebook。它在钱包没有余额时也能跑，会在支付这一步停下，让你在真的花钱之前先看到整个流程。
+</Card>
+
+## 它是怎么工作的
+
+四个部件，其中三个不过是 HTTP：
+
+| 步骤 | Endpoint | 用途 |
+| --- | --- | --- |
+| 证明你是谁 | 任意 endpoint，通过 `SIGN-IN-WITH-X` | 一条签过名的消息替代了 API key |
+| 存入资金 | `/x402/top-up` | 发现支付通道，然后结算一次签名的 USDC 转账 |
+| 查询余额 | `/x402/balance/{address}` | 剩多少钱，够不够继续交易 |
+| 读取扣费 | `/x402/transactions/{address}` | 每次请求的扣款账本 |
+
+推理本身就是一次普通的 `/chat/completions` 调用。唯一的区别是你发的是哪个 header。
+
+## 起步要花多少钱
+
+有两个数字很重要，而它们不是同一个数字。
+
+**最小充值金额是五美元**。这是 `/x402/top-up` 会结算的最小额度，它是在 discovery 响应里返回的，而不是在任何地方硬编码，所以要读它，而不要相信这一页的说法。
+
+**能发起一次调用的最小余额是十美分**。低于这个的钱包即便还有钱，向推理发请求也会拿到一个 `402`。
+
+所以五美元是一个值得充值的最小钱包额度，也就是本指南给智能体的额度。值得知道这点钱能买些什么：向 `qwen3-5-9b` 提一个简短问题大约要花二十七个输入 token 和二十六个输出 token，按这个模型的价格算大约是七百万分之一美元。五美元大约是七十五万个问题的量级。这里的预算不是一个紧约束，而是一个爆炸半径。
+
+## 环境准备
+
+x402 SDK 负责支付签名。不要自己手写：转账授权是 EIP-712 typed data，重用一个 nonce 会以让人非常烦的方式导致验证失败。
+
+```bash
+pip install "x402[evm]" eth-account requests
+```
+
+<Note>
+  x402 Python SDK 需要 Python 3.10 或更高版本。Colab 没问题。macOS 自带的系统 Python 未必满足要求。
+</Note>
+
+创建 `agent.py`，写入配置。`BUDGET_USD` 是智能体给自己设的上限，这里设成整个钱包的额度。调低它，智能体会在钱花完之前就停下，而这可能是你唯一会改动的旋钮。
+
+```python
+import base64
+import json
+import os
+import secrets
+from datetime import datetime, timedelta, timezone
+
+import requests
+from eth_account import Account
+from eth_account.messages import encode_defunct
+
+BASE_URL = "https://api.venice.ai/api/v1"
+DOMAIN = "api.venice.ai"
+CHAIN_ID = 8453          # Base mainnet
+MODEL = "qwen3-5-9b"
+BUDGET_USD = 5.00
+```
+
+## 一个属于智能体自己的钱包
+
+智能体需要一个密钥对。在生产环境里，这是你刻意充过值、私钥存放在 secret manager 里的钱包。在开发过程中，生成一个用完就丢的钱包是正确的做法，因为一个没有钱的钱包不会不小心把事情搞得很贵。
+
+```python
+key = os.environ.get("WALLET_KEY")
+account = Account.from_key(key) if key else Account.create()
+
+print(f"wallet {account.address}")
+print("funded" if key else "disposable, cannot pay yet")
+```
+
+不要把私钥留在 notebook 里。在 Colab 里，把它放进 Secrets，用 `userdata.get("WALLET_KEY")` 读取。
+
+## 用签名而不是密钥来登录
+
+没有 key 可发，每次请求就带一份"钱包持有者本人发起了这次请求"的证明。这份证明是一条 [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) 消息，签名后再 base64 编码进 `SIGN-IN-WITH-X` header。
+
+消息格式是精确的。Venice 会在它那边重建这些字节，并以此校验你的签名，所以多一个空行就意味着签名会被拒绝，而不是给你一个有用的错误信息。
+
+```python
+def siwx_header():
+    now = datetime.now(timezone.utc)
+    stamp = lambda t: t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    issued_at, expires_at = stamp(now), stamp(now + timedelta(minutes=4))
+    nonce = secrets.token_hex(8)
+
+    message = (
+        f"{DOMAIN} wants you to sign in with your Ethereum account:\n"
+        f"{account.address}\n\nSign in to Venice AI\n\n"
+        f"URI: https://{DOMAIN}\nVersion: 1\nChain ID: {CHAIN_ID}\n"
+        f"Nonce: {nonce}\nIssued At: {issued_at}\nExpiration Time: {expires_at}"
+    )
+    signature = account.sign_message(encode_defunct(text=message)).signature.hex()
+
+    payload = {
+        "address": account.address,
+        "message": message,
+        "signature": signature if signature.startswith("0x") else "0x" + signature,
+        "chainId": CHAIN_ID,
+    }
+    return base64.b64encode(json.dumps(payload).encode()).decode()
+```
+
+三条规则约束着这些 header，三条都是为了阻止重放。签名从 `Issued At` 起的**五分钟内**有效。每个 **nonce 在大约五分半的时间里只能使用一次**。而且签名者必须与请求路径里的钱包一致，所以一个钱包不能查看另一个的信息，试图这么做只会拿到 `403`。
+
+实际后果就是你要为每次请求都签一个新的 header，而不是缓存一个来用。签名是本地操作，不花钱，所以这没什么成本。
+
+```python
+def wallet_get(path, **params):
+    response = requests.get(
+        f"{BASE_URL}{path}",
+        headers={"SIGN-IN-WITH-X": siwx_header()},
+        params=params,
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["data"]
+
+
+def balance():
+    return wallet_get(f"/x402/balance/{account.address}")
+
+
+print(balance())
+```
+
+对一个新钱包：
+
+```json
+{
+  "walletAddress": "0xc5048ea84939bb7eb4c611b88ea17d5ee4f11a0c",
+  "balanceUsd": 0,
+  "canConsume": false,
+  "minimumTopUpUsd": 5,
+  "suggestedTopUpUsd": 10
+}
+```
+
+`canConsume` 是分支判断该看的字段。它已经把十美分的下限考虑在内了，所以你不用自己处理。
+
+## 把钱存进去
+
+充值要两次请求。第一次问 Venice 接受什么，这次是不做身份认证的，因为还没有东西可以认证。第二次带上签过名的转账授权。
+
+```python
+from x402.client import SpendControls, x402ClientSync
+from x402.http import PAYMENT_SIGNATURE_HEADER, encode_payment_signature_header
+from x402.mechanisms.evm import EthAccountSigner
+from x402.mechanisms.evm.exact.client import ExactEvmScheme
+from x402.schemas.payments import PaymentRequired
+
+
+def top_up():
+    discovery = requests.post(f"{BASE_URL}/x402/top-up", timeout=30)
+    required = PaymentRequired.model_validate(discovery.json())
+
+    rail = next(a for a in required.accepts if a.network.startswith("eip155"))
+    print(f"{rail.network}: {int(rail.amount) / 1e6:.2f} USDC to {rail.payTo}")
+
+    client = x402ClientSync()
+    client.register(rail.network, ExactEvmScheme(EthAccountSigner(account)))
+    # The SDK caps one payment at $1 by default, which is below the $5 minimum
+    # top-up, so every rail gets rejected until this is raised.
+    client.set_spend_controls(SpendControls(max_amount_per_payment="$5", allowed_assets=True))
+
+    payload = client.create_payment_payload(required)
+    settlement = requests.post(
+        f"{BASE_URL}/x402/top-up",
+        headers={PAYMENT_SIGNATURE_HEADER: encode_payment_signature_header(payload)},
+        timeout=90,
+    )
+    return settlement.json()
+```
+
+Discovery 每种通道返回一条。目前是 Base 和 Solana：
+
+```json
+{
+  "x402Version": 2,
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "eip155:8453",
+      "amount": "5000000",
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "payTo": "0x2670b922ef37c7df47158725c0cc407b5382293f",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "USD Coin", "version": "2" }
+    },
+    {
+      "scheme": "exact",
+      "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+      "amount": "5000000",
+      "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "payTo": "8qUL23aSj7mDWdoLMXGHFvnVCT9wd7jXcysiekroADEL",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "USD Coin", "version": "2", "feePayer": "BFK9TLC3edb13K6v4YyH3DwPb5DSUpkWvb7XnqCL9b4F" }
+    }
+  ]
+}
+```
+
+里面有两处细节容易被忽略。`amount` 用的是基本单位，USDC 有六位小数，所以 `5000000` 是五美元，而不是五百万个什么东西。在 Solana 通道上，`extra.feePayer` 是一个由 Venice 运营的账户，它替你付交易 gas 费，这就是钱包不必持有 SOL 也能付款的原因。
+
+<Warning>
+  默认的 spend control 是第一个会挡住你的东西。SDK 出厂时把 `max_amount_per_payment` 设为一美元，而 Venice 的最小充值是五美元，所以未修改的 client 会拒绝所有提供的通道，在它接触网络之前就抛出 `NoMatchingRequirementsError`。请刻意把这个上限抬高，而不是干脆关掉 spend control。
+</Warning>
+
+从一个没有 USDC 的钱包结算，会拿到一个 `400`，body 里是 `PAYMENT_VERIFICATION_FAILED`。这就是失败该有的样子：签名没问题，转账没成功。
+
+## 按次付费
+
+有了余额之后，推理就是一次带着签名的普通请求。把 Venice 系统 prompt 关掉比看起来更重要：它相当于每次调用大约一千七百个输入 token，比问题本身多出两个数量级。
+
+```python
+def ask(question):
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers={"SIGN-IN-WITH-X": siwx_header(), "Content-Type": "application/json"},
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user", "content": question}],
+            "max_completion_tokens": 150,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=90,
+    )
+    if response.status_code == 402:
+        body = response.json()
+        raise RuntimeError(
+            f"balance ${body.get('currentBalanceUsd', 0)} is under the "
+            f"${body.get('minimumBalanceUsd')} floor. Minimum top-up is "
+            f"${body['topUpInstructions']['minimumAmountUsd']}."
+        )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"].strip()
+```
+
+把 `402` 当作正常结果而不是异常来处理，是整个设计的核心。一个自己付钱的智能体最终会把钱花光，而花光钱不是崩溃。
+
+## 读它花了多少
+
+账本才是权威。与其从 token 数估算，不如问一下实际扣了多少。
+
+```python
+def charges():
+    """Every debit against this wallet, newest first."""
+    ledger = wallet_get(f"/x402/transactions/{account.address}", limit=100)
+    return [t for t in ledger["transactions"] if t["type"] == "CHARGE"]
+```
+
+每一行都回链到导致它的那次调用：
+
+```json
+{
+  "id": "ledger_01H...",
+  "amount": -0.0000066,
+  "balanceAfter": 4.9999934,
+  "type": "CHARGE",
+  "createdAt": "2026-08-21T18:22:10.000Z",
+  "requestId": "chatcmpl-...",
+  "modelId": "qwen3-5-9b"
+}
+```
+
+`TOP_UP` 和 `REFUND` 行也会出现在这里，金额是正的。过滤到 `CHARGE` 得到的就是花费。
+
+## 有预算的一次运行
+
+现在是主循环。在每次调用之前，智能体会检查已经花了多少，并且拒绝去做它付不起的工作。
+
+```python
+TASKS = [
+    "Name one concrete tradeoff of vector search versus keyword search. One sentence.",
+    "In one sentence, when is a bloom filter the wrong choice?",
+    "Give one reason CRDTs are hard to debug in production. One sentence.",
+    "What is one failure mode of exponential backoff without jitter? One sentence.",
+    "Name one thing consistent hashing does not solve. One sentence.",
+    "Why is p99 latency more useful than the mean? One sentence.",
+]
+
+
+def run(budget=BUDGET_USD):
+    opening = balance()
+    print(f"balance ${opening['balanceUsd']:.4f}, budget ${budget:.4f}")
+
+    if not opening["canConsume"]:
+        print(f"cannot transact yet, minimum top-up is ${opening['minimumTopUpUsd']}")
+        return
+
+    baseline = sum(abs(c["amount"]) for c in charges())
+    spent = 0.0
+
+    for number, task in enumerate(TASKS, 1):
+        if spent >= budget:
+            print(f"\nstopped before task {number}: ${spent:.6f} of ${budget:.4f} spent")
+            return
+
+        answer = ask(task)
+        spent = sum(abs(c["amount"]) for c in charges()) - baseline
+        print(f"\n{number}. {task}")
+        print(f"   {answer}")
+        print(f"   ${spent:.6f} spent, ${budget - spent:.6f} left")
+
+    print(f"\nfinished all {len(TASKS)} tasks for ${spent:.6f}")
+    if spent:
+        print(f"at this rate ${budget:.2f} covers about {int(budget / (spent / len(TASKS))):,} calls")
+```
+
+用整整五美元跑一次，预算根本不会触发，按这个价格这是老实的结果。想真正看到上限起作用，就把它设成一次调用就会突破的值：
+
+```python
+run()              # $5.00, finishes every task
+run(budget=1e-5)   # stops partway, having spent about $0.000007 per call
+```
+
+## 到这里你手上有了什么
+
+这个智能体持有自己的钱，用签名证明身份，也没法超出你设的上限，而且在任何地方都不存在关于它的账户。对于一个定时任务、一个 serverless 函数、或者任何你并不想把一个长期存活的 key 交给它的场景，这在安全姿态上是有实质区别的。
+
+值得接着做的一些事：
+
+<CardGroup cols={2}>
+  <Card title="在协议里加上限" icon="shield">
+    SDK 里的 spend control 是每次支付一个上限，而不是每个会话一个上限。把它和上面那个预算循环搭配起来，让其中一个出 bug 也无法绕过另一个。
+  </Card>
+  <Card title="没钱了自动补" icon="refresh">
+    捕获 `402`、去充值、然后重试。TypeScript 版本的 `venice-x402-client` 帮你做的就是这件事。
+  </Card>
+  <Card title="在 Solana 上支付" icon="currency-solana">
+    同样的流程，另一条通道。用 Ed25519 签名，并设置返回的 `feePayer`，这样钱包就不需要 SOL。
+  </Card>
+  <Card title="给它派点真正的活" icon="tools">
+    把任务列表换成一个工具调用循环，账本就会开始告诉你每一个决策各自花了多少。
+  </Card>
+</CardGroup>
+
+完整的 endpoint 参考请见 [x402 top-up](/api-reference/endpoint/x402/top-up) 和 [在 Venice API 中使用 x402](/guides/integrations/x402-venice-api)。

@@ -1,0 +1,434 @@
+---
+title: "Strukturierte Daten aus Dokumenten extrahieren"
+sidebarTitle: "Dokumentenextraktion"
+description: "Verwandle ein PDF in typisierte Datensätze und weich auf Vision aus, wenn es keinen Text zu extrahieren gibt."
+"og:title": "Strukturierte Daten aus Dokumenten extrahieren | Venice API Docs"
+"og:description": "Parse ein PDF mit text-parser, pin die Ausgabe an ein JSON-Schema und wechsel zu einem Vision-Modell, wenn sich herausstellt, dass die Datei ein Scan ist."
+---
+
+Ein Dokument zu lesen ist einfach. Aus jedem Dokument dieselben Felder herauszubekommen, in einer Form, auf die sich dein Code verlassen kann, ist die eigentliche Arbeit.
+
+Es gibt zwei Wege von einer Datei zu einem Datensatz. Du kannst den Text extrahieren und einem Modell übergeben, oder du kannst die Seite einem Modell zeigen, das sehen kann. Welcher Weg der richtige ist, hängt davon ab, wie die Datei erzeugt wurde, und ein PDF sagt dir beim Ansehen nicht, welche Art es ist. Dieses Tutorial baut beide und lässt die API zwischen ihnen entscheiden:
+
+```bash
+python extract.py paper.pdf
+```
+
+Dabei werden wir:
+
+1. Den Text aus einem PDF mit `/augment/text-parser` herausziehen
+2. Den gewünschten Datensatz als JSON-Schema beschreiben
+3. Ihn extrahieren, wobei das Schema erzwungen und nicht nur angefragt wird
+4. Mit der Datei umgehen, die gar keinen Text enthält
+5. Vergleichen, was die beiden Wege aus derselben Seite produzieren
+
+## Setup
+
+Du brauchst Python 3.9 oder neuer, das `requests`-Paket und einen Venice-API-Schlüssel. Siehe [API-Schlüssel erzeugen](/guides/getting-started/generating-api-key), falls du noch keinen hast.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+Wir verwenden ein öffentliches Paper als Beispieldokument, damit du mit derselben Datei mitmachen kannst:
+
+```bash
+curl -L -o paper.pdf https://arxiv.org/pdf/1706.03762
+```
+
+Erstelle `extract.py`:
+
+```python
+from __future__ import annotations
+
+import base64
+import json
+import os
+import subprocess
+import sys
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+AUTH = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+JSON_HEADERS = {**AUTH, "Content-Type": "application/json"}
+```
+
+Beachte, dass `AUTH` und `JSON_HEADERS` getrennt sind. Der Parser nimmt einen Multipart-Upload entgegen, und wenn du `Content-Type` bei einer Multipart-Anfrage selbst setzt, hindert das `requests` daran, den Boundary hinzuzufügen, was auf eine lästig zu diagnostizierende Weise fehlschlägt.
+
+## 1. Den Text herausbekommen
+
+`/augment/text-parser` nimmt eine PDF-, DOCX-, XLSX- oder reine Textdatei von bis zu 25 MB entgegen und gibt den Text zusammen mit einer Token-Zahl zurück. Dokumente werden im Speicher verarbeitet, und der Inhalt wird nicht aufbewahrt.
+
+<CodeGroup>
+```python Python
+def parse_document(path: str) -> dict:
+    with open(path, "rb") as handle:
+        response = requests.post(
+            f"{BASE_URL}/augment/text-parser",
+            headers=AUTH,
+            files={"file": (os.path.basename(path), handle, "application/pdf")},
+            data={"response_format": "json"},
+            timeout=300,
+        )
+    response.raise_for_status()
+    return response.json()
+```
+
+```javascript Node.js
+const BASE_URL = "https://api.venice.ai/api/v1";
+
+async function parseDocument(path) {
+  const form = new FormData();
+  form.append("file", new Blob([await readFile(path)]), basename(path));
+  form.append("response_format", "json");
+
+  const response = await fetch(`${BASE_URL}/augment/text-parser`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.VENICE_API_KEY}` },
+    body: form,
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${await response.text()}`);
+  }
+  return response.json();
+}
+```
+
+```bash cURL
+curl -X POST https://api.venice.ai/api/v1/augment/text-parser \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./paper.pdf" \
+  -F "response_format=json"
+```
+</CodeGroup>
+
+```python
+parsed = parse_document("paper.pdf")
+print(parsed["tokens"], "tokens,", len(parsed["text"]), "characters")
+print(parsed["text"][:180])
+```
+
+```
+12346 tokens, 39505 characters
+Provided proper attribution is provided, Google hereby grants permission to
+reproduce the tables and figures in this paper solely for use in journalistic or
+scholarly works.
+Attention Is All You Need
+```
+
+Der `tokens`-Wert ist der nützliche Teil dieser Antwort. Er sagt dir, was dich das Dokument in der nächsten Anfrage kosten wird, bevor du sie stellst, was wichtig ist, weil ein langes PDF leicht über das hinauswachsen kann, was du ausgeben wolltest.
+
+## 2. Den gewünschten Datensatz beschreiben
+
+Ein Modell nach JSON zu fragen bringt dir JSON, das ungefähr so geformt ist, wie du gefragt hast. Ein Schema zu übergeben bringt dir JSON, das passt, denn das Schema schränkt die Generierung ein, statt sie nur zu empfehlen.
+
+```python
+PAPER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "authors": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "affiliation": {"type": "string"},
+                },
+                "required": ["name", "affiliation"],
+                "additionalProperties": False,
+            },
+        },
+        "year": {"type": "integer"},
+    },
+    "required": ["title", "authors", "year"],
+    "additionalProperties": False,
+}
+```
+
+`additionalProperties: False` lohnt sich auf jeder Ebene. Ohne das kann ein Modell, das etwas Interessantes findet, einen Schlüssel hinzufügen, den du nie eingeplant hast, und der Code, der das Ergebnis liest, wird ihn nicht erwarten.
+
+## 3. Extrahieren
+
+Ein Aufruf, wobei `response_format` das Schema trägt und `strict` eingeschaltet ist:
+
+```python
+def default_model(trait: str) -> str:
+    response = requests.get(f"{BASE_URL}/models/traits", headers=AUTH, timeout=30)
+    response.raise_for_status()
+    return response.json()["data"][trait]
+
+
+def extract_from_text(text: str, schema: dict, budget: int = 12000) -> dict:
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": default_model("default"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract the requested fields from the document. "
+                        "Use only what appears in it."
+                    ),
+                },
+                {"role": "user", "content": text[:budget]},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "record", "strict": True, "schema": schema},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 1500,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    return read_record(response.json())
+```
+
+Jede Extraktion in diesem Tutorial läuft durch einen kleinen Reader, weil die zwei Arten, wie dieser Aufruf fehlschlagen kann, beide als HTTP `200` ankommen:
+
+```python
+def read_record(body: dict) -> dict:
+    choice = body["choices"][0]
+    if choice["finish_reason"] == "length":
+        raise RuntimeError(
+            "Ran out of completion tokens. The JSON is truncated, not invalid. "
+            "Raise max_completion_tokens or shrink the schema."
+        )
+    content = choice["message"].get("content")
+    if not content:
+        raise RuntimeError(f"Empty response, finish_reason={choice['finish_reason']}.")
+    return json.loads(content)
+```
+
+```python
+record = extract_from_text(parsed["text"], PAPER_SCHEMA)
+print(json.dumps(record, indent=2, ensure_ascii=False))
+```
+
+```json
+{
+  "title": "Attention Is All You Need",
+  "authors": [
+    { "name": "Ashish Vaswani", "affiliation": "Google Brain" },
+    { "name": "Noam Shazeer", "affiliation": "Google Brain" },
+    { "name": "Niki Parmar", "affiliation": "Google Research" },
+    { "name": "Jakob Uszkoreit", "affiliation": "Google Research" },
+    { "name": "Llion Jones", "affiliation": "Google Research" },
+    { "name": "Aidan N. Gomez", "affiliation": "University of Toronto" },
+    { "name": "Łukasz Kaiser", "affiliation": "Google Brain" },
+    { "name": "Illia Polosukhin", "affiliation": "" }
+  ],
+  "year": 2017
+}
+```
+
+Sieh dir den letzten Autor an. Das Paper nennt keine Affiliation für Illia Polosukhin, und das Schema sagt, `affiliation` sei erforderlich, also hat das Modell einen leeren String zurückgegeben, statt das Feld wegzulassen. Genau das tut das Schema, was du ihm gesagt hast.
+
+<Note>
+  Ein leerer String und ein fehlender Wert sind unterschiedliche Fakten, und `required` wirft sie in einen Topf. Wenn du „das Dokument sagt es nicht" von „das Dokument sagt hier nichts" unterscheiden musst, typisiere das Feld als `{"type": ["string", "null"]}` und bitte im System-Prompt um `null`. Der Strict-Modus akzeptiert die Union, und du bekommst `null` statt `""`.
+</Note>
+
+### Das Denken abschalten
+
+`disable_thinking` ist die Zeile in dieser Anfrage, über die es sich zu streiten lohnt, hier also das Argument. Das Standard-Textmodell reasoniert, bevor es antwortet, und Reasoning wird aus demselben Completion-Budget gezogen wie das JSON. Führ dieselbe Extraktion viermal aus und beobachte, was das Modell ausgibt:
+
+| Konfiguration | Reasoning-Tokens über vier Läufe | Ergebnis |
+|---|---|---|
+| Budget 1500, Denken an | 959, 325, 975, 575 | Jedes Mal gültig, zu vier verschiedenen Preisen |
+| Budget 4000, Denken an | 4003, 984, 1632, 956 | Ein Lauf hat das gesamte Budget verdacht und nichts zurückgegeben |
+| Budget 1500, Denken aus | 0, 0, 0, 0 | Jedes Mal 217 Completion-Tokens |
+
+Das Budget zu erhöhen behebt das erste Problem nicht, es hebt nur die Decke an, gegen die das Modell stoßen darf. Der Lauf, der 4003 Tokens ausgegeben hat, kam mit `finish_reason` `length` und einem leeren String zurück.
+
+Das Denken abzuschalten hat diese Extraktion fünfmal günstiger gemacht und, was nützlicher ist, jedes Mal gleich. Das Schema erledigt schon die Arbeit, die das Reasoning täte, nämlich zu entscheiden, welche Form die Antwort annimmt.
+
+<Warning>
+  Wenn das Budget doch ausgeht, hat das Modell meist schon etwas JSON geschrieben, du bekommst also ein abgeschnittenes Objekt statt eines Fehlers. `json.loads` scheitert dann irgendwo in der Mitte an einem unbeendeten String, was wie ein Parsing-Bug aussieht und keiner ist. `read_record` prüft `finish_reason` zuerst, sodass die Nachricht sagt, was wirklich passiert ist.
+</Warning>
+
+## 4. Wenn es keinen Text zu holen gibt
+
+Ein PDF, das von einem Scanner erzeugt wurde, enthält Bilder von Seiten, keinen Text. Nichts am Dateinamen sagt das, und nichts an der Dateigröße verrät es.
+
+Du musst es nicht selbst erkennen, denn der Parser tut das:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/augment/text-parser \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./scanned.pdf"
+```
+
+```json
+{ "error": "No text content could be extracted from the file." }
+```
+
+Das kommt als HTTP `400` an, und es ist ein Routing-Signal, kein Fehlschlag. Der Textweg ist für diese Datei nicht verfügbar, nimm also den anderen: Rendere die Seite und lass ein Modell hinschauen.
+
+```python
+def render_first_page(pdf_path: str, png_path: str, width: int = 1400) -> None:
+    """macOS only. Use pdftoppm from poppler, or pypdfium2, elsewhere."""
+    subprocess.run(
+        ["sips", "-s", "format", "png", "--resampleWidth", str(width),
+         pdf_path, "--out", png_path],
+        check=True, capture_output=True,
+    )
+
+
+def extract_from_image(png_path: str, schema: dict) -> dict:
+    encoded = base64.b64encode(open(png_path, "rb").read()).decode()
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": default_model("default_vision"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract the requested fields from the page image. "
+                        "Use only what appears in it."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Extract the fields."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                        },
+                    ],
+                },
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "record", "strict": True, "schema": schema},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 1500,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    return read_record(response.json())
+```
+
+Jetzt lassen sich die beiden Wege zusammenschalten, wobei der Fehler des Parsers selbst zwischen ihnen entscheidet:
+
+```python
+def extract(path: str, schema: dict) -> dict:
+    try:
+        text = parse_document(path)["text"]
+    except requests.HTTPError as error:
+        if error.response.status_code != 400:
+            raise
+        print("no extractable text, falling back to vision", file=sys.stderr)
+        png = path.rsplit(".", 1)[0] + "-page1.png"
+        render_first_page(path, png)
+        return extract_from_image(png, schema)
+    return extract_from_text(text, schema)
+
+
+if __name__ == "__main__":
+    document = sys.argv[1] if len(sys.argv) > 1 else "paper.pdf"
+    print(json.dumps(extract(document, PAPER_SCHEMA), indent=2, ensure_ascii=False))
+```
+
+<Warning>
+  Der Fallback liest eine Seite. Das ist für ein Formular, eine Rechnung oder eine Titelseite in Ordnung und für alles Längere falsch, weil der Rest des Dokuments stillschweigend nicht existiert. Rendere jede Seite und schick sie als mehrere Bilder, wenn die Antwort vielleicht nicht auf Seite eins steht.
+</Warning>
+
+## 5. Worin die beiden Wege sich uneinig sind
+
+Führ beide gegen dieselbe erste Seite aus und die Datensätze kommen fast identisch zurück. „Fast" ist der interessante Teil:
+
+| Feld | Aus geparstem Text | Aus dem Seitenbild |
+|---|---|---|
+| `title` | Attention Is All You Need | Attention Is All You Need |
+| Siebter Autor | Łukasz Kaiser | Lukasz Kaiser |
+| Achte Affiliation | `""` | `""`, oder manchmal `Google Research` |
+| `year` | 2017 | 2017 |
+
+Der Textweg hat das Ł erhalten. Der Vision-Weg hat ein ASCII-L zurückgegeben, weil er Buchstabenformen liest statt Zeichencodes, und ein diakritisches Zeichen ist ein kleines visuelles Detail, das schlecht überlebt. Wenn du extrahierte Namen gegen eine Datenbank abgleichst, entscheidet dieser Unterschied, ob die Zeile gefunden wird.
+
+Der achte Autor ist wichtiger. Die Seite gibt keine Affiliation für Illia Polosukhin an, und der Textweg berichtet das jedes Mal getreu als leeren String. Der Vision-Weg hat in manchen Läufen das Feld mit einem plausiblen Nachbarn von derselben Seite gefüllt. Pixel zu lesen lässt mehr Raum zum Ableiten als Zeichen zu lesen, und ein erforderliches Feld ist eine Einladung, es zu füllen. Wenn du die Ausgabe nicht von Hand prüfen kannst, ist das ein Grund, den geparsten Text zu bevorzugen, wo immer das Dokument ihn anbietet.
+
+Die Kosten liegen näher beieinander, als es aussieht. Mit ausgeschaltetem Denken auf beiden Seiten liefen die beiden Wege auf dieser Seite mit etwa gleicher Prompt-Größe:
+
+| Weg | Prompt-Tokens | Completion-Tokens | Medianzeit |
+|---|---|---|---|
+| Geparster Text, erste 12000 Zeichen | 2611 | 217 | 1.6s |
+| Seitenbild bei 1400px | 2547 | 167 | 4.3s |
+
+Das Bild hatte 923.732 Zeichen Base64, und für nichts davon zahlst du. Bilder werden nach Größe tokenisiert, nicht nach der Länge ihrer Kodierung, sodass ein großes PNG nicht das kostet, wonach es aussieht.
+
+Bevorzuge geparsten Text, wenn das Dokument Text hat. Er behält die exakten Zeichen, es kostet nichts extra, über Seite eins hinauszureichen, und es ist ihm egal, wie die Seite gelayoutet wurde. Greif zu Vision, wenn der Parser sagt, es gebe nichts zu lesen, oder wenn die Bedeutung im Layout steckt, wie in einem Diagramm, einem Stempel oder einer Unterschrift.
+
+## Etwas anderes extrahieren
+
+Nichts oben ist paperspezifisch. Tausch das Schema und den System-Prompt, und die Pipeline extrahiert Rechnungen:
+
+```python
+INVOICE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "invoice_number": {"type": "string"},
+        "issued_on": {"type": "string", "description": "ISO 8601 date"},
+        "currency": {"type": "string", "description": "ISO 4217 code"},
+        "total": {"type": "number"},
+        "line_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "quantity": {"type": "number"},
+                    "unit_price": {"type": "number"},
+                },
+                "required": ["description", "quantity", "unit_price"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["invoice_number", "issued_on", "currency", "total", "line_items"],
+    "additionalProperties": False,
+}
+```
+
+Die `description`-Felder leisten echte Arbeit. Ein Datum ist erst dann eindeutig, wenn du gesagt hast, welches Format du willst, und `03/04/2026` bedeutet zwei verschiedene Tage, je nachdem, wer es geschrieben hat.
+
+## Nächste Schritte
+
+- Validiere das Ergebnis mit `pydantic` oder `jsonschema` gegen das Schema, damit ein fehlerhafter Datensatz an der Grenze scheitert und nicht drei Funktionen später.
+- Speichere den extrahierten Text mit [Embeddings](/guides/features/embeddings), um über Dokumente hinweg zu suchen, statt sie neu zu extrahieren.
+- Häng Dokumente direkt an eine Chat-Completion mit [File Inputs](/guides/features/file-inputs) an, wenn du Antworten statt Datensätzen möchtest.
+- Gib den Extraktor einem Agenten als Werkzeug mit [Einen tool-nutzenden Agenten mit Function Calling bauen](/guides/features/tool-using-agent).
+
+<CardGroup cols={2}>
+  <Card title="Document Processing" icon="file-text" href="/guides/tools/document-processing">
+    Referenz für den text-parser-Endpunkt.
+  </Card>
+  <Card title="Strukturierte Antworten" icon="braces" href="/guides/features/structured-responses">
+    Wie json_schema eine Completion einschränkt.
+  </Card>
+  <Card title="Vision" icon="eye" href="/guides/features/vision">
+    Bilder an ein Chat-Modell senden.
+  </Card>
+  <Card title="File Inputs" icon="paperclip" href="/guides/features/file-inputs">
+    Ein Dokument anhängen, ohne es selbst zu parsen.
+  </Card>
+</CardGroup>

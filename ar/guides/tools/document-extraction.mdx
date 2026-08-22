@@ -1,0 +1,434 @@
+---
+title: "استخراج البيانات المُهيكلة من المستندات"
+sidebarTitle: "استخراج المستندات"
+description: "حوّل ملف PDF إلى سجلات مُنمّطة، وارجع إلى الرؤية عند غياب النصّ القابل للاستخراج."
+"og:title": "استخراج البيانات المُهيكلة من المستندات | وثائق واجهة برمجة تطبيقات Venice"
+"og:description": "حلّل ملف PDF باستخدام text-parser، وثبّت الإخراج على مخطط JSON، وانتقل إلى نموذج رؤية عندما يتبيّن أن الملف مسحٌ ضوئي."
+---
+
+قراءة مستند أمر سهل. المهمة الحقيقية هي استخراج الحقول نفسها من كل مستند، بالشكل الذي يمكن لكودك أن يعتمد عليه.
+
+هناك طريقان من الملف إلى السجل. يمكنك استخراج النصّ وتسليمه إلى نموذج، أو يمكنك عرض الصفحة على نموذج قادر على الرؤية. الطريق الذي تحتاجه يتوقّف على كيفية إنشاء الملف، وملف PDF لا يُخبرك بأي نوعٍ منه هو بمجرّد النظر إليه. يبني هذا الدليل كلا الطريقين، ويترك لواجهة برمجة التطبيقات أن تختار بينهما:
+
+```bash
+python extract.py paper.pdf
+```
+
+على طول الطريق سنقوم بما يلي:
+
+1. استخراج النصّ من ملف PDF باستخدام `/augment/text-parser`
+2. وصف السجل المطلوب بوصفه مخطط JSON
+3. استخراجه، مع فرض المخطط لا مجرّد طلبه
+4. التعامل مع الملف الذي لا يحوي نصًّا أصلًا
+5. مقارنة ما يُنتجه الطريقان من الصفحة نفسها
+
+## الإعداد
+
+تحتاج إلى Python 3.9 أو أحدث، وحزمة `requests`، ومفتاح Venice API. راجع [إنشاء مفتاح API](/guides/getting-started/generating-api-key) إن لم يكن لديك واحد.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+سنستخدم ورقة بحثية عامّة كمستند عيّنة، لتتمكّن من المتابعة بالملف نفسه:
+
+```bash
+curl -L -o paper.pdf https://arxiv.org/pdf/1706.03762
+```
+
+أنشئ ملف `extract.py`:
+
+```python
+from __future__ import annotations
+
+import base64
+import json
+import os
+import subprocess
+import sys
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+AUTH = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+JSON_HEADERS = {**AUTH, "Content-Type": "application/json"}
+```
+
+لاحظ أن `AUTH` و`JSON_HEADERS` منفصلان. المحلّل (parser) يستقبل رفعًا متعدّد الأجزاء، وتعيينك بنفسك لـ `Content-Type` في طلبٍ متعدّد الأجزاء يمنع `requests` من إضافة الحدّ الفاصل (boundary)، مما يُفشل الطلب بطريقة يصعب تشخيصها.
+
+## 1. استخرج النصّ
+
+تستقبل نقطة النهاية `/augment/text-parser` ملف PDF أو DOCX أو XLSX أو ملفًا نصيًّا صافيًا حجمه حتى 25 ميغابايت، وتُعيد النصّ مع عدد الرموز (tokens). تُعالَج المستندات في الذاكرة ولا يُحتفظ بمحتواها.
+
+<CodeGroup>
+```python Python
+def parse_document(path: str) -> dict:
+    with open(path, "rb") as handle:
+        response = requests.post(
+            f"{BASE_URL}/augment/text-parser",
+            headers=AUTH,
+            files={"file": (os.path.basename(path), handle, "application/pdf")},
+            data={"response_format": "json"},
+            timeout=300,
+        )
+    response.raise_for_status()
+    return response.json()
+```
+
+```javascript Node.js
+const BASE_URL = "https://api.venice.ai/api/v1";
+
+async function parseDocument(path) {
+  const form = new FormData();
+  form.append("file", new Blob([await readFile(path)]), basename(path));
+  form.append("response_format", "json");
+
+  const response = await fetch(`${BASE_URL}/augment/text-parser`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.VENICE_API_KEY}` },
+    body: form,
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${await response.text()}`);
+  }
+  return response.json();
+}
+```
+
+```bash cURL
+curl -X POST https://api.venice.ai/api/v1/augment/text-parser \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./paper.pdf" \
+  -F "response_format=json"
+```
+</CodeGroup>
+
+```python
+parsed = parse_document("paper.pdf")
+print(parsed["tokens"], "tokens,", len(parsed["text"]), "characters")
+print(parsed["text"][:180])
+```
+
+```
+12346 tokens, 39505 characters
+Provided proper attribution is provided, Google hereby grants permission to
+reproduce the tables and figures in this paper solely for use in journalistic or
+scholarly works.
+Attention Is All You Need
+```
+
+عدد `tokens` هو الجزء المفيد في هذه الاستجابة. فهو يُخبرك بما سيُكلّفك المستند في الطلب التالي قبل أن تُرسله، وهذا مهمّ لأن ملف PDF طويلًا قد يتجاوز بسهولة ما كنت تنوي إنفاقه.
+
+## 2. صِف السجل الذي تريده
+
+طلب JSON من نموذج يمنحك JSON بالشكل الذي طلبته تقريبًا. تمرير مخطط يمنحك JSON مطابقًا، لأن المخطط يُقيّد التوليد بدلًا من مجرّد إرشاده.
+
+```python
+PAPER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "authors": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "affiliation": {"type": "string"},
+                },
+                "required": ["name", "affiliation"],
+                "additionalProperties": False,
+            },
+        },
+        "year": {"type": "integer"},
+    },
+    "required": ["title", "authors", "year"],
+    "additionalProperties": False,
+}
+```
+
+يستحقّ ضبط `additionalProperties: False` عند كل مستوى. بدونه يستطيع نموذج عثر على شيء مُلفت أن يُضيف مفتاحًا لم تخطّط له، فلا يتوقّعه الكود الذي يقرأ النتيجة.
+
+## 3. الاستخراج
+
+استدعاء واحد، مع `response_format` يحمل المخطط و`strict` مُفعّل:
+
+```python
+def default_model(trait: str) -> str:
+    response = requests.get(f"{BASE_URL}/models/traits", headers=AUTH, timeout=30)
+    response.raise_for_status()
+    return response.json()["data"][trait]
+
+
+def extract_from_text(text: str, schema: dict, budget: int = 12000) -> dict:
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": default_model("default"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract the requested fields from the document. "
+                        "Use only what appears in it."
+                    ),
+                },
+                {"role": "user", "content": text[:budget]},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "record", "strict": True, "schema": schema},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 1500,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    return read_record(response.json())
+```
+
+يمرّ كل استخراج في هذا الدليل عبر قارئ صغير واحد، لأن الطريقتين اللتين قد يفشل بهما هذا الاستدعاء تصلان كلتاهما برمز HTTP `200`:
+
+```python
+def read_record(body: dict) -> dict:
+    choice = body["choices"][0]
+    if choice["finish_reason"] == "length":
+        raise RuntimeError(
+            "Ran out of completion tokens. The JSON is truncated, not invalid. "
+            "Raise max_completion_tokens or shrink the schema."
+        )
+    content = choice["message"].get("content")
+    if not content:
+        raise RuntimeError(f"Empty response, finish_reason={choice['finish_reason']}.")
+    return json.loads(content)
+```
+
+```python
+record = extract_from_text(parsed["text"], PAPER_SCHEMA)
+print(json.dumps(record, indent=2, ensure_ascii=False))
+```
+
+```json
+{
+  "title": "Attention Is All You Need",
+  "authors": [
+    { "name": "Ashish Vaswani", "affiliation": "Google Brain" },
+    { "name": "Noam Shazeer", "affiliation": "Google Brain" },
+    { "name": "Niki Parmar", "affiliation": "Google Research" },
+    { "name": "Jakob Uszkoreit", "affiliation": "Google Research" },
+    { "name": "Llion Jones", "affiliation": "Google Research" },
+    { "name": "Aidan N. Gomez", "affiliation": "University of Toronto" },
+    { "name": "Łukasz Kaiser", "affiliation": "Google Brain" },
+    { "name": "Illia Polosukhin", "affiliation": "" }
+  ],
+  "year": 2017
+}
+```
+
+انظر إلى المؤلّف الأخير. لا تذكر الورقة أي جهة انتساب لـ Illia Polosukhin، والمخطط يقول إن `affiliation` مطلوب، فأعاد النموذج سلسلة فارغة بدلًا من حذفه. هذا هو المخطط يفعل ما طلبته منه تمامًا.
+
+<Note>
+  السلسلة الفارغة والقيمة المفقودة حقيقتان مختلفتان، و`required` يُوحّدهما. إن احتجت إلى التمييز بين "المستند لا يقول" و"المستند يقول لا شيء هنا"، فحدّد نوع الحقل بـ `{"type": ["string", "null"]}` واطلب `null` في موجّه النظام. يقبل الوضع الصارم الاتحاد، فتحصل على `null` بدلًا من `""`.
+</Note>
+
+### أطفئ التفكير
+
+`disable_thinking` هو السطر في ذلك الطلب الذي يستحقّ الجدال، وإليك الحجّة. النموذج النصّي الافتراضي يُفكّر قبل أن يُجيب، والتفكير يُخصم من ميزانية الإكمال نفسها التي تُخصم منها الـ JSON. شغّل الاستخراج نفسه أربع مرات وراقب ما ينفقه النموذج:
+
+| التهيئة | رموز التفكير عبر أربع تشغيلات | النتيجة |
+|---|---|---|
+| ميزانية 1500، التفكير مُفعّل | 959، 325، 975، 575 | صالحة في كل مرة، بأربعة أسعار مختلفة |
+| ميزانية 4000، التفكير مُفعّل | 4003، 984، 1632، 956 | تشغيلٌ واحد أنفق الميزانية كلها في التفكير وأعاد لا شيء |
+| ميزانية 1500، التفكير مُطفأ | 0، 0، 0، 0 | 217 رمز إكمال في كل مرة |
+
+رفع الميزانية لا يُصلح المشكلة الأولى، بل يرفع السقف الذي يُسمح للنموذج ببلوغه. التشغيل الذي أنفق 4003 رموز عاد بـ `finish_reason` قيمته `length` وسلسلة فارغة.
+
+جعل إطفاء التفكير هذا الاستخراج أرخص خمس مرات، والأهم من ذلك جعله ثابتًا في كل مرة. المخطط يقوم فعلًا بالعمل الذي كان التفكير سيقوم به، وهو تحديد شكل الإجابة.
+
+<Warning>
+  حين تنفد الميزانية، يكون النموذج قد كتب بعض الـ JSON عادة، فتحصل على كائن مبتور بدلًا من خطأ. عندئذٍ يفشل `json.loads` على سلسلة غير مغلقة في مكان ما في المنتصف، فيبدو الأمر وكأنه علّة تحليل وليس كذلك. يفحص `read_record` قيمة `finish_reason` أولًا لتقول الرسالة ما حدث فعلًا.
+</Warning>
+
+## 4. حين لا يوجد نصّ لاستخراجه
+
+ملف PDF الناتج من ماسح ضوئي يحتوي على صور للصفحات، لا نصًّا. لا شيء في اسم الملف يقول ذلك، ولا شيء في حجمه يكشفه أيضًا.
+
+لا تحتاج إلى اكتشاف ذلك بنفسك، فالمحلّل يفعل:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/augment/text-parser \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./scanned.pdf"
+```
+
+```json
+{ "error": "No text content could be extracted from the file." }
+```
+
+يصل ذلك بحالة HTTP `400`، وهو إشارة توجيه لا فشل. طريق النصّ غير متاح لهذا الملف، فخذ الطريق الآخر: عيّن الصفحة صورةً ودَع نموذجًا ينظر إليها.
+
+```python
+def render_first_page(pdf_path: str, png_path: str, width: int = 1400) -> None:
+    """macOS only. Use pdftoppm from poppler, or pypdfium2, elsewhere."""
+    subprocess.run(
+        ["sips", "-s", "format", "png", "--resampleWidth", str(width),
+         pdf_path, "--out", png_path],
+        check=True, capture_output=True,
+    )
+
+
+def extract_from_image(png_path: str, schema: dict) -> dict:
+    encoded = base64.b64encode(open(png_path, "rb").read()).decode()
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": default_model("default_vision"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract the requested fields from the page image. "
+                        "Use only what appears in it."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Extract the fields."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                        },
+                    ],
+                },
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "record", "strict": True, "schema": schema},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 1500,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    return read_record(response.json())
+```
+
+الآن يمكن ربط الطريقين معًا، مع اختيار خطأ المحلّل نفسه بينهما:
+
+```python
+def extract(path: str, schema: dict) -> dict:
+    try:
+        text = parse_document(path)["text"]
+    except requests.HTTPError as error:
+        if error.response.status_code != 400:
+            raise
+        print("no extractable text, falling back to vision", file=sys.stderr)
+        png = path.rsplit(".", 1)[0] + "-page1.png"
+        render_first_page(path, png)
+        return extract_from_image(png, schema)
+    return extract_from_text(text, schema)
+
+
+if __name__ == "__main__":
+    document = sys.argv[1] if len(sys.argv) > 1 else "paper.pdf"
+    print(json.dumps(extract(document, PAPER_SCHEMA), indent=2, ensure_ascii=False))
+```
+
+<Warning>
+  البديل يقرأ صفحة واحدة. هذا مناسب لنموذج، أو فاتورة، أو صفحة عنوان، وخاطئ لأي شيء أطول من ذلك، لأن بقية المستند تختفي بصمت. ارسم كل صفحة وأرسلها بوصفها عدة صور حين يكون من المحتمل ألا تكون الإجابة على الصفحة الأولى.
+</Warning>
+
+## 5. فيمَ يختلف الطريقان
+
+شغّل كليهما على الصفحة الأولى نفسها فتعود السجلات متطابقة تقريبًا. التقريب هو الجزء المثير:
+
+| الحقل | من النصّ المُحلَّل | من صورة الصفحة |
+|---|---|---|
+| `title` | Attention Is All You Need | Attention Is All You Need |
+| المؤلف السابع | Łukasz Kaiser | Lukasz Kaiser |
+| الانتساب الثامن | `""` | `""`، أو أحيانًا `Google Research` |
+| `year` | 2017 | 2017 |
+
+حافظ طريق النصّ على حرف Ł. أعاد طريق الرؤية حرف L بترميز ASCII، لأنه يقرأ أشكال الحروف لا شفرات الأحرف، والعلامات التشكيلية تفاصيل بصرية دقيقة تنجو بصعوبة. إن كنت تُطابق الأسماء المستخرَجة مع قاعدة بيانات، فذلك الفارق يُقرّر ما إذا كان الصفّ سيُعثر عليه.
+
+المؤلف الثامن أهمّ. لا تذكر الصفحة أي انتساب لـ Illia Polosukhin، ويُبلّغ طريق النصّ عن ذلك بأمانة بوصفه سلسلة فارغة في كل مرة. أما طريق الرؤية فقد ملأ الحقل في بعض التشغيلات بجار محتمل من الصفحة نفسها. تُتيح قراءة البكسلات مجالًا للاستنتاج أكبر مما تتيحه قراءة الأحرف، والحقل المطلوب دعوةٌ لملئه. حين لا يمكنك التحقّق من الإخراج يدويًا، فذلك سبب لتفضيل النصّ المُحلَّل حيثما وفّره المستند.
+
+الفارق في التكلفة أقلّ ممّا يبدو. مع إطفاء التفكير على الجانبين، شغّل الطريقان حجم موجّه متقاربًا على هذه الصفحة:
+
+| الطريق | رموز الموجّه | رموز الإكمال | الزمن الوسيط |
+|---|---|---|---|
+| النصّ المُحلَّل، أول 12000 حرف | 2611 | 217 | 1.6 ثانية |
+| صورة الصفحة بعرض 1400 بكسل | 2547 | 167 | 4.3 ثانية |
+
+بلغت الصورة 923,732 حرفًا من ترميز base64، ولا شيء من ذلك مما تدفع مقابله. تُقاس الصور بالرموز حسب الحجم لا حسب طول ترميزها، فملف PNG كبير لا يُكلّف بقدر ما يبدو.
+
+فضّل النصّ المُحلَّل حين يحوي المستند نصًّا. فهو يحفظ الأحرف الدقيقة، ولا يُكلّف شيئًا إضافيًا لتجاوز الصفحة الأولى، ولا يُبالي بكيفية تنسيق الصفحة. لجأ إلى الرؤية حين يقول المحلّل إنه لا شيء ليقرأه، أو حين يكون المعنى في التخطيط، كما في مخطط بياني أو ختم أو توقيع.
+
+## استخراج شيء آخر
+
+لا شيء أعلاه خاصّ بالأوراق البحثية. استبدل المخطط وموجّه النظام، فتستخرج خطّة العمل الفواتير:
+
+```python
+INVOICE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "invoice_number": {"type": "string"},
+        "issued_on": {"type": "string", "description": "ISO 8601 date"},
+        "currency": {"type": "string", "description": "ISO 4217 code"},
+        "total": {"type": "number"},
+        "line_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "quantity": {"type": "number"},
+                    "unit_price": {"type": "number"},
+                },
+                "required": ["description", "quantity", "unit_price"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["invoice_number", "issued_on", "currency", "total", "line_items"],
+    "additionalProperties": False,
+}
+```
+
+حقول `description` تقوم بعمل حقيقي. لا يصبح التاريخ بلا لبس إلا حين تُحدّد الصيغة التي تريدها، و`03/04/2026` تعني يومين مختلفين تبعًا لمن كتبها.
+
+## الخطوات التالية
+
+- تحقّق من صحّة النتيجة مقابل المخطط باستخدام `pydantic` أو `jsonschema`، لكي يفشل السجل المشوّه عند الحدود لا بعد ثلاث دوال.
+- خزّن النصّ المستخرَج باستخدام [التضمينات](/guides/features/embeddings) للبحث عبر المستندات بدلًا من إعادة استخراجها.
+- ألحق المستندات مباشرةً بإكمال محادثة عبر [مدخلات الملفات](/guides/features/file-inputs) حين تريد إجابات لا سجلات.
+- امنح المستخرِج لوكيل بوصفه أداةً باستخدام [بناء وكيل يستخدم الأدوات عبر استدعاء الدوال](/guides/features/tool-using-agent).
+
+<CardGroup cols={2}>
+  <Card title="معالجة المستندات" icon="file-text" href="/guides/tools/document-processing">
+    مرجع لنقطة نهاية text-parser.
+  </Card>
+  <Card title="الاستجابات المُهيكلة" icon="braces" href="/guides/features/structured-responses">
+    كيف يقيّد json_schema إكمال المحادثة.
+  </Card>
+  <Card title="الرؤية" icon="eye" href="/guides/features/vision">
+    إرسال الصور إلى نموذج محادثة.
+  </Card>
+  <Card title="مدخلات الملفات" icon="paperclip" href="/guides/features/file-inputs">
+    ألحق مستندًا دون تحليله بنفسك.
+  </Card>
+</CardGroup>
