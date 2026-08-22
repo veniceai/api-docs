@@ -1,0 +1,464 @@
+---
+title: "Construire un agent qui utilise des outils avec l'appel de fonctions"
+sidebarTitle: "Agent avec outils"
+description: "Donnez à un modèle trois outils en lecture seule et laissez-le explorer une base de données qu'il n'a jamais vue."
+"og:title": "Construire un agent qui utilise des outils avec l'appel de fonctions | Documentation de l'API Venice"
+"og:description": "Exécutez la boucle complète d'appel d'outils : appels parallèles, erreurs dont le modèle se remet, et garde-fous que le modèle ne peut pas contourner par la parole."
+---
+
+Un simple appel de fonction est facile. L'intéressant, c'est la boucle qui l'entoure, car un modèle obtient rarement ce dont il a besoin dès le premier appel. Il consulte quelque chose, examine le résultat, et décide ce qu'il va demander ensuite.
+
+Ce tutoriel construit un agent en ligne de commande qui répond à des questions sur une base SQLite qu'il n'a jamais vue. Il ne dispose d'aucun schéma dans son prompt. Il reçoit trois outils en lecture seule et se débrouille pour le reste :
+
+```bash
+python agent.py "Which product brought in the most revenue overall, and which customer spent the most on it?"
+```
+
+Chemin faisant, nous allons :
+
+1. Donner au modèle une base de données et trois outils pour la lire
+2. Décrire ces outils afin que le modèle sache quand recourir à chacun
+3. Exécuter la boucle qui transforme les appels d'outils en résultats d'outils
+4. Le regarder demander plusieurs outils à la fois
+5. Renvoyer les erreurs au modèle plutôt que de les lever
+6. Tracer la frontière entre ce que le modèle refuse de faire et ce qu'il ne peut pas faire
+
+Le guide [Appel de fonctions](/guides/features/function-calling) couvre la forme de la requête isolément. Cette page traite de ce qui se passe après le retour de la première réponse.
+
+## Préparation
+
+Vous avez besoin de Python 3.9 ou plus récent, du paquet `requests`, et d'une clé d'API Venice. Consultez [Générer une clé d'API](/guides/getting-started/generating-api-key) si vous n'en avez pas. Tout le reste se trouve dans la bibliothèque standard.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+Créez `agent.py` avec les imports et l'en-tête que chaque appel réutilise :
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import sys
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+    "Content-Type": "application/json",
+}
+DB_PATH = "shop.db"
+```
+
+Tous les modèles ne peuvent pas appeler des outils, et les identifiants de modèle changent, alors demandez à l'API lequel utiliser plutôt que de fixer un nom qui vieillira :
+
+```python
+def default_tool_model() -> str:
+    response = requests.get(f"{BASE_URL}/models/traits", headers=HEADERS, timeout=30)
+    response.raise_for_status()
+    return response.json()["data"]["function_calling_default"]
+```
+
+```python
+print(default_tool_model())
+```
+
+```
+zai-org-glm-5-2
+```
+
+<Note>
+  `GET /models/traits` associe des noms de traits stables au modèle qui remplit actuellement ce rôle. Lire `function_calling_default` au démarrage fait que votre agent continue de fonctionner lorsque le modèle sous-jacent est remplacé. Consultez [Modèles](/api-reference/api-spec) pour la liste complète des traits.
+</Note>
+
+## 1. Une base de données qui vaut la peine d'être interrogée
+
+N'importe quel fichier SQLite fera l'affaire. Celui-ci est une petite boutique avec des clients, des produits, et les commandes qui les relient, ce qui suffit pour qu'une vraie question nécessite une jointure et une agrégation :
+
+```python
+SEED = """
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    country TEXT NOT NULL,
+    signed_up TEXT NOT NULL
+);
+CREATE TABLE products (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    unit_price REAL NOT NULL
+);
+CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL REFERENCES customers(id),
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    quantity INTEGER NOT NULL,
+    ordered_on TEXT NOT NULL
+);
+INSERT INTO customers VALUES
+    (1,'Aria Bekele','ET','2025-11-02'), (2,'Tomas Vidal','ES','2026-01-14'),
+    (3,'Mei Lin','SG','2026-02-03'),     (4,'Jonas Weber','DE','2026-02-27'),
+    (5,'Priya Nair','IN','2026-03-19');
+INSERT INTO products VALUES
+    (1,'Field Notebook','stationery',12.5), (2,'Fountain Pen','stationery',48.0),
+    (3,'Desk Lamp','lighting',89.0),        (4,'Cable Organiser','desk',9.75),
+    (5,'Monitor Arm','desk',156.0);
+INSERT INTO orders VALUES
+    (1,1,3,2,'2026-04-04'),  (2,2,5,1,'2026-04-11'), (3,3,2,4,'2026-04-19'),
+    (4,1,5,2,'2026-05-02'),  (5,4,1,10,'2026-05-08'), (6,5,3,1,'2026-05-21'),
+    (7,2,5,3,'2026-06-01'),  (8,3,4,12,'2026-06-09'), (9,5,2,2,'2026-06-15'),
+    (10,4,5,1,'2026-06-28');
+"""
+
+
+def build_db() -> None:
+    if os.path.exists(DB_PATH):
+        return
+    db = sqlite3.connect(DB_PATH)
+    db.executescript(SEED)
+    db.commit()
+    db.close()
+```
+
+## 2. Trois outils à la portée du modèle
+
+Les outils reflètent la façon dont une personne aborde une base de données inconnue : découvrir ce qu'elle contient, examiner de près une table, puis la requêter.
+
+```python
+def list_tables() -> str:
+    db = sqlite3.connect(DB_PATH)
+    rows = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    ).fetchall()
+    db.close()
+    return json.dumps([row[0] for row in rows])
+
+
+def describe_table(table: str) -> str:
+    db = sqlite3.connect(DB_PATH)
+    rows = db.execute(f"PRAGMA table_info({table})").fetchall()
+    db.close()
+    if not rows:
+        return json.dumps({"error": f"no table named {table}"})
+    return json.dumps([{"name": row[1], "type": row[2]} for row in rows])
+
+
+def run_query(sql: str) -> str:
+    if not sql.strip().lower().startswith("select"):
+        return json.dumps({"error": "only SELECT statements are allowed"})
+
+    db = sqlite3.connect(DB_PATH)
+    try:
+        cursor = db.execute(sql)
+        columns = [d[0] for d in cursor.description]
+        rows = [dict(zip(columns, row)) for row in cursor.fetchmany(50)]
+        return json.dumps(rows)
+    except (sqlite3.Error, sqlite3.Warning) as error:
+        return json.dumps({"error": f"{type(error).__name__}: {error}"})
+    finally:
+        db.close()
+```
+
+Chacun d'eux renvoie une chaîne JSON, y compris en cas d'échec. C'est délibéré, et la section 5 explique pourquoi.
+
+Décrivez-les maintenant pour le modèle. La `description` n'est pas un commentaire. C'est la seule chose que lit le modèle lorsqu'il décide quel outil appeler et ce qu'il faut y mettre :
+
+```python
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tables",
+            "description": "List every table in the shop database.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_table",
+            "description": "Return the column names and types for one table.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "description": "Exact table name."}
+                },
+                "required": ["table"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_query",
+            "description": "Run a read-only SQL SELECT against the shop database.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string", "description": "A single SELECT statement."}
+                },
+                "required": ["sql"],
+            },
+        },
+    },
+]
+
+TOOL_IMPLS = {
+    "list_tables": lambda: list_tables(),
+    "describe_table": lambda table: describe_table(table),
+    "run_query": lambda sql: run_query(sql),
+}
+```
+
+## 3. La boucle
+
+L'appel de fonctions est une conversation, pas une requête. Le modèle répond par des appels d'outils, vous les exécutez, vous ajoutez les résultats, puis vous redemandez. Cela se termine lorsque le modèle répond avec du contenu au lieu d'appels.
+
+```python
+SYSTEM = (
+    "You answer questions about a shop database. "
+    "Inspect the schema with the tools before writing a query. "
+    "Answer with the figures you retrieved, not from memory."
+)
+
+
+def ask(question: str, model: str, max_rounds: int = 8) -> str:
+    messages = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": question},
+    ]
+
+    for _ in range(max_rounds):
+        response = requests.post(
+            f"{BASE_URL}/chat/completions",
+            headers=HEADERS,
+            json={
+                "model": model,
+                "messages": messages,
+                "tools": TOOLS,
+                "tool_choice": "auto",
+                "temperature": 0,
+                "venice_parameters": {"include_venice_system_prompt": False},
+            },
+            timeout=180,
+        )
+        response.raise_for_status()
+        message = response.json()["choices"][0]["message"]
+
+        calls = message.get("tool_calls") or []
+        if not calls:
+            return message["content"]
+
+        messages.append(message)
+        for call in calls:
+            name = call["function"]["name"]
+            arguments = json.loads(call["function"]["arguments"] or "{}")
+            print(f"  {name}({arguments})", file=sys.stderr)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": TOOL_IMPLS[name](**arguments),
+                }
+            )
+
+    raise RuntimeError(f"No answer after {max_rounds} rounds.")
+```
+
+Trois détails de cette boucle comptent plus qu'il n'y paraît.
+
+Le message de l'assistant non modifié est réinjecté dans `messages` avant les résultats. Il porte les `tool_calls` auxquels les résultats répondent, et sur un modèle de raisonnement il porte aussi un champ `reasoning_content`. Reconstruire le message à la main en supprimant des champs auxquels vous ne vous attendiez pas est la façon la plus courante de casser le second tour.
+
+Chaque résultat est apparié à son appel via `tool_call_id`. Rien d'autre ne l'identifie.
+
+`max_rounds` est une vraie limite, pas une formalité. Un modèle qui continue de requêter sans conclure bouclera sinon jusqu'à épuisement de votre patience ou de vos crédits.
+
+<Warning>
+  Les appels d'outils portent aussi un champ `index`, et il est tentant de s'en servir pour aligner les résultats sur les appels. Ne le faites pas. Lorsque le modèle demande trois outils en même temps, les trois peuvent arriver avec le même `index`, car il numérote le tour de l'assistant et non l'appel à l'intérieur de celui-ci. Seul `id` est unique.
+</Warning>
+
+## 4. Ce que cela fait réellement
+
+Branchez un bloc principal et lancez-le :
+
+```python
+if __name__ == "__main__":
+    build_db()
+    question = " ".join(sys.argv[1:]) or "What are the three biggest orders?"
+    print(ask(question, default_tool_model()))
+```
+
+```bash
+python agent.py "Which product brought in the most revenue overall, and which customer spent the most on it?"
+```
+
+Les appels d'outils s'affichent sur `stderr` au fil de leur exécution, afin que vous puissiez le regarder travailler :
+
+```
+  list_tables({})
+  describe_table({'table': 'customers'})
+  describe_table({'table': 'orders'})
+  describe_table({'table': 'products'})
+  run_query({'sql': 'SELECT p.id, p.name, SUM(o.quantity * p.unit_price) AS total_revenue FROM orders o JOIN products p ON o.product_id = p.id GROUP BY p.id, p.name ORDER BY total_revenue DESC LIMIT 1;'})
+  run_query({'sql': 'SELECT c.id, c.name, SUM(o.quantity * p.unit_price) AS amount_spent FROM orders o JOIN products p ON o.product_id = p.id JOIN customers c ON o.customer_id = c.id WHERE o.product_id = 5 GROUP BY c.id, c.name ORDER BY amount_spent DESC LIMIT 1;'})
+```
+
+```markdown
+- **Top product by revenue:** **Monitor Arm** (product ID 5) brought in the most
+  revenue overall, totaling **$1,092.00**.
+- **Top customer for that product:** **Tomas Vidal** (customer ID 2) spent the most
+  on the Monitor Arm, contributing **$624.00**, more than half of the product's
+  total revenue.
+```
+
+Cela a pris cinq tours. Leur forme mérite d'être lue attentivement, car c'est tout l'argument en faveur de la boucle :
+
+| Tour | Ce que le modèle a fait |
+|---|---|
+| 1 | A appelé `list_tables`, aucun schéma ne lui ayant été fourni |
+| 2 | A appelé `describe_table` trois fois dans une même réponse |
+| 3 | A écrit la requête de chiffre d'affaires, connaissant désormais les noms des colonnes |
+| 4 | A utilisé le produit 5 du résultat précédent pour écrire une seconde requête |
+| 5 | A répondu, sans appel d'outil |
+
+Le tour 4 est la partie qu'un appel de fonction unique ne peut pas faire. Le modèle ne pouvait pas écrire cette requête tant qu'il n'avait pas vu la réponse à la précédente.
+
+Votre exécution ne correspondra pas appel pour appel à celle-ci. Le modèle décrit parfois les trois tables en une seule fois et parfois une par une, et il lui arrive de sauter `list_tables` et de deviner un nom. Les chiffres sont stables parce qu'ils proviennent de la base de données ; le chemin pour y arriver ne l'est pas.
+
+<Note>
+  Le tour 2 a renvoyé trois appels d'outils dans une seule réponse, et la boucle ci-dessus les exécute l'un après l'autre. Ils sont indépendants, donc un `ThreadPoolExecutor` ici vaut la peine dès que vos outils font de vraies E/S. Conservez les messages `tool` dans le même ordre que les appels qui les ont produits.
+</Note>
+
+Chaque tour renvoie toute la conversation, donc le prompt grossit à mesure que l'agent travaille. Venice met en cache automatiquement le préfixe stable, et le bloc `usage` montre que cela paie :
+
+```json
+{"prompt_tokens": 1020, "completion_tokens": 103, "prompt_tokens_details": {"cached_tokens": 960}}
+```
+
+Au dernier tour, 960 jetons de prompt sur 1020 étaient servis depuis le cache. [Mise en cache des prompts](/guides/features/prompt-caching) explique comment garder ce préfixe stable.
+
+## 5. Laissez les erreurs remonter jusqu'au modèle
+
+L'instinct est de lever une exception sur une mauvaise requête. Résistez-y. Une erreur est une information, et le modèle peut agir dessus.
+
+Demandez une table qui n'existe pas :
+
+```bash
+python agent.py "How many rows are in the 'purchases' table?"
+```
+
+```
+  run_query({'sql': 'SELECT COUNT(*) AS row_count FROM purchases'})
+  list_tables({})
+```
+
+```
+There is no `purchases` table in this database. The available tables are
+customers, orders, and products. It's possible that the orders table is what
+you're looking for. Would you like me to check the row count there instead?
+```
+
+La première requête a échoué. Parce que `run_query` a renvoyé `{"error": "OperationalError: no such table: purchases"}` comme un résultat d'outil ordinaire au lieu de lever une exception, le modèle l'a lu, a appelé `list_tables` pour découvrir ce qui existait bel et bien, et s'est corrigé. Si l'exception s'était propagée, le script serait mort sur une faute de frappe.
+
+C'est pourquoi chaque outil renvoie du JSON, y compris sur le chemin d'échec. La règle est simple : si une personne qui débogue votre outil voudrait voir le message, le modèle aussi.
+
+## 6. Ce qu'il refuse de faire, et ce qu'il ne peut pas faire
+
+Demandez à l'agent de détruire quelque chose :
+
+```bash
+python agent.py "Delete every order placed by customers in Spain."
+```
+
+Exécutez cela deux fois et vous pourriez obtenir deux comportements différents. Une fois, il a décliné avant même de toucher à un outil :
+
+```
+I'm unable to help with that. The tools I have access to are read-only, so I can
+only run SELECT queries. I cannot perform DELETE, UPDATE, or INSERT operations.
+```
+
+Une autre fois, il est allé regarder d'abord, a exécuté un `SELECT` pour les clients espagnols, n'en a trouvé aucun parce que la colonne stocke `ES` et non `Spain`, et a signalé cela à la place :
+
+```
+It turns out there are no orders placed by customers in Spain, so there would be
+nothing to delete. If you need to perform deletions, you'll need a tool with
+write access.
+```
+
+Les deux sont raisonnables. Aucun n'est un contrôle de sécurité. Le modèle a lu le mot « read-only » dans la description d'un outil et a choisi de le respecter, et un modèle différent, une conversation plus longue, ou un utilisateur plus insistant peut produire un choix différent.
+
+Le garde-fou à l'intérieur de `run_query` est la partie qui ne dépend pas d'un choix :
+
+```python
+print(run_query("DELETE FROM orders WHERE customer_id = 2"))
+print(run_query("SELECT 1; DROP TABLE orders"))
+print(run_query("SELECT COUNT(*) AS n FROM orders"))
+```
+
+```json
+{"error": "only SELECT statements are allowed"}
+{"error": "Warning: You can only execute one statement at a time."}
+[{"n": 10}]
+```
+
+Rédigez la description pour que le modèle essaie rarement. Rédigez le garde-fou pour que cela n'ait pas d'importance quand il essaie.
+
+<Note>
+  Cette deuxième ligne est la raison pour laquelle `run_query` attrape `sqlite3.Warning` en plus de `sqlite3.Error`. Le pilote Python refuse les instructions empilées, mais il lève `Warning` pour cela, et `Warning` n'est pas une sous-classe de `Error`. N'attraper que `sqlite3.Error` laisse une instruction empilée s'échapper du gestionnaire et tuer la boucle au lieu de renvoyer un message que le modèle peut lire.
+</Note>
+
+<Warning>
+  Une vérification de préfixe bloque les écritures, mais elle ne dit rien sur les lectures. Tout `SELECT` que le modèle écrit peut atteindre chaque table du fichier, y compris celles que vous n'aviez jamais l'intention d'exposer. Deux changements valent la peine d'être faits avant que cela ne touche à de vraies données : ouvrir la base en lecture seule avec `sqlite3.connect("file:shop.db?mode=ro", uri=True)`, qui fait échouer les écritures avec `attempt to write a readonly database` quoi que la vérification de chaîne laisse passer, et pointer l'agent vers une base de données ou un ensemble de vues ne contenant que les colonnes qu'il est autorisé à voir.
+</Warning>
+
+## Contrôler quand les outils sont utilisés
+
+`tool_choice` décide de la latitude laissée au modèle :
+
+| Valeur | Comportement |
+|---|---|
+| `"auto"` | Le modèle décide. Le bon défaut |
+| `"required"` | Le modèle doit appeler quelque chose avant de pouvoir répondre |
+| `"none"` | Les outils sont visibles mais indisponibles, utile pour un dernier tour de synthèse |
+| `{"type": "function", "function": {"name": "run_query"}}` | Force un outil précis |
+
+`"required"` est plus brutal qu'il n'y paraît. Demander à cet agent `What is 2 + 2?` avec `tool_choice` réglé sur `"required"` le fait appeler `list_tables`, examiner une base dont il n'a que faire, puis répondre `4` au tour suivant. Avec `"auto"`, il répond `4` immédiatement et n'appelle rien. Recourez à `"required"` quand un outil doit véritablement s'exécuter, par exemple pour journaliser une requête, et laissez-le tranquille sinon.
+
+## Régler l'agent
+
+| Objectif | Ce qu'il faut changer |
+|---|---|
+| Moins de tours | Placer le schéma dans le prompt système pour que le modèle puisse sauter la phase de découverte |
+| Coût moindre | Abandonner `fetchmany(50)`, car les jeux de résultats larges dominent le prompt à mesure que les tours s'accumulent |
+| Arguments plus fiables | Ajouter `"strict": true` à la définition de la fonction pour contraindre les arguments au schéma |
+| Étapes larges plus rapides | Exécuter les appels d'outils en parallèle simultanément, ou régler `parallel_tool_calls` sur `false` pour les arrêter |
+| Moins de divagations | Baisser `max_rounds` et indiquer dans le prompt système combien de requêtes sont raisonnables |
+
+## Étapes suivantes
+
+La boucle que vous avez maintenant est la même que celle derrière la plupart des agents. Seuls les outils changent.
+
+- Remplacez les outils SQL par des appels HTTP et cela devient un agent d'API.
+- Ajoutez [Recherche et scraping Web](/guides/tools/web-retrieval) comme outil et il peut consulter le Web en direct au milieu d'une réponse.
+- Demandez un résultat typé plutôt que de la prose avec [Réponses structurées](/guides/features/structured-responses).
+- Voyez une version plus grande de ce motif dans l'[Agent de recherche privé](/learn/private-research-agent).
+
+<CardGroup cols={2}>
+  <Card title="Appel de fonctions" icon="code" href="/guides/features/function-calling">
+    Référence pour le tableau tools et tool_choice.
+  </Card>
+  <Card title="Réponses structurées" icon="braces" href="/guides/features/structured-responses">
+    Contraindre la réponse finale à un schéma JSON.
+  </Card>
+  <Card title="Mise en cache des prompts" icon="database" href="/guides/features/prompt-caching">
+    Garder la conversation qui grossit peu coûteuse.
+  </Card>
+  <Card title="Agent de recherche privé" icon="robot" href="/learn/private-research-agent">
+    La même boucle avec des outils Web et un planificateur.
+  </Card>
+</CardGroup>
