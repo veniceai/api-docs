@@ -150,6 +150,103 @@
   scanForRows();
 })();
 
+// A transient scroll indicator for the Learn card rows.
+//
+// The native scrollbar is hidden on these rows because one sitting under every
+// row read as a rule drawn across the page. This puts a bar back, but only
+// while it is telling you something: it fades in while the row is moving and
+// while the cursor is over it, then fades out again. It is built here rather
+// than in the markup so the nine translated copies of the page do not each
+// need a wrapper element. It reports position and takes no input, since the
+// row itself is what you drag.
+(function() {
+  const HIDE_DELAY = 900;
+  const MIN_THUMB = 32;
+
+  function attachIndicator(row) {
+    if (row.dataset.scrollIndicator) return;
+    row.dataset.scrollIndicator = 'on';
+
+    const track = document.createElement('div');
+    track.className = 'venice-learn-scrollbar is-idle';
+    const thumb = document.createElement('div');
+    thumb.className = 'venice-learn-scrollbar-thumb';
+    track.appendChild(thumb);
+    row.insertAdjacentElement('afterend', track);
+
+    let hideTimer = null;
+    let hovering = false;
+
+    function scrollableBy() {
+      return row.scrollWidth - row.clientWidth;
+    }
+
+    function render() {
+      const scrollable = scrollableBy();
+      if (scrollable <= 1) {
+        track.classList.add('is-idle');
+        return;
+      }
+      // Measure only once the track is displayed, or its width reads as zero.
+      track.classList.remove('is-idle');
+      const trackWidth = track.clientWidth;
+      const width = Math.max(MIN_THUMB, Math.round(trackWidth * (row.clientWidth / row.scrollWidth)));
+      const progress = Math.min(1, Math.max(0, row.scrollLeft / scrollable));
+      thumb.style.width = width + 'px';
+      thumb.style.transform = 'translateX(' + Math.round(progress * (trackWidth - width)) + 'px)';
+    }
+
+    function armFade() {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(function() { track.classList.remove('is-visible'); }, HIDE_DELAY);
+    }
+
+    function reveal() {
+      if (scrollableBy() <= 1) return;
+      render();
+      track.classList.add('is-visible');
+      clearTimeout(hideTimer);
+      // Scrolling under the cursor must not start the fade, or the bar drops
+      // out from under someone who is still working the row.
+      if (!hovering) armFade();
+    }
+
+    row.addEventListener('scroll', reveal, { passive: true });
+
+    // Touch has no hover state, and its pointerleave is unreliable, so a touch
+    // scroll would otherwise leave the bar up for good.
+    row.addEventListener('pointerenter', function(event) {
+      if (event.pointerType === 'touch') return;
+      hovering = true;
+      reveal();
+    });
+
+    row.addEventListener('pointerleave', function() {
+      hovering = false;
+      if (track.classList.contains('is-visible')) armFade();
+    });
+
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(render).observe(row);
+    } else {
+      window.addEventListener('resize', render);
+    }
+
+    render();
+  }
+
+  function scanForRows() {
+    document.querySelectorAll('.venice-learn-row').forEach(attachIndicator);
+  }
+
+  new MutationObserver(scanForRows).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
+  scanForRows();
+})();
+
 // Venice AI Model Browser & Pricing Tables - Fetches from API
 (function() {
 
