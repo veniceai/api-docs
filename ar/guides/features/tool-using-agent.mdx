@@ -1,0 +1,464 @@
+---
+title: "بناء وكيل يستخدم الأدوات عبر استدعاء الدوال"
+sidebarTitle: "وكيل يستخدم الأدوات"
+description: "امنح النموذج ثلاث أدوات للقراءة فقط ودعه يستكشف قاعدة بيانات لم يرَها من قبل."
+"og:title": "بناء وكيل يستخدم الأدوات عبر استدعاء الدوال | وثائق واجهة برمجة تطبيقات Venice"
+"og:description": "شغّل حلقة استدعاء الأدوات كاملةً: استدعاءات متوازية، وأخطاء يتعافى منها النموذج، وحمايات لا يستطيع النموذج التحايل عليها."
+---
+
+استدعاء دالة واحدة أمر سهل. الجزء المثير هو الحلقة المحيطة به، لأن النموذج نادرًا ما يحصل على ما يحتاجه من الاستدعاء الأول. يبحث عن معلومة، يرى النتيجة، ثم يقرّر ماذا يطلب بعد ذلك.
+
+يبني هذا الدليل التعليمي وكيلًا يعمل من سطر الأوامر يُجيب عن أسئلة تتعلق بقاعدة بيانات SQLite لم يرَها من قبل. لا يوجد مخطط في موجّهه (prompt). يحصل على ثلاث أدوات للقراءة فقط ويستنتج الباقي بنفسه:
+
+```bash
+python agent.py "Which product brought in the most revenue overall, and which customer spent the most on it?"
+```
+
+على طول الطريق سنقوم بما يلي:
+
+1. نمنح النموذج قاعدة بيانات وثلاث أدوات تقرأ منها
+2. نصف تلك الأدوات ليعرف النموذج متى يلجأ إلى كل منها
+3. نُشغّل الحلقة التي تحوّل استدعاءات الأدوات إلى نتائج
+4. نراقبه وهو يطلب عدة أدوات دفعة واحدة
+5. نُعيد الأخطاء إلى النموذج بدلًا من رفعها كاستثناءات
+6. نُميّز بين ما لن يفعله النموذج وما لا يستطيع فعله
+
+يغطي دليل [استدعاء الدوال](/guides/features/function-calling) شكل الطلب بحد ذاته. هذه الصفحة تدور حول ما يحدث بعد أن يعود أول ردّ.
+
+## الإعداد
+
+تحتاج إلى Python 3.9 أو أحدث، وحزمة `requests`، ومفتاح Venice API. راجع [إنشاء مفتاح API](/guides/getting-started/generating-api-key) إن لم يكن لديك واحد. كل شيء آخر موجود في المكتبة القياسية.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+أنشئ ملف `agent.py` مع سطور الاستيراد وكتلة الترويسة التي يُعيد كل استدعاء استخدامها:
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import sys
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+    "Content-Type": "application/json",
+}
+DB_PATH = "shop.db"
+```
+
+ليس كل نموذج قادرًا على استدعاء الأدوات، ومعرّفات النماذج تتغيّر، لذا اسأل واجهة API عن أيّها تستخدم بدلًا من تثبيت اسم سيتقادم مع الزمن:
+
+```python
+def default_tool_model() -> str:
+    response = requests.get(f"{BASE_URL}/models/traits", headers=HEADERS, timeout=30)
+    response.raise_for_status()
+    return response.json()["data"]["function_calling_default"]
+```
+
+```python
+print(default_tool_model())
+```
+
+```
+zai-org-glm-5-2
+```
+
+<Note>
+  يقوم `GET /models/traits` بربط أسماء السمات الثابتة بأيّ نموذج يشغل ذلك الدور حاليًا. قراءة `function_calling_default` عند بدء التشغيل تعني أن وكيلك سيظل يعمل عند استبدال النموذج الأساسي. راجع [النماذج](/api-reference/api-spec) للاطلاع على القائمة الكاملة للسمات.
+</Note>
+
+## 1. قاعدة بيانات تستحقّ السؤال عنها
+
+سيفي أي ملف SQLite بالغرض. هذا الملف عبارة عن متجر صغير فيه عملاء ومنتجات وطلبات تربطهم، وهو ما يكفي لكي يتطلّب سؤال حقيقي عملية JOIN وتجميعًا:
+
+```python
+SEED = """
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    country TEXT NOT NULL,
+    signed_up TEXT NOT NULL
+);
+CREATE TABLE products (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    unit_price REAL NOT NULL
+);
+CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL REFERENCES customers(id),
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    quantity INTEGER NOT NULL,
+    ordered_on TEXT NOT NULL
+);
+INSERT INTO customers VALUES
+    (1,'Aria Bekele','ET','2025-11-02'), (2,'Tomas Vidal','ES','2026-01-14'),
+    (3,'Mei Lin','SG','2026-02-03'),     (4,'Jonas Weber','DE','2026-02-27'),
+    (5,'Priya Nair','IN','2026-03-19');
+INSERT INTO products VALUES
+    (1,'Field Notebook','stationery',12.5), (2,'Fountain Pen','stationery',48.0),
+    (3,'Desk Lamp','lighting',89.0),        (4,'Cable Organiser','desk',9.75),
+    (5,'Monitor Arm','desk',156.0);
+INSERT INTO orders VALUES
+    (1,1,3,2,'2026-04-04'),  (2,2,5,1,'2026-04-11'), (3,3,2,4,'2026-04-19'),
+    (4,1,5,2,'2026-05-02'),  (5,4,1,10,'2026-05-08'), (6,5,3,1,'2026-05-21'),
+    (7,2,5,3,'2026-06-01'),  (8,3,4,12,'2026-06-09'), (9,5,2,2,'2026-06-15'),
+    (10,4,5,1,'2026-06-28');
+"""
+
+
+def build_db() -> None:
+    if os.path.exists(DB_PATH):
+        return
+    db = sqlite3.connect(DB_PATH)
+    db.executescript(SEED)
+    db.commit()
+    db.close()
+```
+
+## 2. ثلاث أدوات يمكن للنموذج اللجوء إليها
+
+تُحاكي الأدوات الطريقة التي يتعرّف بها شخص ما على قاعدة بيانات غير مألوفة: اكتشاف ما فيها، ثم النظر في جدول واحد عن كثب، ثم الاستعلام منه.
+
+```python
+def list_tables() -> str:
+    db = sqlite3.connect(DB_PATH)
+    rows = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    ).fetchall()
+    db.close()
+    return json.dumps([row[0] for row in rows])
+
+
+def describe_table(table: str) -> str:
+    db = sqlite3.connect(DB_PATH)
+    rows = db.execute(f"PRAGMA table_info({table})").fetchall()
+    db.close()
+    if not rows:
+        return json.dumps({"error": f"no table named {table}"})
+    return json.dumps([{"name": row[1], "type": row[2]} for row in rows])
+
+
+def run_query(sql: str) -> str:
+    if not sql.strip().lower().startswith("select"):
+        return json.dumps({"error": "only SELECT statements are allowed"})
+
+    db = sqlite3.connect(DB_PATH)
+    try:
+        cursor = db.execute(sql)
+        columns = [d[0] for d in cursor.description]
+        rows = [dict(zip(columns, row)) for row in cursor.fetchmany(50)]
+        return json.dumps(rows)
+    except (sqlite3.Error, sqlite3.Warning) as error:
+        return json.dumps({"error": f"{type(error).__name__}: {error}"})
+    finally:
+        db.close()
+```
+
+كل واحدة منها تُعيد سلسلة JSON، بما في ذلك حالات الفشل. هذا مقصود، والقسم الخامس يشرح السبب.
+
+الآن صِف الأدوات للنموذج. حقل `description` ليس تعليقًا، بل هو الشيء الوحيد الذي يقرأه النموذج عند تقرير أيّ أداة يستدعيها وما الذي يضعه فيها:
+
+```python
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tables",
+            "description": "List every table in the shop database.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_table",
+            "description": "Return the column names and types for one table.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "description": "Exact table name."}
+                },
+                "required": ["table"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_query",
+            "description": "Run a read-only SQL SELECT against the shop database.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string", "description": "A single SELECT statement."}
+                },
+                "required": ["sql"],
+            },
+        },
+    },
+]
+
+TOOL_IMPLS = {
+    "list_tables": lambda: list_tables(),
+    "describe_table": lambda table: describe_table(table),
+    "run_query": lambda sql: run_query(sql),
+}
+```
+
+## 3. الحلقة
+
+استدعاء الدوال محادثة، وليس طلبًا واحدًا. يردّ النموذج باستدعاءات أدوات، فتُشغّلها، ثم تُلحق النتائج، ثم تسأل مرة أخرى. تنتهي الحلقة عندما يردّ النموذج بمحتوى بدلًا من استدعاءات.
+
+```python
+SYSTEM = (
+    "You answer questions about a shop database. "
+    "Inspect the schema with the tools before writing a query. "
+    "Answer with the figures you retrieved, not from memory."
+)
+
+
+def ask(question: str, model: str, max_rounds: int = 8) -> str:
+    messages = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": question},
+    ]
+
+    for _ in range(max_rounds):
+        response = requests.post(
+            f"{BASE_URL}/chat/completions",
+            headers=HEADERS,
+            json={
+                "model": model,
+                "messages": messages,
+                "tools": TOOLS,
+                "tool_choice": "auto",
+                "temperature": 0,
+                "venice_parameters": {"include_venice_system_prompt": False},
+            },
+            timeout=180,
+        )
+        response.raise_for_status()
+        message = response.json()["choices"][0]["message"]
+
+        calls = message.get("tool_calls") or []
+        if not calls:
+            return message["content"]
+
+        messages.append(message)
+        for call in calls:
+            name = call["function"]["name"]
+            arguments = json.loads(call["function"]["arguments"] or "{}")
+            print(f"  {name}({arguments})", file=sys.stderr)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": TOOL_IMPLS[name](**arguments),
+                }
+            )
+
+    raise RuntimeError(f"No answer after {max_rounds} rounds.")
+```
+
+ثلاث تفاصيل في تلك الحلقة أهمّ ممّا تبدو عليه.
+
+تُعاد رسالة المساعد كما هي دون تعديل إلى `messages` قبل النتائج. فهي تحمل `tool_calls` التي تُجيب عنها النتائج، وفي نموذج تفكير (reasoning model) تحمل أيضًا حقل `reasoning_content`. إعادة بناء الرسالة يدويًا وإسقاط الحقول التي لم تتوقّعها هي أكثر طريقة شيوعًا لكسر الجولة الثانية.
+
+تُطابَق كل نتيجة مع استدعائها بواسطة `tool_call_id`. لا شيء آخر يُميّزها.
+
+`max_rounds` حدّ حقيقي، لا مجرد شكليّة. النموذج الذي يستمر بالاستعلام دون التوصّل إلى نتيجة سيدور في حلقة حتى ينفد صبرك أو رصيدك.
+
+<Warning>
+  استدعاءات الأدوات تحمل أيضًا حقل `index`، ويُغري استخدامه لمطابقة النتائج مع الاستدعاءات. لا تفعل ذلك. حين يطلب النموذج ثلاث أدوات دفعة واحدة، يمكن أن تصل الثلاثة بنفس `index`، لأنه يُرقّم دور المساعد لا الاستدعاء داخله. `id` وحده هو الفريد.
+</Warning>
+
+## 4. ما الذي يفعله فعلًا
+
+اربط كتلة `main` وشغّله:
+
+```python
+if __name__ == "__main__":
+    build_db()
+    question = " ".join(sys.argv[1:]) or "What are the three biggest orders?"
+    print(ask(question, default_tool_model()))
+```
+
+```bash
+python agent.py "Which product brought in the most revenue overall, and which customer spent the most on it?"
+```
+
+تُطبع استدعاءات الأدوات إلى `stderr` أثناء حدوثها، فيمكنك متابعة عمله:
+
+```
+  list_tables({})
+  describe_table({'table': 'customers'})
+  describe_table({'table': 'orders'})
+  describe_table({'table': 'products'})
+  run_query({'sql': 'SELECT p.id, p.name, SUM(o.quantity * p.unit_price) AS total_revenue FROM orders o JOIN products p ON o.product_id = p.id GROUP BY p.id, p.name ORDER BY total_revenue DESC LIMIT 1;'})
+  run_query({'sql': 'SELECT c.id, c.name, SUM(o.quantity * p.unit_price) AS amount_spent FROM orders o JOIN products p ON o.product_id = p.id JOIN customers c ON o.customer_id = c.id WHERE o.product_id = 5 GROUP BY c.id, c.name ORDER BY amount_spent DESC LIMIT 1;'})
+```
+
+```markdown
+- **Top product by revenue:** **Monitor Arm** (product ID 5) brought in the most
+  revenue overall, totaling **$1,092.00**.
+- **Top customer for that product:** **Tomas Vidal** (customer ID 2) spent the most
+  on the Monitor Arm, contributing **$624.00**, more than half of the product's
+  total revenue.
+```
+
+استغرق ذلك خمس جولات. شكل هذه الجولات جدير بالقراءة عن قرب، لأنه هو المبرر الكامل للحلقة:
+
+| الجولة | ما الذي فعله النموذج |
+|---|---|
+| 1 | استدعى `list_tables`، إذ لم يُعطَ أي مخطط |
+| 2 | استدعى `describe_table` ثلاث مرات في ردٍّ واحد |
+| 3 | كتب استعلام الإيرادات، بعد أن صار يعرف أسماء الأعمدة |
+| 4 | استخدم المنتج رقم 5 من النتيجة السابقة لكتابة استعلام ثانٍ |
+| 5 | أجاب، دون أي استدعاءات أدوات |
+
+الجولة الرابعة هي الجزء الذي لا يستطيع استدعاء دالة واحدة القيام به. لم يكن بمقدور النموذج كتابة ذلك الاستعلام قبل أن يرى إجابة الاستعلام الذي سبقه.
+
+لن يُطابق تشغيلك هذا التشغيلَ استدعاءً باستدعاء. أحيانًا يصف النموذج الجداول الثلاثة دفعة واحدة، وأحيانًا واحدًا في كل مرة، وأحيانًا يتخطّى `list_tables` ويُخمّن اسمًا. الأرقام ثابتة لأنها تأتي من قاعدة البيانات؛ أما الطريق إليها فليس كذلك.
+
+<Note>
+  أعادت الجولة الثانية ثلاثة استدعاءات أدوات في ردٍّ واحد، والحلقة أعلاه تُشغّلها واحدًا تلو الآخر. وهي مستقلّة، لذا يستحقّ استخدام `ThreadPoolExecutor` هنا فور أن تُنفّذ أدواتك عمليات إدخال/إخراج فعلية. حافظ على ترتيب رسائل `tool` بنفس ترتيب الاستدعاءات التي أنتجتها.
+</Note>
+
+تُعيد كل جولة إرسال المحادثة بأكملها، لذا يكبر الموجّه مع عمل الوكيل. تقوم Venice بتخزين البادئة المستقرّة مؤقتًا بشكل تلقائي، وتُظهر كتلة `usage` أن ذلك يؤتي ثماره:
+
+```json
+{"prompt_tokens": 1020, "completion_tokens": 103, "prompt_tokens_details": {"cached_tokens": 960}}
+```
+
+في الجولة الأخيرة، خُدم 960 من أصل 1020 من رموز الموجّه من الذاكرة المؤقتة. يغطي دليل [التخزين المؤقت للموجّهات](/guides/features/prompt-caching) كيفية إبقاء تلك البادئة مستقرّة.
+
+## 5. دع الأخطاء تصل إلى النموذج
+
+الغريزة هي رفع استثناء عند استعلام سيّئ. قاوم ذلك. الخطأ معلومة، والنموذج يستطيع التصرّف بناءً عليها.
+
+اطلب جدولًا غير موجود:
+
+```bash
+python agent.py "How many rows are in the 'purchases' table?"
+```
+
+```
+  run_query({'sql': 'SELECT COUNT(*) AS row_count FROM purchases'})
+  list_tables({})
+```
+
+```
+There is no `purchases` table in this database. The available tables are
+customers, orders, and products. It's possible that the orders table is what
+you're looking for. Would you like me to check the row count there instead?
+```
+
+فشل الاستعلام الأول. ولأن `run_query` أعادت `{"error": "OperationalError: no such table: purchases"}` بوصفها نتيجة أداة عادية بدلًا من رفع استثناء، قرأها النموذج، واستدعى `list_tables` ليعرف ما هو موجود فعلًا، ثم صحّح نفسه. لو انتقل الاستثناء إلى أعلى، لكان السكربت قد توقّف بسبب خطأ إملائي.
+
+هذا هو السبب في أن كل أداة تُعيد JSON في مسار الفشل أيضًا. القاعدة بسيطة: إذا كان مبرمج يُصحّح أداتك سيرغب في رؤية الرسالة، فإن النموذج يرغب في ذلك أيضًا.
+
+## 6. ما لن يفعله، وما لا يستطيع فعله
+
+اطلب من الوكيل تدمير شيء:
+
+```bash
+python agent.py "Delete every order placed by customers in Spain."
+```
+
+شغّل ذلك مرتين وقد تحصل على سلوكين مختلفين. مرّة رفض قبل أن يمسّ أي أداة:
+
+```
+I'm unable to help with that. The tools I have access to are read-only, so I can
+only run SELECT queries. I cannot perform DELETE, UPDATE, or INSERT operations.
+```
+
+ومرّة أخرى بحث أولًا، وأجرى `SELECT` عن العملاء الإسبان، ولم يجد أحدًا لأن العمود يحفظ `ES` وليس `Spain`، فأفاد بذلك بدلًا من الحذف:
+
+```
+It turns out there are no orders placed by customers in Spain, so there would be
+nothing to delete. If you need to perform deletions, you'll need a tool with
+write access.
+```
+
+كلاهما معقول. ولا شيء منهما إجراء أمني. قرأ النموذج عبارة "read-only" في وصف الأداة واختار احترامها، وقد يُنتج نموذج مختلف أو محادثة أطول أو مستخدم أكثر إلحاحًا اختيارًا مختلفًا.
+
+الحماية داخل `run_query` هي الجزء الذي لا يعتمد على اختيار:
+
+```python
+print(run_query("DELETE FROM orders WHERE customer_id = 2"))
+print(run_query("SELECT 1; DROP TABLE orders"))
+print(run_query("SELECT COUNT(*) AS n FROM orders"))
+```
+
+```json
+{"error": "only SELECT statements are allowed"}
+{"error": "Warning: You can only execute one statement at a time."}
+[{"n": 10}]
+```
+
+اكتب الوصف بحيث نادرًا ما يحاول النموذج. واكتب الحماية بحيث لا يهمّ الأمر حين يحاول.
+
+<Note>
+  السطر الثاني هو سبب التقاط `run_query` لـ `sqlite3.Warning` إلى جانب `sqlite3.Error`. يرفض مُشغّل Python تنفيذ عبارات مكدّسة، لكنه يرفع `Warning` من أجلها، و`Warning` ليست فئة فرعية من `Error`. الاكتفاء بالتقاط `sqlite3.Error` يترك العبارة المكدّسة تُفلت من المُعالج وتُنهي الحلقة بدلًا من إعادة رسالة يستطيع النموذج قراءتها.
+</Note>
+
+<Warning>
+  فحص البادئة يمنع الكتابة، لكنه لا يقول شيئًا عن القراءة. أي `SELECT` يكتبه النموذج يستطيع الوصول إلى كل جدول في الملف، بما في ذلك جداول لم تقصد كشفها أبدًا. يستحقّ إجراء تغييرين قبل أن يمسّ هذا بيانات حقيقية: افتح قاعدة البيانات للقراءة فقط باستخدام `sqlite3.connect("file:shop.db?mode=ro", uri=True)`، الذي يُفشل عمليات الكتابة بـ `attempt to write a readonly database` مهما فوّت فحص السلسلة، ووجِّه الوكيل إلى قاعدة بيانات أو مجموعة من العروض (views) تحتوي فقط على الأعمدة التي يُسمح له برؤيتها.
+</Warning>
+
+## التحكّم في متى تُستخدم الأدوات
+
+يقرّر `tool_choice` قدر الصلاحية المتاحة للنموذج:
+
+| القيمة | السلوك |
+|---|---|
+| `"auto"` | النموذج يقرّر. الخيار الافتراضي الصحيح |
+| `"required"` | يجب على النموذج استدعاء شيء ما قبل أن يُجيب |
+| `"none"` | الأدوات ظاهرة لكنها غير متاحة، مفيد لجولة تلخيص نهائية |
+| `{"type": "function", "function": {"name": "run_query"}}` | يفرض أداة محدّدة |
+
+`"required"` أفظّ ممّا يبدو. سؤال هذا الوكيل `What is 2 + 2?` مع ضبط `tool_choice` على `"required"` يجعله يستدعي `list_tables`، وينظر في قاعدة بيانات لا حاجة له بها، ثم يجيب `4` في الجولة التالية. مع `"auto"` يجيب `4` فورًا ولا يستدعي شيئًا. لجأ إلى `"required"` عندما يجب على أداةٍ أن تعمل فعلًا، مثل تسجيل طلب، ودعها وشأنها في غير ذلك.
+
+## ضبط الوكيل
+
+| الهدف | ما الذي تُغيّره |
+|---|---|
+| جولات أقل | ضع المخطط في موجّه النظام حتى يتمكّن النموذج من تخطّي مرحلة الاستكشاف |
+| تكلفة أقل | تخلّص من `fetchmany(50)`، فمجموعات النتائج العريضة تُهيمن على الموجّه مع تراكم الجولات |
+| معامِلات أكثر موثوقية | أضف `"strict": true` إلى تعريف الدالة لتقييد المعامِلات بالمخطط |
+| خطوات عريضة أسرع | شغّل استدعاءات الأدوات المتوازية بالتزامن، أو اضبط `parallel_tool_calls` على `false` لإيقافها |
+| تشتّت أقل | خفّض `max_rounds`، وحدّد في موجّه النظام كم عدد الاستعلامات المعقول |
+
+## الخطوات التالية
+
+الحلقة التي أصبحت لديك الآن هي نفسها الحلقة التي تقف خلف معظم الوكلاء. تتغيّر الأدوات فقط.
+
+- استبدل أدوات SQL باستدعاءات HTTP فيصبح وكيل API.
+- أضِف [البحث في الويب والاستخلاص](/guides/tools/web-retrieval) بوصفه أداة، فيصبح قادرًا على التحقّق من الويب المباشر في منتصف الإجابة.
+- اطلب نتيجة مُنمّطة (typed) بدلًا من نصّ نثري عبر [الاستجابات المُهيكلة](/guides/features/structured-responses).
+- اطّلع على نسخة أوسع من هذا النمط في [وكيل البحث الخاص](/learn/private-research-agent).
+
+<CardGroup cols={2}>
+  <Card title="استدعاء الدوال" icon="code" href="/guides/features/function-calling">
+    مرجع لمصفوفة الأدوات و tool_choice.
+  </Card>
+  <Card title="الاستجابات المُهيكلة" icon="braces" href="/guides/features/structured-responses">
+    قيّد الإجابة النهائية بمخطط JSON.
+  </Card>
+  <Card title="التخزين المؤقت للموجّهات" icon="database" href="/guides/features/prompt-caching">
+    أبقِ المحادثة المتنامية زهيدة الثمن.
+  </Card>
+  <Card title="وكيل البحث الخاص" icon="robot" href="/learn/private-research-agent">
+    الحلقة نفسها مع أدوات ويب ومخطّط.
+  </Card>
+</CardGroup>
