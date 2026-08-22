@@ -1,0 +1,358 @@
+---
+title: "에이전트에게 지갑과 예산 주기"
+description: "API 키 없이 지갑으로 추론 비용을 지불하고, 에이전트가 지출할 수 있는 상한을 설정하세요."
+slug: wallet-budget-agent-venice-x402
+"og:title": "Venice x402로 에이전트에게 지갑과 예산 주기"
+"og:description": "지갑 서명으로 인증하고, USDC로 요청당 비용을 지불하며, 모든 청구를 출력하고, 여러분이 설정한 상한에서 멈추는 에이전트."
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Sabrina Aquino" date="21 August 2026"/>
+
+API 키를 가진 에이전트는 그 키가 쓸 수 있는 만큼 무엇이든 쓸 수 있습니다. 사람이 지켜보고 있을 때는 괜찮지만, 아무도 없을 때는 곤란합니다. 흔한 해결책은 에이전트 바깥, 즉 대시보드나 결제 알림 안에 존재하며, 문제가 이미 발생한 뒤에야 알려줍니다.
+
+Venice는 두 번째 방식을 지원합니다. 키 대신 에이전트가 지갑을 소유합니다. 메시지에 서명해 인증하고, 그 지갑 주소에 연결된 USDC 잔액에서 요청마다 비용을 지불하며, 모든 청구는 에이전트가 다시 읽을 수 있는 원장에 기록됩니다. 계정도, 대시보드도, 유출될 키도 없습니다. 상한은 잔액이며, 얼마를 넣을지는 여러분이 결정합니다.
+
+이 가이드는 스스로에게 부과한 예산 아래에서 정확히 그 일을 하는 에이전트를 만듭니다.
+
+<Card title="이 노트북을 Google Colab에서 실행하세요" icon="notebook" href="https://colab.research.google.com/github/veniceai/api-docs/blob/main/notebooks/wallet-budget-agent.ipynb">
+  아래 모든 단계를 실행 가능한 노트북으로 제공합니다. 자금이 없는 지갑으로도 실행되며 결제 벽에서 멈추므로, 아무것도 지출하지 않고 전체 흐름을 볼 수 있습니다.
+</Card>
+
+## 작동 방식
+
+움직이는 부분은 네 개이며, 그중 셋은 그냥 HTTP입니다:
+
+| 단계 | 엔드포인트 | 이유 |
+| --- | --- | --- |
+| 신원 증명 | 모든 요청, `SIGN-IN-WITH-X`로 | 서명된 메시지가 API 키를 대체 |
+| 자금 넣기 | `/x402/top-up` | 결제 경로를 발견한 뒤 서명된 USDC 이체를 정산 |
+| 잔액 확인 | `/x402/balance/{address}` | 얼마가 남았고, 거래하기에 충분한지 |
+| 청구 내역 읽기 | `/x402/transactions/{address}` | 요청별 모든 차감 내역의 원장 |
+
+추론 자체는 평범한 `/chat/completions` 호출입니다. 유일한 차이는 어떤 헤더를 보내는가입니다.
+
+## 시작 비용
+
+두 개의 숫자가 중요하며, 둘은 같은 숫자가 아닙니다.
+
+**최소 충전 금액은 5달러**입니다. 이는 `/x402/top-up`이 정산할 수 있는 가장 작은 금액이며, 어디에도 하드코딩되지 않고 discovery 응답에 담겨 반환되므로, 이 페이지를 신뢰하지 말고 응답을 읽으세요.
+
+**호출을 하기 위한 최소 잔액은 10센트**입니다. 그보다 적은 잔액을 가진 지갑은 돈을 가지고 있어도 추론에서 `402`를 받게 됩니다.
+
+따라서 5달러가 자금을 넣을 가치가 있는 가장 작은 지갑이고, 이 가이드는 에이전트에게 그 5달러를 줍니다. 그 돈이 얼마를 살 수 있는지 알아둘 가치가 있습니다. `qwen3-5-9b`에 짧은 질문을 하나 던지면 약 27개의 입력 토큰과 26개의 출력 토큰이 사용되며, 그 모델의 가격으로는 대략 1달러의 700만분의 1 정도입니다. 5달러는 약 75만 개의 질문 수준입니다. 여기서의 예산은 빡빡한 제약이 아니라 폭발 반경입니다.
+
+## 준비
+
+x402 SDK가 결제 서명을 처리합니다. 직접 손으로 구현하지 마세요. 이체 승인은 EIP-712 타입 데이터이며, 재사용된 논스는 디버그하기 지루한 방식으로 검증에 실패합니다.
+
+```bash
+pip install "x402[evm]" eth-account requests
+```
+
+<Note>
+  x402 Python SDK는 Python 3.10 이상을 요구합니다. Colab은 괜찮습니다. macOS에 기본 설치된 시스템 Python은 그렇지 않을 수 있습니다.
+</Note>
+
+설정과 함께 `agent.py`를 만듭니다. `BUDGET_USD`는 에이전트가 스스로에게 부과하는 상한이며, 여기서는 지갑 전체로 설정되어 있습니다. 값을 낮추면 돈이 다 떨어지기 전에 에이전트가 멈추는데, 이는 여러분이 조정할 만한 유일한 다이얼입니다.
+
+```python
+import base64
+import json
+import os
+import secrets
+from datetime import datetime, timedelta, timezone
+
+import requests
+from eth_account import Account
+from eth_account.messages import encode_defunct
+
+BASE_URL = "https://api.venice.ai/api/v1"
+DOMAIN = "api.venice.ai"
+CHAIN_ID = 8453          # Base mainnet
+MODEL = "qwen3-5-9b"
+BUDGET_USD = 5.00
+```
+
+## 에이전트가 소유하는 지갑
+
+에이전트에는 키 쌍이 필요합니다. 프로덕션에서는 이 키가 여러분이 의도적으로 자금을 넣은 지갑의 것이며, 시크릿 매니저에 저장됩니다. 개발 중에는 일회용 지갑을 생성하는 것이 올바른 선택입니다. 돈이 없는 지갑은 실수로 비용이 드는 일을 할 수 없기 때문입니다.
+
+```python
+key = os.environ.get("WALLET_KEY")
+account = Account.from_key(key) if key else Account.create()
+
+print(f"wallet {account.address}")
+print("funded" if key else "disposable, cannot pay yet")
+```
+
+개인 키는 노트북 밖에 두세요. Colab에서는 Secrets에 넣고 `userdata.get("WALLET_KEY")`로 읽으세요.
+
+## 인증 대신 서명하기
+
+보낼 키가 없으므로 각 요청은 지갑 소유자가 만들었다는 증명을 함께 실어 나릅니다. 증명은 [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) 메시지이며, 서명한 뒤 base64로 인코딩해 `SIGN-IN-WITH-X` 헤더에 담습니다.
+
+메시지 형식은 정확해야 합니다. Venice는 이 바이트를 자신의 쪽에서 다시 만들어 그것에 대해 여러분의 서명을 검증하므로, 빈 줄 하나만 잘못돼도 도움이 되는 오류가 아니라 거부된 서명을 얻게 됩니다.
+
+```python
+def siwx_header():
+    now = datetime.now(timezone.utc)
+    stamp = lambda t: t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    issued_at, expires_at = stamp(now), stamp(now + timedelta(minutes=4))
+    nonce = secrets.token_hex(8)
+
+    message = (
+        f"{DOMAIN} wants you to sign in with your Ethereum account:\n"
+        f"{account.address}\n\nSign in to Venice AI\n\n"
+        f"URI: https://{DOMAIN}\nVersion: 1\nChain ID: {CHAIN_ID}\n"
+        f"Nonce: {nonce}\nIssued At: {issued_at}\nExpiration Time: {expires_at}"
+    )
+    signature = account.sign_message(encode_defunct(text=message)).signature.hex()
+
+    payload = {
+        "address": account.address,
+        "message": message,
+        "signature": signature if signature.startswith("0x") else "0x" + signature,
+        "chainId": CHAIN_ID,
+    }
+    return base64.b64encode(json.dumps(payload).encode()).decode()
+```
+
+이 헤더에는 세 가지 규칙이 적용되며, 세 가지 모두 리플레이 공격을 막기 위해 존재합니다. 서명은 `Issued At`으로부터 **5분간** 유효합니다. 각 **논스는 약 5분 30초 동안 일회용**입니다. 그리고 서명자는 경로에 있는 지갑과 일치해야 하며, 그렇지 않으면 한 지갑이 다른 지갑을 조회할 수 없고 그 시도에 대해 `403`을 받게 됩니다.
+
+실질적인 결과는, 하나를 캐싱하기보다 요청마다 새 헤더를 서명해야 한다는 것입니다. 서명은 로컬에서 무료이므로 이 비용은 없습니다.
+
+```python
+def wallet_get(path, **params):
+    response = requests.get(
+        f"{BASE_URL}{path}",
+        headers={"SIGN-IN-WITH-X": siwx_header()},
+        params=params,
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["data"]
+
+
+def balance():
+    return wallet_get(f"/x402/balance/{account.address}")
+
+
+print(balance())
+```
+
+새 지갑에서는:
+
+```json
+{
+  "walletAddress": "0xc5048ea84939bb7eb4c611b88ea17d5ee4f11a0c",
+  "balanceUsd": 0,
+  "canConsume": false,
+  "minimumTopUpUsd": 5,
+  "suggestedTopUpUsd": 10
+}
+```
+
+분기해야 할 필드는 `canConsume`입니다. 이 필드가 10센트 하한을 고려해주므로 여러분이 신경 쓸 필요가 없습니다.
+
+## 자금 넣기
+
+충전은 두 요청입니다. 첫 번째는 Venice가 무엇을 받아들이는지 묻는 것으로 아직 인증할 것이 없기에 인증되지 않습니다. 두 번째는 서명된 이체 승인을 전달합니다.
+
+```python
+from x402.client import SpendControls, x402ClientSync
+from x402.http import PAYMENT_SIGNATURE_HEADER, encode_payment_signature_header
+from x402.mechanisms.evm import EthAccountSigner
+from x402.mechanisms.evm.exact.client import ExactEvmScheme
+from x402.schemas.payments import PaymentRequired
+
+
+def top_up():
+    discovery = requests.post(f"{BASE_URL}/x402/top-up", timeout=30)
+    required = PaymentRequired.model_validate(discovery.json())
+
+    rail = next(a for a in required.accepts if a.network.startswith("eip155"))
+    print(f"{rail.network}: {int(rail.amount) / 1e6:.2f} USDC to {rail.payTo}")
+
+    client = x402ClientSync()
+    client.register(rail.network, ExactEvmScheme(EthAccountSigner(account)))
+    # The SDK caps one payment at $1 by default, which is below the $5 minimum
+    # top-up, so every rail gets rejected until this is raised.
+    client.set_spend_controls(SpendControls(max_amount_per_payment="$5", allowed_assets=True))
+
+    payload = client.create_payment_payload(required)
+    settlement = requests.post(
+        f"{BASE_URL}/x402/top-up",
+        headers={PAYMENT_SIGNATURE_HEADER: encode_payment_signature_header(payload)},
+        timeout=90,
+    )
+    return settlement.json()
+```
+
+Discovery는 각 경로마다 하나의 항목을 반환합니다. 현재는 Base와 Solana입니다:
+
+```json
+{
+  "x402Version": 2,
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "eip155:8453",
+      "amount": "5000000",
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "payTo": "0x2670b922ef37c7df47158725c0cc407b5382293f",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "USD Coin", "version": "2" }
+    },
+    {
+      "scheme": "exact",
+      "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+      "amount": "5000000",
+      "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "payTo": "8qUL23aSj7mDWdoLMXGHFvnVCT9wd7jXcysiekroADEL",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "USD Coin", "version": "2", "feePayer": "BFK9TLC3edb13K6v4YyH3DwPb5DSUpkWvb7XnqCL9b4F" }
+    }
+  ]
+}
+```
+
+여기서 놓치기 쉬운 두 가지 세부 사항이 있습니다. `amount`는 기본 단위이며 USDC는 소수점 6자리를 가지므로, `5000000`은 500만이 아니라 5달러입니다. Solana 경로에서 `extra.feePayer`는 Venice가 운영하는 계정으로 트랜잭션 수수료를 부담하며, 이 덕분에 지갑은 SOL을 보유하지 않고도 결제할 수 있습니다.
+
+<Warning>
+  가장 먼저 여러분을 막을 것은 기본 지출 통제입니다. SDK는 `max_amount_per_payment`가 1달러로 설정된 채로 제공되고 Venice의 최소 충전은 5달러이므로, 수정하지 않은 클라이언트는 제공되는 모든 경로를 거부하고 네트워크에 접속하기도 전에 `NoMatchingRequirementsError`를 발생시킵니다. 지출 통제를 끄는 대신 상한을 신중하게 올리세요.
+</Warning>
+
+USDC가 없는 지갑에서 정산하면 `400`과 `PAYMENT_VERIFICATION_FAILED`가 돌아옵니다. 이는 예상되는 실패 형태입니다: 서명은 문제가 없었지만 이체가 되지 않은 것입니다.
+
+## 호출마다 지불하기
+
+잔액이 있으면 추론은 서명이 함께 실린 평범한 요청입니다. Venice 시스템 프롬프트를 끄는 것은 겉보기보다 훨씬 중요합니다. 호출당 약 1700개의 입력 토큰을 절약해 주는데, 이는 질문 자체보다 두 자리 크기만큼 큰 값입니다.
+
+```python
+def ask(question):
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers={"SIGN-IN-WITH-X": siwx_header(), "Content-Type": "application/json"},
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user", "content": question}],
+            "max_completion_tokens": 150,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=90,
+    )
+    if response.status_code == 402:
+        body = response.json()
+        raise RuntimeError(
+            f"balance ${body.get('currentBalanceUsd', 0)} is under the "
+            f"${body.get('minimumBalanceUsd')} floor. Minimum top-up is "
+            f"${body['topUpInstructions']['minimumAmountUsd']}."
+        )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"].strip()
+```
+
+`402`를 예외가 아니라 정상적인 결과로 처리하는 것이 전체 설계의 핵심입니다. 스스로의 비용을 부담하는 에이전트는 언젠가 돈이 떨어질 것이며, 돈이 떨어지는 것은 크래시가 아닙니다.
+
+## 지출 내역 읽기
+
+원장이 권위 있는 자료입니다. 토큰 수에서 추정하지 말고, 실제로 얼마가 청구되었는지 물어보세요.
+
+```python
+def charges():
+    """Every debit against this wallet, newest first."""
+    ledger = wallet_get(f"/x402/transactions/{account.address}", limit=100)
+    return [t for t in ledger["transactions"] if t["type"] == "CHARGE"]
+```
+
+각 행은 자신을 발생시킨 호출로 다시 연결됩니다:
+
+```json
+{
+  "id": "ledger_01H...",
+  "amount": -0.0000066,
+  "balanceAfter": 4.9999934,
+  "type": "CHARGE",
+  "createdAt": "2026-08-21T18:22:10.000Z",
+  "requestId": "chatcmpl-...",
+  "modelId": "qwen3-5-9b"
+}
+```
+
+`TOP_UP`과 `REFUND` 행도 여기 양의 금액으로 나타납니다. `CHARGE`로 필터링하면 지출이 나옵니다.
+
+## 예산이 있는 실행
+
+이제 루프입니다. 각 호출 전에 에이전트는 얼마를 썼는지 확인하고, 지불할 수 없는 작업은 시작하지 않습니다.
+
+```python
+TASKS = [
+    "Name one concrete tradeoff of vector search versus keyword search. One sentence.",
+    "In one sentence, when is a bloom filter the wrong choice?",
+    "Give one reason CRDTs are hard to debug in production. One sentence.",
+    "What is one failure mode of exponential backoff without jitter? One sentence.",
+    "Name one thing consistent hashing does not solve. One sentence.",
+    "Why is p99 latency more useful than the mean? One sentence.",
+]
+
+
+def run(budget=BUDGET_USD):
+    opening = balance()
+    print(f"balance ${opening['balanceUsd']:.4f}, budget ${budget:.4f}")
+
+    if not opening["canConsume"]:
+        print(f"cannot transact yet, minimum top-up is ${opening['minimumTopUpUsd']}")
+        return
+
+    baseline = sum(abs(c["amount"]) for c in charges())
+    spent = 0.0
+
+    for number, task in enumerate(TASKS, 1):
+        if spent >= budget:
+            print(f"\nstopped before task {number}: ${spent:.6f} of ${budget:.4f} spent")
+            return
+
+        answer = ask(task)
+        spent = sum(abs(c["amount"]) for c in charges()) - baseline
+        print(f"\n{number}. {task}")
+        print(f"   {answer}")
+        print(f"   ${spent:.6f} spent, ${budget - spent:.6f} left")
+
+    print(f"\nfinished all {len(TASKS)} tasks for ${spent:.6f}")
+    if spent:
+        print(f"at this rate ${budget:.2f} covers about {int(budget / (spent / len(TASKS))):,} calls")
+```
+
+5달러 전체로 실행하면 예산이 한 번도 걸리지 않는데, 이 가격대에서는 이것이 정직한 결과입니다. 상한이 실제로 작동하는 모습을 보려면, 단일 호출이 넘길 수 있는 값으로 설정하세요:
+
+```python
+run()              # $5.00, finishes every task
+run(budget=1e-5)   # stops partway, having spent about $0.000007 per call
+```
+
+## 이제 여러분이 도달한 지점
+
+에이전트는 자기 돈을 가지고 있고, 서명으로 자신의 신원을 증명하며, 어디에도 계정을 만들지 않고도 여러분이 설정한 한도를 넘을 수 없습니다. 예약된 잡, 서버리스 함수, 혹은 오래 유지되는 키를 넘기고 싶지 않은 어떤 것에든 이는 실질적으로 다른 보안 자세입니다.
+
+다음에 해볼 만한 것들:
+
+<CardGroup cols={2}>
+  <Card title="프로토콜에서 상한 걸기" icon="shield">
+    SDK의 지출 통제는 세션이 아니라 결제당 적용됩니다. 위의 예산 루프와 함께 사용해 한쪽의 버그가 다른 쪽을 무력화할 수 없도록 하세요.
+  </Card>
+  <Card title="비었을 때 자동 충전" icon="refresh">
+    `402`를 잡아서 충전한 뒤 재시도하세요. 이것이 TypeScript 쪽에서 `venice-x402-client`가 대신 해주는 일입니다.
+  </Card>
+  <Card title="Solana에서 결제하기" icon="currency-solana">
+    같은 흐름, 다른 경로. Ed25519로 서명하고 반환된 `feePayer`를 설정하면 지갑에 SOL이 필요 없습니다.
+  </Card>
+  <Card title="실제 작업 맡기기" icon="tools">
+    작업 목록을 도구 호출 루프로 바꾸면 원장이 각 결정이 얼마의 비용이 들었는지 보여주기 시작합니다.
+  </Card>
+</CardGroup>
+
+전체 엔드포인트 레퍼런스는 [x402 top-up](/api-reference/endpoint/x402/top-up)과 [Venice API와 함께 x402 사용하기](/guides/integrations/x402-venice-api)를 참조하세요.

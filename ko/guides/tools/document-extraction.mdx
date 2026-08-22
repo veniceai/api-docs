@@ -1,0 +1,434 @@
+---
+title: "문서에서 구조화된 데이터 추출하기"
+sidebarTitle: "문서 추출"
+description: "PDF를 타입이 지정된 레코드로 바꾸고, 추출할 텍스트가 없을 때는 비전 모델로 대체하세요."
+"og:title": "문서에서 구조화된 데이터 추출하기 | Venice API 문서"
+"og:description": "text-parser로 PDF를 파싱하고, JSON 스키마로 출력을 고정하며, 파일이 스캔본으로 판명되면 비전 모델로 전환하세요."
+---
+
+문서를 읽는 것은 쉽습니다. 어려운 일은 모든 문서에서 동일한 필드를, 여러분의 코드가 신뢰할 수 있는 형태로 뽑아내는 것입니다.
+
+파일에서 레코드로 가는 두 가지 경로가 있습니다. 텍스트를 추출해 모델에 넘겨줄 수도 있고, 페이지를 볼 줄 아는 모델에 그대로 보여줄 수도 있습니다. 어느 경로가 필요한지는 파일이 어떻게 만들어졌는지에 달려 있는데, PDF는 겉으로 봐서는 어느 쪽인지 알려주지 않습니다. 이 튜토리얼은 두 가지를 모두 만들어 두고, 어느 것을 사용할지 API가 결정하게 합니다:
+
+```bash
+python extract.py paper.pdf
+```
+
+과정에서 다음을 다룹니다:
+
+1. `/augment/text-parser`로 PDF에서 텍스트 뽑아내기
+2. 원하는 레코드를 JSON 스키마로 기술하기
+3. 스키마를 요청이 아니라 강제로 적용해 추출하기
+4. 텍스트가 전혀 없는 파일 다루기
+5. 같은 페이지에서 두 경로가 만들어내는 결과 비교하기
+
+## 준비
+
+Python 3.9 이상, `requests` 패키지, 그리고 Venice API 키가 필요합니다. 키가 없다면 [API 키 생성](/guides/getting-started/generating-api-key)을 참조하세요.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+동일한 파일로 따라올 수 있도록 공개된 논문 하나를 샘플 문서로 사용하겠습니다:
+
+```bash
+curl -L -o paper.pdf https://arxiv.org/pdf/1706.03762
+```
+
+`extract.py`를 만듭니다:
+
+```python
+from __future__ import annotations
+
+import base64
+import json
+import os
+import subprocess
+import sys
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+AUTH = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+JSON_HEADERS = {**AUTH, "Content-Type": "application/json"}
+```
+
+`AUTH`와 `JSON_HEADERS`가 분리되어 있음에 유의하세요. 파서는 멀티파트 업로드를 받는데, 멀티파트 요청에서 `Content-Type`을 직접 설정하면 `requests`가 바운더리를 추가하지 못해 진단하기 짜증나는 방식으로 실패합니다.
+
+## 1. 텍스트 뽑아내기
+
+`/augment/text-parser`는 25MB 이하의 PDF, DOCX, XLSX, 또는 일반 텍스트 파일을 받아 텍스트와 토큰 수를 반환합니다. 문서는 메모리에서 처리되며 내용은 보관되지 않습니다.
+
+<CodeGroup>
+```python Python
+def parse_document(path: str) -> dict:
+    with open(path, "rb") as handle:
+        response = requests.post(
+            f"{BASE_URL}/augment/text-parser",
+            headers=AUTH,
+            files={"file": (os.path.basename(path), handle, "application/pdf")},
+            data={"response_format": "json"},
+            timeout=300,
+        )
+    response.raise_for_status()
+    return response.json()
+```
+
+```javascript Node.js
+const BASE_URL = "https://api.venice.ai/api/v1";
+
+async function parseDocument(path) {
+  const form = new FormData();
+  form.append("file", new Blob([await readFile(path)]), basename(path));
+  form.append("response_format", "json");
+
+  const response = await fetch(`${BASE_URL}/augment/text-parser`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.VENICE_API_KEY}` },
+    body: form,
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${await response.text()}`);
+  }
+  return response.json();
+}
+```
+
+```bash cURL
+curl -X POST https://api.venice.ai/api/v1/augment/text-parser \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./paper.pdf" \
+  -F "response_format=json"
+```
+</CodeGroup>
+
+```python
+parsed = parse_document("paper.pdf")
+print(parsed["tokens"], "tokens,", len(parsed["text"]), "characters")
+print(parsed["text"][:180])
+```
+
+```
+12346 tokens, 39505 characters
+Provided proper attribution is provided, Google hereby grants permission to
+reproduce the tables and figures in this paper solely for use in journalistic or
+scholarly works.
+Attention Is All You Need
+```
+
+이 응답에서 유용한 부분은 `tokens` 수입니다. 다음 요청을 만들기 전에 문서가 얼마의 비용을 초래할지 알려주는데, 긴 PDF는 여러분이 의도한 예산을 쉽게 넘어설 수 있으므로 이는 중요합니다.
+
+## 2. 원하는 레코드 기술하기
+
+모델에게 JSON을 요청하면 대략 여러분이 요청한 형태의 JSON을 얻게 됩니다. 스키마를 전달하면 스키마와 일치하는 JSON을 얻습니다. 스키마는 생성을 권고하는 것이 아니라 제약하기 때문입니다.
+
+```python
+PAPER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "authors": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "affiliation": {"type": "string"},
+                },
+                "required": ["name", "affiliation"],
+                "additionalProperties": False,
+            },
+        },
+        "year": {"type": "integer"},
+    },
+    "required": ["title", "authors", "year"],
+    "additionalProperties": False,
+}
+```
+
+`additionalProperties: False`는 모든 레벨에서 설정할 가치가 있습니다. 이것이 없으면 흥미로운 것을 발견한 모델이 여러분이 전혀 계획하지 않은 키를 추가할 수 있고, 결과를 읽는 코드는 그것을 예상하지 못합니다.
+
+## 3. 추출하기
+
+한 번의 호출로, `response_format`이 스키마를 담고 `strict`가 켜져 있습니다:
+
+```python
+def default_model(trait: str) -> str:
+    response = requests.get(f"{BASE_URL}/models/traits", headers=AUTH, timeout=30)
+    response.raise_for_status()
+    return response.json()["data"][trait]
+
+
+def extract_from_text(text: str, schema: dict, budget: int = 12000) -> dict:
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": default_model("default"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract the requested fields from the document. "
+                        "Use only what appears in it."
+                    ),
+                },
+                {"role": "user", "content": text[:budget]},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "record", "strict": True, "schema": schema},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 1500,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    return read_record(response.json())
+```
+
+이 튜토리얼의 모든 추출은 하나의 작은 리더를 거칩니다. 이 호출이 실패하는 두 가지 방식이 모두 HTTP `200`으로 도착하기 때문입니다:
+
+```python
+def read_record(body: dict) -> dict:
+    choice = body["choices"][0]
+    if choice["finish_reason"] == "length":
+        raise RuntimeError(
+            "Ran out of completion tokens. The JSON is truncated, not invalid. "
+            "Raise max_completion_tokens or shrink the schema."
+        )
+    content = choice["message"].get("content")
+    if not content:
+        raise RuntimeError(f"Empty response, finish_reason={choice['finish_reason']}.")
+    return json.loads(content)
+```
+
+```python
+record = extract_from_text(parsed["text"], PAPER_SCHEMA)
+print(json.dumps(record, indent=2, ensure_ascii=False))
+```
+
+```json
+{
+  "title": "Attention Is All You Need",
+  "authors": [
+    { "name": "Ashish Vaswani", "affiliation": "Google Brain" },
+    { "name": "Noam Shazeer", "affiliation": "Google Brain" },
+    { "name": "Niki Parmar", "affiliation": "Google Research" },
+    { "name": "Jakob Uszkoreit", "affiliation": "Google Research" },
+    { "name": "Llion Jones", "affiliation": "Google Research" },
+    { "name": "Aidan N. Gomez", "affiliation": "University of Toronto" },
+    { "name": "Łukasz Kaiser", "affiliation": "Google Brain" },
+    { "name": "Illia Polosukhin", "affiliation": "" }
+  ],
+  "year": 2017
+}
+```
+
+마지막 저자를 보세요. 논문은 Illia Polosukhin의 소속을 명시하지 않고, 스키마는 `affiliation`을 필수로 지정하므로, 모델은 필드를 생략하는 대신 빈 문자열을 반환했습니다. 이는 스키마가 여러분이 지시한 대로 정확히 작동한 것입니다.
+
+<Note>
+  빈 문자열과 누락된 값은 서로 다른 사실이며, `required`는 이 둘을 하나로 뭉갭니다. "문서가 언급하지 않는다"와 "문서가 여기서 아무것도 말하지 않는다"를 구분해야 한다면, 필드를 `{"type": ["string", "null"]}`로 타입 지정하고 시스템 프롬프트에서 `null`을 요청하세요. 스트릭트 모드는 유니온을 받아들이고, `""` 대신 `null`을 얻게 됩니다.
+</Note>
+
+### 사고를 끄기
+
+`disable_thinking`은 그 요청에서 논쟁의 여지가 있는 줄이므로, 그 논거를 여기 적습니다. 기본 텍스트 모델은 답변하기 전에 추론하며, 추론은 JSON과 동일한 완성 예산에서 끌어옵니다. 같은 추출을 네 번 실행하고 모델이 얼마를 쓰는지 지켜보세요:
+
+| 구성 | 4회 실행의 추론 토큰 | 결과 |
+|---|---|---|
+| 예산 1500, 사고 켜짐 | 959, 325, 975, 575 | 매번 유효하지만, 네 가지 다른 가격 |
+| 예산 4000, 사고 켜짐 | 4003, 984, 1632, 956 | 한 실행은 전체 예산을 사고에 쓰고 아무것도 반환하지 않음 |
+| 예산 1500, 사고 꺼짐 | 0, 0, 0, 0 | 매번 217 완성 토큰 |
+
+예산을 늘리는 것은 첫 번째 문제를 해결하지 못하며, 단지 모델이 도달할 수 있는 상한을 올릴 뿐입니다. 4003 토큰을 쓴 실행은 `finish_reason`이 `length`인 채로, 빈 문자열을 반환했습니다.
+
+사고를 끄자 이 추출은 다섯 배 저렴해졌고, 더 유용하게는 매번 동일해졌습니다. 스키마가 이미 추론이 하려던 일을 대신 하고 있으며, 그것은 답이 어떤 형태를 취할지 결정하는 일입니다.
+
+<Warning>
+  예산이 실제로 바닥나면 모델은 대개 이미 어느 정도의 JSON을 작성한 상태이므로, 오류 대신 잘린 객체를 얻게 됩니다. 그러면 `json.loads`는 중간 어딘가에서 종료되지 않은 문자열 때문에 실패하는데, 파싱 버그처럼 보이지만 사실은 그렇지 않습니다. `read_record`는 `finish_reason`을 먼저 확인해 실제로 일어난 일을 메시지로 알려줍니다.
+</Warning>
+
+## 4. 뽑아낼 텍스트가 없을 때
+
+스캐너로 만든 PDF는 텍스트가 아니라 페이지의 이미지들을 담고 있습니다. 파일 이름이 그것을 알려주지도 않고, 파일 크기도 그것을 드러내지 않습니다.
+
+여러분이 감지할 필요는 없습니다. 파서가 대신 해주기 때문입니다:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/augment/text-parser \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./scanned.pdf"
+```
+
+```json
+{ "error": "No text content could be extracted from the file." }
+```
+
+이것은 HTTP `400`으로 도착하며, 실패가 아니라 라우팅 신호입니다. 이 파일에는 텍스트 경로를 사용할 수 없으므로 다른 경로를 택합니다: 페이지를 렌더링해 모델이 그것을 보게 하는 것입니다.
+
+```python
+def render_first_page(pdf_path: str, png_path: str, width: int = 1400) -> None:
+    """macOS only. Use pdftoppm from poppler, or pypdfium2, elsewhere."""
+    subprocess.run(
+        ["sips", "-s", "format", "png", "--resampleWidth", str(width),
+         pdf_path, "--out", png_path],
+        check=True, capture_output=True,
+    )
+
+
+def extract_from_image(png_path: str, schema: dict) -> dict:
+    encoded = base64.b64encode(open(png_path, "rb").read()).decode()
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": default_model("default_vision"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract the requested fields from the page image. "
+                        "Use only what appears in it."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Extract the fields."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                        },
+                    ],
+                },
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "record", "strict": True, "schema": schema},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 1500,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    return read_record(response.json())
+```
+
+이제 두 경로를 함께 연결할 수 있으며, 파서 자체의 오류가 둘 사이에서 선택을 해줍니다:
+
+```python
+def extract(path: str, schema: dict) -> dict:
+    try:
+        text = parse_document(path)["text"]
+    except requests.HTTPError as error:
+        if error.response.status_code != 400:
+            raise
+        print("no extractable text, falling back to vision", file=sys.stderr)
+        png = path.rsplit(".", 1)[0] + "-page1.png"
+        render_first_page(path, png)
+        return extract_from_image(png, schema)
+    return extract_from_text(text, schema)
+
+
+if __name__ == "__main__":
+    document = sys.argv[1] if len(sys.argv) > 1 else "paper.pdf"
+    print(json.dumps(extract(document, PAPER_SCHEMA), indent=2, ensure_ascii=False))
+```
+
+<Warning>
+  이 대체 경로는 한 페이지만 읽습니다. 양식, 청구서, 표지 페이지에는 괜찮지만 그보다 긴 것에는 잘못된 방식입니다. 문서의 나머지가 조용히 존재하지 않는 것이 되기 때문입니다. 답이 1페이지에 없을 수 있다면 모든 페이지를 렌더링해 여러 이미지로 전송하세요.
+</Warning>
+
+## 5. 두 경로가 의견을 달리하는 지점
+
+같은 첫 페이지에 두 경로를 실행하면 레코드는 거의 동일하게 돌아옵니다. 흥미로운 부분은 그 "거의"입니다:
+
+| 필드 | 파싱된 텍스트에서 | 페이지 이미지에서 |
+|---|---|---|
+| `title` | Attention Is All You Need | Attention Is All You Need |
+| 일곱 번째 저자 | Łukasz Kaiser | Lukasz Kaiser |
+| 여덟 번째 소속 | `""` | `""`, 때로는 `Google Research` |
+| `year` | 2017 | 2017 |
+
+텍스트 경로는 Ł를 보존했습니다. 비전 경로는 ASCII L을 반환했는데, 문자 코드가 아니라 자형을 읽고 있으며, 발음 구별 부호는 잘 보존되지 않는 작은 시각적 세부 사항이기 때문입니다. 추출된 이름을 데이터베이스와 대조한다면, 이 차이가 그 행을 찾을 수 있을지 없을지를 결정합니다.
+
+여덟 번째 저자는 더 중요합니다. 페이지에는 Illia Polosukhin의 소속이 명시되어 있지 않고, 텍스트 경로는 이를 매번 충실하게 빈 문자열로 보고합니다. 비전 경로는 일부 실행에서 같은 페이지의 그럴듯한 이웃 값으로 필드를 채워 넣었습니다. 픽셀을 읽는 것은 문자를 읽는 것보다 추론의 여지가 더 많고, 필수 필드는 채우라는 초대입니다. 출력을 손으로 확인할 수 없다면, 문서가 텍스트를 제공하는 어디에서든 파싱된 텍스트를 선호할 이유가 됩니다.
+
+비용은 보이는 것보다 가깝습니다. 양쪽 모두에서 사고를 끈 상태로, 이 페이지에서 두 경로는 거의 같은 프롬프트 크기로 실행되었습니다:
+
+| 경로 | 프롬프트 토큰 | 완성 토큰 | 중앙값 시간 |
+|---|---|---|---|
+| 파싱된 텍스트, 앞 12000자 | 2611 | 217 | 1.6s |
+| 1400px 페이지 이미지 | 2547 | 167 | 4.3s |
+
+이미지는 923,732자의 base64였지만, 그중 어느 것도 여러분이 비용을 지불하는 대상이 아닙니다. 이미지는 인코딩 길이가 아니라 크기로 토큰화되므로, 큰 PNG는 그렇게 보이는 만큼의 비용이 들지 않습니다.
+
+문서에 텍스트가 있을 때는 파싱된 텍스트를 선호하세요. 정확한 문자를 유지하고, 1페이지 너머에 도달하는 데 추가 비용이 들지 않으며, 페이지가 어떻게 배치되었는지 신경 쓰지 않습니다. 파서가 읽을 것이 없다고 말하거나, 차트, 도장, 서명처럼 의미가 레이아웃에 있는 경우에만 비전을 사용하세요.
+
+## 다른 것을 추출하기
+
+위의 어떤 것도 논문에 특화되어 있지 않습니다. 스키마와 시스템 프롬프트를 바꾸면 파이프라인은 청구서를 추출합니다:
+
+```python
+INVOICE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "invoice_number": {"type": "string"},
+        "issued_on": {"type": "string", "description": "ISO 8601 date"},
+        "currency": {"type": "string", "description": "ISO 4217 code"},
+        "total": {"type": "number"},
+        "line_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "quantity": {"type": "number"},
+                    "unit_price": {"type": "number"},
+                },
+                "required": ["description", "quantity", "unit_price"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["invoice_number", "issued_on", "currency", "total", "line_items"],
+    "additionalProperties": False,
+}
+```
+
+`description` 필드가 실제 일을 하고 있습니다. 날짜는 어떤 형식을 원하는지 말한 뒤에야 모호하지 않게 되며, `03/04/2026`은 누가 썼는지에 따라 서로 다른 두 날짜를 의미합니다.
+
+## 다음 단계
+
+- `pydantic`이나 `jsonschema`로 결과를 스키마에 대해 검증하면, 잘못된 레코드가 세 함수 뒤가 아니라 경계에서 실패합니다.
+- 추출된 텍스트를 [임베딩](/guides/features/embeddings)으로 저장해 문서를 다시 추출하는 대신 문서 전반에 걸쳐 검색하세요.
+- 레코드가 아니라 답변을 원할 때는 [파일 입력](/guides/features/file-inputs)으로 문서를 채팅 완성에 직접 첨부하세요.
+- [함수 호출로 도구를 활용하는 에이전트 만들기](/guides/features/tool-using-agent)를 통해 추출기를 에이전트에 도구로 제공하세요.
+
+<CardGroup cols={2}>
+  <Card title="문서 처리" icon="file-text" href="/guides/tools/document-processing">
+    text-parser 엔드포인트 레퍼런스.
+  </Card>
+  <Card title="구조화된 응답" icon="braces" href="/guides/features/structured-responses">
+    json_schema가 완성을 어떻게 제약하는지.
+  </Card>
+  <Card title="비전" icon="eye" href="/guides/features/vision">
+    채팅 모델에 이미지 보내기.
+  </Card>
+  <Card title="파일 입력" icon="paperclip" href="/guides/features/file-inputs">
+    직접 파싱하지 않고 문서를 첨부하세요.
+  </Card>
+</CardGroup>

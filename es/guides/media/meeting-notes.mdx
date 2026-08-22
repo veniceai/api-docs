@@ -1,0 +1,403 @@
+---
+title: "Notas de reuniones con voz a texto"
+sidebarTitle: "Notas de reuniones"
+description: "Convierte una grabación en decisiones y tareas que enlacen con el momento exacto en que se acordaron."
+"og:title": "Notas de reuniones con voz a texto | Documentación de la API de Venice"
+"og:description": "Transcribe una reunión, extrae responsables y fechas contra un esquema, y afronta el hecho de que nadie está etiquetado."
+---
+
+Una transcripción no son notas. Es la reunión otra vez, solo que más larga de leer que de asistir a ella.
+
+Lo que la gente quiere después es corto: qué decidimos, quién se comprometió a hacer qué y qué queda abierto. Este tutorial construye eso, y enlaza cada elemento con el segundo en que se dijo, para que puedas ir a escuchar la parte con la que no estés de acuerdo:
+
+```bash
+python notes.py standup.wav
+```
+
+Por el camino haremos lo siguiente:
+
+1. Transcribir una grabación con `/audio/transcriptions`
+2. Pedir marcas de tiempo, que no todos los modelos ofrecen
+3. Extraer decisiones y tareas contra un esquema
+4. Lidiar con el hecho de que la transcripción nunca dice quién está hablando
+5. Dividir una grabación larga sin perder el reloj
+
+## Configuración
+
+Necesitas Python 3.9 o más reciente, el paquete `requests` y una clave de API de Venice. Consulta [Generar una clave de API](/guides/getting-started/generating-api-key) si no tienes una. Aporta cualquier grabación de una conversación en `wav`, `mp3`, `m4a`, `flac`, `aac`, `mp4`, `ogg` o `webm`.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import sys
+import wave
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+AUTH = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+JSON_HEADERS = {**AUTH, "Content-Type": "application/json"}
+```
+
+## 1. Transcribir la grabación
+
+`/audio/transcriptions` es compatible con OpenAI y acepta una subida multipart. El archivo tiene que ser una parte real, porque base64 no se admite en este endpoint.
+
+<CodeGroup>
+```python Python
+def transcribe(path: str, model: str, timestamps: bool = False) -> dict:
+    with open(path, "rb") as audio:
+        response = requests.post(
+            f"{BASE_URL}/audio/transcriptions",
+            headers=AUTH,
+            files={"file": (os.path.basename(path), audio, "audio/wav")},
+            data={
+                "model": model,
+                "response_format": "json",
+                "timestamps": str(timestamps).lower(),
+            },
+            timeout=600,
+        )
+    response.raise_for_status()
+    return response.json()
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/audio/transcriptions \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./standup.wav" \
+  -F "model=openai/whisper-large-v3" \
+  -F "response_format=json" \
+  -F "timestamps=true"
+```
+</CodeGroup>
+
+La transcripción se factura por la duración del audio, no por cuánto se dijo en él, lo que facilita predecir el coste de una reunión antes de ejecutarla:
+
+| Modelo | Por segundo de audio | Una hora de reunión |
+|---|---|---|
+| `stt-xai-v1` | $0.0000315 | $0.11 |
+| `nvidia/parakeet-tdt-0.6b-v3` | $0.0001 | $0.36 |
+| `openai/whisper-large-v3` | $0.0001 | $0.36 |
+| `elevenlabs/scribe-v2` | $0.000167 | $0.60 |
+
+Llama a `GET /models?type=asr` para obtener la lista actual en lugar de fijar estos valores, ya que el catálogo cambia.
+
+## 2. Pedir marcas de tiempo
+
+Las marcas de tiempo son las que hacen que las notas sean verificables, así que esta es la decisión que más importa, y por defecto no te las darán:
+
+```python
+print(transcribe("standup.wav", "nvidia/parakeet-tdt-0.6b-v3", timestamps=True).keys())
+print(transcribe("standup.wav", "openai/whisper-large-v3", timestamps=True).keys())
+```
+
+```
+dict_keys(['text'])
+dict_keys(['duration', 'text', 'timestamps'])
+```
+
+<Warning>
+  `nvidia/parakeet-tdt-0.6b-v3` es el modelo por defecto, y acepta `timestamps=true` y luego lo ignora. No hay error ni aviso, solo una respuesta con únicamente `text` dentro. Si necesitas tiempos, pide un modelo que los devuelva y comprueba que la clave está ahí.
+</Warning>
+
+Cuando un modelo sí devuelve tiempos, `timestamps` es un objeto en lugar de una lista, y la clave que contiene depende del modelo. Whisper agrupa por frase, Scribe por palabra:
+
+```python
+whisper = transcribe("standup.wav", "openai/whisper-large-v3", timestamps=True)
+scribe = transcribe("standup.wav", "elevenlabs/scribe-v2", timestamps=True)
+
+print(list(whisper["timestamps"]), json.dumps(whisper["timestamps"]["segment"][0]))
+print(list(scribe["timestamps"]), json.dumps(scribe["timestamps"]["word"][0]))
+```
+
+```json
+["segment"] {"text": " Okay, let's keep this to 10 minutes. Where are we on the checkout migration?", "start": 0.21, "end": 4.21}
+["word"] {"word": "Okay,", "start": 0.34, "end": 0.759}
+```
+
+Los segmentos a nivel de frase tienen el tamaño adecuado para este trabajo. Los tiempos por palabra son útiles para subtítulos y demasiado finos para colgar una decisión de ellos.
+
+Vamos a aplanar esos segmentos en líneas con un tiempo delante de cada una, que es todo lo que el modelo necesita para citarlas después:
+
+```python
+def timed_lines(transcription: dict, offset: float = 0.0) -> list[str]:
+    segments = transcription.get("timestamps", {}).get("segment")
+    if not segments:
+        raise RuntimeError(
+            "This model returned no segment timings. Use openai/whisper-large-v3."
+        )
+    return [
+        f"[{segment['start'] + offset:.1f}s] {segment['text'].strip()}"
+        for segment in segments
+    ]
+```
+
+```python
+for line in timed_lines(whisper)[:4]:
+    print(line)
+```
+
+```
+[0.2s] Okay, let's keep this to 10 minutes. Where are we on the checkout migration?
+[5.2s] Backend is done.
+[6.5s] I finished the payment adapter yesterday and it's on staging.
+[10.5s] The one thing I'm not sure about is whether we keep the old endpoint alive after cutover.
+```
+
+## 3. Extraer las notas
+
+Describe las notas que quieres como un esquema, para que el resultado sea un registro en vez de prosa que tengas que parsear:
+
+```python
+NOTES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "decision": {"type": "string"},
+                    "spoken_at": {"type": "number", "description": "Seconds into the recording."},
+                },
+                "required": ["decision", "spoken_at"],
+                "additionalProperties": False,
+            },
+        },
+        "action_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "owner": {"type": "string", "description": "Name as spoken, or 'unassigned'."},
+                    "task": {"type": "string"},
+                    "due": {"type": "string", "description": "As stated, or 'not stated'."},
+                    "spoken_at": {"type": "number"},
+                },
+                "required": ["owner", "task", "due", "spoken_at"],
+                "additionalProperties": False,
+            },
+        },
+        "open_questions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "decisions", "action_items", "open_questions"],
+    "additionalProperties": False,
+}
+```
+
+```python
+SYSTEM = (
+    "You turn meeting transcripts into notes. The transcript has no speaker labels, "
+    "so attribute a task only when a name is spoken. Use 'unassigned' otherwise. "
+    "spoken_at is the start time of the line the item came from."
+)
+
+
+def write_notes(lines: list[str], attendees: list[str] | None = None) -> dict:
+    system = SYSTEM
+    if attendees:
+        system += (
+            f" The attendees are {', '.join(attendees)}. Speech recognition often "
+            "mangles names, so map what you hear to the closest attendee."
+        )
+
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": "zai-org-glm-5-2",
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "\n".join(lines)},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "notes", "strict": True, "schema": NOTES_SCHEMA},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 2000,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    choice = response.json()["choices"][0]
+    if choice["finish_reason"] == "length":
+        raise RuntimeError("Ran out of tokens. The JSON is truncated. Raise the budget.")
+    return json.loads(choice["message"]["content"])
+```
+
+`disable_thinking` está ahí por la misma razón por la que pertenece a cualquier paso de extracción. El esquema ya decide la forma de la respuesta, así que pagar a un modelo con razonamiento para que delibere sobre ella no aporta nada y hace que el coste de cada ejecución sea distinto del anterior. [Extraer datos estructurados de documentos](/guides/tools/document-extraction) mide esa diferencia.
+
+Ejecútalo sobre un standup de cincuenta y tres segundos y las notas vuelven con el reloj adjunto:
+
+```json
+{
+  "decisions": [
+    { "decision": "Keep the old endpoint alive for two weeks after cutover, then remove it.", "spoken_at": 16.8 },
+    { "decision": "Turn on the new checkout form for 10% of traffic on Monday; if error rate stays under 0.5%, increase to 50%.", "spoken_at": 34.5 }
+  ],
+  "action_items": [
+    { "owner": "Tomas", "task": "Put the deprecation notice in the changelog by Friday.", "due": "Friday", "spoken_at": 19.6 },
+    { "owner": "May", "task": "Own the frontend rollout of the new checkout form.", "due": "Monday", "spoken_at": 39.9 },
+    { "owner": "unassigned", "task": "Ask legal to review the new refund copy and report back.", "due": "tomorrow", "spoken_at": 48.1 }
+  ]
+}
+```
+
+Cada `spoken_at` es real. Salta a los 19,6 segundos y escucharás la frase que creó la tarea.
+
+<Note>
+  Dale al modelo líneas sin tiempos y cada `spoken_at` vuelve como `0`. El campo es obligatorio, el modelo no tiene nada que poner en él, y un campo obligatorio es una instrucción para producir algo, no una invitación a decir que no lo sabe. Merece la pena recordarlo cuando un esquema parece funcionar: que la forma sea correcta no es lo mismo que los valores sean correctos.
+</Note>
+
+## 4. Nadie está etiquetado
+
+Dos cosas en esa salida están mal, y ambas vienen del mismo sitio.
+
+El responsable del despliegue es `May`. Su nombre es Mei. El reconocimiento de voz es menos fiable con los nombres propios, y los nombres son exactamente lo que necesita la atribución, así que este es el fallo que deberías esperar y no la mala suerte.
+
+El último elemento es `unassigned`, aunque claramente alguien lo asumió. La línea fue "I'll ask legal today and report back tomorrow", y la transcripción registra las palabras sin registrar quién las dijo.
+
+Ese segundo caso no es un bug que puedas arreglar. Ningún modelo de transcripción de Venice hace diarización, por lo que no hay un campo `speaker` al que recurrir en ninguno de ellos. La transcripción es una única corriente de texto sin voces, y las tareas solo se pueden atribuir cuando se pronuncia un nombre en voz alta, como en "Tomas, can you put the deprecation notice in the changelog".
+
+El primero sí puedes arreglarlo, diciéndole al modelo quién estaba en la sala:
+
+```python
+notes = write_notes(lines, attendees=["Priya Raman", "Tomas Vidal", "Mei Lin"])
+```
+
+```
+Tomas Vidal   due=Friday    @ 19.6s  Put the deprecation notice in the changelog by Friday.
+Mei Lin       due=Monday    @ 39.9s  Own the frontend rollout of the new checkout form.
+unassigned    due=Tomorrow  @ 48.1s  Ask legal to review the new refund copy and report back.
+```
+
+`May` se resuelve a `Mei Lin` porque el modelo ahora tiene una lista corta contra la que emparejar, y los responsables son nombres completos que tu gestor de tareas puede buscar. El tercer elemento sigue sin asignar, correctamente. Una lista de asistentes corrige lo mal escuchado, y nada recupera información que la grabación nunca llevó.
+
+<Tip>
+  Si necesitas atribución real de hablantes, captúrala aguas arriba en lugar de inferirla aguas abajo. Las herramientas de videoconferencia pueden grabar una pista por participante, y transcribir cada pista por separado te da los hablantes gratis, al coste de una petición por persona.
+</Tip>
+
+## 5. Más largo que una sola petición
+
+Las subidas están limitadas a 25 MB, algo que llega antes de lo que pensarías para audio sin comprimir, y de todos modos una reunión larga merece la pena dividirla para que un solo fallo no te cueste toda la transcripción.
+
+Para archivos WAV, la biblioteca estándar es suficiente, no hace falta ffmpeg:
+
+```python
+def split_wav(path: str, chunk_seconds: int = 600) -> list[tuple[str, float]]:
+    """Split into chunks, returning each path with its offset into the original."""
+    chunks: list[tuple[str, float]] = []
+    with wave.open(path, "rb") as source:
+        rate = source.getframerate()
+        stem = path.rsplit(".", 1)[0]
+        index = 0
+        while True:
+            frames = source.readframes(rate * chunk_seconds)
+            if not frames:
+                break
+            part = f"{stem}.part{index}.wav"
+            with wave.open(part, "wb") as out:
+                out.setnchannels(source.getnchannels())
+                out.setsampwidth(source.getsampwidth())
+                out.setframerate(rate)
+                out.writeframes(frames)
+            chunks.append((part, index * chunk_seconds))
+            index += 1
+    return chunks
+```
+
+El offset es la clave. Cada trozo se transcribe como si empezara en cero, así que sus tiempos hay que desplazarlos de vuelta a la línea temporal de la grabación original antes de que el modelo los vea. Para eso está el argumento `offset` de `timed_lines`:
+
+```python
+def transcribe_long(path: str, model: str, chunk_seconds: int = 600) -> list[str]:
+    lines: list[str] = []
+    for part, offset in split_wav(path, chunk_seconds):
+        lines.extend(timed_lines(transcribe(part, model, timestamps=True), offset))
+        os.remove(part)
+    return lines
+```
+
+Divide el mismo standup en trozos de veinte segundos y el reloj sigue siendo honesto a través de las uniones. Las palabras no:
+
+```
+[16.8s] Let's keep it for two weeks, then remove it.
+[19.6s] Thomas?
+[20.0s] awesome.
+[20.4s] Can you put the deprecation notice in the change log by Friday?
+[24.1s] Yes, I'll do that.
+```
+
+Ahí se pronunció una sola frase: "Tomas, can you put the deprecation notice in the changelog by Friday?". El corte cayó en medio, así que el nombre acabó en una petición y la petición en otra. Whisper oyó el nombre huérfano como una pregunta, inventó un `awesome.` para rellenar el hueco al final del trozo y convirtió una línea en tres.
+
+Los tiempos siguen siendo correctos, y el paso de las notas sigue encontrando la tarea. Lo que pierde es el nombre, que es de lo que depende la atribución.
+
+<Warning>
+  Dividir por duración fija corta a alguien en cada frontera. Veinte segundos es lo bastante corto para caer en una frase casi siempre; diez minutos lo hace raro pero no imposible, y acabará cayendo en la única frase que asigna el trabajo. Dividir por silencio evita el problema de la forma adecuada y necesita una herramienta que encuentre los huecos, como `ffmpeg` o `pydub`. Divide solo cuando el archivo realmente lo requiera.
+</Warning>
+
+Los formatos comprimidos no se pueden cortar así, porque no se puede cortar un MP3 en un límite de frame con la biblioteca estándar. Usa `ffmpeg` para esos:
+
+```bash
+ffmpeg -i meeting.mp3 -f segment -segment_time 600 -c copy chunk_%03d.mp3
+```
+
+## Uniéndolo todo
+
+```python
+def meeting_notes(path: str, attendees: list[str] | None = None) -> dict:
+    model = "openai/whisper-large-v3"
+    size_mb = os.path.getsize(path) / 1_000_000
+    if path.endswith(".wav") and size_mb > 20:
+        print(f"{size_mb:.0f} MB, splitting", file=sys.stderr)
+        lines = transcribe_long(path, model)
+    else:
+        lines = timed_lines(transcribe(path, model, timestamps=True))
+    print(f"{len(lines)} lines transcribed", file=sys.stderr)
+    return write_notes(lines, attendees)
+
+
+if __name__ == "__main__":
+    recording = sys.argv[1] if len(sys.argv) > 1 else "standup.wav"
+    roster = sys.argv[2:] or None
+    print(json.dumps(meeting_notes(recording, roster), indent=2))
+```
+
+```bash
+python notes.py standup.wav "Priya Raman" "Tomas Vidal" "Mei Lin"
+```
+
+## Próximos pasos
+
+- Publica las tareas en tu gestor, usando los nombres de responsable que resolvió la lista de asistentes.
+- Lee el resumen en voz alta con [Texto a voz](/guides/media/text-to-speech) para quienes se perdieron la llamada.
+- Busca en reuniones pasadas guardando las transcripciones con [Embeddings](/guides/features/embeddings).
+- Deja que un agente decida cuándo transcribir y cuándo responder desde notas que ya tiene, con [Construir un agente que usa herramientas con llamada a funciones](/guides/features/tool-using-agent).
+
+<CardGroup cols={2}>
+  <Card title="Voz a texto" icon="microphone" href="/guides/media/speech-to-text">
+    Referencia del endpoint de transcripciones.
+  </Card>
+  <Card title="Extraer datos estructurados de documentos" icon="file-text" href="/guides/tools/document-extraction">
+    La misma extracción basada en esquema, aplicada a archivos.
+  </Card>
+  <Card title="Respuestas estructuradas" icon="braces" href="/guides/features/structured-responses">
+    Cómo json_schema restringe una completación.
+  </Card>
+  <Card title="Clonación de voz" icon="wave-sine" href="/guides/media/voice-cloning">
+    Dale al resumen una voz propia.
+  </Card>
+</CardGroup>

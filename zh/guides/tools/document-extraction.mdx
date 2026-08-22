@@ -1,0 +1,434 @@
+---
+title: "从文档中抽取结构化数据"
+sidebarTitle: "文档抽取"
+description: "把 PDF 变成有类型的记录，在没有文本可抽的时候回退到视觉方案。"
+"og:title": "从文档中抽取结构化数据 | Venice API 文档"
+"og:description": "用 text-parser 解析 PDF，把输出锁定到一个 JSON schema，并在文件其实是扫描件时切换到视觉模型。"
+---
+
+阅读一份文档很容易。从每一份文档里稳定地拿到同样的字段、并按你代码能依赖的形状返回，才是真正的工作。
+
+从文件到记录有两条路。你可以把文本抽出来交给模型，或者把整页展示给一个能看的模型。你需要走哪条路取决于这份文件是怎么被生成的，而光看一份 PDF 是看不出它属于哪一种的。本教程把两条路都搭起来，并让 API 自己在两者之间做选择：
+
+```bash
+python extract.py paper.pdf
+```
+
+一路上我们会：
+
+1. 用 `/augment/text-parser` 把 PDF 的文本抽出来
+2. 用 JSON schema 描述我们想要的记录
+3. 抽取它，让 schema 是强制约束而不是建议
+4. 处理那种根本没有可抽文本的文件
+5. 比较两条路线对同一页得到的结果
+
+## 准备工作
+
+你需要 Python 3.9 或更高版本、`requests` 包，以及一个 Venice API key。如果你还没有，请参见[生成 API Key](/guides/getting-started/generating-api-key)。
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+我们会用一篇公开论文作为示例文档，这样你能用同一个文件跟着做：
+
+```bash
+curl -L -o paper.pdf https://arxiv.org/pdf/1706.03762
+```
+
+创建 `extract.py`：
+
+```python
+from __future__ import annotations
+
+import base64
+import json
+import os
+import subprocess
+import sys
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+AUTH = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+JSON_HEADERS = {**AUTH, "Content-Type": "application/json"}
+```
+
+注意 `AUTH` 和 `JSON_HEADERS` 是分开的。parser 接收 multipart 上传，如果你自己在 multipart 请求上设置了 `Content-Type`，`requests` 就不会再帮你加 boundary，然后失败的方式会让你很难排查。
+
+## 1. 把文本抽出来
+
+`/augment/text-parser` 接收 PDF、DOCX、XLSX 或纯文本文件（最大 25 MB），返回文本以及 token 数。文档在内存中处理，内容不会被保留。
+
+<CodeGroup>
+```python Python
+def parse_document(path: str) -> dict:
+    with open(path, "rb") as handle:
+        response = requests.post(
+            f"{BASE_URL}/augment/text-parser",
+            headers=AUTH,
+            files={"file": (os.path.basename(path), handle, "application/pdf")},
+            data={"response_format": "json"},
+            timeout=300,
+        )
+    response.raise_for_status()
+    return response.json()
+```
+
+```javascript Node.js
+const BASE_URL = "https://api.venice.ai/api/v1";
+
+async function parseDocument(path) {
+  const form = new FormData();
+  form.append("file", new Blob([await readFile(path)]), basename(path));
+  form.append("response_format", "json");
+
+  const response = await fetch(`${BASE_URL}/augment/text-parser`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.VENICE_API_KEY}` },
+    body: form,
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${await response.text()}`);
+  }
+  return response.json();
+}
+```
+
+```bash cURL
+curl -X POST https://api.venice.ai/api/v1/augment/text-parser \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./paper.pdf" \
+  -F "response_format=json"
+```
+</CodeGroup>
+
+```python
+parsed = parse_document("paper.pdf")
+print(parsed["tokens"], "tokens,", len(parsed["text"]), "characters")
+print(parsed["text"][:180])
+```
+
+```
+12346 tokens, 39505 characters
+Provided proper attribution is provided, Google hereby grants permission to
+reproduce the tables and figures in this paper solely for use in journalistic or
+scholarly works.
+Attention Is All You Need
+```
+
+响应里 `tokens` 计数才是真正有用的部分。它告诉你这份文档在下一次请求中会花你多少 token，可以在你发出请求之前就知道，这一点很重要，因为一份很长的 PDF 很容易超出你原本打算的预算。
+
+## 2. 描述你想要的记录
+
+请求模型返回 JSON，你拿到的 JSON 大致是你要求的形状。传一个 schema 进去，你拿到的 JSON 就会匹配它，因为 schema 是在约束生成，而不是建议它这样生成。
+
+```python
+PAPER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "authors": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "affiliation": {"type": "string"},
+                },
+                "required": ["name", "affiliation"],
+                "additionalProperties": False,
+            },
+        },
+        "year": {"type": "integer"},
+    },
+    "required": ["title", "authors", "year"],
+    "additionalProperties": False,
+}
+```
+
+`additionalProperties: False` 每一层都值得设。不设的话，模型一旦发现什么有意思的东西就可能加一个你从没打算要的 key，而读取这个结果的代码根本没准备好应付它。
+
+## 3. 抽取
+
+一次调用，`response_format` 带上 schema，把 `strict` 打开：
+
+```python
+def default_model(trait: str) -> str:
+    response = requests.get(f"{BASE_URL}/models/traits", headers=AUTH, timeout=30)
+    response.raise_for_status()
+    return response.json()["data"][trait]
+
+
+def extract_from_text(text: str, schema: dict, budget: int = 12000) -> dict:
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": default_model("default"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract the requested fields from the document. "
+                        "Use only what appears in it."
+                    ),
+                },
+                {"role": "user", "content": text[:budget]},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "record", "strict": True, "schema": schema},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 1500,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    return read_record(response.json())
+```
+
+本教程里每一次抽取都会经过同一个小的读取函数，因为这个调用会以两种方式失败，而两种失败都以 HTTP `200` 到达：
+
+```python
+def read_record(body: dict) -> dict:
+    choice = body["choices"][0]
+    if choice["finish_reason"] == "length":
+        raise RuntimeError(
+            "Ran out of completion tokens. The JSON is truncated, not invalid. "
+            "Raise max_completion_tokens or shrink the schema."
+        )
+    content = choice["message"].get("content")
+    if not content:
+        raise RuntimeError(f"Empty response, finish_reason={choice['finish_reason']}.")
+    return json.loads(content)
+```
+
+```python
+record = extract_from_text(parsed["text"], PAPER_SCHEMA)
+print(json.dumps(record, indent=2, ensure_ascii=False))
+```
+
+```json
+{
+  "title": "Attention Is All You Need",
+  "authors": [
+    { "name": "Ashish Vaswani", "affiliation": "Google Brain" },
+    { "name": "Noam Shazeer", "affiliation": "Google Brain" },
+    { "name": "Niki Parmar", "affiliation": "Google Research" },
+    { "name": "Jakob Uszkoreit", "affiliation": "Google Research" },
+    { "name": "Llion Jones", "affiliation": "Google Research" },
+    { "name": "Aidan N. Gomez", "affiliation": "University of Toronto" },
+    { "name": "Łukasz Kaiser", "affiliation": "Google Brain" },
+    { "name": "Illia Polosukhin", "affiliation": "" }
+  ],
+  "year": 2017
+}
+```
+
+看最后一位作者。论文没有给 Illia Polosukhin 任何单位信息，而 schema 说 `affiliation` 是必填的，所以模型返回了一个空字符串，而不是把它省掉。这就是 schema 在严格按你告诉它的方式做事。
+
+<Note>
+  空字符串和缺失值是两件不同的事，而 `required` 把它们抹平了。如果你需要把"文档没这么说"和"文档在这里什么也没说"区分开，就把字段类型写成 `{"type": ["string", "null"]}`，并在 system prompt 里要求返回 `null`。strict 模式接受这种联合类型，你就能拿到 `null` 而不是 `""`。
+</Note>
+
+### 关掉思考
+
+在那个请求里，`disable_thinking` 是最值得争论的一行，所以下面是论据。默认的文本模型在给出答案之前会先推理，而推理和 JSON 是从同一个 completion 预算里扣的。同样的抽取跑四次，看看模型都花了多少：
+
+| 配置 | 四次运行的推理 token | 结果 |
+|---|---|---|
+| 预算 1500，思考开启 | 959, 325, 975, 575 | 每次都有效，但价格各不相同 |
+| 预算 4000，思考开启 | 4003, 984, 1632, 956 | 有一次把整个预算都花在了思考上，什么也没返回 |
+| 预算 1500，思考关闭 | 0, 0, 0, 0 | 每次都是 217 个 completion token |
+
+提高预算并不能解决第一个问题，只是把模型被允许触到的天花板抬高了。花掉 4003 个 token 那次运行返回时 `finish_reason` 为 `length`，内容是空字符串。
+
+关掉思考让这次抽取便宜了五倍，更有用的是让它每次都一样。schema 已经在做本来推理才做的事——决定答案的形状。
+
+<Warning>
+  当预算真的耗尽时，模型通常已经写了一部分 JSON，所以你拿到的是一个被截断的对象，而不是一个错误。然后 `json.loads` 会在中间某处的一个未闭合字符串上失败，看起来像是解析 bug，但其实不是。`read_record` 先检查 `finish_reason`，所以报错信息说的是实际发生的事情。
+</Warning>
+
+## 4. 当没有文本可抽的时候
+
+由扫描仪产出的 PDF 里装的是页面的图片，不是文本。文件名不会告诉你，文件大小也不会露馅。
+
+你不用自己去检测，因为 parser 会替你检测：
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/augment/text-parser \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./scanned.pdf"
+```
+
+```json
+{ "error": "No text content could be extracted from the file." }
+```
+
+它以 HTTP `400` 返回，而这与其说是失败，不如说是一个路由信号。文本路线对这个文件不可用，那就走另一条：把页面渲染成图像，让一个能看的模型来看它。
+
+```python
+def render_first_page(pdf_path: str, png_path: str, width: int = 1400) -> None:
+    """macOS only. Use pdftoppm from poppler, or pypdfium2, elsewhere."""
+    subprocess.run(
+        ["sips", "-s", "format", "png", "--resampleWidth", str(width),
+         pdf_path, "--out", png_path],
+        check=True, capture_output=True,
+    )
+
+
+def extract_from_image(png_path: str, schema: dict) -> dict:
+    encoded = base64.b64encode(open(png_path, "rb").read()).decode()
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": default_model("default_vision"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract the requested fields from the page image. "
+                        "Use only what appears in it."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Extract the fields."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                        },
+                    ],
+                },
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "record", "strict": True, "schema": schema},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 1500,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    return read_record(response.json())
+```
+
+现在两条路线可以拼在一起，由 parser 自己的错误在两者之间做选择：
+
+```python
+def extract(path: str, schema: dict) -> dict:
+    try:
+        text = parse_document(path)["text"]
+    except requests.HTTPError as error:
+        if error.response.status_code != 400:
+            raise
+        print("no extractable text, falling back to vision", file=sys.stderr)
+        png = path.rsplit(".", 1)[0] + "-page1.png"
+        render_first_page(path, png)
+        return extract_from_image(png, schema)
+    return extract_from_text(text, schema)
+
+
+if __name__ == "__main__":
+    document = sys.argv[1] if len(sys.argv) > 1 else "paper.pdf"
+    print(json.dumps(extract(document, PAPER_SCHEMA), indent=2, ensure_ascii=False))
+```
+
+<Warning>
+  这个回退方案只读一页。对于一张表单、一张发票或一页标题页来说没问题；对于任何更长的文档就都不对，因为文档的其余部分对它悄无声息地不存在。当答案未必在第一页时，就把每一页都渲染出来，作为多张图像一起发送。
+</Warning>
+
+## 5. 两条路线的分歧
+
+对同一张首页跑两条路线，返回的记录几乎一样。"几乎"才是有意思的部分：
+
+| 字段 | 从解析出的文本 | 从页面图像 |
+|---|---|---|
+| `title` | Attention Is All You Need | Attention Is All You Need |
+| 第七位作者 | Łukasz Kaiser | Lukasz Kaiser |
+| 第八位作者单位 | `""` | `""`，有时是 `Google Research` |
+| `year` | 2017 | 2017 |
+
+文本路线保留了 Ł。视觉路线返回了 ASCII 的 L，因为它在读字形而不是字符编码，而变音符是个小小的视觉细节，很难幸存下来。如果你要用抽出来的名字去数据库里做匹配，这个差别决定了记录能不能被找到。
+
+第八位作者的问题更重要。这一页没有为 Illia Polosukhin 写任何单位，文本路线每次都忠实地把它报告为空字符串。视觉路线在某些运行里，会用同一页上一个看起来合理的邻居来把这个字段填上。读像素给推断留出的空间，比读字符要多，而一个必填字段则是让它去填的邀请。当你没法用人工检查输出时，这就是一个在文档提供文本的地方优先走文本路线的理由。
+
+成本的差距比看起来更小。两边都关掉思考之后，这两条路线在这一页上跑的 prompt 大小差不多：
+
+| 路线 | Prompt tokens | Completion tokens | 中位耗时 |
+|---|---|---|---|
+| 前 12000 字符的解析文本 | 2611 | 217 | 1.6s |
+| 1400px 的页面图像 | 2547 | 167 | 4.3s |
+
+那张图片是 923,732 个字符的 base64，但这部分你不用付费。图像是按尺寸计 token，而不是按编码后长度，所以一张很大的 PNG 并不会像它看起来那么贵。
+
+当文档里有文本时，优先选用文本解析。它能保留精确的字符，超越第一页也不额外花钱，还不在乎页面是怎么排版的。只有当 parser 说没有东西可读、或者语义体现在版式上（比如图表、印章、签名）时，才伸手去拿视觉方案。
+
+## 抽取别的东西
+
+上面没有任何东西是论文特有的。换个 schema 和 system prompt，这条流水线就能抽取发票：
+
+```python
+INVOICE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "invoice_number": {"type": "string"},
+        "issued_on": {"type": "string", "description": "ISO 8601 date"},
+        "currency": {"type": "string", "description": "ISO 4217 code"},
+        "total": {"type": "number"},
+        "line_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "quantity": {"type": "number"},
+                    "unit_price": {"type": "number"},
+                },
+                "required": ["description", "quantity", "unit_price"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["invoice_number", "issued_on", "currency", "total", "line_items"],
+    "additionalProperties": False,
+}
+```
+
+这里的 `description` 字段是在真正干活的。日期只有在你说明想要哪种格式后才不再有歧义，`03/04/2026` 根据写的人是谁可以指两种不同的日期。
+
+## 下一步
+
+- 用 `pydantic` 或 `jsonschema` 对结果按 schema 做校验，让一条格式错误的记录在边界处就失败，而不是在往后三层函数里才炸。
+- 用[嵌入](/guides/features/embeddings)把抽出的文本存起来，实现跨文档搜索，而不是每次都重新抽取。
+- 当你想要的是答案而不是记录时，用[文件输入](/guides/features/file-inputs)把文档直接挂到一次 chat completion 里。
+- 把这个抽取器当作工具交给一个智能体，参见[使用函数调用构建能使用工具的智能体](/guides/features/tool-using-agent)。
+
+<CardGroup cols={2}>
+  <Card title="文档处理" icon="file-text" href="/guides/tools/document-processing">
+    text-parser endpoint 的参考文档。
+  </Card>
+  <Card title="结构化响应" icon="braces" href="/guides/features/structured-responses">
+    json_schema 如何约束一次 completion。
+  </Card>
+  <Card title="视觉" icon="eye" href="/guides/features/vision">
+    向 chat 模型发送图像。
+  </Card>
+  <Card title="文件输入" icon="paperclip" href="/guides/features/file-inputs">
+    附带一个文档，而不必自己解析它。
+  </Card>
+</CardGroup>

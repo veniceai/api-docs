@@ -1,0 +1,358 @@
+---
+title: "منح وكيلٍ محفظةً وميزانية"
+description: "ادفع مقابل الاستدلال من محفظة دون مفتاح API، وضع سقفًا لما يستطيع الوكيل إنفاقه."
+slug: wallet-budget-agent-venice-x402
+"og:title": "منح وكيلٍ محفظةً وميزانية باستخدام Venice x402"
+"og:description": "وكيلٌ يوثّق نفسه بتوقيع محفظة، ويدفع لكل طلب بعملة USDC، ويطبع كل مبلغ يُخصم، ويتوقّف عند سقف تحدّده أنت."
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Sabrina Aquino" date="21 August 2026"/>
+
+الوكيل الذي يحمل مفتاح API يستطيع إنفاق كل ما يستطيع المفتاح إنفاقه. هذا مقبول حين يراقبه شخص، ومحرج حين لا أحد يراقبه. الحلول المعتادة تعيش خارج الوكيل، في لوحة تحكّم أو تنبيه فوترة يُخبرك بالمشكلة بعد وقوعها.
+
+تدعم Venice طريقة ثانية للدخول. بدلًا من مفتاح، يحمل الوكيل محفظة. يُصادق على نفسه بتوقيع رسالة، ويدفع لكل طلب من رصيد USDC المرتبط بعنوان تلك المحفظة، وتُسجَّل كل عملية خصم في دفتر يمكنه العودة إليه. لا يوجد حساب، ولا لوحة تحكّم، ولا مفتاح يُسرّب. السقف هو الرصيد، وأنت تُقرّر ما تضعه فيه.
+
+يبني هذا الدليل وكيلًا يفعل ذلك بالضبط، تحت ميزانية يفرضها على نفسه.
+
+<Card title="شغّل هذا الدفتر في Google Colab" icon="notebook" href="https://colab.research.google.com/github/veniceai/api-docs/blob/main/notebooks/wallet-budget-agent.ipynb">
+  كل خطوة أدناه في هيئة دفتر قابل للتشغيل. يعمل دون محفظة مموّلة ويتوقّف عند جدار الدفع، فترى المسار كاملًا قبل أن تُنفق شيئًا.
+</Card>
+
+## كيف يعمل
+
+أربعة أجزاء متحرّكة، ثلاثة منها مجرّد HTTP:
+
+| الخطوة | نقطة النهاية | لماذا |
+| --- | --- | --- |
+| إثبات هويتك | أي نقطة، عبر `SIGN-IN-WITH-X` | رسالة مُوقَّعة تحلّ محلّ مفتاح API |
+| إيداع المال | `/x402/top-up` | اكتشاف السكك المتاحة، ثم تسوية تحويل USDC مُوقَّع |
+| فحص الرصيد | `/x402/balance/{address}` | ما تبقّى، وهل يكفي للمعاملة |
+| قراءة المصاريف | `/x402/transactions/{address}` | دفتر يسجل كل خصم لكل طلب |
+
+الاستدلال نفسه هو استدعاء `/chat/completions` المعتاد. الفرق الوحيد هو الترويسة التي ترسلها.
+
+## ما يكلّفك البدء
+
+يهمّ رقمان، وهما ليسا الرقم نفسه.
+
+**الحدّ الأدنى لإيداع مبلغ هو خمسة دولارات**. هذا أصغر مبلغ ستُسوّيه `/x402/top-up`، ويُعاد في استجابة الاكتشاف بدلًا من أن يكون مُثبّتًا في أي مكان، لذا اقرأه لا تعتمد على هذه الصفحة.
+
+**الحدّ الأدنى للرصيد لإجراء استدعاء هو عشرة سنتات**. المحفظة التي تحمل أقلّ من ذلك تحصل على رمز `402` من الاستدلال حتى وإن كانت تحمل مالًا.
+
+إذن خمسة دولارات هي أصغر محفظة يستحقّ تمويلها، وخمسة دولارات هي ما يمنحه هذا الدليل للوكيل. ويستحقّ معرفة ما يشتريه ذلك: سؤال قصير موجّه إلى `qwen3-5-9b` يُكلّف نحو سبعة وعشرين رمز إدخال وستّة وعشرين رمز إخراج، وهو ما يعادل بأسعار هذا النموذج قرابة سبعة أجزاء من مليون من الدولار. خمسة دولارات في حدود ثلاثة أرباع مليون سؤال. الميزانية هنا ليست قيدًا ضيّقًا، بل نطاق انفجار محدود.
+
+## الإعداد
+
+يقوم x402 SDK بتوقيع الدفع. لا تكتبه يدويًا: تفويض التحويل هو بيانات EIP-712 مُنمّطة، وإعادة استخدام nonce تُفشل التحقّق بطرق مملّة في تشخيصها.
+
+```bash
+pip install "x402[evm]" eth-account requests
+```
+
+<Note>
+  يتطلّب x402 Python SDK إصدار Python 3.10 أو أحدث. Colab مناسب. أما نسخة Python النظامية التي تأتي مع macOS فقد لا تكون كذلك.
+</Note>
+
+أنشئ ملف `agent.py` مع التهيئة. `BUDGET_USD` هو السقف الذي يفرضه الوكيل على نفسه، وقد ضُبط هنا على المحفظة بأكملها. اخفضه فيتوقّف الوكيل قبل أن ينفد المال، وهذا هو المقبض الوحيد الذي يُرجّح أن تُغيّره.
+
+```python
+import base64
+import json
+import os
+import secrets
+from datetime import datetime, timedelta, timezone
+
+import requests
+from eth_account import Account
+from eth_account.messages import encode_defunct
+
+BASE_URL = "https://api.venice.ai/api/v1"
+DOMAIN = "api.venice.ai"
+CHAIN_ID = 8453          # Base mainnet
+MODEL = "qwen3-5-9b"
+BUDGET_USD = 5.00
+```
+
+## محفظة يملكها الوكيل
+
+يحتاج الوكيل إلى زوج مفاتيح. في الإنتاج تكون هذه محفظة موّلتها عمدًا ويعيش مفتاحها في مدير أسرار. أثناء البناء، توليد محفظة مؤقتة هو الخطوة الصحيحة، لأن محفظة بلا مال لا تستطيع فعل شيء مُكلف بالخطأ.
+
+```python
+key = os.environ.get("WALLET_KEY")
+account = Account.from_key(key) if key else Account.create()
+
+print(f"wallet {account.address}")
+print("funded" if key else "disposable, cannot pay yet")
+```
+
+احتفظ بالمفتاح الخاص خارج الدفتر. في Colab، ضعه في Secrets واقرأه بـ `userdata.get("WALLET_KEY")`.
+
+## تسجيل الدخول بدل المصادقة
+
+لا يوجد مفتاح ليُرسَل، لذا يحمل كل طلب برهانًا على أن مالك المحفظة هو من أرسله. البرهان رسالة [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361)، مُوقَّعة ثم مُشفَّرة بـ base64 في ترويسة `SIGN-IN-WITH-X`.
+
+صيغة الرسالة دقيقة. تُعيد Venice بناء هذه البايتات على جانبها وتتحقّق من توقيعك بها، فإن سطرًا فارغًا شاردًا يعني توقيعًا مرفوضًا لا خطأً مفيدًا.
+
+```python
+def siwx_header():
+    now = datetime.now(timezone.utc)
+    stamp = lambda t: t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    issued_at, expires_at = stamp(now), stamp(now + timedelta(minutes=4))
+    nonce = secrets.token_hex(8)
+
+    message = (
+        f"{DOMAIN} wants you to sign in with your Ethereum account:\n"
+        f"{account.address}\n\nSign in to Venice AI\n\n"
+        f"URI: https://{DOMAIN}\nVersion: 1\nChain ID: {CHAIN_ID}\n"
+        f"Nonce: {nonce}\nIssued At: {issued_at}\nExpiration Time: {expires_at}"
+    )
+    signature = account.sign_message(encode_defunct(text=message)).signature.hex()
+
+    payload = {
+        "address": account.address,
+        "message": message,
+        "signature": signature if signature.startswith("0x") else "0x" + signature,
+        "chainId": CHAIN_ID,
+    }
+    return base64.b64encode(json.dumps(payload).encode()).decode()
+```
+
+تحكم هذه الترويسات ثلاث قواعد، وجميعها موجودة لمنع إعادة التشغيل (replay). التوقيع صالح لمدة **خمس دقائق** من `Issued At`. كل **nonce يُستخدم لمرة واحدة** لنحو خمس دقائق ونصف. ويجب أن يتطابق الموقّع مع المحفظة الواردة في المسار، فلا تستطيع محفظة واحدة الاطلاع على أخرى وتحصل على `403` مقابل المحاولة.
+
+النتيجة العملية هي أنك تُوقّع ترويسة جديدة لكل طلب بدلًا من تخزين واحدة. التوقيع محلي ومجاني، فلا يُكلّفك هذا شيئًا.
+
+```python
+def wallet_get(path, **params):
+    response = requests.get(
+        f"{BASE_URL}{path}",
+        headers={"SIGN-IN-WITH-X": siwx_header()},
+        params=params,
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["data"]
+
+
+def balance():
+    return wallet_get(f"/x402/balance/{account.address}")
+
+
+print(balance())
+```
+
+على محفظة جديدة:
+
+```json
+{
+  "walletAddress": "0xc5048ea84939bb7eb4c611b88ea17d5ee4f11a0c",
+  "balanceUsd": 0,
+  "canConsume": false,
+  "minimumTopUpUsd": 5,
+  "suggestedTopUpUsd": 10
+}
+```
+
+`canConsume` هو الحقل الذي تتفرّع عليه. فهو يأخذ في الحسبان أرضية العشرة سنتات، فلا يلزمك أن تفعل ذلك بنفسك.
+
+## إيداع المال
+
+الإيداع طلبان. الأول يسأل عن ما تقبله Venice وهو غير موثّق، لأنه لا يوجد بعد ما يُوثَّق. الثاني يحمل تفويض تحويل مُوقَّعًا.
+
+```python
+from x402.client import SpendControls, x402ClientSync
+from x402.http import PAYMENT_SIGNATURE_HEADER, encode_payment_signature_header
+from x402.mechanisms.evm import EthAccountSigner
+from x402.mechanisms.evm.exact.client import ExactEvmScheme
+from x402.schemas.payments import PaymentRequired
+
+
+def top_up():
+    discovery = requests.post(f"{BASE_URL}/x402/top-up", timeout=30)
+    required = PaymentRequired.model_validate(discovery.json())
+
+    rail = next(a for a in required.accepts if a.network.startswith("eip155"))
+    print(f"{rail.network}: {int(rail.amount) / 1e6:.2f} USDC to {rail.payTo}")
+
+    client = x402ClientSync()
+    client.register(rail.network, ExactEvmScheme(EthAccountSigner(account)))
+    # The SDK caps one payment at $1 by default, which is below the $5 minimum
+    # top-up, so every rail gets rejected until this is raised.
+    client.set_spend_controls(SpendControls(max_amount_per_payment="$5", allowed_assets=True))
+
+    payload = client.create_payment_payload(required)
+    settlement = requests.post(
+        f"{BASE_URL}/x402/top-up",
+        headers={PAYMENT_SIGNATURE_HEADER: encode_payment_signature_header(payload)},
+        timeout=90,
+    )
+    return settlement.json()
+```
+
+يُعيد الاكتشاف مدخلًا واحدًا لكل سكة. اليوم Base وSolana:
+
+```json
+{
+  "x402Version": 2,
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "eip155:8453",
+      "amount": "5000000",
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "payTo": "0x2670b922ef37c7df47158725c0cc407b5382293f",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "USD Coin", "version": "2" }
+    },
+    {
+      "scheme": "exact",
+      "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+      "amount": "5000000",
+      "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "payTo": "8qUL23aSj7mDWdoLMXGHFvnVCT9wd7jXcysiekroADEL",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "USD Coin", "version": "2", "feePayer": "BFK9TLC3edb13K6v4YyH3DwPb5DSUpkWvb7XnqCL9b4F" }
+    }
+  ]
+}
+```
+
+تفصيلتان يسهل تجاوزهما هناك. `amount` بالوحدات الأساسية، وعملة USDC ذات ستّ منازل عشرية، فـ `5000000` هي خمسة دولارات لا خمسة ملايين من أي شيء. على سكة Solana، `extra.feePayer` هو حساب تُشغّله Venice ويُغطّي رسوم المعاملة، وهذا ما يسمح لمحفظة بالدفع دون امتلاك SOL.
+
+<Warning>
+  ضابط الإنفاق الافتراضي هو أول ما سيوقفك. تأتي الحزمة بضبط `max_amount_per_payment` عند دولار واحد، والحدّ الأدنى للإيداع في Venice خمسة، لذا فإن عميلًا لم يُعدَّل يرفض كل سكة معروضة ويرفع `NoMatchingRequirementsError` قبل أن يتصل بالشبكة أصلًا. ارفع السقف عن قصد بدلًا من تعطيل ضوابط الإنفاق.
+</Warning>
+
+تسوية من محفظة لا تحمل USDC تُعيد `400` مع `PAYMENT_VERIFICATION_FAILED`. هذا الشكل المتوقّع للفشل: التوقيع كان سليمًا، والتحويل لم يكن كذلك.
+
+## الدفع لكل استدعاء
+
+بوجود رصيد، يصبح الاستدلال طلبًا اعتياديًا يصادف أنه يحمل توقيعًا. إطفاء موجّه نظام Venice يهمّ أكثر مما يبدو: فهو يوفّر ما يقارب سبعمئة وألف رمز إدخال في كل استدعاء، وهذا مقدار أكبر بمرتبتين مقارنةً بالسؤال نفسه.
+
+```python
+def ask(question):
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers={"SIGN-IN-WITH-X": siwx_header(), "Content-Type": "application/json"},
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user", "content": question}],
+            "max_completion_tokens": 150,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=90,
+    )
+    if response.status_code == 402:
+        body = response.json()
+        raise RuntimeError(
+            f"balance ${body.get('currentBalanceUsd', 0)} is under the "
+            f"${body.get('minimumBalanceUsd')} floor. Minimum top-up is "
+            f"${body['topUpInstructions']['minimumAmountUsd']}."
+        )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"].strip()
+```
+
+معاملة `402` كنتيجة عادية لا كاستثناء هي جوهر التصميم. الوكيل الذي يدفع مصاريفه بنفسه سينفد ماله في نهاية المطاف، ونفاد المال ليس انهيارًا.
+
+## قراءة ما أنفقه
+
+الدفتر هو المرجع. بدلًا من التقدير من عدد الرموز، اسأل عمّا خُصم فعلًا.
+
+```python
+def charges():
+    """Every debit against this wallet, newest first."""
+    ledger = wallet_get(f"/x402/transactions/{account.address}", limit=100)
+    return [t for t in ledger["transactions"] if t["type"] == "CHARGE"]
+```
+
+كل صفّ يعود بربطٍ إلى الاستدعاء الذي سبّبه:
+
+```json
+{
+  "id": "ledger_01H...",
+  "amount": -0.0000066,
+  "balanceAfter": 4.9999934,
+  "type": "CHARGE",
+  "createdAt": "2026-08-21T18:22:10.000Z",
+  "requestId": "chatcmpl-...",
+  "modelId": "qwen3-5-9b"
+}
+```
+
+تظهر هنا أيضًا صفوف `TOP_UP` و`REFUND` بمبالغ موجبة. تصفية النتائج على `CHARGE` يمنحك الإنفاق.
+
+## التشغيل ضمن ميزانية
+
+الآن الحلقة. قبل كل استدعاء يفحص الوكيل ما أنفقه، ويرفض بدء عمل لا يستطيع دفع ثمنه.
+
+```python
+TASKS = [
+    "Name one concrete tradeoff of vector search versus keyword search. One sentence.",
+    "In one sentence, when is a bloom filter the wrong choice?",
+    "Give one reason CRDTs are hard to debug in production. One sentence.",
+    "What is one failure mode of exponential backoff without jitter? One sentence.",
+    "Name one thing consistent hashing does not solve. One sentence.",
+    "Why is p99 latency more useful than the mean? One sentence.",
+]
+
+
+def run(budget=BUDGET_USD):
+    opening = balance()
+    print(f"balance ${opening['balanceUsd']:.4f}, budget ${budget:.4f}")
+
+    if not opening["canConsume"]:
+        print(f"cannot transact yet, minimum top-up is ${opening['minimumTopUpUsd']}")
+        return
+
+    baseline = sum(abs(c["amount"]) for c in charges())
+    spent = 0.0
+
+    for number, task in enumerate(TASKS, 1):
+        if spent >= budget:
+            print(f"\nstopped before task {number}: ${spent:.6f} of ${budget:.4f} spent")
+            return
+
+        answer = ask(task)
+        spent = sum(abs(c["amount"]) for c in charges()) - baseline
+        print(f"\n{number}. {task}")
+        print(f"   {answer}")
+        print(f"   ${spent:.6f} spent, ${budget - spent:.6f} left")
+
+    print(f"\nfinished all {len(TASKS)} tasks for ${spent:.6f}")
+    if spent:
+        print(f"at this rate ${budget:.2f} covers about {int(budget / (spent / len(TASKS))):,} calls")
+```
+
+شغّله بالخمسة دولارات كاملة فلن تُلزم الميزانية أبدًا، وهذه هي النتيجة الصادقة عند هذه الأسعار. لترى السقف يعمل فعلًا، اضبطه على قيمة يخرقها استدعاء واحد:
+
+```python
+run()              # $5.00, finishes every task
+run(budget=1e-5)   # stops partway, having spent about $0.000007 per call
+```
+
+## أين يضعك هذا
+
+يحمل الوكيل ماله الخاص، ويُثبت هويته بتوقيع، ولا يستطيع تجاوز حدٍّ تُحدّده أنت، كل ذلك دون وجود حساب في أي مكان. بالنسبة لمهمّة مجدولة أو دالة serverless أو أي شيء لا تودّ تسليمه مفتاحًا طويل الأمد، فهذا وضع أمني مختلف جوهريًا.
+
+بعض ما يستحقّ عمله لاحقًا:
+
+<CardGroup cols={2}>
+  <Card title="قيّده على مستوى البروتوكول" icon="shield">
+    ضوابط الإنفاق في الحزمة لكل دفعة، لا لكل جلسة. اقرن بينها وبين حلقة الميزانية أعلاه كي لا تُلغي علّة في إحداهما الأخرى.
+  </Card>
+  <Card title="أعِد التعبئة عند النفاد" icon="refresh">
+    التقط `402`، وأعِد التعبئة، وأعِد المحاولة. هذا ما يفعله `venice-x402-client` نيابةً عنك على جانب TypeScript.
+  </Card>
+  <Card title="ادفع على Solana" icon="currency-solana">
+    المسار نفسه بسكة مختلفة. وقّع Ed25519 واضبط `feePayer` المُعاد فلا تحتاج المحفظة إلى SOL.
+  </Card>
+  <Card title="أسند إليه عملًا حقيقيًا" icon="tools">
+    استبدل قائمة المهام بحلقة استدعاء أدوات، ويبدأ الدفتر بإظهار ما كلّفه كل قرار.
+  </Card>
+</CardGroup>
+
+للاطلاع على مرجع نقاط النهاية الكامل، راجع [x402 top-up](/api-reference/endpoint/x402/top-up) و[استخدام x402 مع Venice API](/guides/integrations/x402-venice-api).
