@@ -31,6 +31,26 @@ function formatPrice(price) {
   return '$' + price.toFixed(2);
 }
 
+const FREE_LABEL = 'Free';
+
+// Walks a pricing object and collects every USD amount it declares, at any depth
+// (resolutions, durations, extended context tiers, upscale factors, etc.).
+function collectPricingUsd(node, values) {
+  if (!node || typeof node !== 'object') return values;
+  if (typeof node.usd === 'number') values.push(node.usd);
+  Object.values(node).forEach(child => collectPricingUsd(child, values));
+  return values;
+}
+
+function isFreeModel(model) {
+  const values = collectPricingUsd(model?.model_spec?.pricing, []);
+  return values.length > 0 && values.every(usd => usd === 0);
+}
+
+function formatModelPrice(model, price) {
+  return isFreeModel(model) ? FREE_LABEL : formatPrice(price);
+}
+
 function escapeHtml(str) {
   if (!str) return '';
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -84,8 +104,8 @@ function renderPricingChatTable(models) {
     const pricing = spec.pricing || {};
     const name = escapeHtml(spec.name || model.id) + (isBetaModel(model) ? ' (Beta)' : '');
     const modelId = '\`' + escapeHtml(model.id) + '\`';
-    const inputPrice = formatPrice(pricing.input?.usd);
-    const outputPrice = formatPrice(pricing.output?.usd);
+    const inputPrice = formatModelPrice(model, pricing.input?.usd);
+    const outputPrice = formatModelPrice(model, pricing.output?.usd);
     const cacheReadStr = pricing.cache_input?.usd ? formatPrice(pricing.cache_input.usd) : '-';
     const cacheWriteStr = pricing.cache_write?.usd ? formatPrice(pricing.cache_write.usd) : '-';
     const contextWindow = spec.availableContextTokens || spec.constraints?.maxContextTokens;
@@ -95,7 +115,7 @@ function renderPricingChatTable(models) {
     let row = `| ${name} | ${modelId} | ${inputPrice} | ${outputPrice} | ${cacheReadStr} | ${cacheWriteStr} | ${contextStr} | ${privacyTag} |`;
 
     let extendedRow = '';
-    if (pricing.extended) {
+    if (pricing.extended && !isFreeModel(model)) {
       const ext = pricing.extended;
       const thresholdStr = ext.context_token_threshold >= 1000 ? `${Math.round(ext.context_token_threshold / 1000)}K` : ext.context_token_threshold;
       extendedRow = `\n| ↳ >${thresholdStr} Context | | ${formatPrice(ext.input?.usd)} | ${formatPrice(ext.output?.usd)} | ${ext.cache_input?.usd ? formatPrice(ext.cache_input.usd) : '-'} | ${ext.cache_write?.usd ? formatPrice(ext.cache_write.usd) : '-'} | | |`;
@@ -120,7 +140,7 @@ function renderPricingEmbeddingTable(models) {
     const name = escapeHtml(spec.name || model.id);
     const privacyTag = getPrivacyLabel(model);
 
-    return `| ${name} | ${modelId} | ${formatPrice(pricing.input?.usd)} | ${formatPrice(pricing.output?.usd)} | ${privacyTag} |`;
+    return `| ${name} | ${modelId} | ${formatModelPrice(model, pricing.input?.usd)} | ${formatModelPrice(model, pricing.output?.usd)} | ${privacyTag} |`;
   }).join('\n');
 
   return header + '\n' + rows + '\n';
@@ -148,7 +168,9 @@ function renderPricingImageTable(models) {
     const resPricing = spec.pricing?.resolutions;
     
     let priceStr = '';
-    if (resPricing) {
+    if (isFreeModel(model)) {
+      priceStr = FREE_LABEL;
+    } else if (resPricing) {
       const resKeys = Object.keys(resPricing);
       priceStr = resKeys.map(res => `${res}: ${formatPrice(resPricing[res]?.usd)}`).join(', ');
     } else {
@@ -192,7 +214,7 @@ function renderPricingEditTable(models) {
     const editPrice = spec.pricing?.inpaint?.usd ?? 0.04;
     const extraInputUsd = spec.pricing?.inputImages?.additional?.usd;
 
-    return `| ${name} | ${modelId} | ${formatPrice(editPrice)} | ${formatPrice(extraInputUsd)} |`;
+    return `| ${name} | ${modelId} | ${formatModelPrice(model, editPrice)} | ${formatModelPrice(model, extraInputUsd)} |`;
   }).join('\n');
 
   return header + '\n' + rows + '\n';
@@ -210,7 +232,7 @@ function renderPricingTTSTable(models) {
     const name = escapeHtml(spec.name || model.id);
     const privacyTag = getPrivacyLabel(model);
 
-    return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.input?.usd)} | ${privacyTag} |`;
+    return `| ${name} | ${modelId} | ${formatModelPrice(model, spec.pricing?.input?.usd)} | ${privacyTag} |`;
   }).join('\n');
 
   return header + '\n' + rows + '\n';
@@ -227,7 +249,9 @@ function renderPricingASRTable(models) {
     const pricing = spec.pricing || {};
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
-    const price = pricing.per_audio_second?.usd ? formatPrice(pricing.per_audio_second.usd) : formatPrice(pricing.input?.usd);
+    const price = pricing.per_audio_second?.usd
+      ? formatModelPrice(model, pricing.per_audio_second.usd)
+      : formatModelPrice(model, pricing.input?.usd);
     const privacyTag = getPrivacyLabel(model);
 
     return `| ${name} | ${modelId} | ${price} | ${privacyTag} |`;
@@ -255,10 +279,12 @@ function renderPricingMusicDurationTable(models) {
     const modelId = '\`' + escapeHtml(model.id) + '\`';
     const name = escapeHtml(spec.name || model.id);
     const privacyTag = getPrivacyLabel(model);
-    const durationPricing = Object.entries(pricing.durations || {})
-      .sort(([a], [b]) => Number(a) - Number(b))
-      .map(([duration, price]) => `${duration}s: ${formatPrice(price?.usd)}`)
-      .join(', ');
+    const durationPricing = isFreeModel(model)
+      ? FREE_LABEL
+      : Object.entries(pricing.durations || {})
+          .sort(([a], [b]) => Number(a) - Number(b))
+          .map(([duration, price]) => `${duration}s: ${formatPrice(price?.usd)}`)
+          .join(', ');
 
     return `| ${name} | ${modelId} | ${durationPricing} | ${privacyTag} |`;
   }).join('\n');
@@ -277,7 +303,7 @@ function renderPricingMusicGenerationTable(models) {
     const name = escapeHtml(spec.name || model.id);
     const privacyTag = getPrivacyLabel(model);
 
-    return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.generation?.usd)} | ${privacyTag} |`;
+    return `| ${name} | ${modelId} | ${formatModelPrice(model, spec.pricing?.generation?.usd)} | ${privacyTag} |`;
   }).join('\n');
 
   return header + '\n' + rows + '\n';
@@ -294,7 +320,7 @@ function renderPricingMusicPerSecondTable(models) {
     const name = escapeHtml(spec.name || model.id);
     const privacyTag = getPrivacyLabel(model);
 
-    return `| ${name} | ${modelId} | ${formatPrice(spec.pricing?.per_second?.usd)} | ${privacyTag} |`;
+    return `| ${name} | ${modelId} | ${formatModelPrice(model, spec.pricing?.per_second?.usd)} | ${privacyTag} |`;
   }).join('\n');
 
   return header + '\n' + rows + '\n';

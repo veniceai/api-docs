@@ -774,7 +774,7 @@
     const price = await fetchVideoQuote(modelId, model, { resolution, duration, audio });
     
     if (price !== null) {
-      priceEl.textContent = formatPrice(price);
+      priceEl.textContent = price === 0 ? FREE_LABEL : formatPrice(price);
     } else {
       priceEl.textContent = 'Variable';
     }
@@ -1220,6 +1220,30 @@
     return model.model_spec?.betaModel === true;
   }
 
+  // Walks a pricing object and collects every USD amount it declares, at any depth
+  // (resolutions, durations, extended context tiers, upscale factors, etc.).
+  function collectPricingUsd(node, values) {
+    if (!node || typeof node !== 'object') return values;
+    if (typeof node.usd === 'number') values.push(node.usd);
+    Object.values(node).forEach(child => collectPricingUsd(child, values));
+    return values;
+  }
+
+  function isFreeModel(model) {
+    const values = collectPricingUsd(model?.model_spec?.pricing, []);
+    return values.length > 0 && values.every(usd => usd === 0);
+  }
+
+  const FREE_LABEL = 'Free';
+
+  function formatModelPrice(model, price) {
+    return isFreeModel(model) ? FREE_LABEL : formatPrice(price);
+  }
+
+  function freePriceItem() {
+    return `<span class="vpt-price-item"><span class="vpt-price-label">Price</span><span class="vpt-price-value">${FREE_LABEL}</span></span>`;
+  }
+
   function isDeprecatedModel(model) {
     const dep = model.model_spec?.deprecation;
     return dep != null && (dep.date != null || dep.removesAt != null);
@@ -1318,6 +1342,7 @@
       const pricing = spec.pricing || {};
       const name = escapeHtml(spec.name || model.id);
       const modelId = escapeHtml(model.id);
+      const isFree = isFreeModel(model);
       const inputPrice = formatPrice(pricing.input?.usd);
       const outputPrice = formatPrice(pricing.output?.usd);
       const cacheReadStr = pricing.cache_input?.usd ? formatPrice(pricing.cache_input.usd) : null;
@@ -1330,19 +1355,22 @@
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
       const privacyTag = getPrivacyTag(model, 'vpt');
 
-      let priceItems = `
-        <span class="vpt-price-item"><span class="vpt-price-label">Input Price</span><span class="vpt-price-value">${inputPrice}</span></span>
-        <span class="vpt-price-item"><span class="vpt-price-label">Output Price</span><span class="vpt-price-value">${outputPrice}</span></span>
-      `;
-      if (cacheReadStr) {
-        priceItems += `<span class="vpt-price-item vpt-tooltip" data-tooltip="Discounted rate for cached input tokens."><span class="vpt-price-label">Cache Read</span><span class="vpt-price-value">${cacheReadStr}</span></span>`;
-      }
-      if (cacheWriteStr) {
-        priceItems += `<span class="vpt-price-item vpt-tooltip" data-tooltip="Cost to write tokens to cache."><span class="vpt-price-label">Cache Write</span><span class="vpt-price-value">${cacheWriteStr}</span></span>`;
+      let priceItems = freePriceItem();
+      if (!isFree) {
+        priceItems = `
+          <span class="vpt-price-item"><span class="vpt-price-label">Input Price</span><span class="vpt-price-value">${inputPrice}</span></span>
+          <span class="vpt-price-item"><span class="vpt-price-label">Output Price</span><span class="vpt-price-value">${outputPrice}</span></span>
+        `;
+        if (cacheReadStr) {
+          priceItems += `<span class="vpt-price-item vpt-tooltip" data-tooltip="Discounted rate for cached input tokens."><span class="vpt-price-label">Cache Read</span><span class="vpt-price-value">${cacheReadStr}</span></span>`;
+        }
+        if (cacheWriteStr) {
+          priceItems += `<span class="vpt-price-item vpt-tooltip" data-tooltip="Cost to write tokens to cache."><span class="vpt-price-label">Cache Write</span><span class="vpt-price-value">${cacheWriteStr}</span></span>`;
+        }
       }
 
       let extendedLine = '';
-      if (pricing.extended) {
+      if (pricing.extended && !isFree) {
         const ext = pricing.extended;
         const thresholdStr = ext.context_token_threshold >= 1000 ? `${Math.round(ext.context_token_threshold / 1000)}K` : ext.context_token_threshold;
         extendedLine = `<div class="vpt-extended-line vpt-tooltip" data-tooltip="This model uses higher rates when your prompt exceeds ${thresholdStr} tokens.">&gt;${thresholdStr} context: ${formatPrice(ext.input?.usd)}/M input · ${formatPrice(ext.output?.usd)}/M output`;
@@ -1393,7 +1421,7 @@
           <div class="vpt-row-right">${privacyTag}</div>
         </div>
         <div class="vpt-row-bottom">
-          <span class="vpt-price-item"><span class="vpt-price-label">Per 1M tokens</span><span class="vpt-price-value">${formatPrice(pricing.input?.usd)}</span></span>
+          ${isFreeModel(model) ? freePriceItem() : `<span class="vpt-price-item"><span class="vpt-price-label">Per 1M tokens</span><span class="vpt-price-value">${formatPrice(pricing.input?.usd)}</span></span>`}
         </div>
       </div>`;
     }).join('');
@@ -1435,7 +1463,9 @@
       const defaultRes = spec.constraints?.defaultResolution;
       
       let priceItems = '';
-      if (resPricing) {
+      if (isFreeModel(model)) {
+        priceItems = freePriceItem();
+      } else if (resPricing) {
         // Show each resolution price separately
         const resKeys = Object.keys(resPricing);
         priceItems = resKeys.map(res => 
@@ -1497,6 +1527,10 @@
       const editPrice = spec.pricing?.inpaint?.usd ?? spec.pricing?.generation?.usd ?? 0.04;
       const extraInputUsd = spec.pricing?.inputImages?.additional?.usd;
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
+      const priceItems = isFreeModel(model)
+        ? freePriceItem()
+        : `<span class="vpt-price-item"><span class="vpt-price-label">Per Edit</span><span class="vpt-price-value">${formatPrice(editPrice)}</span></span>
+          ${extraInputUsd ? `<span class="vpt-price-item vpt-tooltip" data-tooltip="Charged per input image beyond the first, added on top of the per-edit price."><span class="vpt-price-label">Extra Input Image</span><span class="vpt-price-value">${formatPrice(extraInputUsd)}</span></span>` : ''}`;
 
       return `<div class="vpt-row">
         <div class="vpt-row-top">
@@ -1507,8 +1541,7 @@
           <div class="vpt-row-right">${moderationTag}</div>
         </div>
         <div class="vpt-row-bottom">
-          <span class="vpt-price-item"><span class="vpt-price-label">Per Edit</span><span class="vpt-price-value">${formatPrice(editPrice)}</span></span>
-          ${extraInputUsd ? `<span class="vpt-price-item vpt-tooltip" data-tooltip="Charged per input image beyond the first, added on top of the per-edit price."><span class="vpt-price-label">Extra Input Image</span><span class="vpt-price-value">${formatPrice(extraInputUsd)}</span></span>` : ''}
+          ${priceItems}
         </div>
       </div>`;
     }).join('');
@@ -1535,7 +1568,7 @@
           <div class="vpt-row-right">${privacyTag}</div>
         </div>
         <div class="vpt-row-bottom">
-          <span class="vpt-price-item"><span class="vpt-price-label">Per 1M Characters</span><span class="vpt-price-value">${formatPrice(spec.pricing?.input?.usd)}</span></span>
+          ${isFreeModel(model) ? freePriceItem() : `<span class="vpt-price-item"><span class="vpt-price-label">Per 1M Characters</span><span class="vpt-price-value">${formatPrice(spec.pricing?.input?.usd)}</span></span>`}
         </div>
       </div>`;
     }).join('');
@@ -1554,6 +1587,9 @@
       const name = escapeHtml(spec.name || model.id);
       const price = pricing.per_audio_second?.usd ? formatPrice(pricing.per_audio_second.usd) : formatPrice(pricing.input?.usd);
       const privacyTag = getPrivacyTag(model, 'vpt');
+      const priceItem = isFreeModel(model)
+        ? freePriceItem()
+        : `<span class="vpt-price-item"><span class="vpt-price-label">Per Audio Second</span><span class="vpt-price-value">${price}</span></span>`;
 
       return `<div class="vpt-row">
         <div class="vpt-row-top">
@@ -1564,7 +1600,7 @@
           <div class="vpt-row-right">${privacyTag}</div>
         </div>
         <div class="vpt-row-bottom">
-          <span class="vpt-price-item"><span class="vpt-price-label">Per Audio Second</span><span class="vpt-price-value">${price}</span></span>
+          ${priceItem}
         </div>
       </div>`;
     }).join('');
@@ -1589,12 +1625,14 @@
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
       const privacyTag = getPrivacyTag(model, 'vpt');
-      const durationPricing = Object.entries(spec.pricing?.durations || {})
-        .sort(([a], [b]) => Number(a) - Number(b))
-        .map(([duration, price]) =>
-          `<span class="vpt-price-item"><span class="vpt-price-label">${duration}s</span><span class="vpt-price-value">${formatPrice(price?.usd)}</span></span>`
-        )
-        .join('');
+      const durationPricing = isFreeModel(model)
+        ? freePriceItem()
+        : Object.entries(spec.pricing?.durations || {})
+            .sort(([a], [b]) => Number(a) - Number(b))
+            .map(([duration, price]) =>
+              `<span class="vpt-price-item"><span class="vpt-price-label">${duration}s</span><span class="vpt-price-value">${formatPrice(price?.usd)}</span></span>`
+            )
+            .join('');
 
       return `<div class="vpt-row">
         <div class="vpt-row-top">
@@ -1632,7 +1670,7 @@
           <div class="vpt-row-right">${privacyTag}</div>
         </div>
         <div class="vpt-row-bottom">
-          <span class="vpt-price-item"><span class="vpt-price-label">Per Generation</span><span class="vpt-price-value">${formatPrice(spec.pricing?.generation?.usd)}</span></span>
+          ${isFreeModel(model) ? freePriceItem() : `<span class="vpt-price-item"><span class="vpt-price-label">Per Generation</span><span class="vpt-price-value">${formatPrice(spec.pricing?.generation?.usd)}</span></span>`}
         </div>
       </div>`;
     }).join('');
@@ -1659,7 +1697,7 @@
           <div class="vpt-row-right">${privacyTag}</div>
         </div>
         <div class="vpt-row-bottom">
-          <span class="vpt-price-item"><span class="vpt-price-label">Per Second</span><span class="vpt-price-value">${formatPrice(spec.pricing?.per_second?.usd)}</span></span>
+          ${isFreeModel(model) ? freePriceItem() : `<span class="vpt-price-item"><span class="vpt-price-label">Per Second</span><span class="vpt-price-value">${formatPrice(spec.pricing?.per_second?.usd)}</span></span>`}
         </div>
       </div>`;
     }).join('');
@@ -1825,8 +1863,8 @@
       .filter(m => m.type === 'text' && m.model_spec?.pricing?.cache_input)
       .filter(m => !isDeprecatedModel(m))
       .sort((a, b) => {
-        const pA = a.model_spec?.pricing?.input?.usd || 999;
-        const pB = b.model_spec?.pricing?.input?.usd || 999;
+        const pA = a.model_spec?.pricing?.input?.usd ?? 999;
+        const pB = b.model_spec?.pricing?.input?.usd ?? 999;
         return pB - pA; // Sort by input price descending (premium models first)
       });
 
@@ -1843,10 +1881,10 @@
 
       return `<tr>
         <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
-        <td class="vpt-price">${formatPrice(input)}</td>
-        <td class="vpt-price">${formatPrice(cacheRead)}</td>
-        <td class="vpt-price">${cacheWrite ? formatPrice(cacheWrite) : '—'}</td>
-        <td class="vpt-price">${formatPrice(output)}</td>
+        <td class="vpt-price">${formatModelPrice(model, input)}</td>
+        <td class="vpt-price">${formatModelPrice(model, cacheRead)}</td>
+        <td class="vpt-price">${cacheWrite != null ? formatModelPrice(model, cacheWrite) : '—'}</td>
+        <td class="vpt-price">${formatModelPrice(model, output)}</td>
         <td>${discount ? discount + '%' : '—'}</td>
       </tr>`;
     }).join('');
@@ -2023,8 +2061,8 @@
     const betaModels = models
       .filter(isBetaModel)
       .sort((a, b) => {
-        const pA = a.model_spec?.pricing?.input?.usd || a.model_spec?.pricing?.generation?.usd || 999;
-        const pB = b.model_spec?.pricing?.input?.usd || b.model_spec?.pricing?.generation?.usd || 999;
+        const pA = a.model_spec?.pricing?.input?.usd ?? a.model_spec?.pricing?.generation?.usd ?? 999;
+        const pB = b.model_spec?.pricing?.input?.usd ?? b.model_spec?.pricing?.generation?.usd ?? 999;
         return pA - pB;
       });
 
@@ -2040,9 +2078,11 @@
       const spec = model.model_spec || {};
       const pricing = spec.pricing || {};
       const modelId = escapeHtml(model.id);
-      const priceStr = pricing.input && pricing.output
-        ? `${formatPrice(pricing.input.usd)} / ${formatPrice(pricing.output.usd)}`
-        : formatPrice(pricing.generation?.usd);
+      const priceStr = isFreeModel(model)
+        ? FREE_LABEL
+        : (pricing.input && pricing.output
+          ? `${formatPrice(pricing.input.usd)} / ${formatPrice(pricing.output.usd)}`
+          : formatPrice(pricing.generation?.usd));
       return `<tr>
         <td>${escapeHtml(spec.name || model.id)}</td>
         <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
@@ -2202,7 +2242,9 @@
       `<span class="vtp-pill vtp-pill-id"><code>${id}</code></span>`,
       `<span class="vtp-pill">${count} voice${count === 1 ? '' : 's'}</span>`
     ];
-    if (typeof price === 'number') {
+    if (isFreeModel(model)) {
+      pills.push(`<span class="vtp-pill">${FREE_LABEL}</span>`);
+    } else if (typeof price === 'number') {
       pills.push(`<span class="vtp-pill">${formatPrice(price)} / 1M chars</span>`);
     }
     return `
@@ -2899,7 +2941,9 @@
       // Pricing display
         let priceStr = '';
         let videoControlsHtml = '';
-        if (model.type === 'video') {
+        if (isFreeModel(model) && model.type !== 'video') {
+          priceStr = FREE_LABEL;
+        } else if (model.type === 'video') {
           // Build video controls for info row
           const resolutions = model._resolutions || [];
           const durations = model._durations || [];
