@@ -471,13 +471,13 @@ function generatePricingMdx() {
   sections.push('## Payment Options');
   sections.push('');
   sections.push('<CardGroup cols={3}>');
-  sections.push('  <Card title="USD" icon="credit-card" href="https://venice.ai/settings/api">');
+  sections.push('  <Card title="USD" icon="credit-card" href="https://venice.ai/settings/api?utm_source=venice-api-documentation">');
   sections.push('    Buy Venice credits with credit card. Credits never expire.');
   sections.push('  </Card>');
-  sections.push('  <Card title="Crypto" icon="bitcoin" href="https://venice.ai/settings/api">');
+  sections.push('  <Card title="Crypto" icon="bitcoin" href="https://venice.ai/settings/api?utm_source=venice-api-documentation">');
   sections.push('    Buy Venice credits with cryptocurrency. Same rates as USD.');
   sections.push('  </Card>');
-  sections.push('  <Card title="Stake DIEM" icon="coins" href="https://venice.ai/token">');
+  sections.push('  <Card title="Stake DIEM" icon="coins" href="https://venice.ai/token?utm_source=venice-api-documentation">');
   sections.push('    Each Diem = $1/day of credits that refresh daily.');
   sections.push('  </Card>');
   sections.push('</CardGroup>');
