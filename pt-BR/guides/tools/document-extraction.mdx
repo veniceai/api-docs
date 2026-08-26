@@ -1,0 +1,434 @@
+---
+title: "Extraindo Dados Estruturados de Documentos"
+sidebarTitle: "Extração de Documentos"
+description: "Transforme um PDF em registros tipados e recorra à visão quando não houver texto para extrair."
+"og:title": "Extraindo Dados Estruturados de Documentos | Documentação da API Venice"
+"og:description": "Parseie um PDF com o text-parser, prenda a saída a um JSON schema e mude para um modelo de visão quando o arquivo for uma digitalização."
+---
+
+Ler um documento é fácil. Obter os mesmos campos de todo documento, em um formato em que seu código possa confiar, é o trabalho de verdade.
+
+Existem dois caminhos de um arquivo até um registro. Você pode extrair o texto e entregá-lo a um modelo, ou pode mostrar a página a um modelo que enxerga. O caminho que você precisa depende de como o arquivo foi feito, e um PDF não te diz qual dos dois é só de olhar. Este tutorial constrói ambos e deixa a API decidir entre eles:
+
+```bash
+python extract.py paper.pdf
+```
+
+Ao longo do caminho, vamos:
+
+1. Tirar o texto de um PDF com `/augment/text-parser`
+2. Descrever o registro que queremos como um JSON schema
+3. Extraí-lo, com o schema imposto em vez de solicitado
+4. Lidar com o arquivo que não tem texto algum
+5. Comparar o que os dois caminhos produzem a partir da mesma página
+
+## Configuração
+
+Você precisa do Python 3.9 ou superior, do pacote `requests` e de uma chave da API Venice. Veja [Gerando uma Chave de API](/guides/getting-started/generating-api-key) caso ainda não tenha uma.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+Vamos usar um paper público como documento de amostra, para você acompanhar com o mesmo arquivo:
+
+```bash
+curl -L -o paper.pdf https://arxiv.org/pdf/1706.03762
+```
+
+Crie `extract.py`:
+
+```python
+from __future__ import annotations
+
+import base64
+import json
+import os
+import subprocess
+import sys
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+AUTH = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+JSON_HEADERS = {**AUTH, "Content-Type": "application/json"}
+```
+
+Repare que `AUTH` e `JSON_HEADERS` são separados. O parser aceita um upload multipart, e definir `Content-Type` você mesmo numa requisição multipart impede que o `requests` adicione o boundary, o que falha de um jeito chato de diagnosticar.
+
+## 1. Extraia o texto
+
+`/augment/text-parser` aceita um arquivo PDF, DOCX, XLSX ou texto puro de até 25 MB e retorna o texto com uma contagem de tokens. Os documentos são processados em memória e o conteúdo não é retido.
+
+<CodeGroup>
+```python Python
+def parse_document(path: str) -> dict:
+    with open(path, "rb") as handle:
+        response = requests.post(
+            f"{BASE_URL}/augment/text-parser",
+            headers=AUTH,
+            files={"file": (os.path.basename(path), handle, "application/pdf")},
+            data={"response_format": "json"},
+            timeout=300,
+        )
+    response.raise_for_status()
+    return response.json()
+```
+
+```javascript Node.js
+const BASE_URL = "https://api.venice.ai/api/v1";
+
+async function parseDocument(path) {
+  const form = new FormData();
+  form.append("file", new Blob([await readFile(path)]), basename(path));
+  form.append("response_format", "json");
+
+  const response = await fetch(`${BASE_URL}/augment/text-parser`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.VENICE_API_KEY}` },
+    body: form,
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${await response.text()}`);
+  }
+  return response.json();
+}
+```
+
+```bash cURL
+curl -X POST https://api.venice.ai/api/v1/augment/text-parser \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./paper.pdf" \
+  -F "response_format=json"
+```
+</CodeGroup>
+
+```python
+parsed = parse_document("paper.pdf")
+print(parsed["tokens"], "tokens,", len(parsed["text"]), "characters")
+print(parsed["text"][:180])
+```
+
+```
+12346 tokens, 39505 characters
+Provided proper attribution is provided, Google hereby grants permission to
+reproduce the tables and figures in this paper solely for use in journalistic or
+scholarly works.
+Attention Is All You Need
+```
+
+A contagem em `tokens` é a parte útil dessa resposta. Ela te diz o que o documento vai custar na próxima requisição antes de você fazê-la, o que importa porque um PDF longo facilmente ultrapassa o que você pretendia gastar.
+
+## 2. Descreva o registro que você quer
+
+Pedir JSON a um modelo te dá um JSON com um formato aproximadamente parecido com o que você pediu. Passar um schema te dá um JSON que casa, porque o schema restringe a geração em vez de aconselhá-la.
+
+```python
+PAPER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "authors": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "affiliation": {"type": "string"},
+                },
+                "required": ["name", "affiliation"],
+                "additionalProperties": False,
+            },
+        },
+        "year": {"type": "integer"},
+    },
+    "required": ["title", "authors", "year"],
+    "additionalProperties": False,
+}
+```
+
+Vale definir `additionalProperties: False` em todos os níveis. Sem isso, um modelo que ache algo interessante pode adicionar uma chave que você nunca planejou, e o código que lê o resultado não vai esperá-la.
+
+## 3. Extraia
+
+Uma chamada, com `response_format` carregando o schema e `strict` ligado:
+
+```python
+def default_model(trait: str) -> str:
+    response = requests.get(f"{BASE_URL}/models/traits", headers=AUTH, timeout=30)
+    response.raise_for_status()
+    return response.json()["data"][trait]
+
+
+def extract_from_text(text: str, schema: dict, budget: int = 12000) -> dict:
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": default_model("default"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract the requested fields from the document. "
+                        "Use only what appears in it."
+                    ),
+                },
+                {"role": "user", "content": text[:budget]},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "record", "strict": True, "schema": schema},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 1500,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    return read_record(response.json())
+```
+
+Toda extração deste tutorial passa por um pequeno leitor, porque as duas formas de essa chamada falhar chegam como HTTP `200`:
+
+```python
+def read_record(body: dict) -> dict:
+    choice = body["choices"][0]
+    if choice["finish_reason"] == "length":
+        raise RuntimeError(
+            "Ran out of completion tokens. The JSON is truncated, not invalid. "
+            "Raise max_completion_tokens or shrink the schema."
+        )
+    content = choice["message"].get("content")
+    if not content:
+        raise RuntimeError(f"Empty response, finish_reason={choice['finish_reason']}.")
+    return json.loads(content)
+```
+
+```python
+record = extract_from_text(parsed["text"], PAPER_SCHEMA)
+print(json.dumps(record, indent=2, ensure_ascii=False))
+```
+
+```json
+{
+  "title": "Attention Is All You Need",
+  "authors": [
+    { "name": "Ashish Vaswani", "affiliation": "Google Brain" },
+    { "name": "Noam Shazeer", "affiliation": "Google Brain" },
+    { "name": "Niki Parmar", "affiliation": "Google Research" },
+    { "name": "Jakob Uszkoreit", "affiliation": "Google Research" },
+    { "name": "Llion Jones", "affiliation": "Google Research" },
+    { "name": "Aidan N. Gomez", "affiliation": "University of Toronto" },
+    { "name": "Łukasz Kaiser", "affiliation": "Google Brain" },
+    { "name": "Illia Polosukhin", "affiliation": "" }
+  ],
+  "year": 2017
+}
+```
+
+Olhe o último autor. O paper não dá afiliação para Illia Polosukhin, e o schema diz que `affiliation` é obrigatório, então o modelo retornou uma string vazia em vez de omitir. É o schema fazendo exatamente o que você mandou.
+
+<Note>
+  Uma string vazia e um valor ausente são fatos diferentes, e `required` os funde. Se você precisa distinguir "o documento não diz" de "o documento não diz nada aqui", tipe o campo como `{"type": ["string", "null"]}` e peça `null` no system prompt. O modo strict aceita a união, e você recebe `null` em vez de `""`.
+</Note>
+
+### Desligue o raciocínio
+
+`disable_thinking` é a linha dessa requisição sobre a qual vale a pena discutir, então aí vai o argumento. O modelo de texto padrão raciocina antes de responder, e o raciocínio é sacado do mesmo orçamento de completion que o JSON. Execute a mesma extração quatro vezes e veja o que o modelo gasta:
+
+| Configuração | Tokens de raciocínio em quatro execuções | Resultado |
+|---|---|---|
+| Orçamento 1500, thinking ligado | 959, 325, 975, 575 | Válido todas as vezes, a quatro preços diferentes |
+| Orçamento 4000, thinking ligado | 4003, 984, 1632, 956 | Uma execução gastou todo o orçamento pensando e não retornou nada |
+| Orçamento 1500, thinking desligado | 0, 0, 0, 0 | 217 tokens de completion toda vez |
+
+Aumentar o orçamento não resolve o primeiro problema, apenas eleva o teto que o modelo pode encostar. A execução que gastou 4003 tokens voltou com `finish_reason` de `length` e uma string vazia.
+
+Desligar o raciocínio deixou essa extração cinco vezes mais barata e, mais útil ainda, fez com que fosse igual toda vez. O schema já está fazendo o trabalho que o raciocínio faria, que é decidir a forma que a resposta assume.
+
+<Warning>
+  Quando o orçamento realmente acaba, o modelo normalmente já escreveu algum JSON, então você recebe um objeto truncado em vez de um erro. O `json.loads` então falha em uma string não terminada em algum lugar no meio, o que parece um bug de parsing e não é. `read_record` verifica primeiro o `finish_reason` para que a mensagem diga o que de fato aconteceu.
+</Warning>
+
+## 4. Quando não há texto para pegar
+
+Um PDF produzido por um scanner contém imagens de páginas, não texto. Nada no nome do arquivo diz isso, e nada no tamanho do arquivo entrega também.
+
+Você não precisa detectar, porque o parser detecta:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/augment/text-parser \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./scanned.pdf"
+```
+
+```json
+{ "error": "No text content could be extracted from the file." }
+```
+
+Isso chega como HTTP `400`, e é um sinal de roteamento em vez de uma falha. O caminho de texto está indisponível para este arquivo, então tome o outro: renderize a página e deixe um modelo olhá-la.
+
+```python
+def render_first_page(pdf_path: str, png_path: str, width: int = 1400) -> None:
+    """macOS only. Use pdftoppm from poppler, or pypdfium2, elsewhere."""
+    subprocess.run(
+        ["sips", "-s", "format", "png", "--resampleWidth", str(width),
+         pdf_path, "--out", png_path],
+        check=True, capture_output=True,
+    )
+
+
+def extract_from_image(png_path: str, schema: dict) -> dict:
+    encoded = base64.b64encode(open(png_path, "rb").read()).decode()
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": default_model("default_vision"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract the requested fields from the page image. "
+                        "Use only what appears in it."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Extract the fields."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                        },
+                    ],
+                },
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "record", "strict": True, "schema": schema},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 1500,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    return read_record(response.json())
+```
+
+Agora os dois caminhos podem ser conectados, com o próprio erro do parser escolhendo entre eles:
+
+```python
+def extract(path: str, schema: dict) -> dict:
+    try:
+        text = parse_document(path)["text"]
+    except requests.HTTPError as error:
+        if error.response.status_code != 400:
+            raise
+        print("no extractable text, falling back to vision", file=sys.stderr)
+        png = path.rsplit(".", 1)[0] + "-page1.png"
+        render_first_page(path, png)
+        return extract_from_image(png, schema)
+    return extract_from_text(text, schema)
+
+
+if __name__ == "__main__":
+    document = sys.argv[1] if len(sys.argv) > 1 else "paper.pdf"
+    print(json.dumps(extract(document, PAPER_SCHEMA), indent=2, ensure_ascii=False))
+```
+
+<Warning>
+  O fallback lê uma página. Isso vale para um formulário, uma nota fiscal ou uma folha de rosto, e é errado para qualquer coisa mais longa, porque o resto do documento silenciosamente deixa de existir. Renderize toda página e envie-as como várias imagens quando a resposta pode não estar na página um.
+</Warning>
+
+## 5. No que os dois caminhos discordam
+
+Rode os dois contra a mesma primeira página e os registros voltam quase idênticos. O "quase" é a parte interessante:
+
+| Campo | Do texto parseado | Da imagem da página |
+|---|---|---|
+| `title` | Attention Is All You Need | Attention Is All You Need |
+| Sétimo autor | Łukasz Kaiser | Lukasz Kaiser |
+| Oitava afiliação | `""` | `""`, ou às vezes `Google Research` |
+| `year` | 2017 | 2017 |
+
+O caminho do texto preservou o Ł. O caminho da visão retornou um L ASCII, porque ele está lendo formas de letra em vez de códigos de caractere, e um diacrítico é um pequeno detalhe visual que sobrevive mal. Se você está casando nomes extraídos contra um banco de dados, essa diferença decide se a linha é encontrada.
+
+O oitavo autor importa mais. A página não indica afiliação para Illia Polosukhin, e o caminho do texto reporta isso fielmente como uma string vazia toda vez. O caminho da visão, em algumas execuções, preencheu o campo com um vizinho plausível da mesma página. Ler pixels deixa mais espaço para inferência do que ler caracteres, e um campo obrigatório é um convite para preencher. Quando você não consegue conferir a saída à mão, isso é motivo para preferir texto parseado sempre que o documento oferecer.
+
+O custo é mais próximo do que parece. Com raciocínio desligado nos dois lados, os dois caminhos rodaram com prompts de tamanho parecido nesta página:
+
+| Caminho | Tokens de prompt | Tokens de completion | Tempo mediano |
+|---|---|---|---|
+| Texto parseado, primeiros 12000 caracteres | 2611 | 217 | 1.6s |
+| Imagem da página a 1400px | 2547 | 167 | 4.3s |
+
+A imagem tinha 923.732 caracteres de base64, e nada disso é o que você paga. Imagens são tokenizadas por tamanho, não pelo comprimento da codificação, então um PNG grande não custa o que parece que deveria.
+
+Prefira texto parseado quando o documento tem texto. Ele preserva os caracteres exatos, não custa nada a mais para ir além da primeira página, e não se importa com como a página foi diagramada. Recorra à visão quando o parser disser que não há nada para ler, ou quando o significado está no layout, como em um gráfico, um carimbo ou uma assinatura.
+
+## Extraindo outra coisa
+
+Nada acima é específico a papers. Troque o schema e o system prompt, e o pipeline extrai notas fiscais:
+
+```python
+INVOICE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "invoice_number": {"type": "string"},
+        "issued_on": {"type": "string", "description": "ISO 8601 date"},
+        "currency": {"type": "string", "description": "ISO 4217 code"},
+        "total": {"type": "number"},
+        "line_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "quantity": {"type": "number"},
+                    "unit_price": {"type": "number"},
+                },
+                "required": ["description", "quantity", "unit_price"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["invoice_number", "issued_on", "currency", "total", "line_items"],
+    "additionalProperties": False,
+}
+```
+
+Os campos `description` estão fazendo trabalho de verdade. Uma data só fica sem ambiguidade depois que você diz qual formato quer, e `03/04/2026` significa dois dias diferentes dependendo de quem escreveu.
+
+## Próximos passos
+
+- Valide o resultado contra o schema com `pydantic` ou `jsonschema`, para que um registro malformado falhe na borda em vez de três funções depois.
+- Armazene o texto extraído com [Embeddings](/guides/features/embeddings) para buscar entre documentos em vez de reextraí-los.
+- Anexe documentos diretamente a uma chat completion com [File Inputs](/guides/features/file-inputs) quando você quiser respostas em vez de registros.
+- Entregue o extrator a um agente como ferramenta, usando [Construindo um Agente que Usa Ferramentas com Function Calling](/guides/features/tool-using-agent).
+
+<CardGroup cols={2}>
+  <Card title="Processamento de Documentos" icon="file-text" href="/guides/tools/document-processing">
+    Referência do endpoint text-parser.
+  </Card>
+  <Card title="Respostas Estruturadas" icon="braces" href="/guides/features/structured-responses">
+    Como o json_schema restringe uma completion.
+  </Card>
+  <Card title="Visão" icon="eye" href="/guides/features/vision">
+    Enviando imagens a um modelo de chat.
+  </Card>
+  <Card title="File Inputs" icon="paperclip" href="/guides/features/file-inputs">
+    Anexe um documento sem parseá-lo você mesmo.
+  </Card>
+</CardGroup>

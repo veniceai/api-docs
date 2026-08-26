@@ -1,0 +1,403 @@
+---
+title: "음성-텍스트 변환으로 회의록 만들기"
+sidebarTitle: "회의록"
+description: "녹음 파일을 결정 사항과 실행 항목으로 바꾸고, 각 항목을 합의된 순간으로 다시 연결하세요."
+"og:title": "음성-텍스트 변환으로 회의록 만들기 | Venice API 문서"
+"og:description": "회의를 전사하고, 스키마에 맞춰 담당자와 마감일을 추출하며, 아무도 화자로 라벨링되어 있지 않다는 사실을 다루세요."
+---
+
+전사는 회의록이 아닙니다. 그것은 회의를 다시 한 번 듣는 것과 같으며, 앉아서 듣는 것보다 오히려 더 오래 걸립니다.
+
+회의가 끝난 뒤 사람들이 실제로 원하는 것은 짧습니다: 무엇을 결정했는지, 누가 무엇을 하기로 했는지, 그리고 무엇이 아직 열려 있는지. 이 튜토리얼은 바로 그것을 만들며, 각 항목을 그것이 언급된 초 단위 시점으로 연결해 동의하지 않는 부분을 직접 다시 들어볼 수 있게 합니다:
+
+```bash
+python notes.py standup.wav
+```
+
+과정에서 다음을 다룹니다:
+
+1. `/audio/transcriptions`로 녹음 파일 전사하기
+2. 모든 모델이 제공하지는 않는 타임스탬프 요청하기
+3. 스키마에 맞춰 결정 사항과 실행 항목 추출하기
+4. 전사본에 화자가 표시되지 않는다는 사실 다루기
+5. 시계를 놓치지 않으면서 긴 녹음을 분할하기
+
+## 준비
+
+Python 3.9 이상, `requests` 패키지, 그리고 Venice API 키가 필요합니다. 키가 없다면 [API 키 생성](/guides/getting-started/generating-api-key)을 참조하세요. `wav`, `mp3`, `m4a`, `flac`, `aac`, `mp4`, `ogg`, `webm` 형식의 대화 녹음 파일을 준비하세요.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import sys
+import wave
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+AUTH = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+JSON_HEADERS = {**AUTH, "Content-Type": "application/json"}
+```
+
+## 1. 녹음 파일 전사하기
+
+`/audio/transcriptions`는 OpenAI 호환이며 멀티파트 업로드를 받습니다. 이 엔드포인트는 base64를 허용하지 않으므로 파일은 실제 파일 파트로 제출되어야 합니다.
+
+<CodeGroup>
+```python Python
+def transcribe(path: str, model: str, timestamps: bool = False) -> dict:
+    with open(path, "rb") as audio:
+        response = requests.post(
+            f"{BASE_URL}/audio/transcriptions",
+            headers=AUTH,
+            files={"file": (os.path.basename(path), audio, "audio/wav")},
+            data={
+                "model": model,
+                "response_format": "json",
+                "timestamps": str(timestamps).lower(),
+            },
+            timeout=600,
+        )
+    response.raise_for_status()
+    return response.json()
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/audio/transcriptions \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./standup.wav" \
+  -F "model=openai/whisper-large-v3" \
+  -F "response_format=json" \
+  -F "timestamps=true"
+```
+</CodeGroup>
+
+전사 요금은 그 안에서 얼마나 말했는지가 아니라 오디오 길이에 따라 청구되므로, 실행하기 전에 회의 비용을 쉽게 예측할 수 있습니다:
+
+| 모델 | 오디오 초당 | 회의 한 시간 |
+|---|---|---|
+| `stt-xai-v1` | $0.0000315 | $0.11 |
+| `nvidia/parakeet-tdt-0.6b-v3` | $0.0001 | $0.36 |
+| `openai/whisper-large-v3` | $0.0001 | $0.36 |
+| `elevenlabs/scribe-v2` | $0.000167 | $0.60 |
+
+카탈로그는 변하므로 위 값을 고정하기보다는 `GET /models?type=asr`을 호출해 현재 목록을 확인하세요.
+
+## 2. 타임스탬프 요청하기
+
+타임스탬프는 회의록을 검증 가능하게 만드는 요소이므로, 이 선택이 가장 중요합니다. 기본 설정으로는 타임스탬프가 제공되지 않습니다:
+
+```python
+print(transcribe("standup.wav", "nvidia/parakeet-tdt-0.6b-v3", timestamps=True).keys())
+print(transcribe("standup.wav", "openai/whisper-large-v3", timestamps=True).keys())
+```
+
+```
+dict_keys(['text'])
+dict_keys(['duration', 'text', 'timestamps'])
+```
+
+<Warning>
+  `nvidia/parakeet-tdt-0.6b-v3`은 기본 모델이며, `timestamps=true`를 받아들이고는 그것을 무시합니다. 오류도 경고도 없이 `text`만 담긴 응답을 되돌려줄 뿐입니다. 타임스탬프가 필요하다면 그것을 반환하는 모델을 요청하고 해당 키가 있는지 확인하세요.
+</Warning>
+
+타임스탬프를 반환하는 모델에서 `timestamps`는 리스트가 아니라 객체이며, 그 안의 키는 모델에 따라 다릅니다. Whisper는 구절 단위, Scribe는 단어 단위로 묶습니다:
+
+```python
+whisper = transcribe("standup.wav", "openai/whisper-large-v3", timestamps=True)
+scribe = transcribe("standup.wav", "elevenlabs/scribe-v2", timestamps=True)
+
+print(list(whisper["timestamps"]), json.dumps(whisper["timestamps"]["segment"][0]))
+print(list(scribe["timestamps"]), json.dumps(scribe["timestamps"]["word"][0]))
+```
+
+```json
+["segment"] {"text": " Okay, let's keep this to 10 minutes. Where are we on the checkout migration?", "start": 0.21, "end": 4.21}
+["word"] {"word": "Okay,", "start": 0.34, "end": 0.759}
+```
+
+구절 단위 세그먼트가 이 작업에 알맞은 크기입니다. 단어 단위 타이밍은 자막에는 유용하지만 결정 사항을 걸어두기에는 지나치게 세밀합니다.
+
+이 세그먼트들을 각 줄 앞에 시간을 붙인 라인으로 평평하게 만들 것입니다. 모델이 나중에 인용하기에 필요한 것은 이것뿐입니다:
+
+```python
+def timed_lines(transcription: dict, offset: float = 0.0) -> list[str]:
+    segments = transcription.get("timestamps", {}).get("segment")
+    if not segments:
+        raise RuntimeError(
+            "This model returned no segment timings. Use openai/whisper-large-v3."
+        )
+    return [
+        f"[{segment['start'] + offset:.1f}s] {segment['text'].strip()}"
+        for segment in segments
+    ]
+```
+
+```python
+for line in timed_lines(whisper)[:4]:
+    print(line)
+```
+
+```
+[0.2s] Okay, let's keep this to 10 minutes. Where are we on the checkout migration?
+[5.2s] Backend is done.
+[6.5s] I finished the payment adapter yesterday and it's on staging.
+[10.5s] The one thing I'm not sure about is whether we keep the old endpoint alive after cutover.
+```
+
+## 3. 회의록 추출하기
+
+원하는 회의록을 스키마로 기술하면, 결과가 파싱해야 할 산문이 아니라 하나의 레코드로 돌아옵니다:
+
+```python
+NOTES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "decision": {"type": "string"},
+                    "spoken_at": {"type": "number", "description": "Seconds into the recording."},
+                },
+                "required": ["decision", "spoken_at"],
+                "additionalProperties": False,
+            },
+        },
+        "action_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "owner": {"type": "string", "description": "Name as spoken, or 'unassigned'."},
+                    "task": {"type": "string"},
+                    "due": {"type": "string", "description": "As stated, or 'not stated'."},
+                    "spoken_at": {"type": "number"},
+                },
+                "required": ["owner", "task", "due", "spoken_at"],
+                "additionalProperties": False,
+            },
+        },
+        "open_questions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "decisions", "action_items", "open_questions"],
+    "additionalProperties": False,
+}
+```
+
+```python
+SYSTEM = (
+    "You turn meeting transcripts into notes. The transcript has no speaker labels, "
+    "so attribute a task only when a name is spoken. Use 'unassigned' otherwise. "
+    "spoken_at is the start time of the line the item came from."
+)
+
+
+def write_notes(lines: list[str], attendees: list[str] | None = None) -> dict:
+    system = SYSTEM
+    if attendees:
+        system += (
+            f" The attendees are {', '.join(attendees)}. Speech recognition often "
+            "mangles names, so map what you hear to the closest attendee."
+        )
+
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": "zai-org-glm-5-2",
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "\n".join(lines)},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "notes", "strict": True, "schema": NOTES_SCHEMA},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 2000,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    choice = response.json()["choices"][0]
+    if choice["finish_reason"] == "length":
+        raise RuntimeError("Ran out of tokens. The JSON is truncated. Raise the budget.")
+    return json.loads(choice["message"]["content"])
+```
+
+`disable_thinking`이 여기에 있는 이유는 어떤 추출 단계에서든 이것이 필요한 이유와 같습니다. 스키마가 이미 답의 형태를 결정하기 때문에, 추론 모델에게 그것을 숙고하도록 비용을 지불하는 것은 아무것도 얻지 못하면서 실행할 때마다 비용을 달라지게 만들 뿐입니다. [문서에서 구조화된 데이터 추출하기](/guides/tools/document-extraction)에서 그 차이를 측정합니다.
+
+53초짜리 스탠드업에 실행하면 회의록이 시계와 함께 돌아옵니다:
+
+```json
+{
+  "decisions": [
+    { "decision": "Keep the old endpoint alive for two weeks after cutover, then remove it.", "spoken_at": 16.8 },
+    { "decision": "Turn on the new checkout form for 10% of traffic on Monday; if error rate stays under 0.5%, increase to 50%.", "spoken_at": 34.5 }
+  ],
+  "action_items": [
+    { "owner": "Tomas", "task": "Put the deprecation notice in the changelog by Friday.", "due": "Friday", "spoken_at": 19.6 },
+    { "owner": "May", "task": "Own the frontend rollout of the new checkout form.", "due": "Monday", "spoken_at": 39.9 },
+    { "owner": "unassigned", "task": "Ask legal to review the new refund copy and report back.", "due": "tomorrow", "spoken_at": 48.1 }
+  ]
+}
+```
+
+모든 `spoken_at`은 진짜입니다. 19.6초로 건너뛰면 이 작업을 만들어낸 문장이 들립니다.
+
+<Note>
+  시간이 없는 라인을 모델에 주면 모든 `spoken_at`이 `0`으로 돌아옵니다. 필드는 필수이고 모델은 거기에 넣을 값이 없지만, 필수 필드는 모른다고 말하라는 초대장이 아니라 무언가를 만들어내라는 지시입니다. 스키마가 잘 작동하는 것처럼 보일 때마다 기억해 둘 만한 점입니다. 형태가 맞다는 것은 값이 맞다는 것과 같지 않습니다.
+</Note>
+
+## 4. 아무도 라벨링되지 않았다
+
+그 출력에서 잘못된 것이 두 가지 있는데, 둘 다 같은 곳에서 옵니다.
+
+롤아웃 담당자는 `May`로 되어 있습니다. 그녀의 이름은 Mei입니다. 음성 인식은 고유명사에서 가장 신뢰도가 낮으며, 이름이야말로 담당자 지정에 필요한 것이므로 이 실패는 운이 나빠서가 아니라 예상해야 할 실패입니다.
+
+마지막 항목은 누군가 분명히 맡았음에도 `unassigned`입니다. 발화는 "I'll ask legal today and report back tomorrow"였고, 전사본은 그 말을 기록했지만 누가 말했는지는 기록하지 않았습니다.
+
+두 번째 것은 고칠 수 있는 버그가 아닙니다. Venice의 어떤 전사 모델도 화자 분리(diarization)를 수행하지 않으므로, 어느 모델에도 `speaker` 필드가 없습니다. 전사본은 목소리 없는 하나의 텍스트 스트림이며, 작업은 오직 "Tomas, can you put the deprecation notice in the changelog"처럼 이름이 소리 내어 언급될 때만 지정될 수 있습니다.
+
+첫 번째 것은 방 안에 누가 있었는지 모델에 알려주면 고칠 수 있습니다:
+
+```python
+notes = write_notes(lines, attendees=["Priya Raman", "Tomas Vidal", "Mei Lin"])
+```
+
+```
+Tomas Vidal   due=Friday    @ 19.6s  Put the deprecation notice in the changelog by Friday.
+Mei Lin       due=Monday    @ 39.9s  Own the frontend rollout of the new checkout form.
+unassigned    due=Tomorrow  @ 48.1s  Ask legal to review the new refund copy and report back.
+```
+
+이제 모델이 대조할 짧은 리스트를 갖게 되었기 때문에 `May`는 `Mei Lin`으로 해결되며, 담당자는 작업 트래커가 찾아볼 수 있는 전체 이름입니다. 세 번째 항목은 올바르게 미지정 상태로 남습니다. 참석자 명단은 잘못 들은 것을 고쳐주지만, 녹음에 담기지 않은 정보를 복원하지는 못합니다.
+
+<Tip>
+  실제 화자 지정이 필요하다면 다운스트림에서 추론하려 하지 말고 업스트림에서 캡처하세요. 회의 도구는 참가자별로 한 트랙씩 녹음할 수 있으며, 각 트랙을 개별로 전사하면 사람당 한 번의 요청 비용으로 화자를 무료로 얻을 수 있습니다.
+</Tip>
+
+## 5. 한 요청을 넘는 길이
+
+업로드는 25MB로 제한되는데, 무압축 오디오라면 예상보다 훨씬 빨리 도달합니다. 게다가 긴 회의는 어차피 분할할 가치가 있습니다. 한 번의 실패로 전체 전사를 잃지 않게 되기 때문입니다.
+
+WAV 파일이라면 표준 라이브러리만으로 충분하며 ffmpeg는 필요 없습니다:
+
+```python
+def split_wav(path: str, chunk_seconds: int = 600) -> list[tuple[str, float]]:
+    """Split into chunks, returning each path with its offset into the original."""
+    chunks: list[tuple[str, float]] = []
+    with wave.open(path, "rb") as source:
+        rate = source.getframerate()
+        stem = path.rsplit(".", 1)[0]
+        index = 0
+        while True:
+            frames = source.readframes(rate * chunk_seconds)
+            if not frames:
+                break
+            part = f"{stem}.part{index}.wav"
+            with wave.open(part, "wb") as out:
+                out.setnchannels(source.getnchannels())
+                out.setsampwidth(source.getsampwidth())
+                out.setframerate(rate)
+                out.writeframes(frames)
+            chunks.append((part, index * chunk_seconds))
+            index += 1
+    return chunks
+```
+
+오프셋이 바로 핵심입니다. 각 청크는 0에서 시작하는 것처럼 전사되므로, 모델이 그것을 보기 전에 원본 녹음의 타임라인으로 다시 이동시켜야 합니다. 그것이 `timed_lines`의 `offset` 인자가 존재하는 이유입니다:
+
+```python
+def transcribe_long(path: str, model: str, chunk_seconds: int = 600) -> list[str]:
+    lines: list[str] = []
+    for part, offset in split_wav(path, chunk_seconds):
+        lines.extend(timed_lines(transcribe(part, model, timestamps=True), offset))
+        os.remove(part)
+    return lines
+```
+
+같은 스탠드업을 20초 단위로 분할하면 이음매를 넘어서도 시계는 정직하게 유지됩니다. 그런데 단어는 그렇지 않습니다:
+
+```
+[16.8s] Let's keep it for two weeks, then remove it.
+[19.6s] Thomas?
+[20.0s] awesome.
+[20.4s] Can you put the deprecation notice in the change log by Friday?
+[24.1s] Yes, I'll do that.
+```
+
+거기서 실제로 발화된 문장은 하나였습니다: "Tomas, can you put the deprecation notice in the changelog by Friday?" 자르는 지점이 문장 한가운데 떨어져 이름은 한 요청으로, 나머지 요청은 다른 요청으로 들어갔습니다. Whisper는 고립된 이름을 질문으로 인식하고, 청크의 끝을 채우기 위해 `awesome.`을 지어내며, 한 줄을 세 줄로 만들어버렸습니다.
+
+타이밍은 여전히 맞고, 회의록 단계도 여전히 그 작업을 찾아냅니다. 잃어버리는 것은 이름이며, 그것이 담당자 지정이 의존하는 요소입니다.
+
+<Warning>
+  고정 길이로 분할하면 매 경계마다 누군가의 말을 끊게 됩니다. 20초는 거의 항상 문장에 걸릴 만큼 짧습니다. 10분이라면 드물지만 불가능하지는 않으며, 결국 언젠가는 작업을 지정하는 그 한 문장에 걸립니다. 무음 구간에서 분할하면 이 문제를 제대로 피할 수 있으며, 이를 위해서는 `ffmpeg`나 `pydub` 같은 공백을 찾아낼 수 있는 도구가 필요합니다. 파일이 실제로 요구할 때만 분할하세요.
+</Warning>
+
+압축된 형식은 이런 방식으로 자를 수 없습니다. 표준 라이브러리로는 MP3를 프레임 경계에서 자를 수 없기 때문입니다. 그런 경우에는 `ffmpeg`를 사용하세요:
+
+```bash
+ffmpeg -i meeting.mp3 -f segment -segment_time 600 -c copy chunk_%03d.mp3
+```
+
+## 종합하기
+
+```python
+def meeting_notes(path: str, attendees: list[str] | None = None) -> dict:
+    model = "openai/whisper-large-v3"
+    size_mb = os.path.getsize(path) / 1_000_000
+    if path.endswith(".wav") and size_mb > 20:
+        print(f"{size_mb:.0f} MB, splitting", file=sys.stderr)
+        lines = transcribe_long(path, model)
+    else:
+        lines = timed_lines(transcribe(path, model, timestamps=True))
+    print(f"{len(lines)} lines transcribed", file=sys.stderr)
+    return write_notes(lines, attendees)
+
+
+if __name__ == "__main__":
+    recording = sys.argv[1] if len(sys.argv) > 1 else "standup.wav"
+    roster = sys.argv[2:] or None
+    print(json.dumps(meeting_notes(recording, roster), indent=2))
+```
+
+```bash
+python notes.py standup.wav "Priya Raman" "Tomas Vidal" "Mei Lin"
+```
+
+## 다음 단계
+
+- 참석자 명단이 해결한 담당자 이름을 사용해 실행 항목을 여러분의 트래커에 게시하세요.
+- 회의를 놓친 사람들을 위해 [텍스트-음성 변환](/guides/media/text-to-speech)으로 요약을 다시 들려주세요.
+- [임베딩](/guides/features/embeddings)으로 전사본을 저장해 지난 회의들을 검색하세요.
+- [함수 호출로 도구를 활용하는 에이전트 만들기](/guides/features/tool-using-agent)로, 에이전트가 언제 전사하고 언제 이미 가진 회의록에서 답변할지를 스스로 결정하게 하세요.
+
+<CardGroup cols={2}>
+  <Card title="음성-텍스트 변환" icon="microphone" href="/guides/media/speech-to-text">
+    전사 엔드포인트 레퍼런스.
+  </Card>
+  <Card title="문서에서 구조화된 데이터 추출하기" icon="file-text" href="/guides/tools/document-extraction">
+    파일에 적용된 동일한 스키마 우선 추출.
+  </Card>
+  <Card title="구조화된 응답" icon="braces" href="/guides/features/structured-responses">
+    json_schema가 완성을 어떻게 제약하는지.
+  </Card>
+  <Card title="음성 복제" icon="wave-sine" href="/guides/media/voice-cloning">
+    요약에 고유한 목소리를 부여하세요.
+  </Card>
+</CardGroup>

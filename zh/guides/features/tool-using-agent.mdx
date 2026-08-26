@@ -1,0 +1,464 @@
+---
+title: "使用函数调用构建能使用工具的智能体"
+sidebarTitle: "工具使用型智能体"
+description: "为模型提供三个只读工具，让它自行探索一个从未见过的数据库。"
+"og:title": "使用函数调用构建能使用工具的智能体 | Venice API 文档"
+"og:description": "运行完整的工具调用循环：并行调用、模型能从中恢复的错误，以及模型无法绕过的护栏。"
+---
+
+单次函数调用很简单。真正有意思的是围绕它的循环，因为模型很少能在第一次调用时就拿到所需的一切。它查一次东西、看看结果，然后决定下一步该问什么。
+
+本教程将构建一个命令行智能体，用来回答关于一个它从未见过的 SQLite 数据库的问题。它的 prompt 中没有任何 schema。它拿到三个只读工具，其余的事情自己想办法：
+
+```bash
+python agent.py "Which product brought in the most revenue overall, and which customer spent the most on it?"
+```
+
+在此过程中我们会：
+
+1. 给模型一个数据库和三个可以读取它的工具
+2. 描述这些工具，让模型知道什么时候该用哪一个
+3. 运行把工具调用转换为工具结果的循环
+4. 观察它一次请求多个工具
+5. 把错误交回给模型，而不是直接抛出
+6. 划清模型"不会做"与"做不到"之间的界线
+
+[函数调用](/guides/features/function-calling)指南单独介绍了请求的结构。本页面关注的是第一次响应返回之后发生的事情。
+
+## 准备工作
+
+你需要 Python 3.9 或更高版本、`requests` 包，以及一个 Venice API key。如果你还没有，请参见[生成 API Key](/guides/getting-started/generating-api-key)。其他东西都在标准库里。
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+创建 `agent.py`，写入以下 import 和每次调用都会复用的头部代码：
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import sys
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+    "Content-Type": "application/json",
+}
+DB_PATH = "shop.db"
+```
+
+不是每个模型都支持工具调用，而且模型 ID 也会变化，所以最好向 API 询问该用哪个模型，而不是把某个名字写死，让它随时间过时：
+
+```python
+def default_tool_model() -> str:
+    response = requests.get(f"{BASE_URL}/models/traits", headers=HEADERS, timeout=30)
+    response.raise_for_status()
+    return response.json()["data"]["function_calling_default"]
+```
+
+```python
+print(default_tool_model())
+```
+
+```
+zai-org-glm-5-2
+```
+
+<Note>
+  `GET /models/traits` 会把稳定的 trait 名称映射到当前担任该角色的模型。启动时读取 `function_calling_default` 意味着当底层模型被替换时，你的智能体依旧能正常工作。完整的 trait 列表请参见 [Models](/api-reference/api-spec)。
+</Note>
+
+## 1. 一个值得提问的数据库
+
+任何 SQLite 文件都可以。这里用的是一个小商店，里面有顾客、商品和把它们关联起来的订单，足以让一个真实的问题需要 join 和聚合：
+
+```python
+SEED = """
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    country TEXT NOT NULL,
+    signed_up TEXT NOT NULL
+);
+CREATE TABLE products (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    unit_price REAL NOT NULL
+);
+CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL REFERENCES customers(id),
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    quantity INTEGER NOT NULL,
+    ordered_on TEXT NOT NULL
+);
+INSERT INTO customers VALUES
+    (1,'Aria Bekele','ET','2025-11-02'), (2,'Tomas Vidal','ES','2026-01-14'),
+    (3,'Mei Lin','SG','2026-02-03'),     (4,'Jonas Weber','DE','2026-02-27'),
+    (5,'Priya Nair','IN','2026-03-19');
+INSERT INTO products VALUES
+    (1,'Field Notebook','stationery',12.5), (2,'Fountain Pen','stationery',48.0),
+    (3,'Desk Lamp','lighting',89.0),        (4,'Cable Organiser','desk',9.75),
+    (5,'Monitor Arm','desk',156.0);
+INSERT INTO orders VALUES
+    (1,1,3,2,'2026-04-04'),  (2,2,5,1,'2026-04-11'), (3,3,2,4,'2026-04-19'),
+    (4,1,5,2,'2026-05-02'),  (5,4,1,10,'2026-05-08'), (6,5,3,1,'2026-05-21'),
+    (7,2,5,3,'2026-06-01'),  (8,3,4,12,'2026-06-09'), (9,5,2,2,'2026-06-15'),
+    (10,4,5,1,'2026-06-28');
+"""
+
+
+def build_db() -> None:
+    if os.path.exists(DB_PATH):
+        return
+    db = sqlite3.connect(DB_PATH)
+    db.executescript(SEED)
+    db.commit()
+    db.close()
+```
+
+## 2. 模型可以使用的三个工具
+
+这些工具映射了一个人在面对不熟悉的数据库时的做法：先弄清楚里面有什么，再仔细看某张表，然后再查询它。
+
+```python
+def list_tables() -> str:
+    db = sqlite3.connect(DB_PATH)
+    rows = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    ).fetchall()
+    db.close()
+    return json.dumps([row[0] for row in rows])
+
+
+def describe_table(table: str) -> str:
+    db = sqlite3.connect(DB_PATH)
+    rows = db.execute(f"PRAGMA table_info({table})").fetchall()
+    db.close()
+    if not rows:
+        return json.dumps({"error": f"no table named {table}"})
+    return json.dumps([{"name": row[1], "type": row[2]} for row in rows])
+
+
+def run_query(sql: str) -> str:
+    if not sql.strip().lower().startswith("select"):
+        return json.dumps({"error": "only SELECT statements are allowed"})
+
+    db = sqlite3.connect(DB_PATH)
+    try:
+        cursor = db.execute(sql)
+        columns = [d[0] for d in cursor.description]
+        rows = [dict(zip(columns, row)) for row in cursor.fetchmany(50)]
+        return json.dumps(rows)
+    except (sqlite3.Error, sqlite3.Warning) as error:
+        return json.dumps({"error": f"{type(error).__name__}: {error}"})
+    finally:
+        db.close()
+```
+
+每一个函数都返回一个 JSON 字符串，失败的情况也不例外。这是故意的，第 5 节会解释原因。
+
+接下来向模型描述这些工具。`description` 不是注释，而是模型在决定该调用哪个工具、参数该填什么时唯一会读到的内容：
+
+```python
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tables",
+            "description": "List every table in the shop database.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_table",
+            "description": "Return the column names and types for one table.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "description": "Exact table name."}
+                },
+                "required": ["table"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_query",
+            "description": "Run a read-only SQL SELECT against the shop database.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string", "description": "A single SELECT statement."}
+                },
+                "required": ["sql"],
+            },
+        },
+    },
+]
+
+TOOL_IMPLS = {
+    "list_tables": lambda: list_tables(),
+    "describe_table": lambda table: describe_table(table),
+    "run_query": lambda sql: run_query(sql),
+}
+```
+
+## 3. 循环
+
+函数调用是一段对话，而不是单次请求。模型用工具调用作为回复，你去执行它们，把结果 append 回去，然后再次询问模型。当模型用文本内容而不是工具调用来回复时，循环就结束了。
+
+```python
+SYSTEM = (
+    "You answer questions about a shop database. "
+    "Inspect the schema with the tools before writing a query. "
+    "Answer with the figures you retrieved, not from memory."
+)
+
+
+def ask(question: str, model: str, max_rounds: int = 8) -> str:
+    messages = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": question},
+    ]
+
+    for _ in range(max_rounds):
+        response = requests.post(
+            f"{BASE_URL}/chat/completions",
+            headers=HEADERS,
+            json={
+                "model": model,
+                "messages": messages,
+                "tools": TOOLS,
+                "tool_choice": "auto",
+                "temperature": 0,
+                "venice_parameters": {"include_venice_system_prompt": False},
+            },
+            timeout=180,
+        )
+        response.raise_for_status()
+        message = response.json()["choices"][0]["message"]
+
+        calls = message.get("tool_calls") or []
+        if not calls:
+            return message["content"]
+
+        messages.append(message)
+        for call in calls:
+            name = call["function"]["name"]
+            arguments = json.loads(call["function"]["arguments"] or "{}")
+            print(f"  {name}({arguments})", file=sys.stderr)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": TOOL_IMPLS[name](**arguments),
+                }
+            )
+
+    raise RuntimeError(f"No answer after {max_rounds} rounds.")
+```
+
+这个循环里有三个细节，比看起来重要。
+
+**未经修改的 assistant 消息**要先于结果被 append 回 `messages`。它携带了这些结果所对应的 `tool_calls`，在推理型模型上它还携带了一个 `reasoning_content` 字段。手动重新构造这条消息、并丢掉你没预料到的字段，是让第二轮出错的最常见原因。
+
+每个结果通过 `tool_call_id` 与它对应的调用匹配。除此之外没有其他东西能标识它。
+
+`max_rounds` 是一个实实在在的上限，不是走个形式。一个一直查询却始终不下结论的模型，若没有这个上限，就会一直循环到你耗尽耐心或耗尽额度为止。
+
+<Warning>
+  工具调用还带有 `index` 字段，很容易让人想用它来把结果和调用对应起来。不要这么做。当模型一次请求三个工具时，这三个都可能带着相同的 `index`，因为它编号的是 assistant 这一轮，而不是这一轮里的每次调用。只有 `id` 是唯一的。
+</Warning>
+
+## 4. 它实际会做什么
+
+接上一个 main 块并运行：
+
+```python
+if __name__ == "__main__":
+    build_db()
+    question = " ".join(sys.argv[1:]) or "What are the three biggest orders?"
+    print(ask(question, default_tool_model()))
+```
+
+```bash
+python agent.py "Which product brought in the most revenue overall, and which customer spent the most on it?"
+```
+
+工具调用会在发生时打印到 `stderr`，你可以边看边观察它的工作过程：
+
+```
+  list_tables({})
+  describe_table({'table': 'customers'})
+  describe_table({'table': 'orders'})
+  describe_table({'table': 'products'})
+  run_query({'sql': 'SELECT p.id, p.name, SUM(o.quantity * p.unit_price) AS total_revenue FROM orders o JOIN products p ON o.product_id = p.id GROUP BY p.id, p.name ORDER BY total_revenue DESC LIMIT 1;'})
+  run_query({'sql': 'SELECT c.id, c.name, SUM(o.quantity * p.unit_price) AS amount_spent FROM orders o JOIN products p ON o.product_id = p.id JOIN customers c ON o.customer_id = c.id WHERE o.product_id = 5 GROUP BY c.id, c.name ORDER BY amount_spent DESC LIMIT 1;'})
+```
+
+```markdown
+- **Top product by revenue:** **Monitor Arm** (product ID 5) brought in the most
+  revenue overall, totaling **$1,092.00**.
+- **Top customer for that product:** **Tomas Vidal** (customer ID 2) spent the most
+  on the Monitor Arm, contributing **$624.00**, more than half of the product's
+  total revenue.
+```
+
+这花了五轮。它们各自的形态值得细读，因为这就是使用循环的全部理由：
+
+| 轮次 | 模型做了什么 |
+|---|---|
+| 1 | 由于没有拿到任何 schema，调用了 `list_tables` |
+| 2 | 在一次响应中调用了三次 `describe_table` |
+| 3 | 现在知道了列名，写出了营收查询 |
+| 4 | 使用上一步结果中的商品 5，写出了第二个查询 |
+| 5 | 回答了问题，没有再调用工具 |
+
+第 4 轮才是单次函数调用做不到的部分。模型只有在看到上一次的结果之后，才能写出那个查询。
+
+你自己运行时不会与这个逐次调用完全对得上。模型有时会一次描述完三张表，有时会逐张描述，偶尔还会跳过 `list_tables` 直接猜表名。数据是稳定的，因为它来自数据库；但到达这些数据的路径不是。
+
+<Note>
+  第 2 轮在一次响应里返回了三个工具调用，而上面的循环是一个接一个地执行它们。它们彼此独立，所以一旦你的工具真正涉及 I/O，用 `ThreadPoolExecutor` 就很值得。把 `tool` 消息保持在与产生它们的调用相同的顺序。
+</Note>
+
+每一轮都会重新发送整段对话，所以随着智能体的工作，prompt 会不断增长。Venice 会自动缓存稳定的前缀，`usage` 数据块能看到它带来的收益：
+
+```json
+{"prompt_tokens": 1020, "completion_tokens": 103, "prompt_tokens_details": {"cached_tokens": 960}}
+```
+
+到最后一轮时，1020 个 prompt token 中有 960 个来自缓存。[Prompt 缓存](/guides/features/prompt-caching)介绍了如何保持这个前缀稳定。
+
+## 5. 让错误传达给模型
+
+面对一个失败的查询，直觉是抛出异常。请忍住。错误本身是一种信息，模型可以据此采取行动。
+
+来查询一个不存在的表：
+
+```bash
+python agent.py "How many rows are in the 'purchases' table?"
+```
+
+```
+  run_query({'sql': 'SELECT COUNT(*) AS row_count FROM purchases'})
+  list_tables({})
+```
+
+```
+There is no `purchases` table in this database. The available tables are
+customers, orders, and products. It's possible that the orders table is what
+you're looking for. Would you like me to check the row count there instead?
+```
+
+第一个查询失败了。因为 `run_query` 把 `{"error": "OperationalError: no such table: purchases"}` 作为一个普通的工具结果返回，而不是抛出异常，模型读到了它，调用 `list_tables` 弄清楚到底有哪些表，然后自己纠正了错误。要是异常向上传播，这个脚本就会因为一个拼写错误直接挂掉。
+
+这就是为什么每个工具在失败路径上也返回 JSON。规则很简单：如果调试你工具的开发者想看到那条错误信息，模型也想看到。
+
+## 6. 它不会做什么，以及它做不到什么
+
+让智能体去销毁一些东西：
+
+```bash
+python agent.py "Delete every order placed by customers in Spain."
+```
+
+跑两次可能得到两种不同的行为。有一次，它在触碰任何工具之前就拒绝了：
+
+```
+I'm unable to help with that. The tools I have access to are read-only, so I can
+only run SELECT queries. I cannot perform DELETE, UPDATE, or INSERT operations.
+```
+
+另一次它先去查了一下，为西班牙客户跑了一个 `SELECT`，发现没有结果（因为列里存的是 `ES` 而不是 `Spain`），于是就报告了这个：
+
+```
+It turns out there are no orders placed by customers in Spain, so there would be
+nothing to delete. If you need to perform deletions, you'll need a tool with
+write access.
+```
+
+两种反应都合理。但两者都不是安全控制。模型是在某个工具描述中读到"read-only"这个词，然后选择尊重它——换一个模型、更长的对话、或者更执意的用户，都可能得到不同的选择。
+
+`run_query` 里面的护栏才是那个不依赖于"选择"的部分：
+
+```python
+print(run_query("DELETE FROM orders WHERE customer_id = 2"))
+print(run_query("SELECT 1; DROP TABLE orders"))
+print(run_query("SELECT COUNT(*) AS n FROM orders"))
+```
+
+```json
+{"error": "only SELECT statements are allowed"}
+{"error": "Warning: You can only execute one statement at a time."}
+[{"n": 10}]
+```
+
+写好描述，让模型很少去尝试；写好护栏，让它偶尔尝试时也无所谓。
+
+<Note>
+  上面第二行是 `run_query` 要在 `sqlite3.Error` 之外同时捕获 `sqlite3.Warning` 的原因。Python 的 driver 拒绝堆叠语句，但它是抛出 `Warning`，而 `Warning` 并不是 `Error` 的子类。只捕获 `sqlite3.Error` 会让堆叠语句逃过处理，直接终止循环，而不是返回一条模型能读到的信息。
+</Note>
+
+<Warning>
+  前缀检查能挡住写入，但对读取一无所知。模型写的任何 `SELECT` 都能触达文件里的每一张表，包括你根本不想暴露的那些。在这套代码接触真实数据之前，值得做两处改动：用 `sqlite3.connect("file:shop.db?mode=ro", uri=True)` 以只读模式打开数据库，无论字符串检查漏掉了什么，任何写入都会以 `attempt to write a readonly database` 失败；此外，把智能体指向一个数据库或一组视图，其中只包含它被允许看到的列。
+</Warning>
+
+## 控制何时调用工具
+
+`tool_choice` 决定模型有多大的话语权：
+
+| 取值 | 行为 |
+|---|---|
+| `"auto"` | 模型自己决定，是合适的默认值 |
+| `"required"` | 模型必须调用某个工具才能回答 |
+| `"none"` | 工具可见但不可用，适合用于最终的汇总回合 |
+| `{"type": "function", "function": {"name": "run_query"}}` | 强制使用某个特定工具 |
+
+`"required"` 比看起来更"钝"。把 `tool_choice` 设为 `"required"`，然后问这个智能体 `What is 2 + 2?`，它会调用 `list_tables`，看一眼一个对它毫无用处的数据库，然后在下一轮回答 `4`。而使用 `"auto"` 时，它会立刻回答 `4`，什么工具都不调用。只在某个工具确实必须运行的时候才使用 `"required"`——例如记录一次请求——除此之外都不要动它。
+
+## 调优智能体
+
+| 目标 | 该改什么 |
+|---|---|
+| 减少轮次 | 把 schema 放进 system prompt，让模型可以跳过发现阶段 |
+| 降低成本 | 去掉 `fetchmany(50)`，因为随着轮数累积，宽的结果集会主导 prompt |
+| 参数更可靠 | 在 function 定义中加 `"strict": true`，让参数受 schema 约束 |
+| 更快地完成宽阶段 | 并发运行并行的工具调用，或把 `parallel_tool_calls` 设为 `false` 来禁止它们 |
+| 减少"到处乱逛" | 降低 `max_rounds`，并在 system prompt 中说明合理的查询次数 |
+
+## 下一步
+
+你现在拥有的这个循环，就是绝大多数智能体背后的那一个。变化的只是工具。
+
+- 把 SQL 工具换成 HTTP 调用，它就变成了一个 API 智能体。
+- 添加 [网络搜索与抓取](/guides/tools/web-retrieval) 作为工具，它就能在回答中途实时查询网络。
+- 用[结构化响应](/guides/features/structured-responses)让它返回有类型的结果，而不是文本。
+- 到 [Private Research Agent](/learn/private-research-agent) 中查看这个模式的一个更大版本。
+
+<CardGroup cols={2}>
+  <Card title="函数调用" icon="code" href="/guides/features/function-calling">
+    tools 数组和 tool_choice 的参考。
+  </Card>
+  <Card title="结构化响应" icon="braces" href="/guides/features/structured-responses">
+    把最终回答约束到一个 JSON schema。
+  </Card>
+  <Card title="Prompt 缓存" icon="database" href="/guides/features/prompt-caching">
+    让不断增长的对话保持低成本。
+  </Card>
+  <Card title="Private Research Agent" icon="robot" href="/learn/private-research-agent">
+    同一个循环，配合网络工具和一个 planner。
+  </Card>
+</CardGroup>

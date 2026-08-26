@@ -1,0 +1,464 @@
+---
+title: "함수 호출로 도구를 활용하는 에이전트 만들기"
+sidebarTitle: "도구 활용 에이전트"
+description: "모델에 읽기 전용 도구 세 개를 제공하고, 한 번도 본 적 없는 데이터베이스를 탐색하게 하세요."
+"og:title": "함수 호출로 도구를 활용하는 에이전트 만들기 | Venice API 문서"
+"og:description": "전체 도구 호출 루프 실행하기: 병렬 호출, 모델이 스스로 복구하는 오류, 그리고 모델이 우회할 수 없는 가드."
+---
+
+단일 함수 호출은 쉽습니다. 흥미로운 부분은 그 주위를 도는 루프입니다. 모델이 첫 번째 호출만으로 필요한 것을 얻는 경우는 드물기 때문입니다. 모델은 무언가를 조회하고, 결과를 보고, 다음에 무엇을 요청할지 결정합니다.
+
+이 튜토리얼에서는 한 번도 본 적 없는 SQLite 데이터베이스에 관한 질문에 답하는 커맨드라인 에이전트를 만듭니다. 프롬프트에는 스키마가 없습니다. 읽기 전용 도구 세 개만 주어지고, 나머지는 스스로 알아냅니다:
+
+```bash
+python agent.py "Which product brought in the most revenue overall, and which customer spent the most on it?"
+```
+
+과정 중에 다음을 다룹니다:
+
+1. 모델에 데이터베이스와 이를 읽는 세 가지 도구를 제공하기
+2. 모델이 각 도구를 언제 사용해야 할지 알 수 있도록 도구를 설명하기
+3. 도구 호출을 도구 결과로 바꾸는 루프 실행하기
+4. 모델이 여러 도구를 한 번에 요청하는 모습 관찰하기
+5. 오류를 예외로 발생시키는 대신 모델에게 돌려주기
+6. 모델이 하지 않으려는 것과 모델이 할 수 없는 것 사이의 경계 긋기
+
+[함수 호출](/guides/features/function-calling) 가이드는 요청 자체의 형태를 다룹니다. 이 페이지는 첫 응답이 돌아온 이후에 무엇이 일어나는지에 관한 것입니다.
+
+## 준비
+
+Python 3.9 이상, `requests` 패키지, 그리고 Venice API 키가 필요합니다. 키가 없다면 [API 키 생성](/guides/getting-started/generating-api-key)을 참조하세요. 그 외의 것은 모두 표준 라이브러리에 있습니다.
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+`agent.py`를 만들고 모든 호출이 재사용할 임포트와 헤더 블록을 작성합니다:
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import sys
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+    "Content-Type": "application/json",
+}
+DB_PATH = "shop.db"
+```
+
+모든 모델이 도구를 호출할 수 있는 것은 아니고 모델 ID도 변하기 때문에, 세월이 지나면 무너질 이름을 고정하기보다는 API에 어떤 모델을 사용할지 물어보세요:
+
+```python
+def default_tool_model() -> str:
+    response = requests.get(f"{BASE_URL}/models/traits", headers=HEADERS, timeout=30)
+    response.raise_for_status()
+    return response.json()["data"]["function_calling_default"]
+```
+
+```python
+print(default_tool_model())
+```
+
+```
+zai-org-glm-5-2
+```
+
+<Note>
+  `GET /models/traits`는 안정적인 특성 이름을 현재 그 역할을 담당하는 모델에 매핑합니다. 시작 시 `function_calling_default`를 읽어두면 내부 모델이 교체되어도 에이전트가 계속 작동합니다. 전체 특성 목록은 [Models](/api-reference/api-spec)를 참조하세요.
+</Note>
+
+## 1. 물어볼 만한 가치가 있는 데이터베이스
+
+어떤 SQLite 파일이든 상관없습니다. 이 예시는 고객, 제품, 그리고 그들을 연결하는 주문이 있는 작은 상점입니다. 실제 질문에 조인과 집계가 필요할 만큼의 규모입니다:
+
+```python
+SEED = """
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    country TEXT NOT NULL,
+    signed_up TEXT NOT NULL
+);
+CREATE TABLE products (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    unit_price REAL NOT NULL
+);
+CREATE TABLE orders (
+    id INTEGER PRIMARY KEY,
+    customer_id INTEGER NOT NULL REFERENCES customers(id),
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    quantity INTEGER NOT NULL,
+    ordered_on TEXT NOT NULL
+);
+INSERT INTO customers VALUES
+    (1,'Aria Bekele','ET','2025-11-02'), (2,'Tomas Vidal','ES','2026-01-14'),
+    (3,'Mei Lin','SG','2026-02-03'),     (4,'Jonas Weber','DE','2026-02-27'),
+    (5,'Priya Nair','IN','2026-03-19');
+INSERT INTO products VALUES
+    (1,'Field Notebook','stationery',12.5), (2,'Fountain Pen','stationery',48.0),
+    (3,'Desk Lamp','lighting',89.0),        (4,'Cable Organiser','desk',9.75),
+    (5,'Monitor Arm','desk',156.0);
+INSERT INTO orders VALUES
+    (1,1,3,2,'2026-04-04'),  (2,2,5,1,'2026-04-11'), (3,3,2,4,'2026-04-19'),
+    (4,1,5,2,'2026-05-02'),  (5,4,1,10,'2026-05-08'), (6,5,3,1,'2026-05-21'),
+    (7,2,5,3,'2026-06-01'),  (8,3,4,12,'2026-06-09'), (9,5,2,2,'2026-06-15'),
+    (10,4,5,1,'2026-06-28');
+"""
+
+
+def build_db() -> None:
+    if os.path.exists(DB_PATH):
+        return
+    db = sqlite3.connect(DB_PATH)
+    db.executescript(SEED)
+    db.commit()
+    db.close()
+```
+
+## 2. 모델이 사용할 수 있는 세 가지 도구
+
+이 도구들은 사람이 처음 보는 데이터베이스를 마주할 때의 방식을 그대로 반영합니다: 안에 무엇이 있는지 파악하고, 한 테이블을 자세히 살펴본 뒤, 쿼리를 실행합니다.
+
+```python
+def list_tables() -> str:
+    db = sqlite3.connect(DB_PATH)
+    rows = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    ).fetchall()
+    db.close()
+    return json.dumps([row[0] for row in rows])
+
+
+def describe_table(table: str) -> str:
+    db = sqlite3.connect(DB_PATH)
+    rows = db.execute(f"PRAGMA table_info({table})").fetchall()
+    db.close()
+    if not rows:
+        return json.dumps({"error": f"no table named {table}"})
+    return json.dumps([{"name": row[1], "type": row[2]} for row in rows])
+
+
+def run_query(sql: str) -> str:
+    if not sql.strip().lower().startswith("select"):
+        return json.dumps({"error": "only SELECT statements are allowed"})
+
+    db = sqlite3.connect(DB_PATH)
+    try:
+        cursor = db.execute(sql)
+        columns = [d[0] for d in cursor.description]
+        rows = [dict(zip(columns, row)) for row in cursor.fetchmany(50)]
+        return json.dumps(rows)
+    except (sqlite3.Error, sqlite3.Warning) as error:
+        return json.dumps({"error": f"{type(error).__name__}: {error}"})
+    finally:
+        db.close()
+```
+
+모든 함수는 실패 시에도 JSON 문자열을 반환합니다. 이는 의도적이며, 그 이유는 5절에서 다룹니다.
+
+이제 이들을 모델에게 설명합니다. `description`은 주석이 아닙니다. 어떤 도구를 호출할지, 그리고 그 안에 무엇을 넣을지를 결정할 때 모델이 읽는 유일한 자료입니다:
+
+```python
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tables",
+            "description": "List every table in the shop database.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_table",
+            "description": "Return the column names and types for one table.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "description": "Exact table name."}
+                },
+                "required": ["table"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_query",
+            "description": "Run a read-only SQL SELECT against the shop database.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {"type": "string", "description": "A single SELECT statement."}
+                },
+                "required": ["sql"],
+            },
+        },
+    },
+]
+
+TOOL_IMPLS = {
+    "list_tables": lambda: list_tables(),
+    "describe_table": lambda table: describe_table(table),
+    "run_query": lambda sql: run_query(sql),
+}
+```
+
+## 3. 루프
+
+함수 호출은 요청이 아니라 대화입니다. 모델이 도구 호출로 답하면, 여러분이 그것을 실행하고, 결과를 이어 붙인 뒤 다시 요청합니다. 모델이 호출 대신 콘텐츠로 응답할 때 종료됩니다.
+
+```python
+SYSTEM = (
+    "You answer questions about a shop database. "
+    "Inspect the schema with the tools before writing a query. "
+    "Answer with the figures you retrieved, not from memory."
+)
+
+
+def ask(question: str, model: str, max_rounds: int = 8) -> str:
+    messages = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": question},
+    ]
+
+    for _ in range(max_rounds):
+        response = requests.post(
+            f"{BASE_URL}/chat/completions",
+            headers=HEADERS,
+            json={
+                "model": model,
+                "messages": messages,
+                "tools": TOOLS,
+                "tool_choice": "auto",
+                "temperature": 0,
+                "venice_parameters": {"include_venice_system_prompt": False},
+            },
+            timeout=180,
+        )
+        response.raise_for_status()
+        message = response.json()["choices"][0]["message"]
+
+        calls = message.get("tool_calls") or []
+        if not calls:
+            return message["content"]
+
+        messages.append(message)
+        for call in calls:
+            name = call["function"]["name"]
+            arguments = json.loads(call["function"]["arguments"] or "{}")
+            print(f"  {name}({arguments})", file=sys.stderr)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": TOOL_IMPLS[name](**arguments),
+                }
+            )
+
+    raise RuntimeError(f"No answer after {max_rounds} rounds.")
+```
+
+이 루프에는 보이는 것보다 훨씬 중요한 세 가지 세부 사항이 있습니다.
+
+수정하지 않은 어시스턴트 메시지가 결과보다 먼저 `messages`에 다시 들어갑니다. 이 메시지에는 결과가 응답하고 있는 `tool_calls`가 담겨 있고, 추론 모델의 경우 `reasoning_content` 필드도 함께 담겨 있습니다. 메시지를 손으로 다시 구성하면서 예상치 못한 필드를 떨어뜨리는 것이 두 번째 라운드를 망치는 가장 흔한 방식입니다.
+
+각 결과는 `tool_call_id`로 자신의 호출과 매칭됩니다. 이것 외에는 결과를 식별할 수 있는 것이 없습니다.
+
+`max_rounds`는 형식적인 값이 아니라 실제 한도입니다. 결론에 이르지 못한 채 계속 질의하는 모델은 여러분의 인내심이나 크레딧이 바닥날 때까지 반복합니다.
+
+<Warning>
+  도구 호출에는 `index` 필드도 있는데, 이를 이용해 결과와 호출을 정렬하고 싶어질 수 있습니다. 그러면 안 됩니다. 모델이 도구 세 개를 한 번에 요청하면 세 개 모두 동일한 `index`로 도착할 수 있습니다. `index`는 호출 자체가 아니라 어시스턴트 턴의 번호를 매기기 때문입니다. 오직 `id`만이 고유합니다.
+</Warning>
+
+## 4. 실제 동작 살펴보기
+
+메인 블록을 붙여서 실행합니다:
+
+```python
+if __name__ == "__main__":
+    build_db()
+    question = " ".join(sys.argv[1:]) or "What are the three biggest orders?"
+    print(ask(question, default_tool_model()))
+```
+
+```bash
+python agent.py "Which product brought in the most revenue overall, and which customer spent the most on it?"
+```
+
+도구 호출은 발생 시점에 `stderr`로 출력되므로, 작동 과정을 관찰할 수 있습니다:
+
+```
+  list_tables({})
+  describe_table({'table': 'customers'})
+  describe_table({'table': 'orders'})
+  describe_table({'table': 'products'})
+  run_query({'sql': 'SELECT p.id, p.name, SUM(o.quantity * p.unit_price) AS total_revenue FROM orders o JOIN products p ON o.product_id = p.id GROUP BY p.id, p.name ORDER BY total_revenue DESC LIMIT 1;'})
+  run_query({'sql': 'SELECT c.id, c.name, SUM(o.quantity * p.unit_price) AS amount_spent FROM orders o JOIN products p ON o.product_id = p.id JOIN customers c ON o.customer_id = c.id WHERE o.product_id = 5 GROUP BY c.id, c.name ORDER BY amount_spent DESC LIMIT 1;'})
+```
+
+```markdown
+- **Top product by revenue:** **Monitor Arm** (product ID 5) brought in the most
+  revenue overall, totaling **$1,092.00**.
+- **Top customer for that product:** **Tomas Vidal** (customer ID 2) spent the most
+  on the Monitor Arm, contributing **$624.00**, more than half of the product's
+  total revenue.
+```
+
+이 과정은 다섯 라운드가 걸렸습니다. 라운드의 흐름을 자세히 읽어볼 가치가 있습니다. 이것이 곧 루프의 존재 이유이기 때문입니다:
+
+| 라운드 | 모델이 한 일 |
+|---|---|
+| 1 | 스키마를 받지 못했기 때문에 `list_tables` 호출 |
+| 2 | 한 응답 안에서 `describe_table`을 세 번 호출 |
+| 3 | 이제 컬럼 이름을 알기 때문에 매출 쿼리 작성 |
+| 4 | 이전 결과의 product 5를 사용해 두 번째 쿼리 작성 |
+| 5 | 도구 호출 없이 답변 |
+
+라운드 4는 단일 함수 호출로는 할 수 없는 부분입니다. 모델은 그 이전 쿼리의 답을 본 뒤에야 이 쿼리를 작성할 수 있었습니다.
+
+여러분의 실행 결과는 이 예시와 호출 단위로 정확히 일치하지 않을 것입니다. 모델은 때때로 세 테이블을 한 번에 설명하고, 때로는 하나씩 설명합니다. 가끔은 `list_tables`를 건너뛰고 이름을 추측하기도 합니다. 수치는 데이터베이스에서 오기 때문에 안정적이지만, 거기까지 가는 경로는 그렇지 않습니다.
+
+<Note>
+  라운드 2에서 한 응답에 세 개의 도구 호출이 반환되었고, 위 루프는 이를 하나씩 순서대로 실행합니다. 이들은 독립적이므로 도구가 실제 I/O를 수행하는 순간부터 `ThreadPoolExecutor`를 도입하는 것이 좋습니다. `tool` 메시지는 이를 생성한 호출과 동일한 순서로 유지하세요.
+</Note>
+
+각 라운드마다 전체 대화가 다시 전송되므로 에이전트가 작업할수록 프롬프트가 커집니다. Venice는 안정적인 접두부를 자동으로 캐시하며, `usage` 블록에서 그 효과를 확인할 수 있습니다:
+
+```json
+{"prompt_tokens": 1020, "completion_tokens": 103, "prompt_tokens_details": {"cached_tokens": 960}}
+```
+
+마지막 라운드에서는 1020개의 프롬프트 토큰 중 960개가 캐시에서 제공되었습니다. 이 접두부를 안정적으로 유지하는 방법은 [프롬프트 캐싱](/guides/features/prompt-caching)에서 다룹니다.
+
+## 5. 오류가 모델에 도달하도록 하기
+
+잘못된 쿼리에 대해 예외를 던지고 싶어질 수 있습니다. 참으세요. 오류는 정보이고, 모델은 그 위에서 행동할 수 있습니다.
+
+존재하지 않는 테이블을 요청해 봅시다:
+
+```bash
+python agent.py "How many rows are in the 'purchases' table?"
+```
+
+```
+  run_query({'sql': 'SELECT COUNT(*) AS row_count FROM purchases'})
+  list_tables({})
+```
+
+```
+There is no `purchases` table in this database. The available tables are
+customers, orders, and products. It's possible that the orders table is what
+you're looking for. Would you like me to check the row count there instead?
+```
+
+첫 번째 쿼리는 실패했습니다. `run_query`가 예외를 발생시키는 대신 `{"error": "OperationalError: no such table: purchases"}`를 평범한 도구 결과로 반환했기 때문에, 모델은 그것을 읽고 `list_tables`를 호출해 실제로 무엇이 있는지 알아본 뒤 스스로 수정했습니다. 만약 예외가 전파되었다면 스크립트는 오타 하나에 죽어버렸을 것입니다.
+
+이것이 모든 도구가 실패 경로에서도 JSON을 반환하는 이유입니다. 규칙은 간단합니다: 여러분의 도구를 디버깅하는 사람이 보고 싶어할 메시지라면, 모델도 그것을 보고 싶어합니다.
+
+## 6. 모델이 하지 않을 일과 할 수 없는 일
+
+에이전트에게 무언가를 파괴해 달라고 요청해 보세요:
+
+```bash
+python agent.py "Delete every order placed by customers in Spain."
+```
+
+두 번 실행하면 다른 결과가 나올 수 있습니다. 한 번은 도구를 건드리기 전에 거절했습니다:
+
+```
+I'm unable to help with that. The tools I have access to are read-only, so I can
+only run SELECT queries. I cannot perform DELETE, UPDATE, or INSERT operations.
+```
+
+또 다른 실행에서는 먼저 조사를 나가, 스페인 고객에 대해 `SELECT`를 실행했고, 해당 컬럼이 `Spain`이 아니라 `ES`를 저장한다는 이유로 아무도 찾지 못해 그 사실을 대신 보고했습니다:
+
+```
+It turns out there are no orders placed by customers in Spain, so there would be
+nothing to delete. If you need to perform deletions, you'll need a tool with
+write access.
+```
+
+둘 다 합리적입니다. 그 어느 쪽도 보안 통제가 아닙니다. 모델은 도구 설명에서 "read-only"라는 단어를 읽고 그것을 존중하기로 선택했을 뿐이며, 다른 모델, 더 긴 대화, 혹은 더 집요한 사용자는 다른 선택을 이끌어 낼 수 있습니다.
+
+`run_query` 내부의 가드는 선택에 의존하지 않는 부분입니다:
+
+```python
+print(run_query("DELETE FROM orders WHERE customer_id = 2"))
+print(run_query("SELECT 1; DROP TABLE orders"))
+print(run_query("SELECT COUNT(*) AS n FROM orders"))
+```
+
+```json
+{"error": "only SELECT statements are allowed"}
+{"error": "Warning: You can only execute one statement at a time."}
+[{"n": 10}]
+```
+
+설명은 모델이 좀처럼 시도하지 않도록 작성하세요. 가드는 시도하더라도 문제가 되지 않도록 작성하세요.
+
+<Note>
+  두 번째 줄이 `run_query`가 `sqlite3.Error`뿐 아니라 `sqlite3.Warning`도 함께 잡는 이유입니다. Python 드라이버는 스택된 문장을 거부하지만, 이를 `Warning`으로 발생시키고, `Warning`은 `Error`의 서브클래스가 아닙니다. `sqlite3.Error`만 잡으면 스택된 문장이 핸들러를 빠져나가 루프를 죽여버리고, 모델이 읽을 수 있는 메시지 대신 프로세스가 종료됩니다.
+</Note>
+
+<Warning>
+  접두사 검사는 쓰기를 막지만, 읽기에 대해서는 아무 말도 하지 않습니다. 모델이 작성하는 어떤 `SELECT`든 파일 내 모든 테이블에 도달할 수 있으며, 이는 여러분이 노출할 의도가 없던 테이블도 포함합니다. 이 코드가 실제 데이터에 닿기 전에 두 가지 변경이 필요합니다: `sqlite3.connect("file:shop.db?mode=ro", uri=True)`로 데이터베이스를 읽기 전용으로 여세요. 이렇게 하면 문자열 검사가 놓치는 무엇이든 관계없이 `attempt to write a readonly database`로 쓰기가 실패합니다. 그리고 에이전트가 볼 수 있어야 할 컬럼만 담긴 데이터베이스 또는 뷰 집합을 가리키게 하세요.
+</Warning>
+
+## 도구 사용 시점 제어하기
+
+`tool_choice`는 모델에게 얼마만큼의 재량을 줄지 결정합니다:
+
+| 값 | 동작 |
+|---|---|
+| `"auto"` | 모델이 결정합니다. 올바른 기본값 |
+| `"required"` | 모델이 답변하기 전에 반드시 무언가를 호출해야 함 |
+| `"none"` | 도구가 보이지만 사용할 수는 없습니다. 마지막에 요약하는 턴에 유용 |
+| `{"type": "function", "function": {"name": "run_query"}}` | 특정 도구 하나를 강제 |
+
+`"required"`는 겉보기보다 훨씬 무딘 도구입니다. 이 에이전트에게 `tool_choice`를 `"required"`로 두고 `What is 2 + 2?`를 물으면, 모델은 아무 쓸모도 없는 데이터베이스에 대해 `list_tables`를 호출한 뒤 다음 라운드에서 `4`라고 답합니다. `"auto"`에서는 아무것도 호출하지 않고 즉시 `4`라고 답합니다. `"required"`는 요청을 로깅하는 경우처럼 도구가 반드시 실행되어야 할 때만 사용하고, 그 외에는 그냥 두세요.
+
+## 에이전트 튜닝하기
+
+| 목표 | 변경할 부분 |
+|---|---|
+| 라운드 줄이기 | 시스템 프롬프트에 스키마를 넣어 모델이 탐색 단계를 건너뛸 수 있게 하기 |
+| 비용 줄이기 | 라운드가 쌓일수록 넓은 결과 집합이 프롬프트를 지배하므로 `fetchmany(50)`을 줄이기 |
+| 인수 신뢰성 높이기 | 함수 정의에 `"strict": true`를 추가해 인수를 스키마에 맞도록 제약하기 |
+| 넓은 단계를 더 빠르게 | 병렬 도구 호출을 동시에 실행하거나, `parallel_tool_calls`를 `false`로 설정해 이를 중단하기 |
+| 방황 줄이기 | `max_rounds`를 낮추고, 시스템 프롬프트에서 몇 번의 쿼리가 합리적인지 명시하기 |
+
+## 다음 단계
+
+여러분이 지금 손에 쥔 루프는 대부분의 에이전트 뒤에 있는 바로 그 루프입니다. 도구만 바뀔 뿐입니다.
+
+- SQL 도구를 HTTP 호출로 바꾸면 API 에이전트가 됩니다.
+- [웹 검색과 스크래핑](/guides/tools/web-retrieval)을 도구로 추가하면 답변 도중에 실시간 웹을 확인할 수 있습니다.
+- [구조화된 응답](/guides/features/structured-responses)으로 산문 대신 타입이 지정된 결과를 요청하세요.
+- 이 패턴의 더 큰 버전은 [프라이빗 리서치 에이전트](/learn/private-research-agent)에서 확인할 수 있습니다.
+
+<CardGroup cols={2}>
+  <Card title="함수 호출" icon="code" href="/guides/features/function-calling">
+    tools 배열과 tool_choice에 대한 레퍼런스.
+  </Card>
+  <Card title="구조화된 응답" icon="braces" href="/guides/features/structured-responses">
+    최종 답변을 JSON 스키마에 맞추어 제약합니다.
+  </Card>
+  <Card title="프롬프트 캐싱" icon="database" href="/guides/features/prompt-caching">
+    커져가는 대화를 저렴하게 유지합니다.
+  </Card>
+  <Card title="프라이빗 리서치 에이전트" icon="robot" href="/learn/private-research-agent">
+    웹 도구와 플래너가 있는 동일한 루프.
+  </Card>
+</CardGroup>

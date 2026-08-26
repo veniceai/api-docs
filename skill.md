@@ -191,7 +191,7 @@ ln -s ~/src/venice-skills/skills ~/.claude/skills/venice
 ## Reference
 
 - Agent guide: https://docs.venice.ai/agents.md
-- Getting started: https://docs.venice.ai/overview/getting-started.md
+- Getting started: https://docs.venice.ai/getting-started/quick-start.md
 - Privacy tiers: https://docs.venice.ai/overview/privacy.md
 - Pricing: https://docs.venice.ai/overview/pricing.md
 - Rate limiting: https://docs.venice.ai/api-reference/rate-limiting.md

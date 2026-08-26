@@ -1,0 +1,403 @@
+---
+title: "用语音转文本生成会议记录"
+sidebarTitle: "会议记录"
+description: "把录音变成决策和行动项，并能回链到它们被达成一致的那一刻。"
+"og:title": "用语音转文本生成会议记录 | Venice API 文档"
+"og:description": "转录一场会议，按 schema 提取负责人和截止日期，并处理\"没人被标注\"这件事。"
+---
+
+转录稿不是会议记录。它是把这场会议又开了一遍，只不过读起来比坐着开还要长。
+
+会后大家真正想要的东西其实很短：我们决定了什么、谁答应了做什么、还有什么悬而未决。本教程就把这些做出来，并把每一项都回链到它被说出的那一秒，方便你回头去听那段你不认同的内容：
+
+```bash
+python notes.py standup.wav
+```
+
+一路上我们会：
+
+1. 用 `/audio/transcriptions` 转录一段录音
+2. 请求带时间戳，而不是每个模型都会给你
+3. 按 schema 提取决策与行动项
+4. 处理转录稿里从来不会告诉你是谁在说话这件事
+5. 切分较长的录音，并且不丢失时钟
+
+## 准备工作
+
+你需要 Python 3.9 或更高版本、`requests` 包，以及一个 Venice API key。如果你还没有，请参见[生成 API Key](/guides/getting-started/generating-api-key)。准备一段对话的录音，格式为 `wav`、`mp3`、`m4a`、`flac`、`aac`、`mp4`、`ogg` 或 `webm` 均可。
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-api-key-here"
+```
+
+```python
+from __future__ import annotations
+
+import json
+import os
+import sys
+import wave
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+AUTH = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+JSON_HEADERS = {**AUTH, "Content-Type": "application/json"}
+```
+
+## 1. 转录这段录音
+
+`/audio/transcriptions` 与 OpenAI 兼容，接收 multipart 上传。文件必须是真正的 file part，因为这个 endpoint 不接受 base64。
+
+<CodeGroup>
+```python Python
+def transcribe(path: str, model: str, timestamps: bool = False) -> dict:
+    with open(path, "rb") as audio:
+        response = requests.post(
+            f"{BASE_URL}/audio/transcriptions",
+            headers=AUTH,
+            files={"file": (os.path.basename(path), audio, "audio/wav")},
+            data={
+                "model": model,
+                "response_format": "json",
+                "timestamps": str(timestamps).lower(),
+            },
+            timeout=600,
+        )
+    response.raise_for_status()
+    return response.json()
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/audio/transcriptions \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "file=@./standup.wav" \
+  -F "model=openai/whisper-large-v3" \
+  -F "response_format=json" \
+  -F "timestamps=true"
+```
+</CodeGroup>
+
+转录按音频时长计费，而不是按里面说了多少话，这让一次会议的费用在运行之前就很容易预估：
+
+| 模型 | 每秒音频价格 | 一小时会议 |
+|---|---|---|
+| `stt-xai-v1` | $0.0000315 | $0.11 |
+| `nvidia/parakeet-tdt-0.6b-v3` | $0.0001 | $0.36 |
+| `openai/whisper-large-v3` | $0.0001 | $0.36 |
+| `elevenlabs/scribe-v2` | $0.000167 | $0.60 |
+
+用 `GET /models?type=asr` 拉取最新列表，而不是把上面这些写死，因为目录会变。
+
+## 2. 请求带时间戳
+
+时间戳是让会议记录可核实的关键，所以这是最重要的一个选择，而默认情况下并不会给你时间戳：
+
+```python
+print(transcribe("standup.wav", "nvidia/parakeet-tdt-0.6b-v3", timestamps=True).keys())
+print(transcribe("standup.wav", "openai/whisper-large-v3", timestamps=True).keys())
+```
+
+```
+dict_keys(['text'])
+dict_keys(['duration', 'text', 'timestamps'])
+```
+
+<Warning>
+  `nvidia/parakeet-tdt-0.6b-v3` 是默认模型，它接受 `timestamps=true`，然后忽略它。没有报错、没有警告，返回的响应里除了 `text` 什么都没有。如果你需要时间戳，就请求一个会返回它们的模型，并检查对应的 key 是否存在。
+</Warning>
+
+当某个模型确实返回了时间戳时，`timestamps` 是一个对象而不是列表，而里面的 key 名字取决于模型。Whisper 按短语分组，Scribe 按单词分组：
+
+```python
+whisper = transcribe("standup.wav", "openai/whisper-large-v3", timestamps=True)
+scribe = transcribe("standup.wav", "elevenlabs/scribe-v2", timestamps=True)
+
+print(list(whisper["timestamps"]), json.dumps(whisper["timestamps"]["segment"][0]))
+print(list(scribe["timestamps"]), json.dumps(scribe["timestamps"]["word"][0]))
+```
+
+```json
+["segment"] {"text": " Okay, let's keep this to 10 minutes. Where are we on the checkout migration?", "start": 0.21, "end": 4.21}
+["word"] {"word": "Okay,", "start": 0.34, "end": 0.759}
+```
+
+短语级 segment 是这项工作最合适的粒度。词级时间戳适合做字幕，用来挂一个决策就太细了。
+
+我们会把这些 segment 铺平成一行行文本，每行前面带一个时间戳，这就是模型稍后引用它们所需的一切：
+
+```python
+def timed_lines(transcription: dict, offset: float = 0.0) -> list[str]:
+    segments = transcription.get("timestamps", {}).get("segment")
+    if not segments:
+        raise RuntimeError(
+            "This model returned no segment timings. Use openai/whisper-large-v3."
+        )
+    return [
+        f"[{segment['start'] + offset:.1f}s] {segment['text'].strip()}"
+        for segment in segments
+    ]
+```
+
+```python
+for line in timed_lines(whisper)[:4]:
+    print(line)
+```
+
+```
+[0.2s] Okay, let's keep this to 10 minutes. Where are we on the checkout migration?
+[5.2s] Backend is done.
+[6.5s] I finished the payment adapter yesterday and it's on staging.
+[10.5s] The one thing I'm not sure about is whether we keep the old endpoint alive after cutover.
+```
+
+## 3. 提取会议记录
+
+把你想要的会议记录形式描述成一个 schema，这样返回的就是一条记录，而不是需要你去解析的散文：
+
+```python
+NOTES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "decision": {"type": "string"},
+                    "spoken_at": {"type": "number", "description": "Seconds into the recording."},
+                },
+                "required": ["decision", "spoken_at"],
+                "additionalProperties": False,
+            },
+        },
+        "action_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "owner": {"type": "string", "description": "Name as spoken, or 'unassigned'."},
+                    "task": {"type": "string"},
+                    "due": {"type": "string", "description": "As stated, or 'not stated'."},
+                    "spoken_at": {"type": "number"},
+                },
+                "required": ["owner", "task", "due", "spoken_at"],
+                "additionalProperties": False,
+            },
+        },
+        "open_questions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "decisions", "action_items", "open_questions"],
+    "additionalProperties": False,
+}
+```
+
+```python
+SYSTEM = (
+    "You turn meeting transcripts into notes. The transcript has no speaker labels, "
+    "so attribute a task only when a name is spoken. Use 'unassigned' otherwise. "
+    "spoken_at is the start time of the line the item came from."
+)
+
+
+def write_notes(lines: list[str], attendees: list[str] | None = None) -> dict:
+    system = SYSTEM
+    if attendees:
+        system += (
+            f" The attendees are {', '.join(attendees)}. Speech recognition often "
+            "mangles names, so map what you hear to the closest attendee."
+        )
+
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=JSON_HEADERS,
+        json={
+            "model": "zai-org-glm-5-2",
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "\n".join(lines)},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "notes", "strict": True, "schema": NOTES_SCHEMA},
+            },
+            "temperature": 0,
+            "max_completion_tokens": 2000,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    choice = response.json()["choices"][0]
+    if choice["finish_reason"] == "length":
+        raise RuntimeError("Ran out of tokens. The JSON is truncated. Raise the budget.")
+    return json.loads(choice["message"]["content"])
+```
+
+`disable_thinking` 出现在这里的原因，和它出现在任何抽取步骤里的原因是一样的。schema 已经决定了答案的形态，让一个推理型模型再针对它反复思考就毫无收获，而且会让每次运行的成本和上一次都不一样。[从文档中抽取结构化数据](/guides/tools/document-extraction)量化了这个差别。
+
+对一段五十三秒的站会跑一下，返回的会议记录带着时钟：
+
+```json
+{
+  "decisions": [
+    { "decision": "Keep the old endpoint alive for two weeks after cutover, then remove it.", "spoken_at": 16.8 },
+    { "decision": "Turn on the new checkout form for 10% of traffic on Monday; if error rate stays under 0.5%, increase to 50%.", "spoken_at": 34.5 }
+  ],
+  "action_items": [
+    { "owner": "Tomas", "task": "Put the deprecation notice in the changelog by Friday.", "due": "Friday", "spoken_at": 19.6 },
+    { "owner": "May", "task": "Own the frontend rollout of the new checkout form.", "due": "Monday", "spoken_at": 39.9 },
+    { "owner": "unassigned", "task": "Ask legal to review the new refund copy and report back.", "due": "tomorrow", "spoken_at": 48.1 }
+  ]
+}
+```
+
+每个 `spoken_at` 都是真实的。跳到 19.6 秒，你就能听到那句促成这项任务的话。
+
+<Note>
+  把不带时间戳的行喂给模型，返回的每个 `spoken_at` 都会是 `0`。这个字段是必填的，模型没有东西可以放进去，而一个必填字段是让它生成点什么的指令，而不是让它说"我不知道"的邀请。任何时候一个 schema 看起来在正常工作，都值得记住这一点：形状对了，不等于值就对了。
+</Note>
+
+## 4. 没人被标注
+
+上面那份输出里有两处错误，两处都来自同一个原因。
+
+发布负责人是 `May`。她的名字其实是 Mei。语音识别在专有名词上最不可靠，而名字恰恰是归属所需要的，所以这是你应该预料到的失败，而不是运气不好。
+
+最后一项是 `unassigned`，尽管显然有人接下了它。那句话是 "I'll ask legal today and report back tomorrow"，转录稿只记下了这些词，却没记下是谁说的。
+
+第二个问题不是你能修的 bug。Venice 的转录模型都不做说话人分离（diarization），所以任何一个模型上都没有 `speaker` 字段可以取。转录稿是一整段没有声音归属的文本流，任务只能在有人喊出名字的时候才能被归属出去，比如 "Tomas, can you put the deprecation notice in the changelog"。
+
+第一个问题你可以修，只要告诉模型房间里都有谁：
+
+```python
+notes = write_notes(lines, attendees=["Priya Raman", "Tomas Vidal", "Mei Lin"])
+```
+
+```
+Tomas Vidal   due=Friday    @ 19.6s  Put the deprecation notice in the changelog by Friday.
+Mei Lin       due=Monday    @ 39.9s  Own the frontend rollout of the new checkout form.
+unassigned    due=Tomorrow  @ 48.1s  Ask legal to review the new refund copy and report back.
+```
+
+`May` 被解析成 `Mei Lin`，因为模型现在有了一个短名单可以对照，负责人的名字也变成了任务追踪工具能查得到的全名。第三项仍然是 unassigned，这是对的。花名册能修正听错，但没有任何东西能挽回录音里从未承载过的信息。
+
+<Tip>
+  如果你需要真正的说话人归属，那就在上游捕获它，而不是在下游推断它。会议工具可以为每个参与者录一条独立轨道，把每条轨道分别转录就能免费拿到说话人，代价是每人一次请求。
+</Tip>
+
+## 5. 一次请求装不下
+
+上传限制在 25 MB，未压缩的音频到这个上限的速度比你想象的要快，而且一场长会议本身就值得切开来处理，这样一次失败也不会让你损失整场转录。
+
+对于 WAV 文件，标准库就够了，不需要 ffmpeg：
+
+```python
+def split_wav(path: str, chunk_seconds: int = 600) -> list[tuple[str, float]]:
+    """Split into chunks, returning each path with its offset into the original."""
+    chunks: list[tuple[str, float]] = []
+    with wave.open(path, "rb") as source:
+        rate = source.getframerate()
+        stem = path.rsplit(".", 1)[0]
+        index = 0
+        while True:
+            frames = source.readframes(rate * chunk_seconds)
+            if not frames:
+                break
+            part = f"{stem}.part{index}.wav"
+            with wave.open(part, "wb") as out:
+                out.setnchannels(source.getnchannels())
+                out.setsampwidth(source.getsampwidth())
+                out.setframerate(rate)
+                out.writeframes(frames)
+            chunks.append((part, index * chunk_seconds))
+            index += 1
+    return chunks
+```
+
+偏移量才是关键。每一段被转录时都好像它从零开始，所以在模型看到它之前，必须把它的时间戳平移回原录音的时间轴上。这就是 `timed_lines` 里 `offset` 参数的用途：
+
+```python
+def transcribe_long(path: str, model: str, chunk_seconds: int = 600) -> list[str]:
+    lines: list[str] = []
+    for part, offset in split_wav(path, chunk_seconds):
+        lines.extend(timed_lines(transcribe(part, model, timestamps=True), offset))
+        os.remove(part)
+    return lines
+```
+
+把同一场站会切成二十秒一段，时钟在拼接处依然是诚实的。但词不是：
+
+```
+[16.8s] Let's keep it for two weeks, then remove it.
+[19.6s] Thomas?
+[20.0s] awesome.
+[20.4s] Can you put the deprecation notice in the change log by Friday?
+[24.1s] Yes, I'll do that.
+```
+
+那里其实只说了一句话："Tomas, can you put the deprecation notice in the changelog by Friday?" 切点正好落在这句话中间，所以名字进了一次请求，问句进了另一次请求。Whisper 把这个孤立的名字听成了一个疑问句，为了填补 chunk 结尾的空隙又发明了一个 `awesome.`，把一句话变成了三句。
+
+时间戳仍然是对的，会议记录那一步也仍然能找到这项任务。它丢掉的是那个名字，而归属恰恰依赖名字。
+
+<Warning>
+  按固定时长切分，会在每一个边界上打断某个人说话。二十秒短到几乎每次都会切在一句话中间；十分钟让这种情况变得罕见但并非不可能，而且它最终会落在某句正好把任务派出去的话上。按静默切分能真正避开这个问题，但需要一个能找到静默间隙的工具，比如 `ffmpeg` 或 `pydub`。只有在文件真的需要时才切分。
+</Warning>
+
+压缩格式没法这样切，因为你没法用标准库在帧边界上切开 MP3。这种情况用 `ffmpeg`：
+
+```bash
+ffmpeg -i meeting.mp3 -f segment -segment_time 600 -c copy chunk_%03d.mp3
+```
+
+## 把这些串起来
+
+```python
+def meeting_notes(path: str, attendees: list[str] | None = None) -> dict:
+    model = "openai/whisper-large-v3"
+    size_mb = os.path.getsize(path) / 1_000_000
+    if path.endswith(".wav") and size_mb > 20:
+        print(f"{size_mb:.0f} MB, splitting", file=sys.stderr)
+        lines = transcribe_long(path, model)
+    else:
+        lines = timed_lines(transcribe(path, model, timestamps=True))
+    print(f"{len(lines)} lines transcribed", file=sys.stderr)
+    return write_notes(lines, attendees)
+
+
+if __name__ == "__main__":
+    recording = sys.argv[1] if len(sys.argv) > 1 else "standup.wav"
+    roster = sys.argv[2:] or None
+    print(json.dumps(meeting_notes(recording, roster), indent=2))
+```
+
+```bash
+python notes.py standup.wav "Priya Raman" "Tomas Vidal" "Mei Lin"
+```
+
+## 下一步
+
+- 把行动项发到你的任务追踪工具里，用花名册解析出来的负责人姓名。
+- 用[文本转语音](/guides/media/text-to-speech)把摘要念给错过会议的人听。
+- 把转录稿用[嵌入](/guides/features/embeddings)存起来，实现对历次会议的搜索。
+- 让一个智能体自行决定什么时候该转录、什么时候直接从已有的会议记录里作答，参见[使用函数调用构建能使用工具的智能体](/guides/features/tool-using-agent)。
+
+<CardGroup cols={2}>
+  <Card title="语音转文本" icon="microphone" href="/guides/media/speech-to-text">
+    转录 endpoint 的参考文档。
+  </Card>
+  <Card title="从文档中抽取结构化数据" icon="file-text" href="/guides/tools/document-extraction">
+    同样的 schema 优先抽取方法，用在文件上。
+  </Card>
+  <Card title="结构化响应" icon="braces" href="/guides/features/structured-responses">
+    json_schema 如何约束一次 completion。
+  </Card>
+  <Card title="声音克隆" icon="wave-sine" href="/guides/media/voice-cloning">
+    给摘要一个属于它自己的声音。
+  </Card>
+</CardGroup>

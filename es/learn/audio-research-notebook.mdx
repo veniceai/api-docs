@@ -1,0 +1,399 @@
+---
+title: "Cómo construir un cuaderno de investigación con audio"
+description: "Convierte tus fuentes en respuestas citadas y en un resumen de audio a dos voces con Venice."
+slug: audio-research-notebook-venice
+"og:title": "Cómo construir un cuaderno de investigación con audio con Venice"
+"og:description": "Un cuaderno al estilo NotebookLM sobre Venice. Ingiere URLs y PDFs, haz preguntas que citen sus fuentes y genera un resumen de audio a dos voces."
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Sabrina Aquino" date="20 de agosto de 2026"/>
+
+Herramientas como NotebookLM cambiaron lo que la gente espera de una pila de material de investigación. Agregas fuentes, haces preguntas y obtienes respuestas que remiten al material, y luego generas una conversación entre dos presentadores que puedes escuchar mientras paseas.
+
+Esta guía construye eso en unas doscientas líneas de Python, sobre cinco endpoints de Venice. Nada se almacena fuera de tu máquina salvo las propias peticiones, y Venice no las retiene.
+
+<Card title="Ejecuta este cuaderno en Google Colab" icon="notebook" href="https://colab.research.google.com/github/veniceai/api-docs/blob/main/notebooks/audio-research-notebook.ipynb">
+  Cada paso de abajo como un cuaderno ejecutable, con el resumen reproduciéndose en línea. Nada que instalar.
+</Card>
+
+## Cómo funciona
+
+Cinco endpoints, cada uno con una tarea:
+
+| Paso | Endpoint | Para qué sirve |
+| --- | --- | --- |
+| Leer una página web | `/augment/scrape` | Devuelve Markdown, no HTML que tengas que limpiar |
+| Leer un PDF o documento | `/augment/text-parser` | Una subida multipart y recibes el texto |
+| Indexar el texto | `/embeddings` | Te permite recuperar por significado en lugar de por palabra clave |
+| Responder preguntas | `/chat/completions` | Fundamentado en los pasajes recuperados, con citas |
+| Locutar el resumen | `/audio/speech` | Dos voces, una por presentador |
+
+La recuperación aquí es deliberadamente sencilla: vectores en una lista de Python, similitud coseno en un bucle. Esa es la cantidad justa de maquinaria para unas pocas docenas de fuentes y mantiene visibles las piezas móviles. Cuando te quedes corto, [Cómo construir un bot RAG privado](/learn/private-rag-bot) cubre el mismo pipeline con una base de datos vectorial real y un paso de reordenación.
+
+## Preparación
+
+Una dependencia y una clave desde [la página de configuración de la API](/guides/getting-started/generating-api-key).
+
+```bash
+pip install requests
+export VENICE_API_KEY="your-key-here"
+```
+
+Crea `notebook.py` y empieza con los imports y la configuración. Las dos listas al final son todo el estado del cuaderno: `sources` registra lo que has añadido y `chunks` contiene las piezas indexables.
+
+```python
+import io
+import json
+import os
+import re
+import wave
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+
+EMBED_MODEL = "text-embedding-bge-m3"
+TTS_MODEL = "tts-xai-v1"
+HOSTS = {"Ana": "luna", "Marco": "orion"}
+
+sources = []
+chunks = []
+```
+
+`HOSTS` asigna un nombre de presentador a una voz. Ambas voces provienen de `tts-xai-v1`, y eso importa: las voces pertenecen a los modelos, y enviar una voz de una familia a un modelo de otra es el error más habitual al usar por primera vez el endpoint de voz.
+
+## Elegir un modelo que no se quede obsoleto
+
+Fijar un modelo de chat en el código garantiza que el proyecto envejezca. Venice publica qué modelo ocupa actualmente cada rol a través de `/models/traits`, así que puedes pedir el valor por defecto vigente en lugar de nombrar uno.
+
+```python
+def default_text_model():
+    response = requests.get(
+        f"{BASE_URL}/models/traits", headers=HEADERS, params={"type": "text"}, timeout=60
+    )
+    response.raise_for_status()
+    return response.json()["data"]["default"]
+
+
+CHAT_MODEL = default_text_model()
+
+
+def chat(messages, **options):
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers=HEADERS,
+        json={"model": CHAT_MODEL, "messages": messages, **options},
+        timeout=300,
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+```
+
+Hay otros rasgos disponibles si este cuaderno no encaja con lo que quieres. `most_intelligent` te da un modelo más potente para el resumen intensivo en razonamiento, y `default_reasoning` te ofrece uno que piensa en voz alta. Consulta [Modelos](/models/overview) para ver la lista completa.
+
+## Añadir fuentes
+
+Una fuente es una URL o un archivo en disco, y Venice tiene un endpoint para cada uno. Ambos devuelven texto plano, que es de lo que se trata: al resto del cuaderno no le importa de dónde vino una fuente.
+
+```python
+def read_url(url):
+    response = requests.post(
+        f"{BASE_URL}/augment/scrape", headers=HEADERS, json={"url": url}, timeout=180
+    )
+    response.raise_for_status()
+    return response.json()["content"]
+
+
+def read_file(path):
+    with open(path, "rb") as handle:
+        response = requests.post(
+            f"{BASE_URL}/augment/text-parser",
+            headers=HEADERS,
+            files={"file": (Path(path).name, handle)},
+            timeout=180,
+        )
+    response.raise_for_status()
+    return response.json()["text"]
+```
+
+`/augment/scrape` devuelve Markdown en lugar de HTML crudo, por lo que no hay que escribir código para eliminar plantillas repetitivas. `/augment/text-parser` acepta PDF, Word, Excel y texto plano hasta 25 MB, y devuelve un conteo de tokens junto al texto. [Procesamiento de documentos](/guides/tools/document-processing) cubre todas sus opciones.
+
+## Fragmentación e incrustaciones
+
+Incrustar un documento entero produce un vector que es un promedio de todo lo que dice, algo demasiado tosco para recuperar una afirmación concreta. Dividirlo produce vectores que sí significan algo.
+
+Divide por límites de párrafo en lugar de por un número fijo de caracteres. Un fragmento que se corta a mitad de frase se recupera mal, porque la incrustación es de un fragmento roto.
+
+```python
+def split(text, limit=1200):
+    """Empaqueta párrafos en fragmentos sin cortar ninguno por la mitad."""
+    packed, current = [], ""
+    for para in re.split(r"\n\s*\n", text):
+        para = para.strip()
+        if not para:
+            continue
+        if current and len(current) + len(para) + 2 > limit:
+            packed.append(current)
+            current = para
+        else:
+            current = f"{current}\n\n{para}" if current else para
+    if current:
+        packed.append(current)
+    return packed
+
+
+def embed(texts):
+    vectors = []
+    for start in range(0, len(texts), 64):
+        response = requests.post(
+            f"{BASE_URL}/embeddings",
+            headers=HEADERS,
+            json={"model": EMBED_MODEL, "input": texts[start : start + 64]},
+            timeout=180,
+        )
+        response.raise_for_status()
+        vectors.extend(row["embedding"] for row in response.json()["data"])
+    return vectors
+```
+
+`embed` procesa por lotes porque el endpoint acepta una lista, y una petición para sesenta y cuatro fragmentos es mucho más barata en tiempo real que sesenta y cuatro peticiones. `text-embedding-bge-m3` devuelve 1024 dimensiones y maneja bien las fuentes multilingües.
+
+Añadir una fuente ahora consiste en leer, dividir, incrustar y registrar. La magnitud de cada vector se almacena junto a él porque nunca cambia y recalcularla dentro del bucle de similitud es trabajo desperdiciado.
+
+```python
+def add_source(title, ref):
+    text = read_url(ref) if ref.startswith("http") else read_file(ref)
+    number = len(sources) + 1
+    sources.append({"number": number, "title": title, "ref": ref})
+
+    pieces = split(text)
+    for piece, vector in zip(pieces, embed(pieces)):
+        magnitude = sum(x * x for x in vector) ** 0.5
+        chunks.append(
+            {"source": number, "title": title, "text": piece,
+             "vector": vector, "magnitude": magnitude}
+        )
+    print(f"[{number}] {title}: {len(text)} characters, {len(pieces)} chunks")
+```
+
+El `number` es lo que más adelante hace posible la cita. Cada fragmento recuerda de qué fuente vino, de modo que una respuesta puede remitir a ella.
+
+## Recuperar los pasajes correctos
+
+Similitud coseno entre el vector de la pregunta y cada vector de fragmento, ordenados, los k mejores. Para unos pocos miles de fragmentos esto se ejecuta más rápido que la llamada de red que produjo el vector de la pregunta.
+
+```python
+def retrieve(question, k=6):
+    query = embed([question])[0]
+    query_magnitude = sum(x * x for x in query) ** 0.5
+
+    def similarity(chunk):
+        dot = sum(a * b for a, b in zip(query, chunk["vector"]))
+        return dot / (query_magnitude * chunk["magnitude"])
+
+    return sorted(chunks, key=similarity, reverse=True)[:k]
+```
+
+## Responder con citas
+
+La diferencia entre una respuesta fundamentada y una conjetura segura de sí misma está por entero en el prompt. Dos instrucciones hacen el trabajo: responder solo desde las notas, y decirlo cuando las notas se queden cortas. Sin la segunda, un modelo llenará el hueco silenciosamente desde la memoria, que es precisamente el modo de fallo que quieres eliminar por diseño.
+
+Numerar las notas en el prompt le da al modelo un vocabulario de citación. Escribe `[2]`, y tú puedes resolver eso a una fuente.
+
+```python
+def ask(question, k=6):
+    hits = retrieve(question, k)
+    notes = "\n\n".join(f"[{h['source']}] {h['title']}\n{h['text']}" for h in hits)
+    answer = chat(
+        [
+            {"role": "system", "content": (
+                "Answer only from the numbered notes. Cite every claim with the bracket number "
+                "of the note it came from. If the notes do not answer the question, say so "
+                "instead of filling the gap.")},
+            {"role": "user", "content": f"Notes:\n\n{notes}\n\nQuestion: {question}"},
+        ],
+        temperature=0.2,
+    )
+    cited = sorted({int(n) for n in re.findall(r"\[(\d+)\]", answer)})
+    return answer, [s for s in sources if s["number"] in cited]
+```
+
+Extraer los corchetes vale la pena por esa única línea. Te dice qué fuentes cargaron realmente con la respuesta, que es como te das cuenta de que una fuente que creías central nunca acaba siendo citada.
+
+## Escribir el guion del resumen
+
+Aquí es donde el cuaderno deja de ser una caja de búsqueda. Un resumen es algo que se lee; un overview es algo que se escucha, y ambos piden una prosa distinta. El diálogo funciona mejor en audio porque el turno de palabra ya marca el ritmo, y una pregunta de un presentador es una forma natural de introducir la siguiente idea.
+
+Importan tres restricciones, y las tres vienen del audio y no del texto:
+
+- **Nada de markdown, nada de URLs.** Un modelo de voz lee `https://docs.venice.ai` un carácter a la vez.
+- **Deletrea las abreviaturas.** *T E E* la primera vez, no *tee*.
+- **Varía la duración de los turnos.** Turnos de tamaño uniforme suenan como dos personas leyéndose una lista.
+
+Pedir JSON con un esquema es lo que hace que el resultado sea renderizable. El texto libre necesitaría parseo, y las etiquetas de hablante son justo el tipo de cosa con la que un modelo se pone creativo. El `enum` en `speaker` garantiza que cada turno mapea a una voz que tienes.
+
+```python
+DIALOGUE_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "dialogue",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["turns"],
+            "properties": {
+                "turns": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["speaker", "text"],
+                        "properties": {
+                            "speaker": {"type": "string", "enum": list(HOSTS)},
+                            "text": {"type": "string"},
+                        },
+                    },
+                }
+            },
+        },
+    },
+}
+
+
+def write_script(turns=16):
+    """Pide a un modelo de chat un diálogo a dos voces fundamentado en las fuentes."""
+    spread = chunks[:: max(1, len(chunks) // 12)][:12]
+    notes = "\n\n".join(f"{c['title']}\n{c['text']}" for c in spread)
+    hosts = " and ".join(HOSTS)
+    raw = chat(
+        [
+            {"role": "system", "content": (
+                f"You write podcast dialogue for two hosts, {hosts}. Ground every statement in "
+                "the supplied notes. Write for the ear: no markdown, no URLs, no bracket "
+                "citations, no stage directions. Spell out abbreviations the first time they "
+                "appear. Vary the length of turns. Open with a hook and close with a takeaway.")},
+            {"role": "user", "content": f"Notes:\n\n{notes}\n\nWrite about {turns} turns."},
+        ],
+        temperature=0.7,
+        response_format=DIALOGUE_SCHEMA,
+    )
+    return json.loads(raw)["turns"]
+```
+
+El resumen cubre las fuentes de manera amplia en lugar de responder a una pregunta, así que `spread` muestrea fragmentos a lo largo de toda la colección en vez de recuperar por similitud. Tomar cada enésimo fragmento es tosco y funciona bien: alcanza el final de documentos largos, cosa que tomar los primeros doce nunca lograría.
+
+Trata la cantidad de turnos como una pista, no como una instrucción. Pedir dieciséis ha producido aquí entre dieciséis y veintiocho, según cuánto tengan que decir las fuentes. Si necesitas un tope estricto, trunca `turns` antes de renderizar en lugar de discutir con el prompt.
+
+## Renderizar dos voces en una sola pista
+
+Cada turno se convierte en una petición de voz, con la voz elegida por quien habla.
+
+```python
+def speak(turn):
+    response = requests.post(
+        f"{BASE_URL}/audio/speech",
+        headers=HEADERS,
+        json={"model": TTS_MODEL, "voice": HOSTS[turn["speaker"]],
+              "input": turn["text"], "response_format": "wav"},
+        timeout=300,
+    )
+    response.raise_for_status()
+    with wave.open(io.BytesIO(response.content)) as clip:
+        return clip.getparams(), clip.readframes(clip.getnframes())
+```
+
+Leer los frames de cada clip, en lugar de guardar veinte archivos y unirlos después, es lo que mantiene limpia la unión. Concatenar audio codificado como MP3 no funciona de forma fiable, porque cada archivo lleva sus propias cabeceras. Los frames decodificados son solo muestras, así que unirlos es simplemente añadir bytes.
+
+Dos detalles hacen que el resultado suene intencionado. La cabecera del archivo de salida viene del primer clip y no de constantes, así que la frecuencia de muestreo siempre es la correcta para el modelo que hayas elegido. Y un cuarto de segundo de silencio entre turnos le da al oído un tiempo para registrar que el hablante ha cambiado. Sin él, los presentadores se pisan los finales.
+
+```python
+def audio_overview(turns, path="overview.wav", pause_seconds=0.25):
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        rendered = list(pool.map(speak, turns))
+
+    params = rendered[0][0]
+    silence = b"\x00" * int(params.framerate * params.sampwidth * params.nchannels * pause_seconds)
+    with wave.open(path, "wb") as out:
+        out.setnchannels(params.nchannels)
+        out.setsampwidth(params.sampwidth)
+        out.setframerate(params.framerate)
+        for position, (_, frames) in enumerate(rendered):
+            if position:
+                out.writeframes(silence)
+            out.writeframes(frames)
+    return path
+```
+
+`pool.map` preserva el orden de entrada, así que los turnos vuelven en el orden en que se escribieron sin importar cuál termine primero. Cuatro workers es un techo deliberado, no un máximo: más concurrencia empezará a devolver 429 en niveles bajos, y el trabajo ya está dominado por el turno individual más largo.
+
+## Ejecutarlo
+
+```python
+if __name__ == "__main__":
+    add_source("Venice Privacy", "https://docs.venice.ai/overview/privacy")
+    add_source("TEE and E2EE Models", "https://docs.venice.ai/guides/features/tee-e2ee-models")
+    add_source("VVV and DIEM", "https://docs.venice.ai/overview/vvv-diem")
+
+    answer, cited = ask("How does Venice keep my prompts private, and what do I give up?")
+    print(answer)
+    print("\nSources:", ", ".join(f"[{s['number']}] {s['title']}" for s in cited))
+
+    turns = write_script()
+    print(f"\nWriting {len(turns)} turns to overview.wav")
+    audio_overview(turns)
+```
+
+```bash
+python notebook.py
+```
+
+```
+[1] Venice Privacy: 7507 characters, 7 chunks
+[2] TEE and E2EE Models: 43859 characters, 40 chunks
+[3] VVV and DIEM: 9609 characters, 11 chunks
+
+Venice's privacy architecture is built around a proxy foundation. All requests pass
+through Venice over HTTPS and are relayed to the model provider without Venice storing
+your prompt or response content [1]. On top of that proxy, each model offers one of four
+progressively stronger privacy modes [1]...
+
+Sources: [1] Venice Privacy
+
+Writing 23 turns to overview.wav
+```
+
+Ingerir y responder tarda unos segundos. El audio es la parte lenta y varía con la carga: unos seis minutos de habla tardan entre medio minuto y tres minutos en renderizarse.
+
+## Cómo hacerlo tuyo
+
+**Las fuentes lo son todo.** Todo lo que viene después está limitado por lo que hayas metido. Las páginas raspadas arrastran su navegación y sus pies de página, algo inofensivo para responder pero que en un resumen aparece como un presentador debatiendo con seriedad un índice de documentación. Si eso pasa, descarta los fragmentos por debajo de un umbral de longitud o filtra los adornos obvios antes de incrustar.
+
+**Cambia las voces.** `HOSTS` son dos entradas en un diccionario. `tts-xai-v1` incluye veintiséis voces, y otras familias tienen las suyas; `GET /models?type=tts` lista `voices` por modelo. Dos voces que contrastan con claridad son más fáciles de seguir que dos que simplemente son distintas.
+
+**Clona la tuya.** [Clonación de voz](/guides/media/voice-cloning) convierte una muestra corta en un identificador de voz que puedes colocar directamente en `HOSTS`.
+
+**Añade un tercer participante.** Nada en el pipeline asume dos hablantes salvo el `enum` del esquema. Añadir un entrevistador que solo hace preguntas cambia bastante la sensación.
+
+**Conserva el guion.** Guardar `turns` en un archivo JSON junto al audio cuesta dos líneas y te ahorra un nuevo renderizado cada vez que quieras retocar una frase.
+
+## A dónde ir después
+
+<CardGroup cols={2}>
+  <Card title="Bot RAG privado" icon="database" href="/learn/private-rag-bot">
+    El mismo pipeline de recuperación con una base de datos vectorial real y reordenación.
+  </Card>
+  <Card title="Respuestas citadas con búsqueda web" icon="search" href="/guides/tools/cited-web-answers">
+    Encuentra las fuentes automáticamente en lugar de nombrarlas tú mismo.
+  </Card>
+  <Card title="Texto a voz" icon="microphone" href="/guides/media/text-to-speech">
+    Referencia del endpoint de voz, sus voces y el streaming.
+  </Card>
+  <Card title="Procesamiento de documentos" icon="file-text" href="/guides/tools/document-processing">
+    Todo lo que acepta el analizador de texto y lo que devuelve.
+  </Card>
+</CardGroup>

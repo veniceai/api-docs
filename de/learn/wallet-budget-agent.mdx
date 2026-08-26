@@ -1,0 +1,358 @@
+---
+title: "Einem Agenten ein Wallet und ein Budget geben"
+description: "Bezahle Inferenz aus einem Wallet ohne API-Schlüssel und begrenze, was der Agent ausgeben kann."
+slug: wallet-budget-agent-venice-x402
+"og:title": "Einem Agenten ein Wallet und ein Budget geben mit Venice x402"
+"og:description": "Ein Agent, der sich mit einer Wallet-Signatur authentifiziert, pro Anfrage in USDC zahlt, jede Belastung ausgibt und an einer von dir gesetzten Obergrenze stoppt."
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Sabrina Aquino" date="21 August 2026"/>
+
+Ein Agent mit einem API-Schlüssel kann alles ausgeben, was der Schlüssel ausgeben kann. Das ist in Ordnung, wenn eine Person zusieht, und heikel, wenn niemand hinschaut. Die üblichen Lösungen leben außerhalb des Agenten, in einem Dashboard oder einer Abrechnungswarnung, die dir vom Problem erzählt, nachdem es passiert ist.
+
+Venice unterstützt einen zweiten Weg hinein. Statt eines Schlüssels hält der Agent ein Wallet. Er authentifiziert sich, indem er eine Nachricht signiert, zahlt jede Anfrage aus einem USDC-Guthaben, das an diese Wallet-Adresse gebunden ist, und jede Belastung landet in einem Ledger, den er zurücklesen kann. Es gibt kein Konto, kein Dashboard und keinen Schlüssel, der geleakt werden kann. Die Obergrenze ist das Guthaben, und du entscheidest, was du dort hineinlegst.
+
+Diese Anleitung baut einen Agenten, der genau das tut, unter einem Budget, das er sich selbst auferlegt.
+
+<Card title="Führ dieses Notebook in Google Colab aus" icon="notebook" href="https://colab.research.google.com/github/veniceai/api-docs/blob/main/notebooks/wallet-budget-agent.ipynb">
+  Jeder Schritt unten als ausführbares Notebook. Es läuft ohne finanziertes Wallet und stoppt an der Zahlungswand, sodass du den ganzen Ablauf sehen kannst, bevor du etwas ausgibst.
+</Card>
+
+## Wie es funktioniert
+
+Vier bewegliche Teile, drei davon sind einfach HTTP:
+
+| Schritt | Endpunkt | Wozu |
+| --- | --- | --- |
+| Beweise, wer du bist | Beliebig, via `SIGN-IN-WITH-X` | Eine signierte Nachricht ersetzt den API-Schlüssel |
+| Geld einzahlen | `/x402/top-up` | Die Rails entdecken, dann einen signierten USDC-Transfer abwickeln |
+| Guthaben prüfen | `/x402/balance/{address}` | Was übrig ist, und ob es für eine Transaktion reicht |
+| Belastungen lesen | `/x402/transactions/{address}` | Ledger pro Anfrage über jede Abbuchung |
+
+Die Inferenz selbst ist der gewöhnliche `/chat/completions`-Aufruf. Der einzige Unterschied ist, welchen Header du sendest.
+
+## Was der Start kostet
+
+Zwei Zahlen sind wichtig, und sie sind nicht dieselbe Zahl.
+
+Der **Mindest-Top-up beträgt fünf Dollar**. Das ist der kleinste Betrag, den `/x402/top-up` abwickelt, und er wird in der Discovery-Antwort zurückgegeben, nicht irgendwo hardgecodet — lies ihn also, statt dieser Seite zu vertrauen.
+
+Das **Mindestguthaben, um einen Aufruf zu tätigen, sind zehn Cent**. Ein Wallet mit weniger bekommt von der Inferenz ein `402` zurück, obwohl es Geld hält.
+
+Fünf Dollar sind also das kleinste Wallet, das sich zu finanzieren lohnt, und fünf Dollar sind das, was diese Anleitung dem Agenten mitgibt. Es lohnt sich zu wissen, was das kauft: Eine kurze Frage an `qwen3-5-9b` kostet etwa 27 Input-Tokens und 26 Output-Tokens, was zu den Preisen dieses Modells ungefähr sieben Millionstel Dollar entspricht. Fünf Dollar sind in der Größenordnung von dreiviertel Millionen Fragen. Das Budget hier ist keine enge Beschränkung, es ist ein Explosionsradius.
+
+## Setup
+
+Das x402-SDK erledigt das Zahlungssignieren. Bau das nicht selbst nach: Die Transfer-Autorisierung ist EIP-712-typisierte Daten, und ein wiederverwendeter Nonce scheitert bei der Verifikation auf mühsam zu debuggende Weise.
+
+```bash
+pip install "x402[evm]" eth-account requests
+```
+
+<Note>
+  Das x402-Python-SDK benötigt Python 3.10 oder neuer. Colab passt. Ein System-Python, das mit macOS geliefert wurde, vielleicht nicht.
+</Note>
+
+Erstelle `agent.py` mit der Konfiguration. `BUDGET_USD` ist die Obergrenze, die der Agent sich selbst auferlegt, hier auf das gesamte Wallet gesetzt. Senk sie ab, und der Agent stoppt, bevor das Geld ausgeht — das ist der einzige Regler, den du wahrscheinlich anfassen wirst.
+
+```python
+import base64
+import json
+import os
+import secrets
+from datetime import datetime, timedelta, timezone
+
+import requests
+from eth_account import Account
+from eth_account.messages import encode_defunct
+
+BASE_URL = "https://api.venice.ai/api/v1"
+DOMAIN = "api.venice.ai"
+CHAIN_ID = 8453          # Base mainnet
+MODEL = "qwen3-5-9b"
+BUDGET_USD = 5.00
+```
+
+## Ein Wallet, das der Agent besitzt
+
+Der Agent braucht ein Schlüsselpaar. In der Produktion ist das ein Wallet, das du bewusst finanziert hast und dessen Schlüssel in einem Secret-Manager lebt. Während du baust, ist das Erzeugen eines Wegwerf-Wallets die richtige Bewegung, denn ein Wallet ohne Geld kann versehentlich nichts Teures tun.
+
+```python
+key = os.environ.get("WALLET_KEY")
+account = Account.from_key(key) if key else Account.create()
+
+print(f"wallet {account.address}")
+print("funded" if key else "disposable, cannot pay yet")
+```
+
+Halte den privaten Schlüssel aus dem Notebook heraus. In Colab leg ihn in Secrets ab und lies ihn mit `userdata.get("WALLET_KEY")`.
+
+## Signieren statt Authentifizieren
+
+Es gibt keinen Schlüssel zum Senden, also trägt jede Anfrage einen Beweis, dass der Wallet-Besitzer sie gestellt hat. Der Beweis ist eine [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361)-Nachricht, signiert und dann base64-kodiert in den `SIGN-IN-WITH-X`-Header.
+
+Das Nachrichtenformat ist exakt. Venice baut diese Bytes auf seiner Seite neu auf und verifiziert deine Signatur dagegen, sodass eine verirrte Leerzeile eine abgelehnte Signatur bedeutet statt einer hilfreichen Fehlermeldung.
+
+```python
+def siwx_header():
+    now = datetime.now(timezone.utc)
+    stamp = lambda t: t.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    issued_at, expires_at = stamp(now), stamp(now + timedelta(minutes=4))
+    nonce = secrets.token_hex(8)
+
+    message = (
+        f"{DOMAIN} wants you to sign in with your Ethereum account:\n"
+        f"{account.address}\n\nSign in to Venice AI\n\n"
+        f"URI: https://{DOMAIN}\nVersion: 1\nChain ID: {CHAIN_ID}\n"
+        f"Nonce: {nonce}\nIssued At: {issued_at}\nExpiration Time: {expires_at}"
+    )
+    signature = account.sign_message(encode_defunct(text=message)).signature.hex()
+
+    payload = {
+        "address": account.address,
+        "message": message,
+        "signature": signature if signature.startswith("0x") else "0x" + signature,
+        "chainId": CHAIN_ID,
+    }
+    return base64.b64encode(json.dumps(payload).encode()).decode()
+```
+
+Drei Regeln bestimmen diese Header, und alle drei existieren, um Replays zu verhindern. Die Signatur ist ab `Issued At` **fünf Minuten lang gültig**. Jeder **Nonce ist etwa fünfeinhalb Minuten lang einmal verwendbar**. Und der Signierer muss zum Wallet im Pfad passen, sodass ein Wallet kein anderes einsehen kann und beim Versuch ein `403` bekommt.
+
+Die praktische Konsequenz ist, dass du pro Anfrage einen frischen Header signierst, statt einen zu cachen. Signieren ist lokal und gratis, das kostet also nichts.
+
+```python
+def wallet_get(path, **params):
+    response = requests.get(
+        f"{BASE_URL}{path}",
+        headers={"SIGN-IN-WITH-X": siwx_header()},
+        params=params,
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["data"]
+
+
+def balance():
+    return wallet_get(f"/x402/balance/{account.address}")
+
+
+print(balance())
+```
+
+Auf einem frischen Wallet:
+
+```json
+{
+  "walletAddress": "0xc5048ea84939bb7eb4c611b88ea17d5ee4f11a0c",
+  "balanceUsd": 0,
+  "canConsume": false,
+  "minimumTopUpUsd": 5,
+  "suggestedTopUpUsd": 10
+}
+```
+
+`canConsume` ist das Feld, auf das du verzweigen solltest. Es berücksichtigt die Zehn-Cent-Untergrenze, damit du das nicht tun musst.
+
+## Geld einzahlen
+
+Ein Top-up sind zwei Anfragen. Die erste fragt, was Venice akzeptiert, und ist nicht authentifiziert, weil es noch nichts zu authentifizieren gibt. Die zweite trägt eine signierte Transfer-Autorisierung.
+
+```python
+from x402.client import SpendControls, x402ClientSync
+from x402.http import PAYMENT_SIGNATURE_HEADER, encode_payment_signature_header
+from x402.mechanisms.evm import EthAccountSigner
+from x402.mechanisms.evm.exact.client import ExactEvmScheme
+from x402.schemas.payments import PaymentRequired
+
+
+def top_up():
+    discovery = requests.post(f"{BASE_URL}/x402/top-up", timeout=30)
+    required = PaymentRequired.model_validate(discovery.json())
+
+    rail = next(a for a in required.accepts if a.network.startswith("eip155"))
+    print(f"{rail.network}: {int(rail.amount) / 1e6:.2f} USDC to {rail.payTo}")
+
+    client = x402ClientSync()
+    client.register(rail.network, ExactEvmScheme(EthAccountSigner(account)))
+    # The SDK caps one payment at $1 by default, which is below the $5 minimum
+    # top-up, so every rail gets rejected until this is raised.
+    client.set_spend_controls(SpendControls(max_amount_per_payment="$5", allowed_assets=True))
+
+    payload = client.create_payment_payload(required)
+    settlement = requests.post(
+        f"{BASE_URL}/x402/top-up",
+        headers={PAYMENT_SIGNATURE_HEADER: encode_payment_signature_header(payload)},
+        timeout=90,
+    )
+    return settlement.json()
+```
+
+Discovery gibt einen Eintrag pro Rail zurück. Heute Base und Solana:
+
+```json
+{
+  "x402Version": 2,
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "eip155:8453",
+      "amount": "5000000",
+      "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "payTo": "0x2670b922ef37c7df47158725c0cc407b5382293f",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "USD Coin", "version": "2" }
+    },
+    {
+      "scheme": "exact",
+      "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+      "amount": "5000000",
+      "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "payTo": "8qUL23aSj7mDWdoLMXGHFvnVCT9wd7jXcysiekroADEL",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "USD Coin", "version": "2", "feePayer": "BFK9TLC3edb13K6v4YyH3DwPb5DSUpkWvb7XnqCL9b4F" }
+    }
+  ]
+}
+```
+
+Zwei Details darin sind leicht zu übersehen. `amount` ist in Basiseinheiten, und USDC hat sechs Dezimalstellen, also sind `5000000` fünf Dollar und keine fünf Millionen von irgendetwas. Auf dem Solana-Rail ist `extra.feePayer` ein von Venice betriebenes Konto, das die Transaktionsgebühr trägt, wodurch ein Wallet zahlen kann, ohne SOL zu halten.
+
+<Warning>
+  Die Standard-Ausgabensteuerung ist das Erste, was dich stoppen wird. Das SDK wird mit `max_amount_per_payment` auf einen Dollar ausgeliefert, und der Venice-Mindest-Top-up beträgt fünf, sodass ein unveränderter Client jede angebotene Rail ablehnt und `NoMatchingRequirementsError` wirft, bevor er überhaupt das Netzwerk kontaktiert. Heb die Grenze bewusst an, statt die Ausgabensteuerung abzuschalten.
+</Warning>
+
+Ein Settlement aus einem Wallet ohne USDC gibt ein `400` mit `PAYMENT_VERIFICATION_FAILED` zurück. Das ist die erwartete Form des Fehlschlags: Die Signatur war in Ordnung, der Transfer nicht.
+
+## Pro Aufruf bezahlen
+
+Mit einem Guthaben in place ist Inferenz eine normale Anfrage, die zufällig eine Signatur trägt. Den Venice-System-Prompt abzuschalten ist wichtiger, als es aussieht: Er ist etwa siebzehnhundert Input-Tokens pro Aufruf wert, was zwei Größenordnungen mehr ist als die Frage selbst.
+
+```python
+def ask(question):
+    response = requests.post(
+        f"{BASE_URL}/chat/completions",
+        headers={"SIGN-IN-WITH-X": siwx_header(), "Content-Type": "application/json"},
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user", "content": question}],
+            "max_completion_tokens": 150,
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+                "disable_thinking": True,
+            },
+        },
+        timeout=90,
+    )
+    if response.status_code == 402:
+        body = response.json()
+        raise RuntimeError(
+            f"balance ${body.get('currentBalanceUsd', 0)} is under the "
+            f"${body.get('minimumBalanceUsd')} floor. Minimum top-up is "
+            f"${body['topUpInstructions']['minimumAmountUsd']}."
+        )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"].strip()
+```
+
+`402` als normalen Ausgang zu behandeln statt als Ausnahme ist der ganze Entwurf. Ein Agent, der sich selbst bezahlt, wird irgendwann kein Geld mehr haben, und kein Geld mehr zu haben ist kein Crash.
+
+## Auslesen, was er ausgegeben hat
+
+Der Ledger ist maßgeblich. Frag lieber, was tatsächlich in Rechnung gestellt wurde, als aus Token-Zählern zu schätzen.
+
+```python
+def charges():
+    """Every debit against this wallet, newest first."""
+    ledger = wallet_get(f"/x402/transactions/{account.address}", limit=100)
+    return [t for t in ledger["transactions"] if t["type"] == "CHARGE"]
+```
+
+Jede Zeile verweist zurück auf den Aufruf, der sie verursacht hat:
+
+```json
+{
+  "id": "ledger_01H...",
+  "amount": -0.0000066,
+  "balanceAfter": 4.9999934,
+  "type": "CHARGE",
+  "createdAt": "2026-08-21T18:22:10.000Z",
+  "requestId": "chatcmpl-...",
+  "modelId": "qwen3-5-9b"
+}
+```
+
+`TOP_UP`- und `REFUND`-Zeilen tauchen hier auch auf, mit positiven Beträgen. Auf `CHARGE` zu filtern liefert dir die Ausgaben.
+
+## Der budgetierte Lauf
+
+Jetzt die Schleife. Vor jedem Aufruf prüft der Agent, was er ausgegeben hat, und lehnt Arbeit ab, die er nicht bezahlen kann.
+
+```python
+TASKS = [
+    "Name one concrete tradeoff of vector search versus keyword search. One sentence.",
+    "In one sentence, when is a bloom filter the wrong choice?",
+    "Give one reason CRDTs are hard to debug in production. One sentence.",
+    "What is one failure mode of exponential backoff without jitter? One sentence.",
+    "Name one thing consistent hashing does not solve. One sentence.",
+    "Why is p99 latency more useful than the mean? One sentence.",
+]
+
+
+def run(budget=BUDGET_USD):
+    opening = balance()
+    print(f"balance ${opening['balanceUsd']:.4f}, budget ${budget:.4f}")
+
+    if not opening["canConsume"]:
+        print(f"cannot transact yet, minimum top-up is ${opening['minimumTopUpUsd']}")
+        return
+
+    baseline = sum(abs(c["amount"]) for c in charges())
+    spent = 0.0
+
+    for number, task in enumerate(TASKS, 1):
+        if spent >= budget:
+            print(f"\nstopped before task {number}: ${spent:.6f} of ${budget:.4f} spent")
+            return
+
+        answer = ask(task)
+        spent = sum(abs(c["amount"]) for c in charges()) - baseline
+        print(f"\n{number}. {task}")
+        print(f"   {answer}")
+        print(f"   ${spent:.6f} spent, ${budget - spent:.6f} left")
+
+    print(f"\nfinished all {len(TASKS)} tasks for ${spent:.6f}")
+    if spent:
+        print(f"at this rate ${budget:.2f} covers about {int(budget / (spent / len(TASKS))):,} calls")
+```
+
+Führ es mit den vollen fünf Dollar aus, und das Budget greift nie — das ist das ehrliche Ergebnis bei diesen Preisen. Um zu sehen, wie die Obergrenze tatsächlich arbeitet, setz eine, die schon ein einzelner Aufruf überschreitet:
+
+```python
+run()              # $5.00, finishes every task
+run(budget=1e-5)   # stops partway, having spent about $0.000007 per call
+```
+
+## Wo dich das hinterlässt
+
+Der Agent hält sein eigenes Geld, weist seine Identität mit einer Signatur nach und kann kein Limit überschreiten, das du setzt — und das alles, ohne dass irgendwo ein Konto existiert. Für einen geplanten Job, eine Serverless-Function oder alles andere, dem du ungern einen langlebigen Schlüssel in die Hand drückst, ist das eine wesentlich andere Sicherheitslage.
+
+Ein paar Dinge, die sich als Nächstes lohnen:
+
+<CardGroup cols={2}>
+  <Card title="Im Protokoll begrenzen" icon="shield">
+    Ausgabensteuerungen im SDK gelten pro Zahlung, nicht pro Session. Kombiniere sie mit der Budget-Schleife oben, damit ein Bug in dem einen den anderen nicht aushebeln kann.
+  </Card>
+  <Card title="Bei Leerstand auffüllen" icon="refresh">
+    Fang das `402` ab, füll auf und wiederhole. Genau das erledigt `venice-x402-client` auf der TypeScript-Seite für dich.
+  </Card>
+  <Card title="Auf Solana zahlen" icon="currency-solana">
+    Derselbe Ablauf, andere Rail. Signiere Ed25519 und setze den zurückgegebenen `feePayer`, sodass das Wallet kein SOL braucht.
+  </Card>
+  <Card title="Gib ihm echte Arbeit" icon="tools">
+    Tausch die Aufgabenliste gegen eine Tool-Calling-Schleife, und der Ledger fängt an, dir zu zeigen, was jede Entscheidung gekostet hat.
+  </Card>
+</CardGroup>
+
+Für die vollständige Endpunkt-Referenz siehe [x402 top-up](/api-reference/endpoint/x402/top-up) und [x402 mit der Venice-API verwenden](/guides/integrations/x402-venice-api).
