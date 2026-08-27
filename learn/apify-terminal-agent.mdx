@@ -304,14 +304,11 @@ Three small helpers do the unglamorous work. `sanitize_tool_name()` replaces ill
 
 ### Formatting Results Back into Context
 
-Tool results go straight into the conversation, so they need to be a string, and they need a size limit. Scraping a documentation site can easily return more text than the context window holds:
+Tool results go straight into the conversation, so they need to be a string, and they need a size limit. Scraping a documentation site can easily return more text than the context window holds.
+
+`format_tool_result()` prefers `structured_content` when the server provides it, and otherwise flattens the content blocks into text, coping with blocks that are not `TextContent`. It ends with the two lines that matter:
 
 ```python
-def format_tool_result(result: Any, *, max_chars: int) -> str:
-    if getattr(result, "structured_content", None) is not None:
-        text = json.dumps(result.structured_content, ensure_ascii=False)
-    else:
-        text = "\n".join(block.text for block in result.content or [])
     if getattr(result, "is_error", False):
         text = json.dumps({"error": text}, ensure_ascii=False)
     return truncate_text(text, max_chars)
@@ -326,10 +323,6 @@ def truncate_text(text: str, max_chars: int) -> str:
         "use a follow-up tool call with filters, limit, or offset]"
     )
 ```
-
-<Note>
-  The real `format_tool_result()` is a little longer, since it also handles content blocks that are not `TextContent`.
-</Note>
 
 The truncation notice is written for the model, not for you. Telling it that content was cut and suggesting filters, limits, or offsets is usually enough for it to make a narrower second call instead of assuming it saw everything.
 
@@ -383,7 +376,7 @@ An MCP connection is a long-lived async resource, and so is the HTTP client unde
 ```python
     async def __aenter__(self) -> ApifyMcp:
         try:
-            ...  # connect, then load_catalog(client)
+            # connect with _connect_stdio or _connect_http, then load_catalog(client)
             return self.session
         except BaseException:
             await self._stack.aclose()
@@ -483,7 +476,7 @@ class Agent:
         on_text: Callable[[str], None] | None = None,
         approve_tool: Callable[[str, str], Awaitable[bool] | bool] | None = None,
     ) -> None:
-        ...
+        # each argument is assigned to self, and then:
         self.messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
         ]
@@ -579,12 +572,19 @@ Models can request several tools in one turn, and there is no reason to run them
 
         async def run(item: tuple[Any, str | None]) -> dict[str, Any]:
             call, denied = item
-            content = denied if denied is not None else await execute_venice_tool_call(
-                self.apify,
-                name=call.function.name,
-                arguments_json=call.function.arguments,
-            )
-            return {"role": "tool", "tool_call_id": call.id, "content": content}
+            if denied is None:
+                content = await execute_venice_tool_call(
+                    self.apify,
+                    name=call.function.name,
+                    arguments_json=call.function.arguments,
+                )
+            else:
+                content = denied
+            return {
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": content,
+            }
 
         return list(await asyncio.gather(*[run(item) for item in planned]))
 ```
@@ -610,21 +610,27 @@ The approval check itself consults both names, since the model works with saniti
 
 The CLI in `src/venice_terminal_agent/cli.py` is Typer plus a REPL, and it is the least interesting file in the project — but three details in it are worth copying.
 
-The first is that every option defaults to `None`:
+The first is that the Typer options are typed as optional and default to `None`, so the settings loader can tell "not passed" from "passed a falsy value":
 
 ```python
-def cli(
-    prompt: Annotated[str | None, typer.Argument(help="Optional one-shot question.")] = None,
-    model: Annotated[str | None, typer.Option(help="Venice model ID.")] = None,
-    transport: Annotated[Literal["http", "stdio"] | None, typer.Option()] = None,
-    tools: Annotated[str | None, typer.Option(help="e.g. actors,docs.")] = None,
-    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
-    # max_rounds and save_history omitted
-) -> None:
-    ...
+    tools: Annotated[str | None, typer.Option(help="Apify MCP tools query, e.g. actors,docs.")] = None,
+    max_rounds: Annotated[int | None, typer.Option(help="Maximum tool-calling rounds per question.")] = None,
 ```
 
-That lets `load_settings()` tell "not passed" from "passed a falsy value", so a flag you did not use never overrides the environment.
+Those `None` defaults are what make the handoff to `load_settings()` safe, since a flag you did not use never overrides the environment:
+
+```python
+        settings = load_settings(
+            venice_model=model,
+            apify_mcp_transport=transport,
+            apify_mcp_tools=tools,
+            max_rounds=max_rounds,
+            auto_approve_tools=yes or None,
+            save_history=save_history or None,
+        )
+```
+
+The `yes or None` is the same idea applied to a boolean flag: `--yes` sets it, and omitting it passes `None` rather than `False`, so `AUTO_APPROVE_TOOLS` from the environment survives.
 
 The second is startup order. Resolve the model, then open the MCP session, then build the agent — and close the Venice client in a `finally`, since the MCP session and the HTTP clients both need unwinding whether or not the question succeeded:
 
