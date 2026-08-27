@@ -1,0 +1,833 @@
+---
+title: "بناء وكيل طرفية باستخدام Apify"
+description: "ابنِ وكيل طرفية بلغة Python يفكّر بواسطة Venice ويتصرّف عبر خادم Apify MCP."
+slug: apify-terminal-agent-venice
+"og:title": "بناء وكيل طرفية باستخدام Venice AI وApify"
+"og:description": "دليل عملي لبناء وكيل طرفية بلغة Python يستدلّ بإكمالات محادثة Venice ويكشط الويب الحي عبر Apify Actors المكشوفة عبر MCP."
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="27 August 2026"/>
+
+النموذج وحده لا يستطيع أن يخبرك بما يوجد على الصفحة الأولى لموقع Hacker News الآن. لفعل ذلك يحتاج إلى أدوات، وعلى أحدهم أن يبني تلك الأدوات ويصونها. Apify فعلت ذلك بالفعل: فهي تستضيف آلاف الـ Actors التي تكشط المواقع، وتزحف على الوثائق، وتسحب بيانات منظّمة، وتكشفها عبر [Model Context Protocol](https://docs.apify.com/integrations/mcp).
+
+هذا المزيج مناسب تمامًا لـ Venice. تُوفّر Venice استدعاء دوال متوافقًا مع OpenAI دون الاحتفاظ بأي بيانات، وتُوفّر Apify الأدوات، وMCP هو صيغة الاتصال بينهما. لا تكتب كاشطًا لكل موقع — تتصل مرة واحدة وتدع النموذج يختار الـ Actor.
+
+في هذا الدرس، سنبني وكيل طرفية بلغة Python يفعل ذلك بالضبط. في النهاية، سيكون لديك CLI يكتشف نموذج استدعاء دوال من Venice وقت التشغيل، ويُحمّل كتالوج أدوات Apify عبر MCP، ويبثّ الإجابات إلى طرفيتك، ويستأذنك قبل أن ينفق مالًا على تشغيل Actor.
+
+مهتم بالتنفيذ الكامل للكود؟ اطّلع على [مستودع GitHub](https://github.com/joshua-mo-143/venice-terminal-agent).
+
+قبل أن نُكمل، ستحتاج إلى مفتاح Venice API:
+
+```bash
+export VENICE_API_KEY=<my-key>
+```
+
+## ما الذي نبنيه
+
+التنفيذ المرجعي هو حزمة Python صغيرة بمهمّة واحدة لكل وحدة:
+
+| الوحدة | ما تفعله |
+| --- | --- |
+| `config.py` | تُحمّل الإعدادات من البيئة أو من `.env`، وتبني رابط Apify MCP |
+| `venice.py` | تستبين نموذجًا من `GET /models/traits` وتبثّ إكمالات المحادثة |
+| `apify_mcp.py` | تملك ناقل MCP وتستدعي أدوات Apify |
+| `tools.py` | تُحوّل مخططات أدوات MCP إلى أدوات دوال Venice وتُنسّق النتائج |
+| `agent.py` | تُشغّل حلقة استدعاء الأدوات وتحرس الأدوات المدفوعة |
+| `cli.py` | نقطة دخول Typer، وREPL، وأوامر الشرطة المائلة، ومطالبات الموافقة |
+| `render.py` | مخرجات Rich للشعار والرموز المبثوثة واستدعاءات الأدوات |
+
+يمرّ السؤال الواحد عبرها هكذا:
+
+1. اسأل Venice عن نموذج استدعاء الدوال الحالي، ما لم تكن ثبّتّ واحدًا.
+2. اتصل بخادم Apify MCP واسرد أدواته.
+3. أعِد كتابة أدوات MCP تلك في هيئة تعريفات دوال متوافقة مع OpenAI.
+4. أرسل السؤال مع قائمة الأدوات مرفقة.
+5. إذا أعاد النموذج `tool_calls`، شغّلها على Apify وألحق النتائج كرسائل `tool`.
+6. كرّر حتى يجيب النموذج بنص بدلًا من استدعاء أداة.
+
+الخطوات من 4 إلى 6 هي الوكيل بأكمله. كل ما عدا ذلك موجود لجعل تلك الخطوات الثلاث آمنة وممتعة الاستخدام.
+
+<Note>
+  يستطيع هذا الوكيل إنفاق حوسبة Apify على حسابك. ابدأ دون `APIFY_TOKEN` إن كنت تريد أدوات البحث والوثائق فقط، ولا تُفعّل `--yes` حتى تنوي فعلًا تشغيل Actors.
+</Note>
+
+## إعداد المشروع
+
+يستخدم المشروع المرجعي Python 3.12+ و[uv](https://docs.astral.sh/uv/).
+
+أنشئ مشروعًا جديدًا:
+
+```bash
+mkdir venice-terminal-agent
+cd venice-terminal-agent
+uv init --package
+```
+
+ثبّت التبعيات:
+
+```bash
+uv add httpx2 mcp openai prompt-toolkit pydantic-settings python-dotenv rich typer
+uv add --dev pytest pytest-asyncio
+```
+
+هذه `httpx2`، أي سلسلة الإصدارات 2.x من `httpx`، التي يعتمد عليها كلٌّ من `openai` و`mcp` أصلًا. تثبيتها مباشرة يجنّبك أن ينتهي بك الأمر بعميلَي HTTP في البيئة نفسها.
+
+ثم أنشئ ملف `.env`:
+
+```bash
+VENICE_API_KEY=your_venice_api_key_here
+APIFY_TOKEN=your_apify_token_here
+```
+
+يأتي `VENICE_API_KEY` من [إعدادات Venice API](https://venice.ai/settings/api?utm_source=venice-api-documentation). ويأتي `APIFY_TOKEN` من [Apify Console](https://console.apify.com/settings/integrations) وهو اختياري — سنشرح ما تحصل عليه بدونه بعد قليل.
+
+## تحميل التهيئة
+
+الإعدادات تأتي أولًا لأن كل وحدة أخرى تأخذها كوسيط. سنستخدم `pydantic-settings` حتى تصبّ متغيرات البيئة و`.env` ورايات CLI جميعها في كائن واحد مُتحقَّق منه.
+
+في `src/venice_terminal_agent/config.py`، تحمل فئة `Settings(BaseSettings)` الحقول المهمة:
+
+```python
+class Settings(BaseSettings):
+    venice_api_key: str = Field(min_length=1)
+    venice_model: str | None = None
+
+    apify_token: str | None = None
+    apify_mcp_transport: Literal["http", "stdio"] = "http"
+    apify_mcp_tools: str | None = None
+
+    max_rounds: int = Field(default=12, ge=1, le=40)
+    max_tool_result_chars: int = Field(default=20_000, ge=1_000)
+    # base URLs, temperature, auto_approve_tools, and save_history omitted
+```
+
+اثنان من هذه الحقول يحملان قرارات لا مجرّد قيم افتراضية. `venice_model` هو `None` بدلًا من مُعرّف نموذج، وسنعود إلى ذلك في القسم التالي. أما `max_rounds` مع `max_tool_result_chars` فهما الحدّان اللذان يوقفان وكيلًا انفلت عقاله: الأول يُقيّد عدد جولات الأدوات التي قد يستهلكها سؤال واحد، والثاني يُقيّد مقدار ما يُعاد إدخاله في السياق من صفحة مكشوطة.
+
+الدالة المثيرة للاهتمام في هذه الوحدة هي بانية الروابط:
+
+```python
+ANONYMOUS_APIFY_TOOLS = (
+    "search-actors,fetch-actor-details,search-apify-docs,fetch-apify-docs"
+)
+
+
+def apify_http_url(settings: Settings) -> str:
+    base = settings.apify_mcp_url.rstrip("/")
+    tools = settings.apify_mcp_tools
+    if tools is None and not settings.apify_token:
+        tools = ANONYMOUS_APIFY_TOOLS
+    if tools:
+        separator = "&" if "?" in base else "?"
+        return f"{base}{separator}tools={tools}"
+    return base
+```
+
+يقبل خادم Apify MCP المستضاف مُعامل استعلام `tools` يُحدّد الأدوات التي يُعلن عنها. دون `APIFY_TOKEN` نطلب الأدوات المجهولة الأربع التي تعمل دون مصادقة — البحث عن Actors، وتفاصيل Actor، والبحث في الوثائق، وجلب الوثائق. هذا يعني أن أي شخص يستطيع استنساخ المشروع وإضافة مفتاح Venice فقط، ومع ذلك يحصل على وكيل عامل يستطيع البحث عن Apify Actors. لكنه لا يستطيع تشغيل أي منها.
+
+## التحدث إلى Venice
+
+Venice متوافقة مع OpenAI، لذا يمكننا استخدام OpenAI SDK لإكمالات المحادثة و`httpx` الخام لاستدعاء اكتشاف النماذج.
+
+أنشئ `src/venice_terminal_agent/venice.py`:
+
+```python
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+import httpx2
+from openai import APIStatusError, AsyncOpenAI
+
+from venice_terminal_agent.config import Settings
+
+CHAT_TIMEOUT_SECONDS = 180.0
+
+
+class VeniceClient:
+    """Thin wrapper around Venice's OpenAI-compatible chat API."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._http = httpx2.AsyncClient(
+            base_url=settings.venice_base_url.rstrip("/"),
+            headers={"Authorization": f"Bearer {settings.venice_api_key}"},
+            timeout=30.0,
+            follow_redirects=True,
+        )
+        self._chat = AsyncOpenAI(
+            api_key=settings.venice_api_key,
+            base_url=settings.venice_base_url.rstrip("/"),
+            timeout=CHAT_TIMEOUT_SECONDS,
+        )
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+        await self._chat.close()
+```
+
+عميلان لواجهة API واحدة يبدو أمرًا زائدًا، لكنهما يؤديان مهمّتين مختلفتين. يمنحنا `AsyncOpenAI` مُساعد البثّ و`tool_calls` مُنمّطة مجانًا. أما عميل `httpx` الخام فموجود لنقاط نهاية Venice التي لا يعرفها OpenAI SDK، وهي في هذا المشروع `/models/traits`.
+
+مهلة المحادثة أطول بكثير من مهلة الاكتشاف عن قصد. السؤال الذي يُطلق زحفًا على الويب قد يستغرق دقيقتين بشكل مشروع تمامًا.
+
+### اكتشاف نموذج وقت التشغيل
+
+تتبدّل مُعرّفات نماذج Venice، وتثبيت أحدها في الكود هو أسرع طريق لشحن وكيل يتعطّل بعد شهر. تُطابق [`GET /models/traits`](/ar/api-reference/endpoint/models/traits) أسماء سمات ثابتة مع أيّ نموذج يشغل ذلك الدور حاليًا، لذا نطلب `function_calling_default` بدلًا من تسمية نموذج:
+
+```python
+    async def resolve_model(self, override: str | None = None) -> str:
+        if override:
+            return override
+        if self._settings.venice_model:
+            return self._settings.venice_model
+        response = await self._http.get("/models/traits", params={"type": "text"})
+        try:
+            response.raise_for_status()
+        except httpx2.HTTPStatusError as error:
+            raise RuntimeError(format_http_error(error)) from error
+        data = response.json().get("data") or {}
+        model = data.get("function_calling_default") or data.get("default")
+        if not model:
+            raise RuntimeError("Venice /models/traits did not return a function-calling model")
+        return str(model)
+```
+
+ترتيب الأسبقية هنا مهم: راية `--model` الصريحة تفوز، ثم `VENICE_MODEL` من البيئة، ثم استعلام السمة. وهكذا لا يحتاج المسار الافتراضي إلى أي تهيئة إطلاقًا، لكنك ما زلت تستطيع تثبيت نموذج حين تقارن السلوك بين نموذجين.
+
+<Tip>
+  ليست كل نماذج النصوص تدعم استدعاء الدوال. طلب سمة `function_calling_default` يعني أنك تحصل على نموذج يدعمها، دون أن تصون قائمة بنفسك. راجع [الإيقافات](/ar/overview/deprecations) لمعرفة وتيرة تغيّر المُعرّفات الأساسية.
+</Tip>
+
+### بثّ الإكمالات
+
+أضِف الآن استدعاء الإكمال:
+
+```python
+    async def complete(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Any:
+        kwargs = chat_request_kwargs(
+            model=model,
+            messages=messages,
+            tools=tools,
+            temperature=self._settings.venice_temperature,
+        )
+        async with self._chat.chat.completions.stream(**kwargs) as stream:
+            async for event in stream:
+                if on_text is not None and event.type == "content.delta" and event.delta:
+                    on_text(event.delta)
+            completion = await stream.get_final_completion()
+        return completion.choices[0].message
+```
+
+نبثّ حتى يرى المستخدم النص وهو يُولَّد، لكننا ما زلنا نريد الرسالة المُجمَّعة بعد ذلك — تصل استدعاءات الأدوات في شظايا عبر أجزاء كثيرة، وإعادة تجميعها يدويًا عمل مضنٍ. مدير السياق `stream()` في SDK يتولّى الأمرين: أحداث `content.delta` تُحرّك مخرجات الطرفية، و`get_final_completion()` تُعيد رسالة كاملة مع `tool_calls` مخيّطة بالفعل.
+
+الطلب نفسه تبنيه دالة منفصلة لتبقى سهلة الاختبار:
+
+```python
+def chat_request_kwargs(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    temperature: float,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "extra_body": {
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+            }
+        },
+    }
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
+    return kwargs
+```
+
+`extra_body` هي طريقة OpenAI SDK لتمرير الحقول التي لا يُنمذجها، وهنا يذهب [`venice_parameters`](/ar/api-reference/api-spec). ضبط `include_venice_system_prompt` على `false` يُبقي موجّه المساعد الافتراضي في Venice خارج المحادثة، فيصبح موجّه النظام الخاص بنا هو التعليمات الوحيدة التي يتلقّاها النموذج. ولوكيل ذي قواعد أدوات صارمة، هذا ما تريده بالضبط.
+
+أرفق `tools` و`tool_choice` فقط حين توجد أداة واحدة على الأقل. إرسال مصفوفة `tools` فارغة طريقة لا داعي لها لإرباك النموذج.
+
+تحتوي الوحدة أيضًا على مُساعد `format_http_error()` يُحوّل `APIStatusError` أو `httpx2.HTTPStatusError` إلى سطر واحد يحمل رمز الحالة وجسم الاستجابة. يفشل الوكلاء عند حدود واجهة API أكثر من أي مكان آخر، ورسالة مقروءة هناك توفّر الكثير من التخمين.
+
+## تحويل أدوات MCP إلى أدوات Venice
+
+تصف أدوات MCP وأدوات الدوال بأسلوب OpenAI الشيءَ نفسه بشكلين مختلفين. لكلٍّ منهما اسم ووصف ومخطط JSON للوسائط. الترجمة ميكانيكية في معظمها، مع مطبّ واحد: أسماء أدوات Apify تتضمّن محارف لا تسمح بها أسماء الدوال. قد تُسمّى أداة Actor باسم `apify/rag-web-browser`، وتلك الشرطة المائلة غير صالحة.
+
+لذا نُعقّم الأسماء في طريق الخروج ونحتفظ بخريطة كي نستطيع استعادتها في طريق العودة.
+
+في `src/venice_terminal_agent/tools.py`، تتولّى `ToolCatalog` الترجمة وتحمل الخريطة:
+
+```python
+class ToolCatalog:
+    """Maps Venice-safe function names back to MCP tool names."""
+
+    def __init__(self, tools: Iterable[Any]) -> None:
+        self.openai_tools: list[dict[str, Any]] = []
+        self._mcp_names: dict[str, str] = {}
+        used: set[str] = set()
+        for tool in tools:
+            raw_name = str(getattr(tool, "name", "") or "tool")
+            safe_name = unique_name(sanitize_tool_name(raw_name), used)
+            used.add(safe_name)
+            self._mcp_names[safe_name] = raw_name
+            self.openai_tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": safe_name,
+                        "description": str(getattr(tool, "description", "") or raw_name),
+                        "parameters": tool_input_schema(tool),
+                    },
+                }
+            )
+
+    def mcp_name(self, venice_name: str) -> str:
+        return self._mcp_names.get(venice_name, venice_name)
+
+    def names(self) -> list[str]:
+        return [item["function"]["name"] for item in self.openai_tools]
+```
+
+ثلاثة مُساعدات صغيرة تؤدي العمل غير البرّاق. `sanitize_tool_name()` تستبدل بالمحارف غير المشروعة شرطاتٍ، وتُسبق الأسماء التي تبدأ برقم ببادئة، وتقتطع إلى 64 محرفًا. ثم تُلحق `unique_name()` لاحقة رقمية إن تسبّب ذلك الاقتطاع في تصادم Actor مع آخر — وهو ما يجنّبك علّة مربكة حقًا يستدعي فيها النموذج Actor فيعمل Actor مختلف. أما `tool_input_schema()` فتتعامل مع خوادم MCP التي تُعيد `dict` أو نموذج Pydantic أو لا شيء إطلاقًا.
+
+### تنسيق النتائج وإعادتها إلى السياق
+
+تذهب نتائج الأدوات مباشرة إلى المحادثة، لذا يجب أن تكون سلسلة نصية، ويجب أن يكون لها حدّ حجم. كشط موقع وثائق قد يُعيد بسهولة نصًا أكبر مما تتّسع له نافذة السياق.
+
+تُفضّل `format_tool_result()` حقل `structured_content` حين يوفّره الخادم، وإلّا تُسطّح كتل المحتوى إلى نص، متعاملةً مع الكتل التي ليست `TextContent`. وتنتهي بالسطرين المهمّين:
+
+```python
+    if getattr(result, "is_error", False):
+        text = json.dumps({"error": text}, ensure_ascii=False)
+    return truncate_text(text, max_chars)
+
+
+def truncate_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    return (
+        f"{text[:max_chars]}\n\n[truncated {omitted} characters; "
+        "use a follow-up tool call with filters, limit, or offset]"
+    )
+```
+
+إشعار الاقتطاع مكتوب للنموذج، لا لك. إخباره بأن المحتوى قُصّ واقتراح مرشّحات أو حدود أو إزاحات يكفي عادةً ليُجري استدعاءً ثانيًا أضيق بدلًا من افتراض أنه رأى كل شيء.
+
+الأخطاء تُغلَّف كـ `{"error": "..."}` بدلًا من رفعها. استدعاء الأداة الفاشل معلومة يستطيع النموذج التصرّف بناءً عليها — يمكنه اختيار Actor مختلف أو إصلاح وسائطه — ولا يستطيع فعل ذلك إلا إذا وصله الفشل كنتيجة أداة اعتيادية.
+
+### وسم الأدوات التي تُكلّف مالًا
+
+تنقسم أدوات Apify بوضوح إلى مجموعتين: أدوات تقرأ البيانات الوصفية والوثائق، وأدوات تُشغّل حوسبة. نريد تأكيدًا للمجموعة الثانية، لذا نضع الأولى في قائمة سماح:
+
+```python
+READ_ONLY_APIFY_TOOLS = frozenset(
+    {
+        "search-actors",
+        "fetch-actor-details",
+        "search-apify-docs",
+        "fetch-apify-docs",
+        "get-actor-output",
+        # plus the other get-actor-*, get-dataset-*, and get-key-value-store-* tools
+    }
+)
+
+
+def requires_confirmation(name: str) -> bool:
+    """True for tools that can spend Apify compute, such as Actor runs."""
+
+    normalized = name.strip().lower().replace("_", "-")
+    return normalized not in READ_ONLY_APIFY_TOOLS
+```
+
+قائمة السماح بدلًا من قائمة الحظر هي الاختيار المهم. تُواصل Apify إضافة أدوات وActors، وأي شيء لم يره الوكيل من قبل يعود افتراضيًا إلى الاستئذان أولًا. اعكس هذا وستجد كل Actor جديد مُعتمدًا تلقائيًا.
+
+## الاتصال بـ Apify عبر MCP
+
+تقدّم Apify طريقين للدخول. الخادم المستضاف على `https://mcp.apify.com` يتحدث Streamable HTTP، و`@apify/actors-mcp-server` يعمل محليًا عبر stdio بواسطة `npx`. سندعم كليهما، لأنهما يناسبان حالتين مختلفتين: المستضاف لا يحتاج إلى Node.js، وstdio يُبقي الاتصال على جهازك.
+
+في `src/venice_terminal_agent/apify_mcp.py`، تُغلّف فئة `ApifyMcp` الجلسة المتصلة. ودالتها `call_tool()` هي حيث يُترجم الاسم المُعقَّم عائدًا — تُرسل Venice الاسم `apify-rag-web-browser`، وتستقبل Apify الاسم `apify/rag-web-browser`:
+
+```python
+    async def call_tool(self, venice_name: str, arguments: dict[str, Any]) -> str:
+        mcp_name = self.catalog.mcp_name(venice_name)
+        result = await self._client.call_tool(mcp_name, arguments)
+        return format_tool_result(result, max_chars=self._max_result_chars)
+```
+
+بناء الكتالوج يحتاج إلى حلقة مؤشّر (cursor) فوق `client.list_tools()`، لأن رمزًا مميزًا يملك وصولًا إلى Actors كثيرة يُنتج قائمة مُقسَّمة على صفحات.
+
+### امتلاك الناقل
+
+اتصال MCP مورد غير متزامن طويل العمر، وكذلك عميل HTTP الذي تحته. يحمل مدير السياق غير المتزامن `ApifyMcpSession` كليهما في `AsyncExitStack`، ويختار ناقلًا بناءً على الإعدادات، ويُحمّل الكتالوج. التفصيلة الجديرة بالنسخ هي التنظيف:
+
+```python
+    async def __aenter__(self) -> ApifyMcp:
+        try:
+            # connect with _connect_stdio or _connect_http, then load_catalog(client)
+            return self.session
+        except BaseException:
+            await self._stack.aclose()
+            raise
+```
+
+هذا الـ `except BaseException` أهمّ مما يبدو. إن فشل سرد الأدوات بعد أن أصبح الناقل قائمًا، فبدونه تُسرّب عملية فرعية أو مقبسًا مفتوحًا في كل مرة يفشل فيها الوكيل في البدء.
+
+إليك الناقلين:
+
+```python
+    async def _connect_http(self, settings: Settings) -> Client:
+        headers: dict[str, str] = {}
+        if settings.apify_token:
+            headers["Authorization"] = f"Bearer {settings.apify_token}"
+        http = await self._stack.enter_async_context(
+            httpx2.AsyncClient(
+                headers=headers,
+                timeout=httpx2.Timeout(30.0, read=300.0),
+                follow_redirects=True,
+            )
+        )
+        transport = streamable_http_client(apify_http_url(settings), http_client=http)
+        return await self._stack.enter_async_context(Client(transport))
+
+    async def _connect_stdio(self, settings: Settings) -> Client:
+        if not settings.apify_token:
+            raise RuntimeError("APIFY_TOKEN is required for the local stdio Apify MCP server")
+        args = ["-y", "@apify/actors-mcp-server"]
+        if settings.apify_mcp_tools:
+            args.extend(["--tools", settings.apify_mcp_tools])
+        params = StdioServerParameters(
+            command="npx",
+            args=args,
+            env={"APIFY_TOKEN": settings.apify_token},
+        )
+        return await self._stack.enter_async_context(Client(stdio_client(params)))
+```
+
+لاحظ مهلة القراءة البالغة 300 ثانية على ناقل HTTP. تشغيلات الـ Actors بطيئة، ومهلة الثلاثين ثانية الافتراضية ستقطع زحفًا سليمًا تمامًا. ولاحظ أيضًا أن عملية stdio الفرعية لا تحصل في بيئتها إلا على `APIFY_TOKEN`، لا على بيئة الصدفة كاملة — بما فيها مفتاح Venice الخاص بك.
+
+### تنفيذ استدعاء أداة
+
+القطعة الأخيرة في هذه الوحدة، `execute_venice_tool_call()`، تُحوّل استدعاء أداة من Venice إلى نتيجة نصية. تُغلّف صنفَي الفشل كليهما — الوسائط غير القابلة للتحليل واستدعاء Apify الفاشل — كـ `{"error": "..."}` بدلًا من الرفع:
+
+```python
+    try:
+        arguments = parse_tool_arguments(arguments_json)
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        return json.dumps({"error": f"invalid arguments: {error}"}, ensure_ascii=False)
+    try:
+        return await session.call_tool(name, arguments)
+    except Exception as error:  # noqa: BLE001 - tool failures belong in the conversation
+        return json.dumps({"error": f"{type(error).__name__}: {error}"}, ensure_ascii=False)
+```
+
+وسائط JSON المشوّهة تحدث. وحين تحدث، فإن تسليم النموذج `{"error": "invalid arguments: ..."}` يمنحك استدعاءً مُصحّحًا في الجولة التالية، في حين أن رفع الاستثناء يقتل الجلسة ويُضيّع المحادثة.
+
+## تشغيل حلقة الأدوات
+
+والآن إلى الوكيل نفسه، في `src/venice_terminal_agent/agent.py`. ابدأ بموجّه النظام:
+
+```python
+SYSTEM_PROMPT = """\
+You are a terminal agent. You think with Venice models and act through Apify MCP tools.
+
+Rules:
+- Use tools when you need live web data, Actor runs, datasets, or Apify documentation.
+- Prefer search-actors and fetch-actor-details before calling an unfamiliar Actor.
+- After an Actor run, use get-actor-output when the preview is incomplete.
+- Treat tool arguments as untrusted structured data. Do not invent credentials.
+- If a tool returns an error, read it and recover instead of guessing.
+- If the user declines a tool, continue with what you already know and ask before assuming they want another paid run.
+- Keep answers concise and terminal-friendly. Cite Actor names and source URLs when you used them.
+"""
+
+DECLINED_TOOL = (
+    "user declined to run this Apify tool because it can spend compute; "
+    "continue without it or ask them to approve"
+)
+```
+
+كل قاعدة هناك تقابل فشلًا محددًا نريد تجنّبه. قاعدة "فضّل `search-actors` و`fetch-actor-details` قبل استدعاء Actor غير مألوف" موجودة لأن النموذج الذي يُخمّن مخطط إدخال Actor يُهدر تشغيلًا مدفوعًا. وسطر الأدوات المرفوضة موجود لأن النموذج بدونه يعامل الرفض كخطأ عابر ويحاول مجددًا على الفور.
+
+تأخذ فئة `Agent` العميلين، ونموذجًا، وحدًّا للجولات، وثلاث دوال استدعاء راجع:
+
+```python
+class Agent:
+    def __init__(
+        self,
+        venice: VeniceClient,
+        apify: ApifyMcp,
+        *,
+        model: str,
+        max_rounds: int,
+        on_tool: Callable[[str, str], Awaitable[None] | None] | None = None,
+        on_text: Callable[[str], None] | None = None,
+        approve_tool: Callable[[str, str], Awaitable[bool] | bool] | None = None,
+    ) -> None:
+        # each argument is assigned to self, and then:
+        self.messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+        ]
+```
+
+دوال الاستدعاء الراجع تلك هي ما يُبقي الوكيل مستقلًّا عن الطرفية. `on_tool` تُبلّغ عن استدعاء أداة، و`on_text` تستقبل الرموز المبثوثة، و`approve_tool` تجيب عن سؤال التأكيد. استبدلها ويعمل الوكيل نفسه خلف تطبيق ويب أو روبوت محادثة.
+
+إليك الحلقة:
+
+```python
+    async def ask(
+        self,
+        question: str,
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> str:
+        start = len(self.messages)
+        self.messages.append({"role": "user", "content": question})
+        tools = self.apify.catalog.openai_tools or None
+        text_callback = self._on_text if on_text is None else on_text
+        try:
+            for _ in range(self.max_rounds):
+                message = await self.venice.complete(
+                    model=self.model,
+                    messages=self.messages,
+                    tools=tools,
+                    on_text=text_callback,
+                )
+                calls = list(getattr(message, "tool_calls", None) or [])
+                if not calls:
+                    content = (message.content or "").strip()
+                    self.messages.append(assistant_payload(message))
+                    return content or "(empty response)"
+
+                self.messages.append(assistant_payload(message))
+                self.messages.extend(await self._execute_calls(calls))
+
+            raise RuntimeError(f"No final answer after {self.max_rounds} tool rounds")
+        except BaseException:
+            del self.messages[start:]
+            raise
+```
+
+هذا هو الوكيل بأكمله: استدعِ النموذج، وإن طلب أدوات، شغّلها واستدعِه مجددًا.
+
+فهرس `start` وعبارة `del` في مُعالج الاستثناء يستحقّان نظرة أقرب. إن فشل سؤال في منتصف الطريق — خطأ شبكة، أو `Ctrl+C`، أو بلوغ حدّ الجولات — تبقى المحادثة حاملةً دورَ مساعدٍ يطلب أدوات لم تُنتج نتائج قط. وسترفض Venice الطلب التالي، لأن دور `tool_calls` يجب أن تتبعه رسائل `tool` مطابقة. التراجع إلى نقطة بداية السؤال يعني أن السؤال الفاشل لا يترك أثرًا وأن REPL يبقى قابلًا للاستخدام.
+
+### إرجاع دور المساعد كما هو
+
+هذه الدالة التالية صغيرة ويسهل الوقوع في خطئها:
+
+```python
+def assistant_payload(message: Any) -> dict[str, Any]:
+    """Echo the assistant turn back to Venice without dropping null content.
+
+    Tool-call turns use ``content: null``. ``exclude_none=True`` would strip that
+    key and can break the next round. Extra Venice fields such as
+    ``reasoning_content`` and ``reasoning_details`` must also be preserved.
+    """
+
+    if hasattr(message, "model_dump"):
+        payload = message.model_dump(exclude_unset=True)
+        payload["role"] = "assistant"
+        return payload
+    return {"role": "assistant", "content": getattr(message, "content", None)}
+```
+
+التنفيذ البديهي هو `message.model_dump(exclude_none=True)`، وهو يُعطّل استدعاء الأدوات. دورُ استدعاء الأدوات يحمل `content: null`، وإسقاط ذلك المفتاح يُغيّر شكل الرسالة التي تُعيد إرسالها. `exclude_unset=True` هو الخيار الذي تريده: فهو يُبقي قيم `null` التي ضبطها النموذج فعلًا، ويحذف الحقول التي لم يُرسلها قط.
+
+كما أنه يحافظ على حقول لا يعرفها مخطط OpenAI. تُعيد [نماذج الاستدلال](/ar/guides/features/reasoning-models) الحقلين `reasoning_content` و`reasoning_details`، ويجب أن يصمدا في رحلة الذهاب والعودة كي يحتفظ النموذج بسلسلة تفكيره عبر جولات الأدوات.
+
+### تنفيذ الاستدعاءات وحراستها
+
+تستطيع النماذج طلب عدة أدوات في دور واحد، ولا سبب لتشغيلها واحدة تلو الأخرى. لكننا نريد طلب الموافقة تسلسليًا، لأن مطالبات التأكيد المتداخلة لا تُقرأ. لذا نُخطّط أولًا، ثم ننفّذ بالتوازي:
+
+```python
+    async def _execute_calls(self, calls: list[Any]) -> list[dict[str, Any]]:
+        planned: list[tuple[Any, str | None]] = []
+        for call in calls:
+            function = call.function
+            name = function.name
+            arguments = function.arguments or "{}"
+            if self._on_tool is not None:
+                maybe = self._on_tool(name, arguments)
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+            if await self._allowed(name, arguments):
+                planned.append((call, None))
+            else:
+                planned.append(
+                    (call, json.dumps({"error": DECLINED_TOOL}, ensure_ascii=False))
+                )
+
+        async def run(item: tuple[Any, str | None]) -> dict[str, Any]:
+            call, denied = item
+            if denied is None:
+                content = await execute_venice_tool_call(
+                    self.apify,
+                    name=call.function.name,
+                    arguments_json=call.function.arguments,
+                )
+            else:
+                content = denied
+            return {
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": content,
+            }
+
+        return list(await asyncio.gather(*[run(item) for item in planned]))
+```
+
+الأدوات المرفوضة تحصل مع ذلك على رسالة `tool`. كل `tool_call_id` يحتاج إلى ردّ، وتخطّي واحد يترك المحادثة مشوّهة. الردّ ببساطة يشرح أن المستخدم قال لا.
+
+فحص الموافقة نفسه يستشير الاسمين، لأن النموذج يعمل بالأسماء المُعقَّمة وقائمة السماح لدينا تستخدم أسماء MCP:
+
+```python
+    async def _allowed(self, name: str, arguments: str) -> bool:
+        mcp_name = self.apify.catalog.mcp_name(name)
+        if not (requires_confirmation(name) or requires_confirmation(mcp_name)):
+            return True
+        if self._approve_tool is None:
+            return True
+        decision = self._approve_tool(name, arguments)
+        if asyncio.iscoroutine(decision):
+            return await decision
+        return bool(decision)
+```
+
+## إضافة واجهة CLI
+
+واجهة CLI في `src/venice_terminal_agent/cli.py` هي Typer زائد REPL، وهي أقل ملفات المشروع إثارة — لكن ثلاث تفاصيل فيها تستحق النسخ.
+
+الأولى أن خيارات Typer مُنمّطة كاختيارية وتأخذ افتراضيًا `None`، حتى يستطيع مُحمّل الإعدادات التمييز بين "لم يُمرَّر" و"مُرِّرت قيمة زائفة":
+
+```python
+    tools: Annotated[str | None, typer.Option(help="Apify MCP tools query, e.g. actors,docs.")] = None,
+    max_rounds: Annotated[int | None, typer.Option(help="Maximum tool-calling rounds per question.")] = None,
+```
+
+قيم `None` الافتراضية تلك هي ما يجعل التسليم إلى `load_settings()` آمنًا، إذ إن راية لم تستخدمها لا تتجاوز البيئة أبدًا:
+
+```python
+        settings = load_settings(
+            venice_model=model,
+            apify_mcp_transport=transport,
+            apify_mcp_tools=tools,
+            max_rounds=max_rounds,
+            auto_approve_tools=yes or None,
+            save_history=save_history or None,
+        )
+```
+
+عبارة `yes or None` هي الفكرة نفسها مطبّقة على راية منطقية: `--yes` تضبطها، وإغفالها يُمرّر `None` بدلًا من `False`، فتنجو `AUTO_APPROVE_TOOLS` القادمة من البيئة.
+
+الثانية هي ترتيب البدء. استبِن النموذج، ثم افتح جلسة MCP، ثم ابنِ الوكيل — وأغلق عميل Venice في `finally`، لأن جلسة MCP وعملاء HTTP كليهما يحتاجان إلى التفكيك سواء نجح السؤال أم لا:
+
+```python
+async def _run(settings: Settings, prompt: str | None) -> None:
+    venice = VeniceClient(settings)
+    try:
+        model_id = await venice.resolve_model()
+        async with ApifyMcpSession(settings) as apify:
+            agent = Agent(
+                venice,
+                apify,
+                model=model_id,
+                max_rounds=settings.max_rounds,
+                on_tool=print_tool_call,
+                approve_tool=_make_approver(settings.auto_approve_tools),
+            )
+            print_banner(model_id, apify.catalog.names(), anonymous=apify.anonymous)
+            if prompt:
+                await _ask(agent, prompt)
+                return
+            await _repl(agent, save_history=settings.save_history)
+    finally:
+        await venice.aclose()
+```
+
+الثالثة هي المُوافِق، وهو الجزء الوحيد من الوكيل الموجود حصرًا لحماية فاتورة Apify الخاصة بك:
+
+```python
+def _make_approver(auto_approve: bool):
+    def approve(name: str, arguments: str) -> bool:
+        if auto_approve:
+            return True
+        if not sys.stdin.isatty():
+            print_info(f"Skipped {name}: paid Apify tools need a TTY or --yes.")
+            return False
+        preview = arguments if len(arguments) <= 240 else f"{arguments[:240]}…"
+        try:
+            return Confirm.ask(
+                f"Run Apify tool [bold]{name}[/bold]({preview})? This can spend compute",
+                default=False,
+            )
+        except (KeyboardInterrupt, EOFError):
+            return False
+
+    return approve
+```
+
+فحص `isatty()` هو الجزء الذي ينساه الناس. شغّل الوكيل من cron أو CI ولن يكون هناك من يجيب عن المطالبة، فينتهي التنفيذ الساذج إما بتعليق أبدي وإما بموافقة صامتة. هنا يرفض، ويقول لماذا، ويدع النموذج يُكمل بأدوات القراءة فقط. و`default=False` تعني أن ضغطة Enter شاردة لا تبدأ تشغيلًا مدفوعًا، وأن مقاطعة المطالبة تُحسب رفضًا.
+
+بقية الوحدة عمل طرفية اعتيادي، لذا يكفي أن تعرف ما فيها بدلًا من قراءتها: حلقة REPL بواسطة `prompt_toolkit`، وجدول `_handle_command()` لأوامر الشرطة المائلة، وملف `render.py` من مُساعدات Rich، ودالة `_settings_error()` تُحوّل غياب `VENICE_API_KEY` إلى رسالة مقروءة بدلًا من تتبّع مكدّس Pydantic. ثلاثة من تلك الأجزاء تحمل قرارًا:
+
+| الجزء | القرار الجدير بالإبقاء |
+| --- | --- |
+| سجلّ REPL | في الذاكرة ما لم تُمرّر `--save-history`. لوكيل قد تسأله عن مواد خاصة، كتابة كل موجّه إلى `~/.local/share` افتراضيًا اختيار سيّئ. |
+| معالجة `Ctrl+C` | تُلغي السؤال وتعود إلى المطالبة بدلًا من الخروج، وهو ما يتكامل مع تراجع السجلّ في `Agent.ask()` بحيث يترك السؤالُ المُلغى محادثةً نظيفة. |
+| `StreamPrinter` | يطبع الرموز المبثوثة مع `markup=False` و`highlight=False`، وإلّا قرأت Rich الأقواس المربّعة في مخرجات النموذج كوسوم تنسيق خاصة بها. |
+
+أوامر الشرطة المائلة هي `/help` و`/clear` و`/quit` واثنان يستحقّان وجودهما: `/tools` يطبع الكتالوج المُحمَّل، وهو ما يفسّر عادةً سبب اختيار الوكيل أداةً غريبة، و`/reload` يلتقط الـ Actors التي أضفتها إلى حساب Apify في منتصف الجلسة.
+
+أخيرًا، اربط نقطة الدخول في `pyproject.toml` حتى يعمل `uv run venice-agent`:
+
+```toml
+[project.scripts]
+venice-agent = "venice_terminal_agent.cli:main"
+```
+
+## تشغيل الوكيل
+
+ابدأ جلسة تفاعلية:
+
+```bash
+uv run venice-agent
+```
+
+أو اسأل سؤالًا واحدًا واخرج:
+
+```bash
+uv run venice-agent "Find an Apify Actor that scrapes Hacker News and summarize how to call it"
+```
+
+سترى الشعار، ثم استدعاءات الأدوات لحظة حدوثها:
+
+```text
+╭──────────────────────────────────────────────╮
+│ Venice terminal agent                        │
+│ Model: zai-org-glm-5-2                       │
+│ Apify: Apify authenticated                   │
+│ Tools: search-actors, fetch-actor-details, … │
+╰──────────────────────────────────────────────╯
+
+→ search-actors({"search": "hacker news scraper", "limit": 5})
+→ fetch-actor-details({"actor": "epctex/hackernews-scraper"})
+
+epctex/hackernews-scraper takes a `startUrls` array and a `maxItems` cap…
+```
+
+اقرأ سطر Apify في ذلك الشعار قبل أي شيء آخر. إن كان يقول "anonymous Apify tools only"، فإن `APIFY_TOKEN` لم يُحمَّل، وملاحظة ذلك الآن أفضل بكثير من ملاحظته بعد عشر دقائق من التساؤل عن سبب رفض الوكيل تشغيل Actor.
+
+قيّد كتالوج الأدوات حين تعرف ما تحتاج إليه:
+
+```bash
+uv run venice-agent --tools actors,docs,apify/rag-web-browser
+```
+
+الكتالوج الأصغر ليس مسألة كلفة فحسب. تختار النماذج عمومًا اختيارًا أفضل حين تكون الأدوات المتاحة أقلّ وأوثق صلة، و`--tools` هي أرخص طريقة لتضييق الخيار.
+
+شغّل خادم MCP محليًا بدلًا من استخدام المستضاف:
+
+```bash
+uv run venice-agent --transport stdio
+```
+
+هذا الخيار يحتاج إلى Node.js على PATH لديك، لأنه يُطلق `@apify/actors-mcp-server` عبر `npx`، ويحتاج إلى `APIFY_TOKEN` — لا يوجد وضع مجهول للخادم المحلي.
+
+وحين تريد فعلًا تشغيلات Actor دون إشراف:
+
+```bash
+uv run venice-agent --yes "Crawl https://docs.venice.ai and list the guides about tool calling"
+```
+
+## اختبار الأجزاء
+
+لا شيء من المنطق المثير هنا يحتاج إلى شبكة. `FakeVenice` تسحب من قائمة ردود مُعدّة سلفًا، مع `FakeApify` تبني `ToolCatalog` حقيقيًا من أدوات `SimpleNamespace`، يكفيان لتشغيل جولة أدوات كاملة:
+
+```python
+class FakeVenice:
+    def __init__(self, replies: list[object]) -> None:
+        self.replies = list(replies)
+
+    async def complete(self, **kwargs: object) -> object:
+        return self.replies.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_agent_runs_tool_then_answers() -> None:
+    venice = FakeVenice(
+        [
+            _tool_message("search-actors", '{"query": "hacker news"}'),
+            _text_message("Use apify/rag-web-browser."),
+        ]
+    )
+    apify = FakeApify()
+    agent = Agent(venice, apify, model="test-model", max_rounds=4)
+
+    answer = await agent.ask("Find a scraper for Hacker News")
+
+    assert apify.calls == [("search-actors", {"query": "hacker news"})]
+    roles = [message["role"] for message in agent.messages]
+    assert roles == ["system", "user", "assistant", "tool", "assistant"]
+```
+
+التأكيد على تسلسل الأدوار عادة جيدة في كود الوكلاء. فهو يلتقط عِلل المحادثة المشوّهة التي تبقى خفية إلى أن تُعيد Venice خطأ 400.
+
+ثلاثة اختبارات أخرى تستحقّ الكتابة، وجميعها تؤكّد على `agent.messages` بالطريقة نفسها. أنّ التشغيل الفاشل يُرجع السجلّ إلى `["system"]` فقط، سواء فشل بخطأ من Venice أو باستنفاد `max_rounds`. وأنّ أداة القراءة فقط تعمل مع ذلك حين يُعيد المُوافِق `False`. وأنّ الأداة المدفوعة المرفوضة تترك رسالة `tool` تحتوي على `declined` بينما تبقى `apify.calls` فارغة.
+
+شغّل مجموعة الاختبارات بـ:
+
+```bash
+uv run pytest
+```
+
+## ملاحظات الخصوصية والكلفة
+
+وكيل يصل إلى واجهتَي API يستحقّ الدقة في وصفه:
+
+| الطبقة | ما الذي يرى البيانات |
+| --- | --- |
+| CLI المحلي | سؤالك وتهيئتك وسجلّ المحادثة ونتائج الأدوات تبقى في الذاكرة على جهازك |
+| إكمالات محادثة Venice | موجّه النظام وأسئلتك ومخططات الأدوات ونتائج الأدوات تُرسل إلى Venice، التي لا تحتفظ بها |
+| Apify MCP | وسائط الأدوات التي يُولّدها النموذج، مثل مصطلحات البحث والروابط المستهدفة |
+| Apify Actors | المواقع التي يزورها Actor مُعتمَد، إضافة إلى ما يُخزّنه الـ Actor في مجموعات بيانات Apify لديك |
+| القرص المحلي | لا شيء، ما لم تُمرّر `--save-history` |
+
+تُغطّي سياسة Venice في [عدم الاحتفاظ بأي بيانات](/ar/overview/privacy) جانبَ النموذج. وهي لا تُغطّي Apify، وتشغيل Actor يكتب النتائج في حساب Apify الخاص بك. إن كان ذلك مهمًّا لمهمّة معيّنة، فاعمل دون `APIFY_TOKEN` والتزم بأدوات الاكتشاف المجهولة.
+
+أما في الكلفة، فثلاث عادات تُحقّق الكثير:
+
+- أبقِ `--yes` مُعطَّلة أثناء التطوير. مراقبة الـ Actors التي يريد النموذج تشغيلها مفيدة في حدّ ذاتها.
+- استخدم `--tools` لتضييق الكتالوج إلى Actors راجعتها فعلًا.
+- أبقِ `max_rounds` متواضعًا. اثنتا عشرة جولة أكثر من كافية لمهام البحث، وسقف أدنى يحدّ من الضرر حين يعلق نموذج في حلقة.
+
+## توسيع هذا المثال
+
+الحلقة هي الأساس. وحين تعمل، تشمل الاتجاهات المفيدة:
+
+- أضِف خادم MCP ثانيًا. لا شيء في `Agent` خاص بـ Apify، لذا فإن دمج الكتالوجات من عدة خوادم يعني في معظمه وضع مساحات أسماء لأسماء الأدوات.
+- خزّن المحادثات في SQLite لتستطيع استئناف جلسة أو مراجعة ما أعاده Actor.
+- أضِف ميزانيات لكل أداة تتعقّب تشغيلات الـ Actors وتتوقّف عند سقف، بدلًا من تأكيد كل تشغيل على حدة.
+- خزّن نتائج الأدوات مؤقتًا حسب الاسم والوسائط، حتى لا تُعيد عمليات البحث المتكرّرة في الوثائق الزحف من جديد.
+- ثبّت نموذجًا بـ `--model` وقارن جودة اختيار الأدوات مع `function_calling_default`.
+- استبدل بالمُوافِق دالةَ سياسة تعتمد Actors محدّدة بوسائط محدّدة تلقائيًا وتسأل عن كل ما عداها.
+
+لنقطة بداية أصغر دون MCP، يشرح [بناء وكيل يستخدم الأدوات](/ar/guides/features/tool-using-agent) الحلقة نفسها بثلاث دوال Python محلية.
+
+## الختام
+
+شكرًا للقراءة! نأمل أن يكون هذا قد ساعدك على بناء وكيل طرفية يفكّر بواسطة Venice ويتصرّف عبر Apify.
+
+النمط الجدير بأخذه معك هو كم أن القليل من هذا الكود يتعلّق بالذكاء. يُعيد النموذج استدعاءات أدوات، وكودك هو من يُقرّر أيّها يُسمح له بالعمل، وكيف تعود نتائجها، وماذا يحدث حين يفشل شيء. ومتى صارت تلك القرارات صريحة، تصبح إضافة القدرات في معظمها مسألة توجيه الوكيل إلى مزيد من الأدوات.

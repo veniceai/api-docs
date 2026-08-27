@@ -1,0 +1,833 @@
+---
+title: "Costruire un agente da terminale con Apify"
+description: "Costruisci un agente da terminale in Python che pensa con Venice e agisce tramite il server MCP di Apify."
+slug: apify-terminal-agent-venice
+"og:title": "Costruire un agente da terminale con Venice AI e Apify"
+"og:description": "Una guida pratica per costruire un agente da terminale in Python che ragiona con le chat completion di Venice e fa scraping del web in tempo reale tramite gli Actor di Apify esposti via MCP."
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="27 August 2026"/>
+
+Un modello da solo non può dirti cosa c'è in prima pagina su Hacker News in questo momento. Per farlo gli servono dei tool, e qualcuno deve costruirli e mantenerli. Apify lo ha già fatto: ospita migliaia di Actor che fanno scraping di siti, esplorano documentazione ed estraggono dati strutturati, e li espone tramite il [Model Context Protocol](https://docs.apify.com/integrations/mcp).
+
+Quella combinazione si sposa bene con Venice. Venice fornisce function calling compatibile con OpenAI senza ritenzione dei dati, Apify fornisce i tool, e MCP è il formato di trasporto tra i due. Non scrivi uno scraper per ogni sito: ti connetti una volta e lasci che sia il modello a scegliere l'Actor.
+
+In questo tutorial costruiremo un agente da terminale in Python che fa esattamente questo. Alla fine avrai una CLI che scopre a runtime un modello Venice con function calling, carica il catalogo dei tool di Apify via MCP, trasmette in streaming le risposte nel tuo terminale, e chiede conferma prima di spendere denaro per l'esecuzione di un Actor.
+
+Ti interessa l'implementazione completa del codice? Dai un'occhiata al [repository GitHub](https://github.com/joshua-mo-143/venice-terminal-agent).
+
+Prima di continuare, ti servirà una chiave API di Venice:
+
+```bash
+export VENICE_API_KEY=<my-key>
+```
+
+## Cosa costruiremo
+
+L'implementazione di riferimento è un piccolo package Python con un compito per modulo:
+
+| Modulo | Cosa fa |
+| --- | --- |
+| `config.py` | Carica le impostazioni dall'ambiente o da `.env` e costruisce l'URL MCP di Apify |
+| `venice.py` | Risolve un modello da `GET /models/traits` e trasmette in streaming le chat completion |
+| `apify_mcp.py` | Possiede il transport MCP e chiama i tool di Apify |
+| `tools.py` | Converte gli schemi dei tool MCP in function tool di Venice e formatta i risultati |
+| `agent.py` | Esegue il ciclo di tool-calling e mette un cancello ai tool a pagamento |
+| `cli.py` | Entry point Typer, REPL, comandi slash e prompt di approvazione |
+| `render.py` | Output Rich per il banner, i token in streaming e le chiamate ai tool |
+
+Una singola domanda lo attraversa così:
+
+1. Chiedi a Venice il modello corrente con function calling, a meno che tu non ne abbia fissato uno.
+2. Connettiti al server MCP di Apify ed elenca i suoi tool.
+3. Riscrivi quei tool MCP come definizioni di funzione compatibili con OpenAI.
+4. Invia la domanda con la lista dei tool allegata.
+5. Se il modello restituisce `tool_calls`, eseguili su Apify e aggiungi i risultati come messaggi `tool`.
+6. Ripeti finché il modello risponde con testo invece che con una chiamata a un tool.
+
+I passi da 4 a 6 sono l'intero agente. Tutto il resto esiste per rendere quei tre passi sicuri e piacevoli da usare.
+
+<Note>
+  Questo agente può spendere compute di Apify sul tuo account. Parti senza `APIFY_TOKEN` se vuoi solo i tool di ricerca e documentazione, e lascia `--yes` disattivato finché non intendi davvero eseguire degli Actor.
+</Note>
+
+## Configurare il progetto
+
+Il progetto di riferimento usa Python 3.12+ e [uv](https://docs.astral.sh/uv/).
+
+Crea un nuovo progetto:
+
+```bash
+mkdir venice-terminal-agent
+cd venice-terminal-agent
+uv init --package
+```
+
+Installa le dipendenze:
+
+```bash
+uv add httpx2 mcp openai prompt-toolkit pydantic-settings python-dotenv rich typer
+uv add --dev pytest pytest-asyncio
+```
+
+Quello è `httpx2`, la linea 2.x di `httpx`, da cui sia `openai` sia `mcp` già dipendono. Installarlo direttamente evita di ritrovarsi con due client HTTP nello stesso ambiente.
+
+Poi crea un file `.env`:
+
+```bash
+VENICE_API_KEY=your_venice_api_key_here
+APIFY_TOKEN=your_apify_token_here
+```
+
+`VENICE_API_KEY` proviene dalle [impostazioni API di Venice](https://venice.ai/settings/api?utm_source=venice-api-documentation). `APIFY_TOKEN` proviene dalla [Apify Console](https://console.apify.com/settings/integrations) ed è opzionale — vedremo tra un attimo cosa ottieni senza di esso.
+
+## Caricare la configurazione
+
+Le impostazioni vengono per prime perché ogni altro modulo le riceve come argomento. Useremo `pydantic-settings` così le variabili d'ambiente, il file `.env` e i flag della CLI finiscono tutti in un unico oggetto validato.
+
+In `src/venice_terminal_agent/config.py`, una classe `Settings(BaseSettings)` contiene i campi che contano:
+
+```python
+class Settings(BaseSettings):
+    venice_api_key: str = Field(min_length=1)
+    venice_model: str | None = None
+
+    apify_token: str | None = None
+    apify_mcp_transport: Literal["http", "stdio"] = "http"
+    apify_mcp_tools: str | None = None
+
+    max_rounds: int = Field(default=12, ge=1, le=40)
+    max_tool_result_chars: int = Field(default=20_000, ge=1_000)
+    # base URLs, temperature, auto_approve_tools, and save_history omitted
+```
+
+Due di questi campi portano decisioni più che valori predefiniti. `venice_model` è `None` invece di un ID di modello, e ci torneremo nella prossima sezione. E `max_rounds` con `max_tool_result_chars` sono i limiti che fermano un agente fuori controllo: il primo pone un tetto a quanti round di tool può richiedere una domanda, il secondo a quanta parte di una pagina sottoposta a scraping viene reimmessa nel contesto.
+
+La funzione interessante di questo modulo è il costruttore dell'URL:
+
+```python
+ANONYMOUS_APIFY_TOOLS = (
+    "search-actors,fetch-actor-details,search-apify-docs,fetch-apify-docs"
+)
+
+
+def apify_http_url(settings: Settings) -> str:
+    base = settings.apify_mcp_url.rstrip("/")
+    tools = settings.apify_mcp_tools
+    if tools is None and not settings.apify_token:
+        tools = ANONYMOUS_APIFY_TOOLS
+    if tools:
+        separator = "&" if "?" in base else "?"
+        return f"{base}{separator}tools={tools}"
+    return base
+```
+
+Il server MCP ospitato di Apify accetta un parametro di query `tools` che decide quali tool pubblicizza. Senza un `APIFY_TOKEN` chiediamo i quattro tool anonimi che funzionano senza autenticazione: ricerca di Actor, dettagli degli Actor, ricerca nella documentazione e recupero della documentazione. Ciò significa che qualcuno può clonare il progetto, aggiungere solo una chiave Venice, e avere comunque un agente funzionante in grado di fare ricerche sugli Actor di Apify. Semplicemente non può eseguirne uno.
+
+## Parlare con Venice
+
+Venice è compatibile con OpenAI, quindi possiamo usare l'SDK di OpenAI per le chat completion e un semplice `httpx` per la chiamata di discovery dei modelli.
+
+Crea `src/venice_terminal_agent/venice.py`:
+
+```python
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+import httpx2
+from openai import APIStatusError, AsyncOpenAI
+
+from venice_terminal_agent.config import Settings
+
+CHAT_TIMEOUT_SECONDS = 180.0
+
+
+class VeniceClient:
+    """Thin wrapper around Venice's OpenAI-compatible chat API."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._http = httpx2.AsyncClient(
+            base_url=settings.venice_base_url.rstrip("/"),
+            headers={"Authorization": f"Bearer {settings.venice_api_key}"},
+            timeout=30.0,
+            follow_redirects=True,
+        )
+        self._chat = AsyncOpenAI(
+            api_key=settings.venice_api_key,
+            base_url=settings.venice_base_url.rstrip("/"),
+            timeout=CHAT_TIMEOUT_SECONDS,
+        )
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+        await self._chat.close()
+```
+
+Due client per una sola API sembrano ridondanti, ma fanno lavori diversi. `AsyncOpenAI` ci regala l'helper per lo streaming e i `tool_calls` tipizzati. Il client `httpx` grezzo serve per gli endpoint di Venice che l'SDK di OpenAI non conosce, il che in questo progetto significa `/models/traits`.
+
+Il timeout della chat è di proposito molto più lungo di quello di discovery. Una domanda che innesca un crawl del web può legittimamente richiedere un paio di minuti.
+
+### Scoprire un modello a runtime
+
+Gli ID dei modelli Venice ruotano, e cablarne uno nel codice è il modo più rapido per distribuire un agente che si rompe nel giro di un mese. [`GET /models/traits`](/it/api-reference/endpoint/models/traits) mappa nomi di trait stabili su qualunque modello ricopra attualmente quel ruolo, quindi chiediamo `function_calling_default` invece di nominare un modello:
+
+```python
+    async def resolve_model(self, override: str | None = None) -> str:
+        if override:
+            return override
+        if self._settings.venice_model:
+            return self._settings.venice_model
+        response = await self._http.get("/models/traits", params={"type": "text"})
+        try:
+            response.raise_for_status()
+        except httpx2.HTTPStatusError as error:
+            raise RuntimeError(format_http_error(error)) from error
+        data = response.json().get("data") or {}
+        model = data.get("function_calling_default") or data.get("default")
+        if not model:
+            raise RuntimeError("Venice /models/traits did not return a function-calling model")
+        return str(model)
+```
+
+La precedenza qui conta: un flag `--model` esplicito vince, poi `VENICE_MODEL` dall'ambiente, infine la ricerca del trait. Quindi il percorso predefinito non richiede alcuna configurazione, ma puoi comunque fissare un modello quando stai confrontando il comportamento di due di essi.
+
+<Tip>
+  Non tutti i modelli di testo supportano il function calling. Chiedere il trait `function_calling_default` ti garantisce di ottenerne uno che lo supporta, senza dover mantenere una lista per conto tuo. Consulta le [Deprecazioni](/it/overview/deprecations) per sapere con quale frequenza cambiano gli ID sottostanti.
+</Tip>
+
+### Completions in streaming
+
+Ora aggiungi la chiamata di completion:
+
+```python
+    async def complete(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Any:
+        kwargs = chat_request_kwargs(
+            model=model,
+            messages=messages,
+            tools=tools,
+            temperature=self._settings.venice_temperature,
+        )
+        async with self._chat.chat.completions.stream(**kwargs) as stream:
+            async for event in stream:
+                if on_text is not None and event.type == "content.delta" and event.delta:
+                    on_text(event.delta)
+            completion = await stream.get_final_completion()
+        return completion.choices[0].message
+```
+
+Facciamo streaming così l'utente vede il testo apparire mentre viene generato, ma vogliamo comunque il messaggio assemblato alla fine — le chiamate ai tool arrivano a frammenti distribuiti su molti chunk, e riassemblarle a mano è tedioso. Il context manager `stream()` dell'SDK gestisce entrambe le cose: gli eventi `content.delta` guidano l'output del terminale, e `get_final_completion()` restituisce un messaggio completo con i `tool_calls` già ricuciti insieme.
+
+La richiesta stessa è costruita da una funzione separata così rimane facile da testare:
+
+```python
+def chat_request_kwargs(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    temperature: float,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "extra_body": {
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+            }
+        },
+    }
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
+    return kwargs
+```
+
+`extra_body` è il modo in cui l'SDK di OpenAI fa passare campi che non modella, ed è lì che vanno i [`venice_parameters`](/it/api-reference/api-spec). Impostare `include_venice_system_prompt` a `false` tiene il prompt assistente predefinito di Venice fuori dalla conversazione, così il nostro system prompt è l'unica istruzione che il modello riceve. Per un agente con regole rigide sui tool, è esattamente ciò che vuoi.
+
+Allega `tools` e `tool_choice` solo quando c'è almeno un tool. Inviare un array `tools` vuoto è un modo inutile di confondere un modello.
+
+Il modulo ha anche un helper `format_http_error()` che trasforma un `APIStatusError` o un `httpx2.HTTPStatusError` in una stringa di una riga con il codice di stato e il corpo della risposta. Gli agenti falliscono al confine con l'API più spesso che altrove, e un messaggio leggibile lì risparmia un sacco di congetture.
+
+## Convertire i tool MCP in tool Venice
+
+I tool MCP e i function tool in stile OpenAI descrivono la stessa cosa in forme diverse. Entrambi hanno un nome, una descrizione e uno JSON Schema per gli argomenti. La traduzione è per lo più meccanica, con un'insidia: i nomi dei tool di Apify includono caratteri che i nomi di funzione non ammettono. Un tool Actor può chiamarsi `apify/rag-web-browser`, e quello slash non è valido.
+
+Quindi sanifichiamo i nomi in uscita e teniamo una mappa per poterli ripristinare al ritorno.
+
+In `src/venice_terminal_agent/tools.py`, un `ToolCatalog` fa la traduzione e conserva la mappa:
+
+```python
+class ToolCatalog:
+    """Maps Venice-safe function names back to MCP tool names."""
+
+    def __init__(self, tools: Iterable[Any]) -> None:
+        self.openai_tools: list[dict[str, Any]] = []
+        self._mcp_names: dict[str, str] = {}
+        used: set[str] = set()
+        for tool in tools:
+            raw_name = str(getattr(tool, "name", "") or "tool")
+            safe_name = unique_name(sanitize_tool_name(raw_name), used)
+            used.add(safe_name)
+            self._mcp_names[safe_name] = raw_name
+            self.openai_tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": safe_name,
+                        "description": str(getattr(tool, "description", "") or raw_name),
+                        "parameters": tool_input_schema(tool),
+                    },
+                }
+            )
+
+    def mcp_name(self, venice_name: str) -> str:
+        return self._mcp_names.get(venice_name, venice_name)
+
+    def names(self) -> list[str]:
+        return [item["function"]["name"] for item in self.openai_tools]
+```
+
+Tre piccoli helper fanno il lavoro poco glamour. `sanitize_tool_name()` sostituisce i caratteri illegali con trattini, aggiunge un prefisso ai nomi che iniziano con una cifra e tronca a 64 caratteri. `unique_name()` poi aggiunge un suffisso numerico se quel troncamento ha fatto collidere due Actor — il che ti risparmia un bug genuinamente confondente in cui il modello chiama un Actor e ne viene eseguito un altro. `tool_input_schema()` gestisce i server MCP che restituiscono un `dict`, un modello Pydantic, o niente del tutto.
+
+### Formattare i risultati verso il contesto
+
+I risultati dei tool vanno dritti nella conversazione, quindi devono essere una stringa, e serve loro un limite di dimensione. Fare scraping di un sito di documentazione può facilmente restituire più testo di quanto la context window contenga.
+
+`format_tool_result()` preferisce `structured_content` quando il server lo fornisce, altrimenti appiattisce i blocchi di contenuto in testo, gestendo i blocchi che non sono `TextContent`. Termina con le due righe che contano:
+
+```python
+    if getattr(result, "is_error", False):
+        text = json.dumps({"error": text}, ensure_ascii=False)
+    return truncate_text(text, max_chars)
+
+
+def truncate_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    return (
+        f"{text[:max_chars]}\n\n[truncated {omitted} characters; "
+        "use a follow-up tool call with filters, limit, or offset]"
+    )
+```
+
+L'avviso di troncamento è scritto per il modello, non per te. Dirgli che il contenuto è stato tagliato e suggerire filtri, limiti o offset è di solito sufficiente perché faccia una seconda chiamata più mirata invece di presumere di aver visto tutto.
+
+Gli errori vengono avvolti come `{"error": "..."}` invece di essere sollevati. Una chiamata a un tool fallita è informazione su cui il modello può agire — può scegliere un Actor diverso o correggere i suoi argomenti — e può farlo solo se il fallimento gli arriva come un normale risultato di tool.
+
+### Contrassegnare i tool che costano denaro
+
+I tool di Apify si dividono nettamente in due gruppi: quelli che leggono metadati e documentazione, e quelli che avviano compute. Vogliamo una conferma per il secondo gruppo, quindi mettiamo in allowlist il primo:
+
+```python
+READ_ONLY_APIFY_TOOLS = frozenset(
+    {
+        "search-actors",
+        "fetch-actor-details",
+        "search-apify-docs",
+        "fetch-apify-docs",
+        "get-actor-output",
+        # plus the other get-actor-*, get-dataset-*, and get-key-value-store-* tools
+    }
+)
+
+
+def requires_confirmation(name: str) -> bool:
+    """True for tools that can spend Apify compute, such as Actor runs."""
+
+    normalized = name.strip().lower().replace("_", "-")
+    return normalized not in READ_ONLY_APIFY_TOOLS
+```
+
+Una allowlist invece di una blocklist è la scelta importante. Apify continua ad aggiungere tool e Actor, e qualsiasi cosa l'agente non abbia mai visto prima chiede conferma per impostazione predefinita. Fallo al contrario e ogni nuovo Actor viene approvato automaticamente.
+
+## Connettersi ad Apify via MCP
+
+Apify offre due vie d'accesso. Il server ospitato su `https://mcp.apify.com` parla Streamable HTTP, e `@apify/actors-mcp-server` gira localmente su stdio tramite `npx`. Le supporteremo entrambe, dato che servono situazioni diverse: quello ospitato non richiede Node.js, e stdio mantiene la connessione sulla tua macchina.
+
+In `src/venice_terminal_agent/apify_mcp.py`, una classe `ApifyMcp` avvolge la sessione connessa. Il suo `call_tool()` è dove il nome sanificato viene ritradotto — Venice invia `apify-rag-web-browser`, Apify riceve `apify/rag-web-browser`:
+
+```python
+    async def call_tool(self, venice_name: str, arguments: dict[str, Any]) -> str:
+        mcp_name = self.catalog.mcp_name(venice_name)
+        result = await self._client.call_tool(mcp_name, arguments)
+        return format_tool_result(result, max_chars=self._max_result_chars)
+```
+
+Costruire il catalogo richiede un ciclo con cursore su `client.list_tools()`, dato che un token con accesso a molti Actor produce una lista paginata.
+
+### Possedere il transport
+
+Una connessione MCP è una risorsa async a lunga vita, e lo è anche il client HTTP che le sta sotto. Un context manager async `ApifyMcpSession` tiene entrambi in un `AsyncExitStack`, sceglie un transport in base alle impostazioni e carica il catalogo. Il dettaglio da copiare è la pulizia:
+
+```python
+    async def __aenter__(self) -> ApifyMcp:
+        try:
+            # connect with _connect_stdio or _connect_http, then load_catalog(client)
+            return self.session
+        except BaseException:
+            await self._stack.aclose()
+            raise
+```
+
+Quell'`except BaseException` conta più di quanto sembri. Se l'elenco dei tool fallisce dopo che il transport è attivo, senza di esso perdi un sottoprocesso o un socket aperto ogni volta che l'agente non riesce ad avviarsi.
+
+Ecco i due transport:
+
+```python
+    async def _connect_http(self, settings: Settings) -> Client:
+        headers: dict[str, str] = {}
+        if settings.apify_token:
+            headers["Authorization"] = f"Bearer {settings.apify_token}"
+        http = await self._stack.enter_async_context(
+            httpx2.AsyncClient(
+                headers=headers,
+                timeout=httpx2.Timeout(30.0, read=300.0),
+                follow_redirects=True,
+            )
+        )
+        transport = streamable_http_client(apify_http_url(settings), http_client=http)
+        return await self._stack.enter_async_context(Client(transport))
+
+    async def _connect_stdio(self, settings: Settings) -> Client:
+        if not settings.apify_token:
+            raise RuntimeError("APIFY_TOKEN is required for the local stdio Apify MCP server")
+        args = ["-y", "@apify/actors-mcp-server"]
+        if settings.apify_mcp_tools:
+            args.extend(["--tools", settings.apify_mcp_tools])
+        params = StdioServerParameters(
+            command="npx",
+            args=args,
+            env={"APIFY_TOKEN": settings.apify_token},
+        )
+        return await self._stack.enter_async_context(Client(stdio_client(params)))
+```
+
+Nota il read timeout di 300 secondi sul transport HTTP. Le esecuzioni degli Actor sono lente, e il timeout predefinito di 30 secondi taglierà crawl perfettamente sani. Nota anche che il sottoprocesso stdio riceve nel suo ambiente solo `APIFY_TOKEN`, non tutto il tuo ambiente shell — inclusa la tua chiave Venice.
+
+### Eseguire una chiamata a un tool
+
+L'ultimo pezzo di questo modulo, `execute_venice_tool_call()`, trasforma una chiamata a un tool di Venice in un risultato stringa. Avvolge entrambe le classi di fallimento — argomenti non analizzabili e una chiamata Apify fallita — come `{"error": "..."}` invece di sollevare eccezioni:
+
+```python
+    try:
+        arguments = parse_tool_arguments(arguments_json)
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        return json.dumps({"error": f"invalid arguments: {error}"}, ensure_ascii=False)
+    try:
+        return await session.call_tool(name, arguments)
+    except Exception as error:  # noqa: BLE001 - tool failures belong in the conversation
+        return json.dumps({"error": f"{type(error).__name__}: {error}"}, ensure_ascii=False)
+```
+
+Argomenti JSON malformati succedono. Quando capita, consegnare al modello `{"error": "invalid arguments: ..."}` ti procura una chiamata corretta al round successivo, mentre sollevare un'eccezione uccide la sessione e perde la conversazione.
+
+## Eseguire il ciclo dei tool
+
+Ora l'agente vero e proprio, in `src/venice_terminal_agent/agent.py`. Inizia con il system prompt:
+
+```python
+SYSTEM_PROMPT = """\
+You are a terminal agent. You think with Venice models and act through Apify MCP tools.
+
+Rules:
+- Use tools when you need live web data, Actor runs, datasets, or Apify documentation.
+- Prefer search-actors and fetch-actor-details before calling an unfamiliar Actor.
+- After an Actor run, use get-actor-output when the preview is incomplete.
+- Treat tool arguments as untrusted structured data. Do not invent credentials.
+- If a tool returns an error, read it and recover instead of guessing.
+- If the user declines a tool, continue with what you already know and ask before assuming they want another paid run.
+- Keep answers concise and terminal-friendly. Cite Actor names and source URLs when you used them.
+"""
+
+DECLINED_TOOL = (
+    "user declined to run this Apify tool because it can spend compute; "
+    "continue without it or ask them to approve"
+)
+```
+
+Ogni regola lì mappa su un fallimento specifico che vogliamo evitare. "Preferisci `search-actors` e `fetch-actor-details` prima di chiamare un Actor sconosciuto" esiste perché un modello che tira a indovinare lo schema di input di un Actor spreca un'esecuzione a pagamento. La riga sui tool rifiutati esiste perché altrimenti il modello tratta un rifiuto come un errore transitorio e riprova immediatamente.
+
+La classe `Agent` prende i due client, un modello, un limite di round e tre callback:
+
+```python
+class Agent:
+    def __init__(
+        self,
+        venice: VeniceClient,
+        apify: ApifyMcp,
+        *,
+        model: str,
+        max_rounds: int,
+        on_tool: Callable[[str, str], Awaitable[None] | None] | None = None,
+        on_text: Callable[[str], None] | None = None,
+        approve_tool: Callable[[str, str], Awaitable[bool] | bool] | None = None,
+    ) -> None:
+        # each argument is assigned to self, and then:
+        self.messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+        ]
+```
+
+Quelle callback sono ciò che mantiene l'agente indipendente dal terminale. `on_tool` segnala una chiamata a un tool, `on_text` riceve i token in streaming, e `approve_tool` risponde alla domanda di conferma. Sostituiscile e lo stesso agente funziona dietro una web app o un chat bot.
+
+Ecco il ciclo:
+
+```python
+    async def ask(
+        self,
+        question: str,
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> str:
+        start = len(self.messages)
+        self.messages.append({"role": "user", "content": question})
+        tools = self.apify.catalog.openai_tools or None
+        text_callback = self._on_text if on_text is None else on_text
+        try:
+            for _ in range(self.max_rounds):
+                message = await self.venice.complete(
+                    model=self.model,
+                    messages=self.messages,
+                    tools=tools,
+                    on_text=text_callback,
+                )
+                calls = list(getattr(message, "tool_calls", None) or [])
+                if not calls:
+                    content = (message.content or "").strip()
+                    self.messages.append(assistant_payload(message))
+                    return content or "(empty response)"
+
+                self.messages.append(assistant_payload(message))
+                self.messages.extend(await self._execute_calls(calls))
+
+            raise RuntimeError(f"No final answer after {self.max_rounds} tool rounds")
+        except BaseException:
+            del self.messages[start:]
+            raise
+```
+
+Quello è l'intero agente: chiama il modello, e se ha chiesto dei tool, eseguili e chiama di nuovo.
+
+L'indice `start` e il `del` nel gestore dell'eccezione meritano uno sguardo più attento. Se una domanda fallisce a metà — errore di rete, `Ctrl+C`, limite di round — la conversazione resta con un turno assistente che richiede tool che non hanno mai prodotto risultati. Venice rifiuterà la richiesta successiva, perché un turno `tool_calls` deve essere seguito da messaggi `tool` corrispondenti. Fare rollback al punto in cui la domanda è iniziata significa che una domanda fallita non lascia traccia e la REPL resta usabile.
+
+### Riecheggiare il turno dell'assistente
+
+Questa prossima funzione è piccola e facile da sbagliare:
+
+```python
+def assistant_payload(message: Any) -> dict[str, Any]:
+    """Echo the assistant turn back to Venice without dropping null content.
+
+    Tool-call turns use ``content: null``. ``exclude_none=True`` would strip that
+    key and can break the next round. Extra Venice fields such as
+    ``reasoning_content`` and ``reasoning_details`` must also be preserved.
+    """
+
+    if hasattr(message, "model_dump"):
+        payload = message.model_dump(exclude_unset=True)
+        payload["role"] = "assistant"
+        return payload
+    return {"role": "assistant", "content": getattr(message, "content", None)}
+```
+
+L'implementazione ovvia è `message.model_dump(exclude_none=True)`, e rompe il tool calling. Un turno di chiamata a tool ha `content: null`, e rimuovere quella chiave cambia la forma del messaggio che rimandi indietro. `exclude_unset=True` è la versione che vuoi: mantiene i valori `null` che il modello ha effettivamente impostato, e omette i campi che non ha mai inviato.
+
+Preserva anche campi che lo schema OpenAI non conosce. I [modelli di reasoning](/it/guides/features/reasoning-models) restituiscono `reasoning_content` e `reasoning_details`, e quei campi devono sopravvivere al viaggio di andata e ritorno così il modello mantiene la propria catena di pensiero attraverso i round di tool.
+
+### Eseguire e filtrare le chiamate
+
+I modelli possono richiedere più tool in un solo turno, e non c'è motivo di eseguirli uno alla volta. Ma vogliamo chiedere l'approvazione in modo sequenziale, dato che prompt di conferma intercalati sarebbero illeggibili. Quindi prima pianifichiamo, poi eseguiamo in modo concorrente:
+
+```python
+    async def _execute_calls(self, calls: list[Any]) -> list[dict[str, Any]]:
+        planned: list[tuple[Any, str | None]] = []
+        for call in calls:
+            function = call.function
+            name = function.name
+            arguments = function.arguments or "{}"
+            if self._on_tool is not None:
+                maybe = self._on_tool(name, arguments)
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+            if await self._allowed(name, arguments):
+                planned.append((call, None))
+            else:
+                planned.append(
+                    (call, json.dumps({"error": DECLINED_TOOL}, ensure_ascii=False))
+                )
+
+        async def run(item: tuple[Any, str | None]) -> dict[str, Any]:
+            call, denied = item
+            if denied is None:
+                content = await execute_venice_tool_call(
+                    self.apify,
+                    name=call.function.name,
+                    arguments_json=call.function.arguments,
+                )
+            else:
+                content = denied
+            return {
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": content,
+            }
+
+        return list(await asyncio.gather(*[run(item) for item in planned]))
+```
+
+Anche i tool rifiutati ricevono un messaggio `tool`. Ogni `tool_call_id` ha bisogno di una risposta, e saltarne uno lascia la conversazione malformata. La risposta semplicemente spiega che l'utente ha detto di no.
+
+Il controllo di approvazione stesso consulta entrambi i nomi, dato che il modello lavora con i nomi sanificati e la nostra allowlist usa i nomi MCP:
+
+```python
+    async def _allowed(self, name: str, arguments: str) -> bool:
+        mcp_name = self.apify.catalog.mcp_name(name)
+        if not (requires_confirmation(name) or requires_confirmation(mcp_name)):
+            return True
+        if self._approve_tool is None:
+            return True
+        decision = self._approve_tool(name, arguments)
+        if asyncio.iscoroutine(decision):
+            return await decision
+        return bool(decision)
+```
+
+## Aggiungere la CLI
+
+La CLI in `src/venice_terminal_agent/cli.py` è Typer più una REPL, ed è il file meno interessante del progetto — ma tre dettagli al suo interno vale la pena copiarli.
+
+Il primo è che le opzioni Typer sono tipizzate come opzionali e hanno `None` come predefinito, così il loader delle impostazioni può distinguere "non passato" da "passato un valore falsy":
+
+```python
+    tools: Annotated[str | None, typer.Option(help="Apify MCP tools query, e.g. actors,docs.")] = None,
+    max_rounds: Annotated[int | None, typer.Option(help="Maximum tool-calling rounds per question.")] = None,
+```
+
+Quei predefiniti `None` sono ciò che rende sicuro il passaggio a `load_settings()`, dato che un flag che non hai usato non sovrascrive mai l'ambiente:
+
+```python
+        settings = load_settings(
+            venice_model=model,
+            apify_mcp_transport=transport,
+            apify_mcp_tools=tools,
+            max_rounds=max_rounds,
+            auto_approve_tools=yes or None,
+            save_history=save_history or None,
+        )
+```
+
+Il `yes or None` è la stessa idea applicata a un flag booleano: `--yes` lo imposta, e ometterlo passa `None` invece di `False`, così `AUTO_APPROVE_TOOLS` dall'ambiente sopravvive.
+
+Il secondo è l'ordine di avvio. Risolvi il modello, poi apri la sessione MCP, poi costruisci l'agente — e chiudi il client Venice in un `finally`, dato che la sessione MCP e i client HTTP hanno entrambi bisogno di essere smontati che la domanda sia riuscita o no:
+
+```python
+async def _run(settings: Settings, prompt: str | None) -> None:
+    venice = VeniceClient(settings)
+    try:
+        model_id = await venice.resolve_model()
+        async with ApifyMcpSession(settings) as apify:
+            agent = Agent(
+                venice,
+                apify,
+                model=model_id,
+                max_rounds=settings.max_rounds,
+                on_tool=print_tool_call,
+                approve_tool=_make_approver(settings.auto_approve_tools),
+            )
+            print_banner(model_id, apify.catalog.names(), anonymous=apify.anonymous)
+            if prompt:
+                await _ask(agent, prompt)
+                return
+            await _repl(agent, save_history=settings.save_history)
+    finally:
+        await venice.aclose()
+```
+
+Il terzo è l'approvatore, che è l'unico pezzo dell'agente che esiste puramente per proteggere la tua bolletta Apify:
+
+```python
+def _make_approver(auto_approve: bool):
+    def approve(name: str, arguments: str) -> bool:
+        if auto_approve:
+            return True
+        if not sys.stdin.isatty():
+            print_info(f"Skipped {name}: paid Apify tools need a TTY or --yes.")
+            return False
+        preview = arguments if len(arguments) <= 240 else f"{arguments[:240]}…"
+        try:
+            return Confirm.ask(
+                f"Run Apify tool [bold]{name}[/bold]({preview})? This can spend compute",
+                default=False,
+            )
+        except (KeyboardInterrupt, EOFError):
+            return False
+
+    return approve
+```
+
+Il controllo `isatty()` è la parte che la gente dimentica. Esegui l'agente da cron o dalla CI e non c'è nessuno a rispondere al prompt, quindi un'implementazione ingenua o resta appesa per sempre o approva silenziosamente. Qui rifiuta, spiega perché, e lascia che il modello prosegua con i tool di sola lettura. `default=False` significa che un Invio distratto non avvia un'esecuzione a pagamento, e interrompere il prompt conta come un no.
+
+Il resto del modulo è ordinario lavoro da terminale, quindi vale la pena sapere cosa c'è più che leggerlo: un ciclo REPL con `prompt_toolkit`, un lookup `_handle_command()` per i comandi slash, un `render.py` di helper Rich, e un `_settings_error()` che trasforma un `VENICE_API_KEY` mancante in un messaggio leggibile invece di un traceback Pydantic. Tre di questi portano con sé una decisione:
+
+| Pezzo | Decisione da conservare |
+| --- | --- |
+| Cronologia della REPL | In memoria a meno che tu non passi `--save-history`. Per un agente a cui potresti chiedere di materiale privato, scrivere ogni prompt in `~/.local/share` per impostazione predefinita è una scelta infelice. |
+| Gestione di `Ctrl+C` | Annulla la domanda e torna al prompt invece di uscire, il che si abbina al rollback della cronologia in `Agent.ask()` così una domanda annullata lascia una conversazione pulita. |
+| `StreamPrinter` | Stampa i token in streaming con `markup=False` e `highlight=False`, altrimenti Rich interpreta le parentesi quadre nell'output del modello come propri tag di formattazione. |
+
+I comandi slash sono `/help`, `/clear`, `/quit`, e due che si guadagnano il posto: `/tools` stampa il catalogo caricato, il che di solito spiega perché l'agente ha scelto un tool strano, e `/reload` recupera gli Actor che hai aggiunto al tuo account Apify a sessione in corso.
+
+Infine, collega l'entry point in `pyproject.toml` così `uv run venice-agent` funziona:
+
+```toml
+[project.scripts]
+venice-agent = "venice_terminal_agent.cli:main"
+```
+
+## Eseguire l'agente
+
+Avvia una sessione interattiva:
+
+```bash
+uv run venice-agent
+```
+
+Oppure fai una domanda ed esci:
+
+```bash
+uv run venice-agent "Find an Apify Actor that scrapes Hacker News and summarize how to call it"
+```
+
+Vedrai il banner, poi le chiamate ai tool man mano che avvengono:
+
+```text
+╭──────────────────────────────────────────────╮
+│ Venice terminal agent                        │
+│ Model: zai-org-glm-5-2                       │
+│ Apify: Apify authenticated                   │
+│ Tools: search-actors, fetch-actor-details, … │
+╰──────────────────────────────────────────────╯
+
+→ search-actors({"search": "hacker news scraper", "limit": 5})
+→ fetch-actor-details({"actor": "epctex/hackernews-scraper"})
+
+epctex/hackernews-scraper takes a `startUrls` array and a `maxItems` cap…
+```
+
+Leggi la riga Apify di quel banner prima di ogni altra cosa. Se dice "anonymous Apify tools only", il tuo `APIFY_TOKEN` non è stato caricato, ed è molto meglio accorgersene ora che dopo dieci minuti a chiedersi perché l'agente si rifiuta di eseguire un Actor.
+
+Restringi il catalogo dei tool quando sai di cosa hai bisogno:
+
+```bash
+uv run venice-agent --tools actors,docs,apify/rag-web-browser
+```
+
+Un catalogo più piccolo non è solo una questione di costi. I modelli in genere scelgono meglio quando ci sono meno tool, più pertinenti, tra cui scegliere, e `--tools` è il modo più economico per restringere la scelta.
+
+Esegui il server MCP localmente invece di usare quello ospitato:
+
+```bash
+uv run venice-agent --transport stdio
+```
+
+Questo richiede Node.js nel tuo PATH, dato che lancia `@apify/actors-mcp-server` tramite `npx`, e richiede un `APIFY_TOKEN` — non esiste una modalità anonima per il server locale.
+
+E quando vuoi davvero esecuzioni di Actor non presidiate:
+
+```bash
+uv run venice-agent --yes "Crawl https://docs.venice.ai and list the guides about tool calling"
+```
+
+## Testare i pezzi
+
+Nessuna della logica interessante qui ha bisogno della rete. Un `FakeVenice` che estrae da una lista predefinita di risposte, più un `FakeApify` che costruisce un vero `ToolCatalog` da tool `SimpleNamespace`, basta per pilotare un round di tool completo:
+
+```python
+class FakeVenice:
+    def __init__(self, replies: list[object]) -> None:
+        self.replies = list(replies)
+
+    async def complete(self, **kwargs: object) -> object:
+        return self.replies.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_agent_runs_tool_then_answers() -> None:
+    venice = FakeVenice(
+        [
+            _tool_message("search-actors", '{"query": "hacker news"}'),
+            _text_message("Use apify/rag-web-browser."),
+        ]
+    )
+    apify = FakeApify()
+    agent = Agent(venice, apify, model="test-model", max_rounds=4)
+
+    answer = await agent.ask("Find a scraper for Hacker News")
+
+    assert apify.calls == [("search-actors", {"query": "hacker news"})]
+    roles = [message["role"] for message in agent.messages]
+    assert roles == ["system", "user", "assistant", "tool", "assistant"]
+```
+
+Fare assert sulla sequenza dei ruoli è una buona abitudine per il codice degli agenti. Cattura i bug di conversazione malformata che altrimenti restano invisibili finché Venice non restituisce un 400.
+
+Vale la pena scrivere altri tre test, e tutti fanno assert su `agent.messages` allo stesso modo. Che un'esecuzione fallita riporti la cronologia a solo `["system"]`, sia che sia fallita per un errore Venice sia per l'esaurimento di `max_rounds`. Che un tool di sola lettura venga comunque eseguito quando l'approvatore restituisce `False`. E che un tool a pagamento rifiutato lasci un messaggio `tool` contenente `declined` mentre `apify.calls` resta vuoto.
+
+Esegui la suite con:
+
+```bash
+uv run pytest
+```
+
+## Note su privacy e costi
+
+Per un agente che raggiunge due API vale la pena essere precisi:
+
+| Livello | Cosa vede i dati |
+| --- | --- |
+| CLI locale | La tua domanda, la configurazione, la cronologia della conversazione e i risultati dei tool restano in memoria sulla tua macchina |
+| Chat completion di Venice | System prompt, le tue domande, gli schemi dei tool e i risultati dei tool sono inviati a Venice, che non li conserva |
+| MCP di Apify | Gli argomenti dei tool generati dal modello, come termini di ricerca e URL di destinazione |
+| Actor di Apify | I siti che un Actor approvato visita, più tutto ciò che l'Actor memorizza nei tuoi dataset Apify |
+| Disco locale | Niente, a meno che tu non passi `--save-history` |
+
+La [zero data retention](/it/overview/privacy) di Venice copre il lato modello. Non copre Apify, e l'esecuzione di un Actor scrive risultati nel tuo account Apify. Se questo conta per un compito particolare, esegui senza `APIFY_TOKEN` e attieniti ai tool di discovery anonimi.
+
+Sul fronte costi, tre abitudini fanno molta strada:
+
+- Lascia `--yes` disattivato durante lo sviluppo. Osservare quali Actor il modello vuole eseguire è informativo di per sé.
+- Usa `--tools` per restringere il catalogo agli Actor che hai effettivamente esaminato.
+- Mantieni `max_rounds` modesto. Dodici round bastano e avanzano per compiti di ricerca, e un tetto più basso limita i danni quando un modello si blocca in un loop.
+
+## Estendere questo esempio
+
+Il ciclo è la fondazione. Una volta che funziona, tra le direzioni utili ci sono:
+
+- Aggiungere un secondo server MCP. Niente in `Agent` è specifico di Apify, quindi unire i cataloghi di più server significa per lo più mettere in namespace i nomi dei tool.
+- Persistere le conversazioni su SQLite così puoi riprendere una sessione o verificare cosa ha restituito un Actor.
+- Aggiungere budget per singolo tool che tracciano le esecuzioni degli Actor e si fermano a un tetto, invece di confermarle una a una.
+- Mettere in cache i risultati dei tool per nome e argomenti, così ricerche ripetute nella documentazione non rifanno il crawl.
+- Fissare un modello con `--model` e confrontare la qualità della selezione dei tool con `function_calling_default`.
+- Sostituire l'approvatore con una funzione di policy che approva automaticamente Actor specifici con argomenti specifici e chiede conferma per tutto il resto.
+
+Per un punto di partenza più piccolo senza MCP, [Costruire un agente che usa tool](/it/guides/features/tool-using-agent) copre lo stesso ciclo con tre funzioni Python locali.
+
+## Per concludere
+
+Grazie per aver letto! Speriamo che questo ti abbia aiutato a costruire un agente da terminale che pensa con Venice e agisce tramite Apify.
+
+Il pattern da portarsi a casa è quanto poco di questo codice riguardi l'intelligenza. Il modello restituisce chiamate a tool, e il tuo codice decide quali possono essere eseguite, come tornano i loro risultati, e cosa succede quando qualcosa fallisce. Una volta che quelle decisioni sono esplicite, aggiungere capacità è per lo più questione di puntare l'agente verso più tool.

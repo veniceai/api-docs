@@ -1,0 +1,833 @@
+---
+title: "Apify로 터미널 에이전트 만들기"
+description: "Venice로 사고하고 Apify MCP 서버를 통해 행동하는 Python 터미널 에이전트를 만들어 보세요."
+slug: apify-terminal-agent-venice
+"og:title": "Venice AI와 Apify로 터미널 에이전트 만들기"
+"og:description": "Venice 채팅 완성으로 추론하고 MCP로 노출된 Apify Actor를 통해 실시간 웹을 스크래핑하는 Python 터미널 에이전트를 만드는 실전 가이드."
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="27 August 2026"/>
+
+모델 혼자서는 지금 Hacker News 첫 페이지에 무엇이 있는지 알려줄 수 없습니다. 그러려면 도구가 필요하고, 누군가는 그 도구를 만들고 유지해야 합니다. Apify는 이미 그 일을 해 두었습니다. 사이트를 스크래핑하고, 문서를 크롤링하고, 구조화된 데이터를 가져오는 수천 개의 Actor를 호스팅하며, 이를 [Model Context Protocol](https://docs.apify.com/integrations/mcp)로 노출합니다.
+
+이 조합은 Venice와 잘 맞습니다. Venice는 데이터를 보관하지 않는 OpenAI 호환 함수 호출을 제공하고, Apify는 도구를 제공하며, MCP는 그 둘 사이의 전송 형식입니다. 사이트마다 스크래퍼를 작성할 필요 없이, 한 번 연결하고 모델이 Actor를 고르게 하면 됩니다.
+
+이 튜토리얼에서는 정확히 그런 일을 하는 Python 터미널 에이전트를 만듭니다. 다 만들고 나면 런타임에 Venice 함수 호출 모델을 찾아내고, MCP로 Apify 도구 카탈로그를 불러오고, 답변을 터미널로 스트리밍하며, Actor 실행에 돈을 쓰기 전에 먼저 물어보는 CLI를 갖게 됩니다.
+
+전체 코드 구현이 궁금하신가요? [GitHub 저장소](https://github.com/joshua-mo-143/venice-terminal-agent)를 확인하세요.
+
+계속하기 전에 Venice API 키가 필요합니다:
+
+```bash
+export VENICE_API_KEY=<my-key>
+```
+
+## 무엇을 만드나요
+
+레퍼런스 구현은 모듈마다 하나의 역할을 가진 작은 Python 패키지입니다:
+
+| 모듈 | 하는 일 |
+| --- | --- |
+| `config.py` | 환경 변수나 `.env`에서 설정을 불러오고 Apify MCP URL을 만듭니다 |
+| `venice.py` | `GET /models/traits`에서 모델을 결정하고 채팅 완성을 스트리밍합니다 |
+| `apify_mcp.py` | MCP 전송을 소유하고 Apify 도구를 호출합니다 |
+| `tools.py` | MCP 도구 스키마를 Venice 함수 도구로 변환하고 결과를 포맷합니다 |
+| `agent.py` | 도구 호출 루프를 실행하고 유료 도구를 통제합니다 |
+| `cli.py` | Typer 진입점, REPL, 슬래시 명령어, 승인 프롬프트 |
+| `render.py` | 배너, 스트리밍 토큰, 도구 호출을 위한 Rich 출력 |
+
+하나의 질문은 다음과 같이 흘러갑니다:
+
+1. 모델을 고정하지 않았다면, 현재 함수 호출 모델을 Venice에 요청합니다.
+2. Apify MCP 서버에 연결하고 도구 목록을 가져옵니다.
+3. 그 MCP 도구들을 OpenAI 호환 함수 정의로 다시 씁니다.
+4. 도구 목록을 첨부해 질문을 보냅니다.
+5. 모델이 `tool_calls`를 반환하면 Apify에 대해 실행하고 결과를 `tool` 메시지로 덧붙입니다.
+6. 모델이 도구 호출 대신 텍스트로 답할 때까지 반복합니다.
+
+4단계부터 6단계가 에이전트의 전부입니다. 나머지는 이 세 단계를 안전하고 편하게 쓰기 위해 존재합니다.
+
+<Note>
+  이 에이전트는 여러분의 계정에서 Apify 컴퓨팅을 소비할 수 있습니다. 검색과 문서 도구만 원한다면 `APIFY_TOKEN` 없이 시작하고, 실제로 Actor를 실행할 의도가 생기기 전까지는 `--yes`를 켜지 마세요.
+</Note>
+
+## 프로젝트 설정하기
+
+레퍼런스 프로젝트는 Python 3.12 이상과 [uv](https://docs.astral.sh/uv/)를 사용합니다.
+
+새 프로젝트를 만듭니다:
+
+```bash
+mkdir venice-terminal-agent
+cd venice-terminal-agent
+uv init --package
+```
+
+의존성을 설치합니다:
+
+```bash
+uv add httpx2 mcp openai prompt-toolkit pydantic-settings python-dotenv rich typer
+uv add --dev pytest pytest-asyncio
+```
+
+여기서 `httpx2`는 `httpx`의 2.x 라인으로, `openai`와 `mcp`가 이미 의존하고 있습니다. 직접 설치하면 같은 환경에 HTTP 클라이언트가 두 개 생기는 일을 피할 수 있습니다.
+
+그다음 `.env` 파일을 만듭니다:
+
+```bash
+VENICE_API_KEY=your_venice_api_key_here
+APIFY_TOKEN=your_apify_token_here
+```
+
+`VENICE_API_KEY`는 [Venice API 설정](https://venice.ai/settings/api?utm_source=venice-api-documentation)에서 가져옵니다. `APIFY_TOKEN`은 [Apify Console](https://console.apify.com/settings/integrations)에서 가져오며 선택 사항입니다 — 토큰 없이 무엇을 쓸 수 있는지는 잠시 뒤에 다룹니다.
+
+## 설정 불러오기
+
+다른 모든 모듈이 설정을 인자로 받기 때문에 설정이 가장 먼저입니다. `pydantic-settings`를 사용해 환경 변수, `.env`, CLI 플래그가 모두 하나의 검증된 객체에 담기게 합니다.
+
+`src/venice_terminal_agent/config.py`에서 `Settings(BaseSettings)` 클래스가 중요한 필드를 담습니다:
+
+```python
+class Settings(BaseSettings):
+    venice_api_key: str = Field(min_length=1)
+    venice_model: str | None = None
+
+    apify_token: str | None = None
+    apify_mcp_transport: Literal["http", "stdio"] = "http"
+    apify_mcp_tools: str | None = None
+
+    max_rounds: int = Field(default=12, ge=1, le=40)
+    max_tool_result_chars: int = Field(default=20_000, ge=1_000)
+    # base URLs, temperature, auto_approve_tools, and save_history omitted
+```
+
+이 중 둘은 기본값이 아니라 결정을 담고 있습니다. `venice_model`은 모델 ID가 아닌 `None`인데, 그 이유는 다음 섹션에서 다시 다룹니다. 그리고 `max_rounds`와 `max_tool_result_chars`는 에이전트가 폭주하는 것을 막는 한계입니다. 첫 번째는 하나의 질문이 사용할 수 있는 도구 라운드 수를 제한하고, 두 번째는 스크래핑한 페이지 중 얼마만큼이 컨텍스트로 다시 들어가는지를 제한합니다.
+
+이 모듈에서 흥미로운 함수는 URL 빌더입니다:
+
+```python
+ANONYMOUS_APIFY_TOOLS = (
+    "search-actors,fetch-actor-details,search-apify-docs,fetch-apify-docs"
+)
+
+
+def apify_http_url(settings: Settings) -> str:
+    base = settings.apify_mcp_url.rstrip("/")
+    tools = settings.apify_mcp_tools
+    if tools is None and not settings.apify_token:
+        tools = ANONYMOUS_APIFY_TOOLS
+    if tools:
+        separator = "&" if "?" in base else "?"
+        return f"{base}{separator}tools={tools}"
+    return base
+```
+
+호스팅된 Apify MCP 서버는 어떤 도구를 광고할지 결정하는 `tools` 쿼리 파라미터를 받습니다. `APIFY_TOKEN`이 없으면 인증 없이 작동하는 익명 도구 네 가지 — Actor 검색, Actor 상세 정보, 문서 검색, 문서 가져오기 — 를 요청합니다. 덕분에 누구든 프로젝트를 클론해 Venice 키만 추가해도 Apify Actor를 조사할 수 있는 작동하는 에이전트를 얻습니다. 다만 실행은 할 수 없을 뿐입니다.
+
+## Venice와 대화하기
+
+Venice는 OpenAI 호환이므로 채팅 완성에는 OpenAI SDK를, 모델 탐색 호출에는 순수 `httpx`를 사용할 수 있습니다.
+
+`src/venice_terminal_agent/venice.py`를 만듭니다:
+
+```python
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+import httpx2
+from openai import APIStatusError, AsyncOpenAI
+
+from venice_terminal_agent.config import Settings
+
+CHAT_TIMEOUT_SECONDS = 180.0
+
+
+class VeniceClient:
+    """Thin wrapper around Venice's OpenAI-compatible chat API."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._http = httpx2.AsyncClient(
+            base_url=settings.venice_base_url.rstrip("/"),
+            headers={"Authorization": f"Bearer {settings.venice_api_key}"},
+            timeout=30.0,
+            follow_redirects=True,
+        )
+        self._chat = AsyncOpenAI(
+            api_key=settings.venice_api_key,
+            base_url=settings.venice_base_url.rstrip("/"),
+            timeout=CHAT_TIMEOUT_SECONDS,
+        )
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+        await self._chat.close()
+```
+
+하나의 API에 클라이언트 둘은 중복처럼 보이지만, 각자 하는 일이 다릅니다. `AsyncOpenAI`는 스트리밍 헬퍼와 타입이 지정된 `tool_calls`를 공짜로 제공합니다. 순수 `httpx` 클라이언트는 OpenAI SDK가 알지 못하는 Venice 엔드포인트를 위한 것으로, 이 프로젝트에서는 `/models/traits`가 그것입니다.
+
+채팅 타임아웃이 탐색 타임아웃보다 훨씬 긴 것은 의도적입니다. 웹 크롤링을 유발하는 질문은 정당하게 몇 분이 걸릴 수 있습니다.
+
+### 런타임에 모델 찾기
+
+Venice 모델 ID는 교체되며, 하나를 하드코딩하는 것은 한 달 안에 망가지는 에이전트를 배포하는 가장 빠른 길입니다. [`GET /models/traits`](/ko/api-reference/endpoint/models/traits)는 안정적인 특성 이름을 현재 그 역할을 맡은 모델에 매핑하므로, 모델을 지명하는 대신 `function_calling_default`를 요청합니다:
+
+```python
+    async def resolve_model(self, override: str | None = None) -> str:
+        if override:
+            return override
+        if self._settings.venice_model:
+            return self._settings.venice_model
+        response = await self._http.get("/models/traits", params={"type": "text"})
+        try:
+            response.raise_for_status()
+        except httpx2.HTTPStatusError as error:
+            raise RuntimeError(format_http_error(error)) from error
+        data = response.json().get("data") or {}
+        model = data.get("function_calling_default") or data.get("default")
+        if not model:
+            raise RuntimeError("Venice /models/traits did not return a function-calling model")
+        return str(model)
+```
+
+여기서 우선순위가 중요합니다. 명시적인 `--model` 플래그가 이기고, 그다음이 환경 변수의 `VENICE_MODEL`, 그다음이 특성 조회입니다. 따라서 기본 경로는 아무 설정도 필요 없지만, 두 모델의 동작을 비교할 때는 여전히 모델을 고정할 수 있습니다.
+
+<Tip>
+  모든 텍스트 모델이 함수 호출을 지원하는 것은 아닙니다. `function_calling_default` 특성을 요청하면 직접 목록을 관리하지 않고도 지원하는 모델을 얻습니다. 기반 ID가 얼마나 자주 바뀌는지는 [지원 중단](/ko/overview/deprecations)을 참조하세요.
+</Tip>
+
+### 완성 스트리밍하기
+
+이제 완성 호출을 추가합니다:
+
+```python
+    async def complete(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        on_text: Callable[[str], None] | None = None,
+    ) -> Any:
+        kwargs = chat_request_kwargs(
+            model=model,
+            messages=messages,
+            tools=tools,
+            temperature=self._settings.venice_temperature,
+        )
+        async with self._chat.chat.completions.stream(**kwargs) as stream:
+            async for event in stream:
+                if on_text is not None and event.type == "content.delta" and event.delta:
+                    on_text(event.delta)
+            completion = await stream.get_final_completion()
+        return completion.choices[0].message
+```
+
+사용자가 생성되는 텍스트를 실시간으로 볼 수 있도록 스트리밍하지만, 완성 후에는 조립된 메시지도 필요합니다 — 도구 호출은 여러 청크에 걸쳐 조각으로 도착하고, 이를 손으로 재조립하는 일은 번거롭습니다. SDK의 `stream()` 컨텍스트 매니저가 둘 다 처리합니다. `content.delta` 이벤트가 터미널 출력을 이끌고, `get_final_completion()`이 `tool_calls`가 이미 이어 붙여진 완전한 메시지를 돌려줍니다.
+
+요청 자체는 테스트하기 쉽도록 별도 함수에서 만듭니다:
+
+```python
+def chat_request_kwargs(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    temperature: float,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "extra_body": {
+            "venice_parameters": {
+                "include_venice_system_prompt": False,
+            }
+        },
+    }
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
+    return kwargs
+```
+
+`extra_body`는 OpenAI SDK가 자신이 모델링하지 않는 필드를 통과시키는 방법이며, [`venice_parameters`](/ko/api-reference/api-spec)가 여기에 들어갑니다. `include_venice_system_prompt`를 `false`로 설정하면 Venice의 기본 어시스턴트 프롬프트가 대화에서 빠지므로, 우리 시스템 프롬프트가 모델이 받는 유일한 지침이 됩니다. 엄격한 도구 규칙을 가진 에이전트라면 그것이 원하는 바입니다.
+
+`tools`와 `tool_choice`는 도구가 하나 이상 있을 때만 첨부하세요. 빈 `tools` 배열을 보내는 것은 모델을 쓸데없이 혼란스럽게 만드는 방법입니다.
+
+이 모듈에는 `APIStatusError`나 `httpx2.HTTPStatusError`를 상태 코드와 응답 본문을 담은 한 줄 문자열로 바꾸는 `format_http_error()` 헬퍼도 있습니다. 에이전트는 다른 어디보다 API 경계에서 자주 실패하며, 거기서 읽기 좋은 메시지 하나가 많은 추측을 아껴줍니다.
+
+## MCP 도구를 Venice 도구로 변환하기
+
+MCP 도구와 OpenAI 스타일 함수 도구는 같은 것을 다른 모양으로 기술합니다. 둘 다 이름, 설명, 인자에 대한 JSON Schema를 가집니다. 변환은 대부분 기계적이지만 한 가지 함정이 있습니다. Apify 도구 이름에는 함수 이름에 허용되지 않는 문자가 포함됩니다. Actor 도구는 `apify/rag-web-browser` 같은 이름을 가질 수 있는데, 그 슬래시는 유효하지 않습니다.
+
+그래서 나가는 길에 이름을 정제하고, 돌아오는 길에 복원할 수 있도록 매핑을 유지합니다.
+
+`src/venice_terminal_agent/tools.py`에서 `ToolCatalog`가 변환을 수행하고 매핑을 보관합니다:
+
+```python
+class ToolCatalog:
+    """Maps Venice-safe function names back to MCP tool names."""
+
+    def __init__(self, tools: Iterable[Any]) -> None:
+        self.openai_tools: list[dict[str, Any]] = []
+        self._mcp_names: dict[str, str] = {}
+        used: set[str] = set()
+        for tool in tools:
+            raw_name = str(getattr(tool, "name", "") or "tool")
+            safe_name = unique_name(sanitize_tool_name(raw_name), used)
+            used.add(safe_name)
+            self._mcp_names[safe_name] = raw_name
+            self.openai_tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": safe_name,
+                        "description": str(getattr(tool, "description", "") or raw_name),
+                        "parameters": tool_input_schema(tool),
+                    },
+                }
+            )
+
+    def mcp_name(self, venice_name: str) -> str:
+        return self._mcp_names.get(venice_name, venice_name)
+
+    def names(self) -> list[str]:
+        return [item["function"]["name"] for item in self.openai_tools]
+```
+
+작고 수수한 헬퍼 세 개가 궂은일을 합니다. `sanitize_tool_name()`은 허용되지 않는 문자를 하이픈으로 바꾸고, 숫자로 시작하는 이름에 접두사를 붙이고, 64자로 자릅니다. `unique_name()`은 그 잘라내기 때문에 두 Actor가 충돌하면 숫자 접미사를 붙입니다 — 모델이 한 Actor를 호출했는데 다른 Actor가 실행되는, 정말 혼란스러운 버그를 막아줍니다. `tool_input_schema()`는 MCP 서버가 `dict`, Pydantic 모델, 또는 아무것도 아닌 것을 돌려주는 경우를 모두 처리합니다.
+
+### 결과를 컨텍스트로 되돌려 포맷하기
+
+도구 결과는 대화에 곧바로 들어가므로 문자열이어야 하고, 크기 제한이 필요합니다. 문서 사이트를 스크래핑하면 컨텍스트 윈도우가 담을 수 있는 것보다 많은 텍스트가 쉽게 돌아옵니다.
+
+`format_tool_result()`는 서버가 제공하면 `structured_content`를 우선하고, 아니면 콘텐츠 블록을 텍스트로 평탄화하면서 `TextContent`가 아닌 블록도 처리합니다. 마지막은 중요한 두 줄로 끝납니다:
+
+```python
+    if getattr(result, "is_error", False):
+        text = json.dumps({"error": text}, ensure_ascii=False)
+    return truncate_text(text, max_chars)
+
+
+def truncate_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    return (
+        f"{text[:max_chars]}\n\n[truncated {omitted} characters; "
+        "use a follow-up tool call with filters, limit, or offset]"
+    )
+```
+
+이 잘림 안내문은 여러분이 아니라 모델을 위해 쓰여진 것입니다. 콘텐츠가 잘렸음을 알리고 필터, 리밋, 오프셋을 제안하면, 대개 모델은 전부 봤다고 가정하는 대신 더 좁은 두 번째 호출을 하게 됩니다.
+
+오류는 예외로 던지는 대신 `{"error": "..."}`로 감쌉니다. 실패한 도구 호출은 모델이 행동할 수 있는 정보입니다 — 다른 Actor를 고르거나 인자를 고칠 수 있는데, 실패가 일반 도구 결과로 전달될 때만 그렇게 할 수 있습니다.
+
+### 비용이 드는 도구 표시하기
+
+Apify 도구는 두 그룹으로 깔끔하게 나뉩니다. 메타데이터와 문서를 읽는 도구, 그리고 컴퓨팅을 시작하는 도구입니다. 두 번째 그룹에는 확인을 요구하고 싶으므로, 첫 번째 그룹을 허용 목록에 넣습니다:
+
+```python
+READ_ONLY_APIFY_TOOLS = frozenset(
+    {
+        "search-actors",
+        "fetch-actor-details",
+        "search-apify-docs",
+        "fetch-apify-docs",
+        "get-actor-output",
+        # plus the other get-actor-*, get-dataset-*, and get-key-value-store-* tools
+    }
+)
+
+
+def requires_confirmation(name: str) -> bool:
+    """True for tools that can spend Apify compute, such as Actor runs."""
+
+    normalized = name.strip().lower().replace("_", "-")
+    return normalized not in READ_ONLY_APIFY_TOOLS
+```
+
+차단 목록이 아닌 허용 목록이라는 것이 중요한 선택입니다. Apify는 도구와 Actor를 계속 추가하고 있으며, 에이전트가 본 적 없는 것은 기본적으로 먼저 물어보게 됩니다. 이를 반대로 만들면 모든 새 Actor가 자동 승인됩니다.
+
+## MCP로 Apify에 연결하기
+
+Apify는 두 가지 진입로를 제공합니다. `https://mcp.apify.com`의 호스팅 서버는 Streamable HTTP를 사용하고, `@apify/actors-mcp-server`는 `npx`를 통해 stdio로 로컬에서 실행됩니다. 두 방식은 서로 다른 상황에 맞으므로 둘 다 지원합니다. 호스팅 방식은 Node.js가 필요 없고, stdio는 연결을 여러분의 머신 안에 유지합니다.
+
+`src/venice_terminal_agent/apify_mcp.py`에서 `ApifyMcp` 클래스가 연결된 세션을 감쌉니다. `call_tool()`이 정제된 이름을 다시 되돌리는 곳입니다 — Venice는 `apify-rag-web-browser`를 보내고, Apify는 `apify/rag-web-browser`를 받습니다:
+
+```python
+    async def call_tool(self, venice_name: str, arguments: dict[str, Any]) -> str:
+        mcp_name = self.catalog.mcp_name(venice_name)
+        result = await self._client.call_tool(mcp_name, arguments)
+        return format_tool_result(result, max_chars=self._max_result_chars)
+```
+
+카탈로그를 만들려면 `client.list_tools()`에 대한 커서 루프가 필요합니다. 많은 Actor에 접근할 수 있는 토큰은 페이지네이션된 목록을 만들어 내기 때문입니다.
+
+### 전송 소유하기
+
+MCP 연결은 수명이 긴 비동기 리소스이고, 그 아래의 HTTP 클라이언트도 마찬가지입니다. `ApifyMcpSession` 비동기 컨텍스트 매니저가 둘 다 `AsyncExitStack`에 담고, 설정에 따라 전송을 고르고, 카탈로그를 불러옵니다. 따라 할 만한 디테일은 정리(cleanup)입니다:
+
+```python
+    async def __aenter__(self) -> ApifyMcp:
+        try:
+            # connect with _connect_stdio or _connect_http, then load_catalog(client)
+            return self.session
+        except BaseException:
+            await self._stack.aclose()
+            raise
+```
+
+저 `except BaseException`은 보기보다 중요합니다. 전송이 열린 뒤 도구 목록 가져오기가 실패하면, 이것 없이는 에이전트가 시작에 실패할 때마다 서브프로세스나 열린 소켓이 누수됩니다.
+
+두 가지 전송은 다음과 같습니다:
+
+```python
+    async def _connect_http(self, settings: Settings) -> Client:
+        headers: dict[str, str] = {}
+        if settings.apify_token:
+            headers["Authorization"] = f"Bearer {settings.apify_token}"
+        http = await self._stack.enter_async_context(
+            httpx2.AsyncClient(
+                headers=headers,
+                timeout=httpx2.Timeout(30.0, read=300.0),
+                follow_redirects=True,
+            )
+        )
+        transport = streamable_http_client(apify_http_url(settings), http_client=http)
+        return await self._stack.enter_async_context(Client(transport))
+
+    async def _connect_stdio(self, settings: Settings) -> Client:
+        if not settings.apify_token:
+            raise RuntimeError("APIFY_TOKEN is required for the local stdio Apify MCP server")
+        args = ["-y", "@apify/actors-mcp-server"]
+        if settings.apify_mcp_tools:
+            args.extend(["--tools", settings.apify_mcp_tools])
+        params = StdioServerParameters(
+            command="npx",
+            args=args,
+            env={"APIFY_TOKEN": settings.apify_token},
+        )
+        return await self._stack.enter_async_context(Client(stdio_client(params)))
+```
+
+HTTP 전송의 읽기 타임아웃이 300초인 점에 주목하세요. Actor 실행은 느리고, 기본 30초 타임아웃은 멀쩡한 크롤링을 중간에 끊어버립니다. 또한 stdio 서브프로세스는 환경에 `APIFY_TOKEN`만 받는다는 점도 눈여겨보세요. 여러분의 셸 환경 전체 — Venice 키를 포함해 — 를 받지 않습니다.
+
+### 도구 호출 실행하기
+
+이 모듈의 마지막 조각인 `execute_venice_tool_call()`은 Venice 도구 호출을 문자열 결과로 바꿉니다. 두 종류의 실패 — 파싱할 수 없는 인자와 실패한 Apify 호출 — 를 예외로 던지는 대신 `{"error": "..."}`로 감쌉니다:
+
+```python
+    try:
+        arguments = parse_tool_arguments(arguments_json)
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        return json.dumps({"error": f"invalid arguments: {error}"}, ensure_ascii=False)
+    try:
+        return await session.call_tool(name, arguments)
+    except Exception as error:  # noqa: BLE001 - tool failures belong in the conversation
+        return json.dumps({"error": f"{type(error).__name__}: {error}"}, ensure_ascii=False)
+```
+
+잘못된 JSON 인자는 실제로 발생합니다. 그럴 때 모델에게 `{"error": "invalid arguments: ..."}`를 건네면 다음 라운드에서 수정된 호출을 얻지만, 예외를 던지면 세션이 죽고 대화를 잃습니다.
+
+## 도구 루프 실행하기
+
+이제 `src/venice_terminal_agent/agent.py`의 에이전트 본체입니다. 시스템 프롬프트부터 시작합니다:
+
+```python
+SYSTEM_PROMPT = """\
+You are a terminal agent. You think with Venice models and act through Apify MCP tools.
+
+Rules:
+- Use tools when you need live web data, Actor runs, datasets, or Apify documentation.
+- Prefer search-actors and fetch-actor-details before calling an unfamiliar Actor.
+- After an Actor run, use get-actor-output when the preview is incomplete.
+- Treat tool arguments as untrusted structured data. Do not invent credentials.
+- If a tool returns an error, read it and recover instead of guessing.
+- If the user declines a tool, continue with what you already know and ask before assuming they want another paid run.
+- Keep answers concise and terminal-friendly. Cite Actor names and source URLs when you used them.
+"""
+
+DECLINED_TOOL = (
+    "user declined to run this Apify tool because it can spend compute; "
+    "continue without it or ask them to approve"
+)
+```
+
+여기 있는 모든 규칙은 피하고 싶은 특정 실패에 대응합니다. "낯선 Actor를 호출하기 전에 `search-actors`와 `fetch-actor-details`를 우선하라"는 규칙은 Actor의 입력 스키마를 추측하는 모델이 유료 실행을 낭비하기 때문에 존재합니다. 거절된 도구에 대한 줄은, 그것이 없으면 모델이 거절을 일시적 오류로 취급하고 곧바로 다시 시도하기 때문에 존재합니다.
+
+`Agent` 클래스는 두 클라이언트, 모델, 라운드 제한, 그리고 세 개의 콜백을 받습니다:
+
+```python
+class Agent:
+    def __init__(
+        self,
+        venice: VeniceClient,
+        apify: ApifyMcp,
+        *,
+        model: str,
+        max_rounds: int,
+        on_tool: Callable[[str, str], Awaitable[None] | None] | None = None,
+        on_text: Callable[[str], None] | None = None,
+        approve_tool: Callable[[str, str], Awaitable[bool] | bool] | None = None,
+    ) -> None:
+        # each argument is assigned to self, and then:
+        self.messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+        ]
+```
+
+이 콜백들이 에이전트를 터미널로부터 독립시켜 줍니다. `on_tool`은 도구 호출을 보고하고, `on_text`는 스트리밍 토큰을 받고, `approve_tool`은 확인 질문에 답합니다. 이것들만 갈아 끼우면 같은 에이전트가 웹 앱이나 챗봇 뒤에서도 작동합니다.
+
+루프는 다음과 같습니다:
+
+```python
+    async def ask(
+        self,
+        question: str,
+        *,
+        on_text: Callable[[str], None] | None = None,
+    ) -> str:
+        start = len(self.messages)
+        self.messages.append({"role": "user", "content": question})
+        tools = self.apify.catalog.openai_tools or None
+        text_callback = self._on_text if on_text is None else on_text
+        try:
+            for _ in range(self.max_rounds):
+                message = await self.venice.complete(
+                    model=self.model,
+                    messages=self.messages,
+                    tools=tools,
+                    on_text=text_callback,
+                )
+                calls = list(getattr(message, "tool_calls", None) or [])
+                if not calls:
+                    content = (message.content or "").strip()
+                    self.messages.append(assistant_payload(message))
+                    return content or "(empty response)"
+
+                self.messages.append(assistant_payload(message))
+                self.messages.extend(await self._execute_calls(calls))
+
+            raise RuntimeError(f"No final answer after {self.max_rounds} tool rounds")
+        except BaseException:
+            del self.messages[start:]
+            raise
+```
+
+이것이 에이전트의 전부입니다. 모델을 호출하고, 모델이 도구를 요청했다면 실행한 뒤 다시 호출합니다.
+
+`start` 인덱스와 예외 핸들러 안의 `del`은 자세히 볼 가치가 있습니다. 질문이 중간에 실패하면 — 네트워크 오류, `Ctrl+C`, 라운드 제한 — 대화에는 결과를 만들어 내지 못한 도구를 요청한 어시스턴트 턴이 남습니다. `tool_calls` 턴 뒤에는 대응하는 `tool` 메시지가 와야 하므로 Venice는 다음 요청을 거부합니다. 질문이 시작된 지점까지 되돌리면 실패한 질문이 흔적을 남기지 않고 REPL을 계속 쓸 수 있습니다.
+
+### 어시스턴트 턴 되돌려 보내기
+
+다음 함수는 작지만 틀리기 쉽습니다:
+
+```python
+def assistant_payload(message: Any) -> dict[str, Any]:
+    """Echo the assistant turn back to Venice without dropping null content.
+
+    Tool-call turns use ``content: null``. ``exclude_none=True`` would strip that
+    key and can break the next round. Extra Venice fields such as
+    ``reasoning_content`` and ``reasoning_details`` must also be preserved.
+    """
+
+    if hasattr(message, "model_dump"):
+        payload = message.model_dump(exclude_unset=True)
+        payload["role"] = "assistant"
+        return payload
+    return {"role": "assistant", "content": getattr(message, "content", None)}
+```
+
+뻔한 구현은 `message.model_dump(exclude_none=True)`인데, 이것은 도구 호출을 망가뜨립니다. 도구 호출 턴은 `content: null`을 가지며, 그 키를 제거하면 되돌려 보내는 메시지의 형태가 바뀝니다. 원하는 것은 `exclude_unset=True`입니다. 모델이 실제로 설정한 `null` 값은 유지하고, 모델이 보낸 적 없는 필드는 생략합니다.
+
+이 방식은 OpenAI 스키마가 알지 못하는 필드도 보존합니다. [추론 모델](/ko/guides/features/reasoning-models)은 `reasoning_content`와 `reasoning_details`를 반환하며, 이 필드들이 왕복에서 살아남아야 모델이 도구 라운드를 넘어 자신의 사고 흐름을 유지합니다.
+
+### 호출 실행과 통제
+
+모델은 한 턴에 여러 도구를 요청할 수 있고, 이를 하나씩 실행할 이유는 없습니다. 하지만 승인 요청은 순차적으로 하고 싶습니다. 확인 프롬프트가 뒤섞이면 읽을 수 없기 때문입니다. 그래서 먼저 계획하고, 그다음에 동시에 실행합니다:
+
+```python
+    async def _execute_calls(self, calls: list[Any]) -> list[dict[str, Any]]:
+        planned: list[tuple[Any, str | None]] = []
+        for call in calls:
+            function = call.function
+            name = function.name
+            arguments = function.arguments or "{}"
+            if self._on_tool is not None:
+                maybe = self._on_tool(name, arguments)
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+            if await self._allowed(name, arguments):
+                planned.append((call, None))
+            else:
+                planned.append(
+                    (call, json.dumps({"error": DECLINED_TOOL}, ensure_ascii=False))
+                )
+
+        async def run(item: tuple[Any, str | None]) -> dict[str, Any]:
+            call, denied = item
+            if denied is None:
+                content = await execute_venice_tool_call(
+                    self.apify,
+                    name=call.function.name,
+                    arguments_json=call.function.arguments,
+                )
+            else:
+                content = denied
+            return {
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": content,
+            }
+
+        return list(await asyncio.gather(*[run(item) for item in planned]))
+```
+
+거절된 도구도 여전히 `tool` 메시지를 받습니다. 모든 `tool_call_id`에는 응답이 필요하고, 하나라도 건너뛰면 대화가 잘못된 형태가 됩니다. 그 응답이 사용자가 거절했다고 설명할 뿐입니다.
+
+승인 검사 자체는 두 이름을 모두 확인합니다. 모델은 정제된 이름으로 작업하고 허용 목록은 MCP 이름을 사용하기 때문입니다:
+
+```python
+    async def _allowed(self, name: str, arguments: str) -> bool:
+        mcp_name = self.apify.catalog.mcp_name(name)
+        if not (requires_confirmation(name) or requires_confirmation(mcp_name)):
+            return True
+        if self._approve_tool is None:
+            return True
+        decision = self._approve_tool(name, arguments)
+        if asyncio.iscoroutine(decision):
+            return await decision
+        return bool(decision)
+```
+
+## CLI 추가하기
+
+`src/venice_terminal_agent/cli.py`의 CLI는 Typer에 REPL을 더한 것이고, 이 프로젝트에서 가장 밋밋한 파일이지만 — 따라 할 가치가 있는 디테일이 세 가지 있습니다.
+
+첫 번째는 Typer 옵션이 optional 타입에 기본값 `None`으로 선언되어, 설정 로더가 "전달되지 않음"과 "거짓 값이 전달됨"을 구분할 수 있다는 점입니다:
+
+```python
+    tools: Annotated[str | None, typer.Option(help="Apify MCP tools query, e.g. actors,docs.")] = None,
+    max_rounds: Annotated[int | None, typer.Option(help="Maximum tool-calling rounds per question.")] = None,
+```
+
+이 `None` 기본값이 `load_settings()`로 넘기는 과정을 안전하게 만듭니다. 사용하지 않은 플래그는 결코 환경 변수를 덮어쓰지 않습니다:
+
+```python
+        settings = load_settings(
+            venice_model=model,
+            apify_mcp_transport=transport,
+            apify_mcp_tools=tools,
+            max_rounds=max_rounds,
+            auto_approve_tools=yes or None,
+            save_history=save_history or None,
+        )
+```
+
+`yes or None`은 같은 아이디어를 불리언 플래그에 적용한 것입니다. `--yes`는 값을 설정하고, 생략하면 `False`가 아닌 `None`을 전달하므로 환경 변수의 `AUTO_APPROVE_TOOLS`가 살아남습니다.
+
+두 번째는 시작 순서입니다. 모델을 결정하고, MCP 세션을 열고, 에이전트를 만듭니다 — 그리고 Venice 클라이언트는 `finally`에서 닫습니다. 질문의 성공 여부와 관계없이 MCP 세션과 HTTP 클라이언트 모두 정리가 필요하기 때문입니다:
+
+```python
+async def _run(settings: Settings, prompt: str | None) -> None:
+    venice = VeniceClient(settings)
+    try:
+        model_id = await venice.resolve_model()
+        async with ApifyMcpSession(settings) as apify:
+            agent = Agent(
+                venice,
+                apify,
+                model=model_id,
+                max_rounds=settings.max_rounds,
+                on_tool=print_tool_call,
+                approve_tool=_make_approver(settings.auto_approve_tools),
+            )
+            print_banner(model_id, apify.catalog.names(), anonymous=apify.anonymous)
+            if prompt:
+                await _ask(agent, prompt)
+                return
+            await _repl(agent, save_history=settings.save_history)
+    finally:
+        await venice.aclose()
+```
+
+세 번째는 승인자(approver)로, 오로지 여러분의 Apify 청구서를 지키기 위해 존재하는 에이전트의 유일한 조각입니다:
+
+```python
+def _make_approver(auto_approve: bool):
+    def approve(name: str, arguments: str) -> bool:
+        if auto_approve:
+            return True
+        if not sys.stdin.isatty():
+            print_info(f"Skipped {name}: paid Apify tools need a TTY or --yes.")
+            return False
+        preview = arguments if len(arguments) <= 240 else f"{arguments[:240]}…"
+        try:
+            return Confirm.ask(
+                f"Run Apify tool [bold]{name}[/bold]({preview})? This can spend compute",
+                default=False,
+            )
+        except (KeyboardInterrupt, EOFError):
+            return False
+
+    return approve
+```
+
+`isatty()` 검사는 사람들이 잊는 부분입니다. cron이나 CI에서 에이전트를 실행하면 프롬프트에 답할 사람이 없으므로, 순진한 구현은 영원히 멈춰 있거나 조용히 승인해 버립니다. 여기서는 거절하고, 이유를 말하고, 모델이 읽기 전용 도구로 계속 진행하게 합니다. `default=False` 덕분에 실수로 누른 Enter가 유료 실행을 시작하지 않고, 프롬프트를 중단하는 것도 거절로 처리됩니다.
+
+모듈의 나머지는 평범한 터미널 작업이므로 읽기보다는 무엇이 있는지 알아두면 됩니다. `prompt_toolkit` REPL 루프, 슬래시 명령어를 위한 `_handle_command()` 조회, Rich 헬퍼를 담은 `render.py`, 그리고 누락된 `VENICE_API_KEY`를 Pydantic 트레이스백 대신 읽기 좋은 메시지로 바꾸는 `_settings_error()`가 있습니다. 그중 셋은 결정을 담고 있습니다:
+
+| 조각 | 지킬 가치가 있는 결정 |
+| --- | --- |
+| REPL 히스토리 | `--save-history`를 전달하지 않는 한 메모리에만 둡니다. 사적인 자료에 대해 질문할 수 있는 에이전트라면, 모든 프롬프트를 기본으로 `~/.local/share`에 기록하는 것은 나쁜 선택입니다. |
+| `Ctrl+C` 처리 | 종료하는 대신 질문을 취소하고 프롬프트로 돌아갑니다. `Agent.ask()`의 히스토리 롤백과 짝을 이루어, 취소된 질문이 깨끗한 대화를 남깁니다. |
+| `StreamPrinter` | 스트리밍 토큰을 `markup=False`와 `highlight=False`로 출력합니다. 그렇지 않으면 Rich가 모델 출력의 대괄호를 자신의 포맷 태그로 읽습니다. |
+
+슬래시 명령어는 `/help`, `/clear`, `/quit`, 그리고 제 몫을 하는 둘입니다. `/tools`는 불러온 카탈로그를 출력하는데, 에이전트가 이상한 도구를 고른 이유를 대개 설명해 주며, `/reload`는 세션 도중 Apify 계정에 추가한 Actor를 다시 불러옵니다.
+
+마지막으로 `uv run venice-agent`가 작동하도록 `pyproject.toml`에서 진입점을 연결합니다:
+
+```toml
+[project.scripts]
+venice-agent = "venice_terminal_agent.cli:main"
+```
+
+## 에이전트 실행하기
+
+인터랙티브 세션을 시작합니다:
+
+```bash
+uv run venice-agent
+```
+
+또는 질문 하나만 하고 종료합니다:
+
+```bash
+uv run venice-agent "Find an Apify Actor that scrapes Hacker News and summarize how to call it"
+```
+
+배너가 표시된 뒤, 도구 호출이 일어나는 대로 나타납니다:
+
+```text
+╭──────────────────────────────────────────────╮
+│ Venice terminal agent                        │
+│ Model: zai-org-glm-5-2                       │
+│ Apify: Apify authenticated                   │
+│ Tools: search-actors, fetch-actor-details, … │
+╰──────────────────────────────────────────────╯
+
+→ search-actors({"search": "hacker news scraper", "limit": 5})
+→ fetch-actor-details({"actor": "epctex/hackernews-scraper"})
+
+epctex/hackernews-scraper takes a `startUrls` array and a `maxItems` cap…
+```
+
+무엇보다 먼저 배너의 Apify 줄을 읽으세요. "anonymous Apify tools only"라고 표시되면 `APIFY_TOKEN`이 로드되지 않은 것이며, 에이전트가 왜 Actor 실행을 거부하는지 10분간 고민한 뒤보다는 지금 알아차리는 편이 훨씬 낫습니다.
+
+무엇이 필요한지 알 때는 도구 카탈로그를 제한하세요:
+
+```bash
+uv run venice-agent --tools actors,docs,apify/rag-web-browser
+```
+
+카탈로그를 줄이는 것은 비용만의 문제가 아닙니다. 선택지가 더 적고 더 관련성 높을수록 모델은 대개 더 잘 고르며, `--tools`는 선택지를 좁히는 가장 값싼 방법입니다.
+
+호스팅 서버 대신 MCP 서버를 로컬에서 실행하려면:
+
+```bash
+uv run venice-agent --transport stdio
+```
+
+이 방식은 `npx`를 통해 `@apify/actors-mcp-server`를 실행하므로 PATH에 Node.js가 필요하고, `APIFY_TOKEN`도 필요합니다 — 로컬 서버에는 익명 모드가 없습니다.
+
+그리고 정말로 무인 Actor 실행을 원할 때는:
+
+```bash
+uv run venice-agent --yes "Crawl https://docs.venice.ai and list the guides about tool calling"
+```
+
+## 조각별로 테스트하기
+
+여기서 흥미로운 로직은 어느 것도 네트워크가 필요 없습니다. 미리 정해 둔 응답 목록에서 하나씩 꺼내는 `FakeVenice`와 `SimpleNamespace` 도구로 실제 `ToolCatalog`를 만드는 `FakeApify`만 있으면 완전한 도구 라운드를 구동하기에 충분합니다:
+
+```python
+class FakeVenice:
+    def __init__(self, replies: list[object]) -> None:
+        self.replies = list(replies)
+
+    async def complete(self, **kwargs: object) -> object:
+        return self.replies.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_agent_runs_tool_then_answers() -> None:
+    venice = FakeVenice(
+        [
+            _tool_message("search-actors", '{"query": "hacker news"}'),
+            _text_message("Use apify/rag-web-browser."),
+        ]
+    )
+    apify = FakeApify()
+    agent = Agent(venice, apify, model="test-model", max_rounds=4)
+
+    answer = await agent.ask("Find a scraper for Hacker News")
+
+    assert apify.calls == [("search-actors", {"query": "hacker news"})]
+    roles = [message["role"] for message in agent.messages]
+    assert roles == ["system", "user", "assistant", "tool", "assistant"]
+```
+
+역할 시퀀스를 검증하는 것은 에이전트 코드에서 좋은 습관입니다. Venice가 400을 반환하기 전까지는 보이지 않는, 잘못된 형태의 대화 버그를 잡아냅니다.
+
+세 가지 테스트를 더 작성할 가치가 있으며, 모두 같은 방식으로 `agent.messages`를 검증합니다. Venice 오류로 실패했든 `max_rounds`를 소진했든, 실패한 실행이 히스토리를 `["system"]`만 남도록 되돌리는지. 승인자가 `False`를 반환해도 읽기 전용 도구는 여전히 실행되는지. 그리고 거절된 유료 도구가 `declined`를 담은 `tool` 메시지를 남기고 `apify.calls`는 비어 있는지.
+
+테스트 스위트는 다음으로 실행합니다:
+
+```bash
+uv run pytest
+```
+
+## 프라이버시와 비용에 관한 메모
+
+두 API에 접근하는 에이전트라면 정확히 짚어 둘 가치가 있습니다:
+
+| 계층 | 데이터를 보는 대상 |
+| --- | --- |
+| 로컬 CLI | 질문, 설정, 대화 히스토리, 도구 결과가 여러분의 머신 메모리에 머뭅니다 |
+| Venice 채팅 완성 | 시스템 프롬프트, 질문, 도구 스키마, 도구 결과가 Venice로 전송되며, Venice는 이를 보관하지 않습니다 |
+| Apify MCP | 검색어와 대상 URL 같이 모델이 생성하는 도구 인자 |
+| Apify Actor | 승인된 Actor가 방문하는 사이트들과, Actor가 여러분의 Apify 데이터셋에 저장하는 모든 것 |
+| 로컬 디스크 | `--save-history`를 전달하지 않는 한 아무것도 없음 |
+
+Venice의 [데이터 무보관](/ko/overview/privacy)은 모델 측을 다룹니다. Apify는 다루지 않으며, Actor 실행은 결과를 여러분의 Apify 계정에 기록합니다. 특정 작업에서 그것이 문제가 된다면, `APIFY_TOKEN` 없이 실행하고 익명 탐색 도구만 사용하세요.
+
+비용에 관해서는 세 가지 습관이 큰 도움이 됩니다:
+
+- 개발 중에는 `--yes`를 끄세요. 모델이 어떤 Actor를 실행하고 싶어 하는지 지켜보는 것 자체가 유익합니다.
+- `--tools`로 카탈로그를 실제로 검토한 Actor로 좁히세요.
+- `max_rounds`를 적당히 유지하세요. 리서치 작업에는 12 라운드면 충분하며, 상한을 낮추면 모델이 루프에 갇혔을 때 피해가 제한됩니다.
+
+## 이 예제 확장하기
+
+루프가 토대입니다. 일단 작동하면 다음과 같은 방향이 유용합니다:
+
+- 두 번째 MCP 서버를 추가하세요. `Agent`에는 Apify 전용인 것이 없으므로, 여러 서버의 카탈로그를 병합하는 일은 대부분 도구 이름의 네임스페이스 처리입니다.
+- 세션을 재개하거나 Actor가 반환한 내용을 감사할 수 있도록 대화를 SQLite에 저장하세요.
+- 매번 확인하는 대신 Actor 실행을 추적하고 상한에서 멈추는 도구별 예산을 추가하세요.
+- 이름과 인자를 기준으로 도구 결과를 캐싱해, 반복되는 문서 조회가 다시 크롤링하지 않게 하세요.
+- `--model`로 모델을 고정하고 `function_calling_default`와 도구 선택 품질을 비교해 보세요.
+- 승인자를 정책 함수로 바꿔 특정 인자를 가진 특정 Actor는 자동 승인하고 나머지는 모두 프롬프트로 물어보게 하세요.
+
+MCP 없이 더 작게 시작하고 싶다면, [도구를 활용하는 에이전트 만들기](/ko/guides/features/tool-using-agent)가 로컬 Python 함수 세 개로 같은 루프를 다룹니다.
+
+## 마무리
+
+읽어주셔서 감사합니다! 이 글이 Venice로 사고하고 Apify를 통해 행동하는 터미널 에이전트를 만드는 데 도움이 되었기를 바랍니다.
+
+가져갈 만한 패턴은 이 코드에서 지능에 관한 부분이 얼마나 적은가입니다. 모델은 도구 호출을 반환하고, 어떤 호출을 실행할지, 결과가 어떻게 돌아올지, 무언가 실패하면 어떻게 되는지는 여러분의 코드가 결정합니다. 그 결정들이 명시적으로 드러나면, 능력을 추가하는 일은 대부분 에이전트에게 더 많은 도구를 가리켜 주는 일이 됩니다.
