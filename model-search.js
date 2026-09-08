@@ -669,9 +669,9 @@
   const FILTER_CHECK = '<svg class="vmb-dd-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
   const SORT_ICON = '<svg class="vmb-dd-sort-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"/></svg>';
 
-  // Sort options (single-select). `default` preserves the API's curated order and
-  // is the natural resting state on preset pages; the overview page defaults to
-  // newest. All values are handled by sortModels().
+  // Sort options (single-select). Every catalog page defaults to newest so
+  // category pages are consistent with the overview. `default` remains available
+  // when someone explicitly selects the API's curated order.
   const SORT_OPTIONS = [
     { value: 'default', label: 'Recommended' },
     { value: 'newest', label: 'Newest' },
@@ -2543,8 +2543,8 @@
     let activeVideoType = null;
     let activeImageType = null;
     let activePrivacy = null;
-    // On overview page (no preset filter), default to newest first
-    let activeSort = presetFilter ? 'default' : 'newest';
+    // Keep every catalog page consistent by showing the newest models first.
+    let activeSort = 'newest';
 
     // Configure which dropdowns are visible for the current page context.
     if (presetFilter) {
@@ -2750,7 +2750,7 @@
     updateClearVisibility();
 
     const sortDd = container.querySelector('.vmb-sort-dd');
-    const sortDefault = presetFilter ? 'default' : 'newest';
+    const sortDefault = 'newest';
 
     // Sync the sort dropdown's trigger label, selected option, and active accent
     // (highlighted whenever the sort differs from the page's natural default).
