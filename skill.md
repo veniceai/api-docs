@@ -79,7 +79,7 @@ catalog moves; the capability flags on each model are the authoritative answer.
 | --- | --- |
 | Chat / text | `POST /chat/completions`; `POST /responses` (alpha) |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`; OpenAI-style `POST /images/generations` |
-| Video (async) | `POST /video/quote`, `/video/queue`, `GET /video/retrieve?id=`, `POST /video/complete`, `POST /video/transcriptions` |
+| Video (async) | `POST /video/quote`, `/video/queue`, `GET /video/retrieve?id=`, `POST /video/complete` |
 | Audio | `POST /audio/speech` (TTS), `POST /audio/voices` (voice cloning), `POST /audio/transcriptions` (STT) |
 | Music (async) | `POST /audio/quote`, `/audio/queue`, `/audio/retrieve`, `/audio/complete` |
 | Embeddings | `POST /embeddings` |
@@ -180,7 +180,7 @@ ln -s ~/src/venice-skills/skills ~/.claude/skills/venice
 | `venice-text-routing` | choosing a model by privacy tier and modality |
 | `venice-models` | catalog, capability flags, pricing |
 | `venice-image-generate`, `venice-image-edit` | generation, edit, upscale |
-| `venice-video` | async video generation and transcription |
+| `venice-video` | video generation, editing, upscaling, and async job lifecycle |
 | `venice-audio-speech`, `venice-audio-music`, `venice-audio-transcription` | TTS, voice cloning, music, STT |
 | `venice-embeddings`, `venice-characters`, `venice-responses` | embeddings, personas, the alpha Responses API |
 | `venice-augment` | document parsing and web search |

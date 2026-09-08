@@ -573,9 +573,9 @@
     }
   }
 
-  // Capability filters only apply to text/chat models.
-  function categoryAllowsCapabilityFilters(category) {
-    return category === 'all' || category === 'text';
+  // Most capabilities are text-only, while Uncensored applies across model types.
+  function isTextOnlyCapability(capability) {
+    return capability !== 'uncensored';
   }
 
   // ========== I18N (filter/sort UI chrome) ==========
@@ -651,14 +651,6 @@
         { value: 'vision', label: 'Vision' },
         { value: 'function', label: 'Function Calling' },
         { value: 'code', label: 'Code' },
-      ],
-    },
-    // Uncensored spans text, image, video, and audio models, so it gets its own
-    // always-available dropdown rather than a slot in the text-only Capability
-    // group.
-    content: {
-      label: 'Content', mode: 'single', default: null,
-      options: [
         { value: 'uncensored', label: 'Uncensored' },
       ],
     },
@@ -677,9 +669,9 @@
   const FILTER_CHECK = '<svg class="vmb-dd-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
   const SORT_ICON = '<svg class="vmb-dd-sort-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"/></svg>';
 
-  // Sort options (single-select). `default` preserves the API's curated order and
-  // is the natural resting state on preset pages; the overview page defaults to
-  // newest. All values are handled by sortModels().
+  // Sort options (single-select). Every catalog page defaults to newest so
+  // category pages are consistent with the overview. `default` remains available
+  // when someone explicitly selects the API's curated order.
   const SORT_OPTIONS = [
     { value: 'default', label: 'Recommended' },
     { value: 'newest', label: 'Newest' },
@@ -2521,7 +2513,6 @@
             ${renderFilterDropdown('image', FILTER_GROUPS.image)}
             ${ENABLE_VIDEO ? renderFilterDropdown('video', FILTER_GROUPS.video) : ''}
             ${renderFilterDropdown('capability', FILTER_GROUPS.capability)}
-            ${renderFilterDropdown('content', FILTER_GROUPS.content)}
             ${renderFilterDropdown('privacy', FILTER_GROUPS.privacy)}
             <button type="button" class="vmb-dd-clear" hidden>${t('Clear filters')}</button>
           </div>
@@ -2552,20 +2543,19 @@
     let activeVideoType = null;
     let activeImageType = null;
     let activePrivacy = null;
-    let activeContent = null;
-    // On overview page (no preset filter), default to newest first
-    let activeSort = presetFilter ? 'default' : 'newest';
+    // Keep every catalog page consistent by showing the newest models first.
+    let activeSort = 'newest';
 
     // Configure which dropdowns are visible for the current page context.
     if (presetFilter) {
       const filterVisibility = {
-        text: { capability: true, video: false, image: false },
-        video: { capability: false, video: true, image: false },
-        image: { capability: false, video: false, image: true },
+        text: { video: false, image: false },
+        video: { video: true, image: false },
+        image: { video: false, image: true },
       };
-      const config = filterVisibility[presetFilter] || { capability: false, video: false, image: false };
+      const config = filterVisibility[presetFilter] || { video: false, image: false };
       showDd('type', false);
-      showDd('capability', config.capability);
+      showDd('capability', true);
       showDd('video', config.video);
       showDd('image', config.image);
     } else {
@@ -2582,7 +2572,6 @@
       if (key === 'image') return activeImageType;
       if (key === 'video') return activeVideoType;
       if (key === 'privacy') return activePrivacy;
-      if (key === 'content') return activeContent;
       return null;
     }
     function setSingleState(key, value) {
@@ -2590,7 +2579,6 @@
       else if (key === 'image') activeImageType = value;
       else if (key === 'video') activeVideoType = value;
       else if (key === 'privacy') activePrivacy = value;
-      else if (key === 'content') activeContent = value;
     }
 
     function updateDropdownUI(key) {
@@ -2639,7 +2627,7 @@
 
     function updateClearVisibility() {
       const any = activeCapabilities.size > 0 || activeVideoType || activeImageType ||
-        activePrivacy || activeContent || (!presetFilter && activeFilter !== 'all');
+        activePrivacy || (!presetFilter && activeFilter !== 'all');
       clearBtn.hidden = !any;
     }
 
@@ -2667,20 +2655,21 @@
     function syncCapabilityFilterControls() {
       const capDd = dd.capability;
       if (!capDd) return;
-      const allow = categoryAllowsCapabilityFilters(activeFilter);
-      if (!allow && activeCapabilities.size) {
-        activeCapabilities.clear();
+      const category = presetFilter || activeFilter;
+      const allowTextCapabilities = category === 'all' || category === 'text';
+
+      capDd.querySelectorAll('.vmb-dd-option').forEach(option => {
+        const available = allowTextCapabilities || !isTextOnlyCapability(option.dataset.value);
+        option.hidden = !available;
+        option.style.display = available ? '' : 'none';
+        option.disabled = !available;
+      });
+
+      if (!allowTextCapabilities) {
+        [...activeCapabilities]
+          .filter(isTextOnlyCapability)
+          .forEach(capability => activeCapabilities.delete(capability));
         updateDropdownUI('capability');
-      }
-      capDd.classList.toggle('vmb-dd-disabled', !allow);
-      const trigger = capDd.querySelector('.vmb-dd-trigger');
-      trigger.disabled = !allow;
-      trigger.setAttribute('aria-disabled', allow ? 'false' : 'true');
-      trigger.title = allow ? '' : 'Available when viewing All or Text models';
-      if (!allow) {
-        capDd.classList.remove('open');
-        trigger.setAttribute('aria-expanded', 'false');
-        capDd.querySelector('.vmb-dd-panel').hidden = true;
       }
     }
 
@@ -2692,8 +2681,8 @@
       if (group.mode === 'multi') {
         if (activeCapabilities.has(value)) activeCapabilities.delete(value);
         else activeCapabilities.add(value);
-        // Selecting a capability on the main page implies text models.
-        if (activeCapabilities.size > 0 && !presetFilter && activeFilter === 'all') {
+        // Selecting a text-only capability on the main page implies text models.
+        if ([...activeCapabilities].some(isTextOnlyCapability) && !presetFilter && activeFilter !== 'text') {
           activeFilter = 'text';
           updateDropdownUI('type');
         }
@@ -2706,7 +2695,9 @@
         setSingleState(key, next);
         // Changing type resets the type-dependent filters.
         if (key === 'type') {
-          activeCapabilities.clear();
+          [...activeCapabilities]
+            .filter(isTextOnlyCapability)
+            .forEach(capability => activeCapabilities.delete(capability));
           activeVideoType = null;
           activeImageType = null;
           updateDropdownUI('capability');
@@ -2726,7 +2717,6 @@
       activeVideoType = null;
       activeImageType = null;
       activePrivacy = null;
-      activeContent = null;
       if (!presetFilter) activeFilter = 'all';
       updateAllDropdownUI();
       syncCapabilityFilterControls();
@@ -2760,7 +2750,7 @@
     updateClearVisibility();
 
     const sortDd = container.querySelector('.vmb-sort-dd');
-    const sortDefault = presetFilter ? 'default' : 'newest';
+    const sortDefault = 'newest';
 
     // Sync the sort dropdown's trigger label, selected option, and active accent
     // (highlighted whenever the sort differs from the page's natural default).
@@ -2814,6 +2804,7 @@
         if (cap === 'vision' && !caps.supportsVision) return false;
         if (cap === 'function' && !caps.supportsFunctionCalling) return false;
         if (cap === 'code' && !matchesCodeFilter(model)) return false;
+        if (cap === 'uncensored' && !isUncensoredModel(model)) return false;
       }
       return true;
     }
@@ -2844,11 +2835,6 @@
       return true;
     }
 
-    function matchesContent(model) {
-      if (!activeContent) return true;
-      if (activeContent === 'uncensored') return isUncensoredModel(model);
-      return true;
-    }
 
     function getModelPrice(model) {
       const pricing = model.model_spec?.pricing || {};
@@ -2887,8 +2873,7 @@
                matchesCapability(model) &&
                matchesVideoType(model) &&
                matchesImageType(model) &&
-               matchesPrivacy(model) &&
-               matchesContent(model);
+               matchesPrivacy(model);
       });
 
       let candidates = filtered;
