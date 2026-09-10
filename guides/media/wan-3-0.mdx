@@ -1,0 +1,542 @@
+---
+title: "Wan 3.0"
+description: "Wan 3.0 on Venice — native 30-second video with audio from text, a first/last frame, or up to 20 reference assets (images, videos, audio, a document or webpage). Variants, limits, prompt formulas, and worked examples."
+'og:title': "Wan 3.0 Guide | Venice API Docs"
+'og:description': "Generate, reference, edit and extend videos with Wan 3.0 via the Venice API. Omni Reference vs First & Last Frames, multimodal limits, prompt formulas, pricing, and complete curl examples."
+---
+
+Wan 3.0 is an all-in-one video model, exposed on Venice as a family of variants for text-, image-, and reference-driven generation. It generates **up to 30 seconds in a single pass with native audio** (dialogue, sound effects, and background music), accepts prompts up to 20,000 characters, and in its **reference-to-video** form takes up to **20 reference assets** at once: 10 images, 5 videos, 5 audio clips, and one document or webpage.
+
+The same reference-to-video model handles subject reference, motion and camera reference, voice reference, document-to-video, video editing, and video extension. There is no `task` field — **how you write the prompt decides the workflow**.
+
+This guide covers the variants, the two input modes, the Venice request parameters, the Omni Reference workflows with their prompt patterns, multimodal limits, pricing, and complete `curl` examples.
+
+## Variants
+
+Every Wan 3.0 tier ships the same three variants. Pick the tier for speed and resolution, and the variant for the kind of input you have.
+
+| Tier | Text-to-video | Image-to-video | Reference-to-video | Resolutions | Notes |
+|---|---|---|---|---|---|
+| **Wan 3.0** | `wan-3-0-text-to-video` | `wan-3-0-image-to-video` | `wan-3-0-reference-to-video` | 480p / 720p / 1080p | Standard tier. The only tier that accepts a document or webpage reference. |
+| **Wan 3.0 Prime** | `wan-3-0-prime-text-to-video` | `wan-3-0-prime-image-to-video` | `wan-3-0-prime-reference-to-video` | 480p / 720p / 1080p | Same model and output quality, significantly faster end-to-end, higher per-second price. |
+| **Wan 3.0 Pro** | `wan-3-0-pro-text-to-video` | `wan-3-0-pro-image-to-video` | `wan-3-0-pro-reference-to-video` | 1080p / 2K / 4K | Highest resolution. No 480p/720p rungs. |
+| **Wan 3.0 Prime Pro** | `wan-3-0-prime-pro-text-to-video` | `wan-3-0-prime-pro-image-to-video` | `wan-3-0-prime-pro-reference-to-video` | 1080p / 2K / 4K | Fastest high-resolution tier. |
+
+Dotted aliases (`wan-3.0-text-to-video`, etc.) are accepted for every ID.
+
+All variants are async. Submit via `POST /api/v1/video/queue`, then poll `POST /api/v1/video/retrieve` until the response body is `video/mp4`. See [Video Generation](/guides/media/video-generation) for the general queue flow.
+
+## Two input modes, one model
+
+One model serves two **mutually exclusive** input modes. On Venice each mode is its own variant, so you never have to worry about mixing them:
+
+| Mode | Venice variant | What you supply | Best for |
+|---|---|---|---|
+| **Omni Reference** | `*-reference-to-video` | Any mix of reference images, videos, audio clips, and (standard tier) one document or webpage | Most creative work: consistent characters and products, motion transfer, voice-driven dialogue, editing, extension, document-to-video |
+| **First & Last Frames** | `*-image-to-video` | A strict first frame (`image_url`) and optionally a strict last frame (`end_image_url`) | Shots that must start (and end) on exactly the frame you provide |
+| **Text only** | `*-text-to-video` | Prompt only | Open-ended generation, fastest to author |
+
+Reference images are *donors* — the model reproduces the subject, style, or scene but does not have to start on that pixel grid. A first frame is a *constraint* — the video starts on it. If you need the video to open on your exact image, use image-to-video; if you need the same character across shots, use reference-to-video.
+
+---
+
+## Request parameters
+
+Values below are what the Venice API accepts for the Wan 3.0 family. Requests outside these ranges are rejected with a 400 before reaching inference.
+
+| Field | Values | Notes |
+|---|---|---|
+| `prompt` | up to **20,000** characters | Required. Long, structured prompts (shot lists, timestamps, per-shot audio) are the intended use. |
+| `duration` | `2s`, `5s`, `10s`, `15s`, `20s`, `25s`, `30s` | Default `10s`. With reference videos, **input duration + output duration must be ≤ 30 s** (see [limits](#multimodal-input-limits)). |
+| `resolution` | `480p`, `720p`, `1080p` — Pro tiers: `1080p`, `2k`, `4k` | Default `1080p`. |
+| `aspect_ratio` | `16:9`, `9:16`, `1:1`, `4:3`, `3:4` — plus `adaptive` on image- and reference-to-video | Text-to-video defaults to `16:9`. Image- and reference-to-video default to `adaptive`, which derives the output ratio from your input media and prompt. |
+| `audio` | `true` / `false` | Default `true`. When `false` the output has no audio track. Price is the same either way. |
+| `image_url` | URL or data URL | Image-to-video only: the strict first frame. Shortest side must be ≥ 240 px. |
+| `end_image_url` | URL or data URL | Image-to-video only, optional: the strict last frame. |
+| `reference_image_urls` | array, ≤ 10 | Reference-to-video: subject / scene / style donors. Referenced as `@Image1`, `@Image2`, … |
+| `reference_video_urls` | array, ≤ 5 | Reference-to-video: motion, camera, or edit/extend source clips. Referenced as `@Video1`, … |
+| `reference_audio_urls` | array, ≤ 5 | Reference-to-video: voice timbre, music, or a dance track. Referenced as `@Audio1`, … |
+| `reference_document_urls` | array, ≤ 1 | Standard `wan-3-0-reference-to-video` only: one document file **or** one public webpage URL. |
+
+Not supported on this family:
+
+- **`negative_prompt`** — Wan 3.0 has no negative prompt. Describe what you want instead; for exclusions, state them in the prompt ("no dialogue", "no background music", "one continuous take").
+- **Prompt rewriting** — Venice submits your prompt literally, with no automatic prompt expansion, so what you write is what the model sees.
+- **Smart duration** — the model can pick its own length, but Venice does not offer that mode because your job is priced up front from the duration you select.
+
+### Referencing inputs in the prompt
+
+Refer to reference assets by type and 1-based position: `@Image1`, `@Video2`, `@Audio1`. Numbering follows the order of the arrays you send — `reference_image_urls[0]` is `@Image1`, `reference_video_urls[0]` is `@Video1`, and so on. The forms `Image 1` / `Figure 1` are also understood. Mention a reference as many times as you need; each mention is an instruction about how to use it in that part of the shot.
+
+```
+@Image1 walks through the doorway shown in @Image2, then the camera follows in the style of @Video1.
+Use the voice from @Audio1 for her line: "We're late."
+```
+
+---
+
+## Omni Reference workflows
+
+All of the patterns below run on `wan-3-0-reference-to-video` (or the Prime / Pro / Prime Pro equivalent). Include at least one reference image, reference video, or (standard tier) document; audio on its own is not a valid request and must be paired with an image or video.
+
+### Subject reference
+
+Lock the appearance of characters, products, and environments across the whole clip. Wan 3.0 is built for **pixel-level consistency**: every detail of the reference is meant to survive into the output.
+
+**Prompt pattern**:
+
+```
+@Reference subject + action + (dialogue) [+ scene from @ImageN] [+ camera]
+```
+
+**Examples**:
+
+- `A continuous, photorealistic cinematic shot. Inside the apartment entrance shown in @Image2, the child from @Image1 stands centre frame, smiles and waves at the camera, then turns and opens the wooden door. Camera fixed; appearance and clothing unchanged throughout.`
+- `[Video Type] Game character showcase. [Duration] 15 seconds. Three characters (@Image1, @Image2, @Image3) appear in turn in close-up, each surrounded by their own elemental particles, then demonstrate one signature skill each with matching sound effects.`
+
+Tips:
+
+- Name the reference **every time** the subject reappears, especially in multi-shot prompts. `The woman` is ambiguous once two people are on screen; `@Image1` is not.
+- Keep the reference set lean. Up to 10 images are allowed, but unrelated references compete for attention. Use a character sheet plus the few supporting assets the shot actually needs.
+- For multi-image scenes, say which image is the *subject* and which is the *scene* ("the child from @Image1 … the entrance shown in @Image2").
+
+### Video temporal reference (motion, camera, effects)
+
+A reference video can donate its **motion**, **camera movement**, or **effects** without donating its content.
+
+**Prompt patterns**:
+
+```
+Refer to the camera movement in @Video1, and change the scene to ...
+Refer to @Video1, replacing the [subject] with @Image1. Keep the [action], motion trajectory, and background unchanged.
+The character in @Image1 performs the same movements and effects as the character in @Video1.
+```
+
+**Examples**:
+
+- `Refer to the camera movement style in @Video1, and change the scene to a cup of coffee on a rooftop café table.`
+- `Refer to @Video1, replacing the skateboarding man with the woman and clothes from @Image1. Only replace the person; keep the skateboarding action, motion trajectory, and skatepark background completely unchanged.`
+
+### Audio reference (voice, music, rhythm)
+
+Reference audio can supply a **voice timbre** for dialogue, a **music track** to choreograph to, or a **sound design** reference. Say explicitly how each clip should be used.
+
+**Prompt patterns**:
+
+```
+Extract the tone characteristics from @Audio1 and have the character say: "..."
+Dance to the beat of @Audio1: heavy beats → sharp large movements and freeze poses; soft sections → gentle waves.
+```
+
+**Example**:
+
+- `Replace the man in @Image1 with the woman from @Video1, sitting by the window on the phone. [Tone and lines] Use the voice from @Audio1 for the line: "Really? That sounds great! When will you be back?" [Mouth and expression] Lip movement must match the generated voice, with natural blinking and small head nods. A 15-second slow push-in, cinematic lighting.`
+
+### Document or webpage reference (standard tier only)
+
+`wan-3-0-reference-to-video` can turn a document or a public webpage into a video: a diary into a narrated short film, a spreadsheet into an animated data story, an encyclopedia article into an explainer.
+
+- Supply **one** `reference_document_urls` entry. Document files (docx, doc, xlsx, xls, pptx, ppt, pdf, txt, key, pages, numbers, md; ≤ 100 MB, as a URL or data URL) are fetched by Venice and forwarded as a file; any other public `http(s)` URL is forwarded as a webpage link. A file and a link cannot be combined.
+- Pair the document with the images the video should look like, and tell the model which cells, pages, or sections to draw on.
+- Prime, Pro, and Prime Pro do not accept documents; a request with `reference_document_urls` on those tiers is rejected.
+
+**Examples**:
+
+- `Help me turn the content of the webpage about quantum mechanics into a fun, popular-science short video in a paper-cut animation style.`
+- `Based on the encyclopedia entry, create an animated video titled "Who is Wang Wei" for first-grade students.`
+- `A 22-second, four-segment data video on a pure white background, minimalist business style. Segment 1: the title, then the values of cells B7 and G7 slide in with a light-grey arrow between them and the voiceover "In the first half of 2026, monthly GMV grew from 15.8 to 34.6 million dollars." Segment 2: three trend lines drawn left to right from rows 4–6, in the chart style of @Image2 …`
+
+### Video edit
+
+Edit a single input clip while preserving everything you do not name. Send the clip as `reference_video_urls[0]` and address it as `@Video1`.
+
+**Prompt pattern**:
+
+```
+Edit @Video1: [editing target] + [editing action]. [Everything else] remains unchanged.
+```
+
+**Sub-patterns**:
+
+| Edit type | Example prompt |
+|---|---|
+| Add elements | `Edit @Video1: Add a boulder on the beach, half-buried in wet sand. As the waves recede, let the water lap over the base of the rock.` |
+| Modify elements | `Edit @Video1: Replace the skateboarding man with a short-haired woman in an athletic tank top and cargo pants. Keep the cap, knee pads, and elbow pads. The tricks, movement trajectory, and skatepark background must remain completely unchanged.` |
+| Remove elements | `Edit @Video1: Remove the woman's sunglasses, revealing her natural eye makeup and gaze. Her movements and the rest of the frame remain unchanged.` |
+| Lighting | `Edit @Video1: Brighten the overall lighting with soft three-point lighting in a cinematic TV-series style. Remove the hard shadow on the right side of the man's face. Movements and frame content unchanged.` |
+| Motion | `Edit @Video1: Swap the positions of the man in the suit and the ostrich. Both keep the same walking pace and rhythm. The street background remains unchanged.` |
+| Style | `Edit @Video1: Change the visual style to claymation.` |
+| Dialogue | `Edit @Video1: Change the male character's dialogue to: "The deal is done. Now... we disappear." Keep his voice timbre and tone.` |
+| Reference-guided | `Edit @Video1: Have the woman put on the hat from @Image1 and the man put on the hat from @Image2. Replace the man's shirt with the denim shirt from @Image3, collar open, sleeves rolled. Everything else unchanged.` |
+| Narrative reshaping | `Reshape the storyline of @Video1: Have the man pick up the guitar and start playing a piece of music.` |
+
+Editing bills the **input clip duration plus the output duration** (see [Pricing](#pricing)), and the two together must fit in 30 s.
+
+### Video extend
+
+Continue a clip forward, backward, or in both directions. Describe **only the new footage** — the content, style, and framing are already established by the input. Character descriptions at the top of the prompt help the model keep identities stable across the join.
+
+**Prompt patterns**:
+
+```
+Extend @Video1 by N seconds. [Character A is ...] [Character B is ...] [What happens next, with dialogue.]
+Extend @Video1 backward by N seconds. [What happened before.]
+Extend N seconds backward from @Video1 as the middle segment: [...]. Extend M seconds forward: [...].
+```
+
+**Examples**:
+
+- `Extend @Video1 by 15 seconds. Character A is a man in a dark grey changshan with a prayer-bead bracelet; Character B wears a dark changshan. B sets down his tea bowl and taps the table twice: "The price is negotiable, but when will the goods arrive at port?" A skims the tea foam, leans in: "By the end of the month at the latest." Republic-era business-drama pacing, subdued teahouse ambience.`
+- `Extend two seconds backward from @Video1 as the middle segment: the girl walks slowly toward the lens, pauses, and breathes in the cold air. Extend three seconds forward: she looks into the camera, smiles, and raises a gloved hand to catch a snowflake. Golden-hour backlight, shallow depth of field.`
+
+Choose `duration` for the length of the **newly generated** footage. The input clip's length plus `duration` must be ≤ 30 s, so a 15 s input leaves at most 15 s of extension.
+
+---
+
+## First & Last Frames
+
+`wan-3-0-image-to-video` (and the Prime / Pro / Prime Pro equivalents) starts the video on your `image_url` and, if given, ends it on `end_image_url`. Because the frames already fix subject, setting, and style, the prompt should focus on **motion and camera**:
+
+```
+Prompt = motion description + camera movement
+```
+
+- `Continue the ink-wash bamboo-forest scene from the first frame. (0:00–0:03) Medium shot; the swordsman rests his hand on the hilt as leaves fall. (0:03–0:08) Push in beneath the hat brim to reveal sharp eyes. (0:08–0:13) Rapid orbit as two ink-silhouette assassins burst from the forest. (0:13–0:20) Handheld fight, then slow motion to a freeze frame on the sheathed blade.`
+- `Shot 1 (00:00–00:08): 35 mm film, sunlit rose garden; she touches the brim of her straw hat, slow push-in. Shot 2 (00:08–00:15): close-up, she removes the hat and lowers her head. Shot 3 (00:15–00:23): rear-seat car interior, rain on the window. Shot 4 (00:23–00:30): extreme close-up, she closes her eyes; focus shifts to the raindrops and the frame fades to black.`
+
+Use `static shot` or `fixed camera` to hold the camera still, and adverbs (`slowly`, `quickly`) to control pace. Both images must have a shortest side of at least 240 px.
+
+---
+
+## Prompt guide
+
+Wan 3.0 will make a complete video from one sentence, but output quality tracks prompt completeness. These formulas work on every Venice variant.
+
+### Basic formula
+
+For first attempts and open-ended exploration:
+
+```
+Prompt = Subject + Scene + Motion
+```
+
+### Advanced formula
+
+Add detail to every slot and layer on aesthetics, style, and sound:
+
+```
+Prompt = Subject + Scene + Motion + Aesthetic control + Stylization + Audio
+```
+
+- **Subject**: appearance in adjectives and short phrases ("a black-haired Miao girl in embroidered ethnic dress").
+- **Scene**: environment, foreground and background, time of day, weather.
+- **Motion**: amplitude, speed, and effect ("violently swaying", "slowly drifting", "glass shattering").
+- **Aesthetic control**: light source, lighting environment, shot size, camera angle, lens, camera movement.
+- **Stylization**: "cyberpunk", "line-drawing illustration", "35 mm film", "claymation".
+- **Audio**: sound effects, background music, dialogue, narration, and voice qualities ("a deep, warm voice", "bright and clear, American English").
+
+### Sound formula
+
+Wan 3.0 generates audio natively, and the prompt controls it:
+
+```
+Prompt = Voice + Sound effects + Background music
+Voice          = "spoken line" + emotion + intonation + speech rate + timbre + accent
+Sound effects  = sound source + action + ambient sound
+Background music = BGM + style
+```
+
+- `A man talks about his insomnia. He says, "Love is not getting but giving." Relaxed tone, moderate pace, bright clear voice, American English.`
+- `A piece of glass falls from the table onto a wooden floor with a sharp shatter, in a quiet indoor space.`
+- `A rainy night in a narrow corridor with a window at the end; suspense-style background music.`
+
+### Multi-shot formula
+
+For coherent multi-shot narratives with consistent subjects, settings, and mood:
+
+```
+Prompt = Overall description + Shot number + Timestamp + Shot content
+```
+
+- `A third-person short play about giving up and regaining hope. Shot 1 [0–3 s]: the protagonist sits alone in a corner of the playground reading a letter, then sighs. Shot 2 [4–6 s]: hard cut, fixed camera, close-up on tear-filled eyes. Shot 3 [7–10 s]: hard cut to a plain classroom; a second character in simple clothes smiles warmly and walks toward the first.`
+
+### Editing formula
+
+```
+Prompt = Editing target + Editing action
+```
+
+- **Element editing**: "The man puts on a red hat", "Replace the cat with a dog", "Remove the cat from the grass". With image references: "Change the man's clothing to the red jacket in @Image1 and the pants in @Image2."
+- **Global parameters** (style / lighting / colour / weather): "Change the video to an overcast day", "Convert the video to the 2D cartoon style shown in @Image1." Add "Keep everything else the same" when you want a narrow change.
+- **Temporal editing** (actions, dialogue): "Have the man pick up the cup and take a sip." For dialogue: "Maintain the character's voice timbre and tone, and change the girl's line to: 'Hello World.'"
+
+### Other controls
+
+If you say nothing about shots, dialogue, or music, the model generates them freely. To take control:
+
+| Control | How |
+|---|---|
+| Number of shots and timing | `Shot 1 [0–3s]: … Shot 2 [3–6s]: …` |
+| Force a single take | `Generate a single shot` or `One continuous take` |
+| Exact dialogue | `XX says: "…"` — the line is preserved verbatim |
+| No dialogue | `No dialogue throughout the entire video.` |
+| No music | `No background music.` |
+| Still camera | `static shot` / `fixed camera` |
+
+---
+
+## Multimodal input limits
+
+Values below are what the Venice API accepts for the reference-to-video variants. Requests outside these ranges are rejected with a 400.
+
+| Input | Count | Per item | Aggregate | Formats |
+|---|---|---|---|---|
+| Reference images | ≤ 10 | ≤ 20 MB, shortest side ≥ 240 px | — | Common image formats, URL or data URL |
+| Reference videos | ≤ 5 | 1–15 s, ≤ 100 MB | **≤ 15 s** total | `.mp4`, `.mov` |
+| Reference audio | ≤ 5 | 1–15 s, ≤ 15 MB | **≤ 15 s** total | `.wav`, `.mp3` |
+| Document / webpage | ≤ 1 | ≤ 100 MB | — | docx, doc, xlsx, xls, pptx, ppt, pdf, txt, key, pages, numbers, md, or a public `http(s)` URL. Standard tier only. |
+| Total reference assets | up to 20 | | | 10 images + 5 videos + 5 audio + 1 document |
+
+Two duration rules apply whenever reference videos are present:
+
+1. The reference videos together may not exceed **15 seconds**.
+2. Reference video duration **plus** the requested output `duration` may not exceed **30 seconds**. Venice checks this before dispatch and returns a 400 with the remaining budget ("Choose an output duration of 12s or less").
+
+Image-to-video accepts one `image_url` and one optional `end_image_url`, each with a shortest side of at least 240 px.
+
+---
+
+## Pricing
+
+Wan 3.0 is billed **per second of output**, scaled by resolution. Tiers differ: Prime costs more per second than the standard tier for the same output, and the Pro tiers price 1080p, 2K, and 4K separately.
+
+When a request includes reference videos, the **reference footage is billed in addition to the output** — a 5-second edit of a 10-second clip is charged as 15 seconds. Pass `reference_video_total_duration` (the sum of all reference clip durations, in seconds) to `/video/quote` so the quote matches what `/video/queue` will charge.
+
+Call `POST /api/v1/video/quote` for the authoritative price of a given request shape before submitting it. Prices may change and should not be cached client-side.
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/quote \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "duration": "10s",
+    "resolution": "1080p",
+    "aspect_ratio": "adaptive",
+    "reference_video_total_duration": 8
+  }'
+```
+
+`audio: false` does not change the price.
+
+---
+
+## Complete examples
+
+### Text-to-video (30 seconds, multi-shot with audio)
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-text-to-video",
+    "prompt": "A modern suspense-style cinematic long take, the whole frame drenched in a pale-green grade. Shot 1 [0-10s]: an empty hospital corridor under cold fluorescent light; the camera glides forward at walking pace, the hum of the lights and a distant trolley the only sounds. Shot 2 [10-20s]: a door at the end opens by itself with a slow creak; the camera does not stop. Shot 3 [20-30s]: inside, a single chair faces a window; rain begins outside, and a low string drone rises. No dialogue throughout the entire video.",
+    "duration": "30s",
+    "resolution": "1080p",
+    "aspect_ratio": "16:9",
+    "audio": true
+  }'
+```
+
+### Image-to-video (first and last frame)
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-image-to-video",
+    "prompt": "The woman slowly removes her straw hat and lowers her head, a soft breeze moving her hair. Slow push-in, then hold. 35 mm film texture, warm tones, shallow depth of field.",
+    "image_url": "https://example.com/garden-first-frame.png",
+    "end_image_url": "https://example.com/garden-last-frame.png",
+    "duration": "10s",
+    "resolution": "1080p",
+    "aspect_ratio": "adaptive"
+  }'
+```
+
+### Reference-to-video — consistent character in a referenced scene
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "prompt": "A continuous, photorealistic cinematic shot. Inside the apartment entrance shown in @Image2, the child from @Image1 stands centre frame, smiles and waves at the camera, then turns and opens the wooden door with a mechanical click. Warm light floods in from the street shown in @Image3. Camera fixed for the first half, then follows him through the door. Appearance and clothing unchanged throughout; a low cello melody under distant bells.",
+    "reference_image_urls": [
+      "https://example.com/child.png",
+      "https://example.com/apartment-entrance.png",
+      "https://example.com/magic-street.png"
+    ],
+    "duration": "15s",
+    "resolution": "1080p",
+    "aspect_ratio": "16:9"
+  }'
+```
+
+### Reference-to-video — voice donor for dialogue
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "prompt": "The woman from @Image1 sits by a rain-streaked window holding a phone to her ear. Use the voice from @Audio1 for her line: \"Really? That sounds great! When will you be back? I miss you so much.\" Lip movement must match the voice, with natural blinking and small nods. A 10-second slow push-in, cinematic lighting.",
+    "reference_image_urls": ["https://example.com/woman.png"],
+    "reference_audio_urls": ["https://example.com/voice-sample.mp3"],
+    "duration": "10s",
+    "resolution": "1080p",
+    "aspect_ratio": "9:16"
+  }'
+```
+
+### Reference-to-video — edit an existing clip
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "prompt": "Edit @Video1: Replace the skateboarding man with the woman and clothes from @Image1. Only replace the person; keep the skateboarding tricks, motion trajectory, and skatepark background completely unchanged.",
+    "reference_video_urls": ["https://example.com/skatepark.mp4"],
+    "reference_image_urls": ["https://example.com/woman-outfit.png"],
+    "duration": "10s",
+    "resolution": "1080p",
+    "aspect_ratio": "adaptive"
+  }'
+```
+
+Quote this request with `"reference_video_total_duration": 10` (the length of `skatepark.mp4`).
+
+### Reference-to-video — extend a clip forward
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "prompt": "Extend @Video1 by 15 seconds. Character A is the man in the grey changshan; Character B wears the dark changshan. B sets down his tea bowl and taps the table twice: \"The price is negotiable, but when will the goods arrive at port?\" A skims the tea foam and leans in: \"By the end of the month at the latest.\" Unhurried pacing, subdued teahouse ambience.",
+    "reference_video_urls": ["https://example.com/teahouse.mp4"],
+    "duration": "15s",
+    "resolution": "1080p",
+    "aspect_ratio": "adaptive"
+  }'
+```
+
+### Reference-to-video — document to video (standard tier)
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "prompt": "A 20-second, four-segment data video on a pure white background, minimalist business style, in the chart style of @Image1. Segment 1: the title, then the H1 total from the spreadsheet slides in with a bright \"ding\". Segment 2: three trend lines for rows 4-6, drawn left to right month by month. Segment 3: a bar chart of row 5 with each monthly value labelled. Segment 4: a donut chart of the three market shares. Confident, steady female voiceover reading the key numbers; light, fast background music.",
+    "reference_document_urls": ["https://example.com/h1-gmv.xlsx"],
+    "reference_image_urls": ["https://example.com/chart-style.png"],
+    "duration": "20s",
+    "resolution": "1080p",
+    "aspect_ratio": "16:9"
+  }'
+```
+
+### Wan 3.0 Pro — 4K text-to-video
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-pro-text-to-video",
+    "prompt": "West Lake at dawn in thin mist, Chinese rock-colour painting texture with gold-leaf accents. Golden light pierces the clouds in Tyndall beams over a matte azure lake; lotus leaves in the foreground, stone pagodas faint in the fog. One continuous take, slow aesthetic camera, no cuts. Soft guqin and a low ambient wash.",
+    "duration": "15s",
+    "resolution": "4k",
+    "aspect_ratio": "16:9"
+  }'
+```
+
+### Polling for completion
+
+After every queue submission, save the returned `queue_id` and poll `/video/retrieve` until the response body is `video/mp4`:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+  }' \
+  -o output.mp4
+```
+
+The response is JSON (`{ "status": "PROCESSING", ... }`) until the job completes, at which point the body switches to `video/mp4` bytes. Long, high-resolution jobs take longer; use `average_execution_time` from the processing response to pace your polling. See [Video Generation](/guides/media/video-generation) for the full pattern.
+
+---
+
+## Troubleshooting
+
+### Reference video duration plus output duration exceeds the 30s combined limit
+
+Wan 3.0 caps **input + output** at 30 seconds. The error tells you the remaining budget ("Choose an output duration of 12s or less"). Either pick a shorter `duration` or trim the reference clips.
+
+### `reference_video_urls must have at most 5 videos` / aggregate `> 15s`
+
+Up to 5 reference clips, 1–15 s each, and no more than 15 s in total. Trim client-side before submitting.
+
+### `image_url is not supported for text to video models`
+
+Frame inputs belong to the image-to-video variant. Switch to `wan-3-0-image-to-video` for a strict first frame, or to `wan-3-0-reference-to-video` and send the image in `reference_image_urls` if it should act as a donor instead.
+
+### `This model does not support end_image_url`
+
+Only the image-to-video variants take a last frame. Reference-to-video has no first/last-frame slot — the two input modes are mutually exclusive.
+
+### `This model does not support reference documents`
+
+Document and webpage references are available on `wan-3-0-reference-to-video` only. Prime, Pro, and Prime Pro reject `reference_document_urls`.
+
+### `A document file and a webpage link cannot be used together`
+
+The single document slot is either a file or a link. Send one or the other.
+
+### Image rejected for size
+
+Every image (first frame, last frame, reference) needs a shortest side of at least 240 px. Upscale small assets before submitting.
+
+### Output ignores my exclusions
+
+There is no `negative_prompt`. Put exclusions in the prompt as instructions: "No dialogue throughout the entire video", "No background music", "Keep everything else the same".
+
+### Character drifts between shots
+
+Re-state the reference (`@Image1`) in every shot where the character appears, describe clothing and distinctive features once at the top of the prompt, and keep the reference set to the assets the shot actually needs.
+
+### Quote doesn't match the queued amount
+
+If the request includes reference videos, pass `reference_video_total_duration` to `/video/quote`. Reference footage is billed on top of the generated output.
+
+---
+
+## References
+
+- Venice video queue endpoint: [`POST /api/v1/video/queue`](/api-reference/endpoint/video/queue)
+- Venice quote endpoint: [`POST /api/v1/video/quote`](/api-reference/endpoint/video/quote)
+- Companion guide: [Video Generation](/guides/media/video-generation) (queue / polling overview)
+- Companion guide: [Reference to Video](/guides/media/reference-to-video) (Kling O3 + Grok Imagine R2V)
+- Companion guide: [Seedance 2.0](/guides/media/seedance-2-0) (the other multimodal reference family on Venice)
