@@ -318,44 +318,50 @@
   // Privacy types that are always private (no API privacy field needed)
   const PRIVATE_TYPES = new Set(['upscale']);
 
-  // Rate limit tiers - default limits by model size category
-  // Models not listed default to their type's standard tier
-  const RATE_LIMIT_TIERS = {
-    xsmall: { rpm: 500, tpm: 1000000, label: 'XS', tooltip: 'Rate Limit: 500 RPM · 1M TPM' },
-    small:  { rpm: 75,  tpm: 750000,  label: 'S',  tooltip: 'Rate Limit: 75 RPM · 750K TPM' },
-    medium: { rpm: 50,  tpm: 750000,  label: 'M',  tooltip: 'Rate Limit: 50 RPM · 750K TPM' },
-    large:  { rpm: 20,  tpm: 500000,  label: 'L',  tooltip: 'Rate Limit: 20 RPM · 500K TPM' }
-  };
+  // Rate limit sizes and the models on them, generated from outerface by
+  // scripts/generate-rate-limit-tiers.js. Models routed through a provider-specific
+  // size, or carrying a per-model override, are deliberately absent and render no
+  // badge: a guessed size here publishes a limit the API does not enforce.
+  const RATE_LIMIT_TIERS_URL = '/data/rate-limit-tiers.json';
+  let RATE_LIMIT_TIERS = null;
+  let rateLimitTiersPromise = null;
 
-  // Model to rate limit tier mapping (text/embedding models only)
-  const MODEL_RATE_LIMIT_TIER = {
-    // XSmall - fastest/smallest models
-    'qwen3-4b': 'xsmall',
-    'llama-3.2-3b': 'xsmall',
-    'text-embedding-bge-m3': 'xsmall',
-    // Small - efficient mid-size models
-    'mistral-31-24b': 'small',
-    'venice-uncensored': 'small',
-    // Medium - capable models
-    'llama-3.3-70b': 'medium',
-    'qwen3-next-80b': 'medium',
-    'google-gemma-3-27b-it': 'medium',
-    // Large - flagship models (default for unknown text models)
-    'qwen3-235b': 'large',
-    'qwen3-235b-a22b-instruct-2507': 'large',
-    'qwen3-235b-a22b-thinking-2507': 'large',
-    'grok-41-fast': 'large',
-    'kimi-k2-thinking': 'large',
-    'gemini-3-pro-preview': 'large',
-    'hermes-3-llama-3.1-405b': 'large',
-    'qwen3-coder-480b-a35b-instruct': 'large',
-    'zai-org-glm-4.7': 'large',
-    'openai-gpt-oss-120b': 'large'
-  };
+  function ensureRateLimitTiers() {
+    if (rateLimitTiersPromise) return rateLimitTiersPromise;
+
+    rateLimitTiersPromise = fetch(RATE_LIMIT_TIERS_URL)
+      .then(r => {
+        if (!r.ok) throw new Error(`rate limit snapshot returned ${r.status}`);
+        return r.json();
+      })
+      .then(data => {
+        if (data && data.sizes && data.models) RATE_LIMIT_TIERS = data;
+        return RATE_LIMIT_TIERS;
+      })
+      .catch(() => RATE_LIMIT_TIERS);
+
+    return rateLimitTiersPromise;
+  }
+
+  function formatTokensPerMinute(tpm) {
+    if (tpm >= 1000000) return (tpm / 1000000) + 'M';
+    if (tpm >= 1000) return (tpm / 1000) + 'K';
+    return String(tpm);
+  }
 
   function getModelRateLimitTier(modelId, modelType) {
     if (modelType !== 'text' && modelType !== 'embedding') return null;
-    return MODEL_RATE_LIMIT_TIER[modelId] || 'large'; // Default to large for unknown text models
+    if (!RATE_LIMIT_TIERS) return null;
+
+    const size = RATE_LIMIT_TIERS.models[modelId];
+    const tier = size ? RATE_LIMIT_TIERS.sizes[size] : null;
+    if (!tier) return null;
+
+    return {
+      label: tier.label,
+      size: size,
+      tooltip: `Rate Limit: ${tier.paid.rpm} RPM · ${formatTokensPerMinute(tier.paid.tpm)} TPM`
+    };
   }
 
   // Video model display configuration (can't be detected from API)
@@ -3100,7 +3106,7 @@
       // Rate limit tier badge (text/embedding only)
       const rateTier = getModelRateLimitTier(model.id, model.type);
       const rateLimitBadge = rateTier
-        ? `<span class="vmb-ratelimit-badge vmb-tooltip tier-${rateTier}" data-tooltip="${RATE_LIMIT_TIERS[rateTier].tooltip}">${RATE_LIMIT_TIERS[rateTier].label}</span>`
+        ? `<span class="vmb-ratelimit-badge vmb-tooltip tier-${rateTier.size}" data-tooltip="${rateTier.tooltip}">${rateTier.label}</span>`
         : '';
 
       // Copy button SVGs
@@ -3490,6 +3496,10 @@
   }
 
   function start() {
+    // Started before the first render so size badges are populated by the time
+    // cards paint, including on the warm-cache path that skips the snapshot fetch.
+    ensureRateLimitTiers();
+
     tryInitAll();
     setupObserver();
     
