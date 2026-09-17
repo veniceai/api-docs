@@ -82,6 +82,7 @@ catalog moves; the capability flags on each model are the authoritative answer.
 | Video (async) | `POST /video/quote`, `/video/queue`, `GET /video/retrieve?id=`, `POST /video/complete` |
 | Audio | `POST /audio/speech` (TTS), `POST /audio/voices` (voice cloning), `POST /audio/transcriptions` (STT) |
 | Music (async) | `POST /audio/quote`, `/audio/queue`, `/audio/retrieve`, `/audio/complete` |
+| Voice Changer (async) | `POST /audio/voice-changer/quote`, `/audio/voice-changer/queue`, `/audio/voice-changer/retrieve`, `/audio/voice-changer/complete` |
 | Embeddings | `POST /embeddings` |
 | Tools | `POST /augment/search`, `/augment/scrape`, `/augment/text-parser` |
 | Blockchain RPC | `GET /crypto/rpc/networks`, `POST /crypto/rpc/{network}` |

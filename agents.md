@@ -37,7 +37,7 @@ Python (OpenAI SDK): `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=VE
 | Chat / text | `POST /chat/completions` (streaming, vision, audio/video input, tool calling), `POST /responses` (alpha) |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`, OpenAI-style `POST /images/generations` |
 | Video | `POST /video/queue` → `GET /video/retrieve?id=`, or `POST /video/complete` (one call); `POST /video/quote` for pricing |
-| Audio | `POST /audio/speech` (TTS), `POST /audio/transcriptions` (STT); music via `/audio/queue`, `/audio/retrieve`, `/audio/quote`, `/audio/complete` |
+| Audio | `POST /audio/speech` (TTS), `POST /audio/transcriptions` (STT); music via `/audio/queue`, `/audio/retrieve`, `/audio/quote`, `/audio/complete`; voice changer via `/audio/voice-changer/quote`, `/audio/voice-changer/queue`, `/audio/voice-changer/retrieve`, `/audio/voice-changer/complete` |
 | Embeddings | `POST /embeddings` |
 | Tools | `POST /augment/search` (web search), `/augment/scrape` (URL → markdown), `/augment/text-parser` (PDF/DOCX/XLSX → text) |
 | Blockchain RPC | `POST /crypto/rpc/{network}` — JSON-RPC to Ethereum, Base, Arbitrum, Optimism, Polygon, Solana, Starknet, and more (one key, batch up to 100); `GET /crypto/rpc/networks` for the live slug list |
@@ -64,7 +64,7 @@ Feature suffixes also work on model IDs, e.g. `venice-uncensored:web` enables we
 ## Rules for agents
 
 1. **Discover, don't hardcode.** Query `GET /models` and `GET /models/traits` at runtime to pick models. Model IDs are deprecated and replaced regularly (see https://docs.venice.ai/overview/deprecations).
-2. **Quote before generating media.** Video and music can be expensive — use `/video/quote` and `/audio/quote` first.
+2. **Quote before generating media.** Video, music, and voice changer can be expensive — use `/video/quote`, `/audio/quote`, and `/audio/voice-changer/quote` first.
 3. **Respect rate limits.** Check `x-ratelimit-*` response headers; details at https://docs.venice.ai/api-reference/rate-limiting.
 4. **Handle errors by code.** Error reference: https://docs.venice.ai/api-reference/error-codes.
 5. **No content filtering.** Venice models are uncensored by default; do not add unnecessary refusal layers on top.
