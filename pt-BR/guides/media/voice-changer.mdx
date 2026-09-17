@@ -1,0 +1,231 @@
+---
+title: "Trocador de voz"
+description: "Converta uma gravação de origem em outra voz com a API assíncrona de speech-to-speech da Venice."
+"og:title": "Trocador de voz | Documentação da API Venice"
+"og:description": "Aprenda a converter uma gravação de origem em outra voz com a API Venice."
+---
+
+O Trocador de Voz é speech-to-speech: regrava um arquivo de origem em uma voz diferente preservando a entrega, o ritmo e o timing. É assíncrono e usa seus próprios endpoints. Não é [`/audio/queue`](/pt-BR/api-reference/endpoint/audio/queue), tampouco [text-to-speech](/pt-BR/guides/media/text-to-speech) ou [clonagem de voz](/pt-BR/guides/media/voice-cloning).
+
+Escolha um modelo de trocador de voz, solicite uma cotação de preço, coloque a conversão na fila e faça polling até que a Venice retorne o áudio convertido.
+
+<Note>
+Uma conversão enfileirada é cobrada imediatamente. Se a resposta da fila for perdida, faça polling em [`/audio/voice-changer/retrieve`](/pt-BR/api-reference/endpoint/audio/voice-changer/retrieve) com o mesmo `queue_id`. Não enfileire a mesma gravação novamente.
+</Note>
+
+## Escolha um modelo
+
+Modelos de trocador de voz são retornados por `GET /models?type=music` com `model_spec.voice_changer` definido como `true`. Não há um filtro `?type=voice-changer`. Os exemplos abaixo usam `elevenlabs-voice-changer`.
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=music" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+Verifique os metadados de cada modelo antes de definir campos opcionais:
+
+| Campo | Use para |
+|-------|----------|
+| `voices` / `default_voice` | Nomes de vozes de destino. Omita `voice` para usar o padrão. |
+| `supports_custom_voice_id` | Se `voice` também aceita um Voice ID do provedor |
+| `accepted_audio_formats` | Contêineres de origem que a Venice aceita (validados a partir da assinatura binária do arquivo, não do nome do arquivo) |
+| `max_source_audio_duration_seconds` | Gravação de origem mais longa que o modelo aceita |
+| `supports_background_noise_removal` | Se `remove_background_noise` é aceito |
+| `supports_seed` | Se `seed` é aceito |
+| `pricing.durations` | Faixas de preço por minuto inteiro |
+
+Campos não suportados causam uma resposta HTTP `400`. Gravações mais longas que `max_source_audio_duration_seconds` são rejeitadas com HTTP `422` antes de qualquer cobrança.
+
+## Fluxo de conversão
+
+| Endpoint | Finalidade |
+|----------|------------|
+| [`POST /audio/voice-changer/quote`](/pt-BR/api-reference/endpoint/audio/voice-changer/quote) | Estimar o custo da conversão em USD |
+| [`POST /audio/voice-changer/queue`](/pt-BR/api-reference/endpoint/audio/voice-changer/queue) | Iniciar uma conversão speech-to-speech |
+| [`POST /audio/voice-changer/retrieve`](/pt-BR/api-reference/endpoint/audio/voice-changer/retrieve) | Consultar o job e baixar o áudio convertido |
+| [`POST /audio/voice-changer/complete`](/pt-BR/api-reference/endpoint/audio/voice-changer/complete) | Excluir a mídia armazenada após baixá-la |
+
+## 1. Obtenha uma cotação de preço
+
+O Trocador de Voz é cobrado com base na duração da gravação de origem, arredondada para cima para o próximo minuto inteiro. Cote o comprimento que você espera enviar; a cobrança é calculada a partir do comprimento que a Venice mede quando a gravação é enfileirada.
+
+```bash
+curl https://api.venice.ai/api/v1/audio/voice-changer/quote \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "duration_seconds": 60
+  }'
+```
+
+A resposta contém o custo estimado em USD e a duração para a qual a cotação foi calculada:
+
+```json
+{
+  "quote": 0.35,
+  "duration_seconds": 60
+}
+```
+
+## 2. Enfileire a conversão
+
+Forneça a gravação de origem exatamente de uma de duas formas: como upload `file` multipart, ou como um `audio_url` em um corpo JSON. Fornecer ambos, ou nenhum, é rejeitado.
+
+Quando você passa uma URL, a Venice busca e valida os bytes por conta própria e encaminha apenas esses bytes para o provedor. A URL nunca é repassada adiante.
+
+<CodeGroup>
+```bash Upload de arquivo
+curl https://api.venice.ai/api/v1/audio/voice-changer/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "model=elevenlabs-voice-changer" \
+  -F "voice=Aria" \
+  -F "file=@./source-recording.mp3"
+```
+
+```bash URL de áudio
+curl https://api.venice.ai/api/v1/audio/voice-changer/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "voice": "Aria",
+    "audio_url": "https://example.com/source-recording.mp3"
+  }'
+```
+</CodeGroup>
+
+Campos opcionais, quando o modelo informa suporte:
+
+- `remove_background_noise` — remove o ruído de fundo antes da conversão
+- `seed` — inteiro ≥ 0 para um resultado reproduzível
+
+Uma requisição bem-sucedida retorna o modelo, um ID de fila e o comprimento medido da origem:
+
+```json
+{
+  "model": "elevenlabs-voice-changer",
+  "queue_id": "0190f2c4-9c1e-7a3b-8f42-2c9d5e7a1b34",
+  "status": "QUEUED",
+  "duration_seconds": 52
+}
+```
+
+Salve `model` e `queue_id`; os endpoints retrieve e complete os exigem. Compare `duration_seconds` com sua cotação se precisar reconciliar a estimativa com o comprimento cobrado.
+
+<Warning>
+Enfileirar não é seguro para retry. Uma requisição de queue bem-sucedida já foi cobrada.
+</Warning>
+
+## 3. Faça polling e baixe
+
+Chame `/audio/voice-changer/retrieve` com os valores da resposta de queue:
+
+```bash
+curl https://api.venice.ai/api/v1/audio/voice-changer/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "queue_id": "0190f2c4-9c1e-7a3b-8f42-2c9d5e7a1b34"
+  }' \
+  --output response.bin
+```
+
+Inspecione o `Content-Type` da resposta:
+
+| Content-Type | Significado | Ação |
+|--------------|-------------|------|
+| `application/json` | A conversão ainda está em processamento | Leia os campos de tempo, aguarde e faça polling novamente |
+| `audio/mpeg` | A conversão está concluída | Salve o corpo binário como um `.mp3` |
+
+Uma resposta de processamento se parece com esta:
+
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 10000,
+  "execution_duration": 4200
+}
+```
+
+Ambos os valores de tempo estão em milissegundos. Uma resposta concluída também inclui `x-venice-audio-format`, `x-venice-audio-duration`, `x-venice-inference-time`, `x-venice-model-id` e `x-venice-model-name`.
+
+Se o provedor falhar na conversão, a cobrança é reembolsada automaticamente e o corpo do erro inclui `credits_refunded`. Fazer polling novamente reproduz o mesmo resultado em vez de reembolsar duas vezes.
+
+Para excluir a mídia armazenada na mesma chamada que retorna o áudio, defina `delete_media_on_completion` como `true` em retrieve. O áudio não pode ser recuperado novamente depois disso.
+
+## Exemplo completo
+
+Este exemplo em Python cota uma conversão, envia um arquivo de origem, faz polling a cada cinco segundos e salva o resultado como MP3.
+
+```python
+import os
+import time
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+}
+
+source = Path("source-recording.mp3")
+
+quote = requests.post(f"{BASE_URL}/audio/voice-changer/quote", json={
+    "model": "elevenlabs-voice-changer",
+    "duration_seconds": 60,
+})
+quote.raise_for_status()
+print(f"Estimated cost: ${quote.json()['quote']:.2f}")
+
+with source.open("rb") as audio:
+    queued = requests.post(
+        f"{BASE_URL}/audio/voice-changer/queue",
+        headers=HEADERS,
+        data={
+            "model": "elevenlabs-voice-changer",
+            "voice": "Aria",
+        },
+        files={"file": audio},
+    )
+queued.raise_for_status()
+job = queued.json()
+print(f"Queued {job['queue_id']} ({job['duration_seconds']}s billed)")
+
+while True:
+    result = requests.post(
+        f"{BASE_URL}/audio/voice-changer/retrieve",
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json={"model": job["model"], "queue_id": job["queue_id"]},
+    )
+    result.raise_for_status()
+    content_type = result.headers.get("Content-Type", "").split(";")[0]
+
+    if content_type == "audio/mpeg":
+        output = Path("converted-audio.mp3")
+        output.write_bytes(result.content)
+        print(f"Saved {output}")
+        break
+
+    status = result.json()
+    print(f"Status: {status['status']}")
+    time.sleep(5)
+
+requests.post(
+    f"{BASE_URL}/audio/voice-changer/complete",
+    headers={**HEADERS, "Content-Type": "application/json"},
+    json={"model": job["model"], "queue_id": job["queue_id"]},
+).raise_for_status()
+```
+
+<Note>
+O endpoint de cotação não requer autenticação, mas as requisições de queue, retrieve e complete requerem.
+</Note>
+
+## Recursos relacionados
+
+- [API de fila do trocador de voz](/pt-BR/api-reference/endpoint/audio/voice-changer/queue)
+- [API de recuperação do trocador de voz](/pt-BR/api-reference/endpoint/audio/voice-changer/retrieve)
+- [Clonagem de voz](/pt-BR/guides/media/voice-cloning)
+- [Text to Speech](/pt-BR/guides/media/text-to-speech)

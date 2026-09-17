@@ -1,0 +1,231 @@
+---
+title: "تغيير الصوت"
+description: "حوّل تسجيلًا مصدرًا إلى صوت آخر باستخدام واجهة برمجة تطبيقات speech-to-speech غير المتزامنة من Venice."
+"og:title": "تغيير الصوت | Venice API Docs"
+"og:description": "تعلّم كيفية تحويل تسجيل مصدر إلى صوت آخر باستخدام واجهة برمجة تطبيقات Venice."
+---
+
+مُغيّر الصوت هو speech-to-speech: يُعيد تسجيل ملف مصدر بصوتٍ مختلف مع الحفاظ على الأداء والإيقاع والتوقيت. وهو غير متزامن ويستخدم نقاط النهاية الخاصة به. ليس [`/audio/queue`](/ar/api-reference/endpoint/audio/queue)، وليس [تحويل النص إلى كلام](/ar/guides/media/text-to-speech) أو [استنساخ الصوت](/ar/guides/media/voice-cloning).
+
+اختر نموذج تغيير صوت، واطلب عرض سعر، وضع عملية التحويل في قائمة الانتظار، ثم استعلم دوريًا إلى أن تُعيد Venice الصوت المُحوَّل.
+
+<Note>
+تُخصم تكلفة عملية التحويل الموضوعة في قائمة الانتظار فورًا. إذا فُقدت استجابة قائمة الانتظار، فاستعلم عن [`/audio/voice-changer/retrieve`](/ar/api-reference/endpoint/audio/voice-changer/retrieve) بنفس `queue_id`. لا تُعِد وضع التسجيل نفسه في قائمة الانتظار.
+</Note>
+
+## اختيار نموذج
+
+تُعاد نماذج تغيير الصوت من `GET /models?type=music` مع تعيين `model_spec.voice_changer` على `true`. لا يوجد فلتر `?type=voice-changer`. تستخدم الأمثلة أدناه `elevenlabs-voice-changer`.
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=music" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+راجع بيانات كل نموذج التعريفية قبل تعيين الحقول الاختيارية:
+
+| الحقل | استخدامه لـ |
+|-------|------------|
+| `voices` / `default_voice` | أسماء الأصوات المستهدفة. احذف `voice` لاستخدام الافتراضي. |
+| `supports_custom_voice_id` | ما إذا كان `voice` يقبل أيضًا Voice ID من المزوّد |
+| `accepted_audio_formats` | حاويات المصدر التي تقبلها Venice (يُتحقّق منها من التوقيع الثنائي للملف، وليس من اسم الملف) |
+| `max_source_audio_duration_seconds` | أطول تسجيل مصدر يقبله النموذج |
+| `supports_background_noise_removal` | ما إذا كان `remove_background_noise` مقبولًا |
+| `supports_seed` | ما إذا كان `seed` مقبولًا |
+| `pricing.durations` | مستويات السعر بالدقيقة الكاملة |
+
+الحقول غير المدعومة تؤدي إلى استجابة HTTP `400`. التسجيلات التي تتجاوز `max_source_audio_duration_seconds` تُرفض بالحالة HTTP `422` قبل أي خصم.
+
+## سير عملية التحويل
+
+| نقطة النهاية | الغرض |
+|----------|---------|
+| [`POST /audio/voice-changer/quote`](/ar/api-reference/endpoint/audio/voice-changer/quote) | تقدير تكلفة التحويل بالدولار الأمريكي |
+| [`POST /audio/voice-changer/queue`](/ar/api-reference/endpoint/audio/voice-changer/queue) | بدء تحويل speech-to-speech |
+| [`POST /audio/voice-changer/retrieve`](/ar/api-reference/endpoint/audio/voice-changer/retrieve) | الاستعلام الدوري عن المهمة وتنزيل الصوت المُحوَّل |
+| [`POST /audio/voice-changer/complete`](/ar/api-reference/endpoint/audio/voice-changer/complete) | حذف الوسائط المُخزَّنة بعد تنزيلها |
+
+## 1. احصل على عرض سعر
+
+تُحتسب فوترة مُغيّر الصوت من طول التسجيل المصدر، مقربًا لأعلى إلى الدقيقة الكاملة التالية. اطلب عرض السعر بالمدة التي تعتزم إرسالها؛ يُحتسب الخصم من المدة التي تقيسها Venice عند وضع التسجيل في قائمة الانتظار.
+
+```bash
+curl https://api.venice.ai/api/v1/audio/voice-changer/quote \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "duration_seconds": 60
+  }'
+```
+
+تحتوي الاستجابة على التكلفة المقدَّرة بالدولار الأمريكي والمدة التي حُسب عليها عرض السعر:
+
+```json
+{
+  "quote": 0.35,
+  "duration_seconds": 60
+}
+```
+
+## 2. ضع عملية التحويل في قائمة الانتظار
+
+قدّم التسجيل المصدر بإحدى طريقتين فقط: كرفع `file` عبر multipart، أو كـ `audio_url` في جسم JSON. تقديم الاثنين معًا، أو عدم تقديم أيٍّ منهما، يؤدي إلى الرفض.
+
+عندما تُمرّر عنوان URL، تجلب Venice البايتات وتتحقق منها بنفسها، وتمرر تلك البايتات فقط إلى المزوّد. لا يُمرَّر عنوان URL أبدًا.
+
+<CodeGroup>
+```bash File upload
+curl https://api.venice.ai/api/v1/audio/voice-changer/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "model=elevenlabs-voice-changer" \
+  -F "voice=Aria" \
+  -F "file=@./source-recording.mp3"
+```
+
+```bash Audio URL
+curl https://api.venice.ai/api/v1/audio/voice-changer/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "voice": "Aria",
+    "audio_url": "https://example.com/source-recording.mp3"
+  }'
+```
+</CodeGroup>
+
+الحقول الاختيارية، عندما يُبلّغ النموذج بدعمها:
+
+- `remove_background_noise` — إزالة ضوضاء الخلفية قبل التحويل
+- `seed` — عدد صحيح ≥ 0 لنتيجة قابلة للتكرار
+
+يُعيد الطلب الناجح النموذج، ومعرّف قائمة الانتظار، وطول المصدر المقاس:
+
+```json
+{
+  "model": "elevenlabs-voice-changer",
+  "queue_id": "0190f2c4-9c1e-7a3b-8f42-2c9d5e7a1b34",
+  "status": "QUEUED",
+  "duration_seconds": 52
+}
+```
+
+احفظ `model` و`queue_id`؛ فنقطتا نهاية الاسترجاع والإكمال تتطلبانهما. قارن `duration_seconds` بعرض السعر إذا احتجت إلى مطابقة التقدير مع الطول الذي جرت فوترته.
+
+<Warning>
+ليس من الآمن إعادة محاولة قائمة الانتظار. طلب قائمة الانتظار الناجح تكون تكلفته قد خُصمت بالفعل.
+</Warning>
+
+## 3. الاستعلام الدوري والتنزيل
+
+استدعِ `/audio/voice-changer/retrieve` بالقيم المُستلمة من استجابة قائمة الانتظار:
+
+```bash
+curl https://api.venice.ai/api/v1/audio/voice-changer/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "queue_id": "0190f2c4-9c1e-7a3b-8f42-2c9d5e7a1b34"
+  }' \
+  --output response.bin
+```
+
+افحص `Content-Type` في الاستجابة:
+
+| Content-Type | المعنى | الإجراء |
+|--------------|---------|--------|
+| `application/json` | لا يزال التحويل قيد المعالجة | اقرأ حقول التوقيت، وانتظر، ثم استعلم مرة أخرى |
+| `audio/mpeg` | اكتمل التحويل | احفظ الجسم الثنائي بامتداد `.mp3` |
+
+تبدو استجابة المعالجة كما يلي:
+
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 10000,
+  "execution_duration": 4200
+}
+```
+
+كلا قيمتَي التوقيت بالميلي ثانية. تتضمن الاستجابة المكتملة أيضًا `x-venice-audio-format` و`x-venice-audio-duration` و`x-venice-inference-time` و`x-venice-model-id` و`x-venice-model-name`.
+
+إذا أخفق المزوّد في التحويل، يُعاد الخصم تلقائيًا ويتضمن جسم الخطأ `credits_refunded`. الاستعلام الدوري مرة أخرى يعيد النتيجة نفسها بدلًا من إعادة الاسترداد مرتين.
+
+لحذف الوسائط المُخزَّنة في الاستدعاء نفسه الذي يُعيد الصوت، عيّن `delete_media_on_completion` على `true` في الاسترجاع. لا يمكن استرجاع الصوت مرة أخرى بعد ذلك.
+
+## مثال كامل
+
+يطلب مثال Python هذا عرض سعر للتحويل، ويرفع ملفًا مصدرًا، ويستعلم دوريًا كل خمس ثوانٍ، ويحفظ النتيجة بصيغة MP3.
+
+```python
+import os
+import time
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+}
+
+source = Path("source-recording.mp3")
+
+quote = requests.post(f"{BASE_URL}/audio/voice-changer/quote", json={
+    "model": "elevenlabs-voice-changer",
+    "duration_seconds": 60,
+})
+quote.raise_for_status()
+print(f"Estimated cost: ${quote.json()['quote']:.2f}")
+
+with source.open("rb") as audio:
+    queued = requests.post(
+        f"{BASE_URL}/audio/voice-changer/queue",
+        headers=HEADERS,
+        data={
+            "model": "elevenlabs-voice-changer",
+            "voice": "Aria",
+        },
+        files={"file": audio},
+    )
+queued.raise_for_status()
+job = queued.json()
+print(f"Queued {job['queue_id']} ({job['duration_seconds']}s billed)")
+
+while True:
+    result = requests.post(
+        f"{BASE_URL}/audio/voice-changer/retrieve",
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json={"model": job["model"], "queue_id": job["queue_id"]},
+    )
+    result.raise_for_status()
+    content_type = result.headers.get("Content-Type", "").split(";")[0]
+
+    if content_type == "audio/mpeg":
+        output = Path("converted-audio.mp3")
+        output.write_bytes(result.content)
+        print(f"Saved {output}")
+        break
+
+    status = result.json()
+    print(f"Status: {status['status']}")
+    time.sleep(5)
+
+requests.post(
+    f"{BASE_URL}/audio/voice-changer/complete",
+    headers={**HEADERS, "Content-Type": "application/json"},
+    json={"model": job["model"], "queue_id": job["queue_id"]},
+).raise_for_status()
+```
+
+<Note>
+لا تتطلب نقطة نهاية عرض السعر مصادقة، لكن طلبات قائمة الانتظار والاسترجاع والإكمال تتطلبها.
+</Note>
+
+## موارد ذات صلة
+
+- [واجهة برمجة تطبيقات وضع تغيير الصوت في قائمة الانتظار](/ar/api-reference/endpoint/audio/voice-changer/queue)
+- [واجهة برمجة تطبيقات استرجاع تغيير الصوت](/ar/api-reference/endpoint/audio/voice-changer/retrieve)
+- [استنساخ الصوت](/ar/guides/media/voice-cloning)
+- [تحويل النص إلى كلام](/ar/guides/media/text-to-speech)
