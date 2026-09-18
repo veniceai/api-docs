@@ -256,7 +256,7 @@
 
   // Configuration
   const API_BASE = 'https://api.venice.ai/api/v1/models';
-  const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'music', ...(ENABLE_VIDEO ? ['video'] : [])];
+  const MODEL_TYPES = ['text', 'decision', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'music', ...(ENABLE_VIDEO ? ['video'] : [])];
   const CACHE_KEY = 'venice-models-cache';
   const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
@@ -453,6 +453,7 @@
   const MODEL_ICON_BASE_PATH = '/images/icons/models/';
   const MODEL_TYPE_ICON_BY_TYPE = {
     asr: 'text.svg',
+    decision: 'text.svg',
     embedding: 'text.svg',
     image: 'image.svg',
     inpaint: 'image.svg',
@@ -622,6 +623,7 @@
       options: [
         { value: 'all', label: 'All types' },
         { value: 'text', label: 'Text' },
+        { value: 'decision', label: 'Decision' },
         { value: 'image', label: 'Image' },
         ...(ENABLE_VIDEO ? [{ value: 'video', label: 'Video' }] : []),
         { value: 'audio', label: 'Audio' },
@@ -776,6 +778,12 @@
     if (price === null || price === undefined) return '-';
     if (price < 0.01 && price > 0) return '$' + price.toFixed(4);
     return '$' + price.toFixed(2);
+  }
+
+  function formatDecisionTokenPrice(price) {
+    if (price === null || price === undefined) return '-';
+    if (price === 0) return '$0.00';
+    return price < 1 ? '$' + price.toFixed(4) : '$' + price.toFixed(2);
   }
 
   function formatVideoPricing(modelId, model) {
@@ -2784,6 +2792,7 @@
     function matchesCategory(model) {
       if (activeFilter === 'all') return true;
       if (activeFilter === 'text') return model.type === 'text';
+      if (activeFilter === 'decision') return model.type === 'decision';
       if (activeFilter === 'image') return model.type === 'image' || model.type === 'upscale' || model.type === 'inpaint';
       if (activeFilter === 'video') return model.type === 'video';
       if (activeFilter === 'audio') return model.type === 'tts' || model.type === 'asr';
@@ -2938,7 +2947,9 @@
         let contextStr = '';
         if (spec.availableContextTokens) {
           contextStr = `${formatContext(spec.availableContextTokens)} context`;
-      } else if (model.type === 'video') {
+        } else if (model.type === 'decision') {
+          contextStr = `${formatContext(spec.maxStateTokens)} state · ${formatContext(spec.maxTotalTokens)} total`;
+        } else if (model.type === 'video') {
           // Video models - store config for info row
           const config = getVideoModelConfig(model.id);
           const resolutions = constraints.resolutions || [];
@@ -3001,6 +3012,8 @@
           if (pricing.inputImages?.additional?.usd) {
             priceStr += ` <span class="vmb-pipe">|</span> ${formatPrice(pricing.inputImages.additional.usd)}/extra image`;
           }
+        } else if (model.type === 'decision' && pricing.input) {
+          priceStr = `${formatDecisionTokenPrice(pricing.input.usd)}/M input <span class="vmb-pipe">|</span> ${formatDecisionTokenPrice(pricing.output?.usd)}/M output`;
         } else if (model.type === 'embedding' && pricing.input) {
           priceStr = `${formatPrice(pricing.input.usd)}/M tokens`;
         } else if (pricing.input && pricing.output) {

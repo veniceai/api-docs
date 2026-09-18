@@ -35,6 +35,12 @@ function formatPrice(price) {
   return '$' + price.toFixed(2);
 }
 
+function formatDecisionTokenPrice(price) {
+  if (price === null || price === undefined) return '—';
+  if (price === 0) return '$0.00';
+  return price < 1 ? '$' + price.toFixed(4) : '$' + price.toFixed(2);
+}
+
 function inlineCode(value) {
   return `\`${String(value).replace(/`/g, '\\`')}\``;
 }
@@ -81,10 +87,13 @@ function getModelName(model) {
   return isBetaModel(model) ? `${name} (Beta)` : name;
 }
 
-function formatContext(model) {
-  const tokens = model.model_spec?.availableContextTokens;
+function formatTokenCount(tokens) {
   if (!tokens) return '—';
   return tokens >= 1000 ? `${Math.round(tokens / 1000)}K` : String(tokens);
+}
+
+function formatContext(model) {
+  return formatTokenCount(model.model_spec?.availableContextTokens);
 }
 
 function getCapabilityLabels(model) {
@@ -265,9 +274,27 @@ function renderEmbeddingTable(models) {
   return markdownTable(['Model', 'ID', 'Input (per 1M tokens)', 'Privacy'], rows);
 }
 
+function renderDecisionTable(models) {
+  const rows = liveModels(models, m => m.type === 'decision').map(model => {
+    const spec = model.model_spec || {};
+    return row(model, [
+      formatDecisionTokenPrice(spec.pricing?.input?.usd),
+      formatDecisionTokenPrice(spec.pricing?.output?.usd),
+      formatTokenCount(spec.maxStateTokens),
+      formatTokenCount(spec.maxTotalTokens),
+      getPrivacyLabel(model)
+    ]);
+  });
+  return markdownTable(
+    ['Model', 'ID', 'Input', 'Output', 'State + longest question', 'Total request', 'Privacy'],
+    rows
+  );
+}
+
 function renderOverviewTables(models) {
   const groups = [
     ['Text', m => m.type === 'text', renderTextTable],
+    ['Decisions', m => m.type === 'decision', renderDecisionTable],
     ['Image', m => m.type === 'image' || m.type === 'upscale' || m.type === 'inpaint', renderImageTables],
     ['Video', m => m.type === 'video', renderVideoTable],
     ['Text-to-Speech', m => m.type === 'tts', renderTtsTable],
