@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 
 const API_BASE = 'https://api.venice.ai/api/v1/models';
-const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video', 'music'];
+const MODEL_TYPES = ['text', 'decision', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video', 'music'];
 const SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-models.json');
 const TRAITS_SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-traits.json');
 
@@ -74,6 +74,8 @@ function cleanModel(m) {
   if (spec.uncensored) clean.model_spec.uncensored = true;
   if (spec.privacy) clean.model_spec.privacy = spec.privacy;
   if (spec.availableContextTokens) clean.model_spec.availableContextTokens = spec.availableContextTokens;
+  if (spec.maxStateTokens) clean.model_spec.maxStateTokens = spec.maxStateTokens;
+  if (spec.maxTotalTokens) clean.model_spec.maxTotalTokens = spec.maxTotalTokens;
   if (spec.pricing) clean.model_spec.pricing = spec.pricing;
   clean.model_spec.traits = spec.traits || [];
   if (spec.name) clean.model_spec.name = spec.name;
@@ -84,7 +86,7 @@ function cleanModel(m) {
 }
 
 function sortModels(models) {
-  const typeOrder = ['inpaint', 'tts', 'embedding', 'music', 'video', 'text', 'asr', 'upscale', 'image'];
+  const typeOrder = ['decision', 'inpaint', 'tts', 'embedding', 'music', 'video', 'text', 'asr', 'upscale', 'image'];
   return models.sort((a, b) => {
     const ta = typeOrder.indexOf(a.type);
     const tb = typeOrder.indexOf(b.type);
