@@ -1,0 +1,251 @@
+---
+title: "使用 Jev 的类型化决策"
+sidebarTitle: "类型化决策"
+description: "使用 Jev 对应用状态进行分类、评分和评估，并返回带有类型化答案、概率和置信度的结果。"
+"og:title": "使用 Jev 的类型化决策 | Venice API 文档"
+"og:description": "使用 Venice Decisions API 构建可感知置信度的工作流。"
+---
+
+大多数语言模型是为生成文本而设计的。而当应用需要做出决策时，通常意味着要向模型请求 JSON、校验响应，再从中提取用于驱动下一步的值。
+
+Jev 是一款 System One 决策模型。它不生成散文，而是根据带有预定义答案类型的问题来评估一段 `state`，并返回可供机器直接使用的判断结果。
+
+<Warning>
+  Jev 和 Decisions API 目前处于测试阶段。可用性和行为可能在不通知的情况下发生变化。
+</Warning>
+
+## 让一条支持工单变成一个决策
+
+假设收到了这样一条消息：
+
+> 我的付款已经三天失败了,也没有人回复。请尽快帮忙。
+
+你的应用需要判断应该将其路由到哪里、是否紧急，以及客户的沮丧程度。只需发送一次消息，就可以一并提出这三个问题：
+
+```bash cURL
+curl https://api.venice.ai/api/v1/decisions \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "jev-latest",
+    "state": "我的付款已经三天失败了,也没有人回复。请尽快帮忙。",
+    "questions": {
+      "is_urgent": {
+        "type": "noul",
+        "instructions": "这条消息是否需要紧急处理？"
+      },
+      "department": {
+        "type": "choice",
+        "instructions": "哪个团队应该处理这张工单？",
+        "criteria": {
+          "billing": "付款、发票或退款",
+          "technical": "缺陷、故障或集成问题",
+          "sales": "定价、升级或新账户"
+        }
+      },
+      "frustration": {
+        "type": "score",
+        "instructions": "客户的沮丧程度如何？",
+        "criteria": ["冷静", "沮丧", "非常愤怒"]
+      }
+    }
+  }'
+```
+
+Jev 会在每个问题 ID 下返回一个答案：
+
+```json
+{
+  "model": "jev-latest",
+  "answers": {
+    "is_urgent": {
+      "type": "noul",
+      "noul": 0.95
+    },
+    "department": {
+      "type": "choice",
+      "choice": "billing",
+      "probabilities": {
+        "billing": 0.95,
+        "technical": 0.05,
+        "sales": 0
+      },
+      "confidence": 0.93
+    },
+    "frustration": {
+      "type": "score",
+      "score": 1.27,
+      "legend": {
+        "0": "冷静",
+        "1": "沮丧",
+        "2": "非常愤怒"
+      },
+      "probabilities": {
+        "0": 0,
+        "1": 0.73,
+        "2": 0.27
+      },
+      "confidence": 0.6
+    }
+  },
+  "usage": {
+    "input_tokens": 429,
+    "output_tokens": 73
+  }
+}
+```
+
+不同请求之间的概率会有所变化。请在选择生产阈值之前，用你自己应用中的样例来评估 Jev。
+
+## 选择答案形态
+
+Jev 支持三种问题类型：
+
+| 类型 | 提问 | 答案 |
+| --- | --- | --- |
+| `noul` | 该陈述是否成立？ | 一个介于 `0`（否）到 `1`（是）之间的概率 |
+| `choice` | 在预定义选项中哪一个最合适？ | 所选选项、每个选项的概率以及置信度 |
+| `score` | 该情况落在有序评价量表的哪个位置？ | 加权得分、等级图例、概率分布以及置信度 |
+
+### Noul：做出二元判断
+
+当"是"的概率本身就有用时，使用 Noul：
+
+```json
+{
+  "refund_requested": {
+    "type": "noul",
+    "instructions": "客户是否明确要求退款？",
+    "criteria": {
+      "true": "客户要求退还款项",
+      "false": "客户并未要求退还款项"
+    }
+  }
+}
+```
+
+Noul 没有单独的 `confidence` 字段。接近 `1` 表示强烈的"是"，接近 `0` 表示强烈的"否"，接近 `0.5` 则表示不确定。
+
+### Choice：路由或分类
+
+当答案必须来自一个封闭集合时，使用 Choice：
+
+```json
+{
+  "request_type": {
+    "type": "choice",
+    "instructions": "客户的主要诉求是什么？",
+    "criteria": {
+      "refund": "退还已支付的款项",
+      "troubleshooting": "帮助解决产品问题",
+      "information": "回答问题但不采取行动",
+      "other": null
+    }
+  }
+}
+```
+
+当所提供的选项可能无法覆盖每种状态时，请加入 `other` 或 `none` 选项。
+
+### Score：衡量一个区间
+
+当答案沿着有序等级分布时，使用 Score：
+
+```json
+{
+  "severity": {
+    "type": "score",
+    "instructions": "所报告问题的严重程度如何？",
+    "criteria": [
+      "外观问题，或无实质性影响",
+      "工作流程受到影响，但存在变通方案",
+      "关键工作流程被阻塞，且没有变通方案"
+    ]
+  }
+}
+```
+
+等级索引从 `0` 开始。返回的得分是按概率加权计算的，因此可能落在两个等级之间。
+
+## 将置信度转化为应用行为
+
+Choice 和 Score 类型的答案既包含完整的分布，也包含由其推导出的单一 `confidence` 值。这让你的代码可以将答案和确定性作为两个独立的信号来处理：
+
+```javascript
+const department = result.answers.department;
+
+if (department.confidence >= 0.9) {
+  await routeTicket(department.choice);
+} else if (department.confidence >= 0.6) {
+  await askForConfirmation(department.choice);
+} else {
+  await sendToHumanReview();
+}
+```
+
+对于代价高昂、具有破坏性、涉及资金或难以撤销的操作，请使用更高的阈值。置信度并不保证正确性；它只是帮助你的应用决定何时不应自动执行。
+
+## 将相关问题打包提问
+
+请求中的每个问题都会收到相同的 state，并被独立评估。department 的答案不会成为 frustration 问题的隐含上下文。
+
+在以下情况下批量提出独立的问题：
+
+- 它们评估的是同一份文档、记录、对话或应用状态。
+- 你的代码可能会根据首个结果决定后续需要哪些答案。
+- 你希望避免在多个请求中重复发送相同的 state。
+
+只有当后续请求的 state 或可选项确实依赖于前一个答案时，才发起第二次请求。
+
+## 使用结构化 state
+
+`state` 可以是字符串、JSON 对象或数组。结构化的 state 让问题能够引用具体的记录和支撑上下文：
+
+```json
+{
+  "ticket": {
+    "subject": "重复扣款",
+    "message": "我被扣了两次款。请退还重复的那一笔。"
+  },
+  "account": {
+    "plan": "pro"
+  },
+  "refund_policy": "重复扣款符合退款条件。"
+}
+```
+
+请编写完整的说明并指明相关字段，例如："`ticket.message` 是否请求了 `refund_policy` 所覆盖的退款？"
+
+## 了解 Jev 及其能力边界
+
+列出决策模型时请使用你自己的 API 密钥，因为不同账户的模型可用性可能不同：
+
+```bash cURL
+curl "https://api.venice.ai/api/v1/models?type=decision" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+`jev-latest` 模型当前支持：
+
+- `state` 加上单个最长问题最多 32,000 个 token
+- `state` 加上所有问题合计最多 64,000 个 token
+- 文本或结构化 JSON 输入
+
+由于价格、限制和可用性可能会变化，请以 Models API 的结果为准。
+
+## 何时改用其他模型
+
+对于软件可以直接据以行动的有界判断，请使用 Jev。当你需要下列内容时，请改用聊天或推理模型：
+
+- 生成散文或解释
+- 多轮对话
+- 工具调用
+- 开放式回答
+- 长链条的依赖推理
+
+## 后续步骤
+
+- [`POST /decisions` API 参考](/zh/api-reference/endpoint/decisions/create)
+- [`POST /systemone` TypeSafe 兼容性参考](/zh/api-reference/endpoint/decisions/systemone)
+- [列出模型 API](/zh/api-reference/endpoint/models/list)
+- [API 速率限制](/zh/api-reference/rate-limiting)
