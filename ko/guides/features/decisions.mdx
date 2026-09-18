@@ -1,0 +1,251 @@
+---
+title: "Jev를 활용한 타입 지정 결정"
+sidebarTitle: "타입 지정 결정"
+description: "Jev를 사용해 타입이 지정된 답변, 확률, 신뢰도로 애플리케이션 상태를 분류·평가·점수화하세요."
+"og:title": "Jev를 활용한 타입 지정 결정 | Venice API 문서"
+"og:description": "Venice Decisions API로 신뢰도를 고려한 워크플로를 구축하세요."
+---
+
+대부분의 언어 모델은 텍스트를 생성하도록 설계되어 있습니다. 애플리케이션이 결정을 내려야 할 때는 보통 모델에게 JSON을 요청하고, 응답을 검증한 뒤, 다음 단계를 좌우하는 값을 추출하는 과정을 거쳐야 합니다.
+
+Jev는 System One 결정 모델입니다. 산문을 생성하는 대신, 사전에 정의된 답변 유형을 가진 질문들에 대해 `state`를 평가하고 기계가 바로 사용할 수 있는 판단을 반환합니다.
+
+<Warning>
+  Jev와 Decisions API는 베타 상태입니다. 가용성과 동작 방식은 사전 공지 없이 변경될 수 있습니다.
+</Warning>
+
+## 지원 티켓을 결정으로 바꾸기
+
+다음과 같은 메시지가 들어왔다고 가정해 봅시다:
+
+> 지급이 3일째 실패했는데 아무도 답변이 없습니다. 최대한 빨리 도와주세요.
+
+애플리케이션은 이 메시지를 어디로 라우팅할지, 긴급한지, 고객이 얼마나 불만스러워하는지를 파악해야 합니다. 메시지를 한 번만 보내고 세 가지 질문을 함께 물어보세요:
+
+```bash cURL
+curl https://api.venice.ai/api/v1/decisions \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "jev-latest",
+    "state": "지급이 3일째 실패했는데 아무도 답변이 없습니다. 최대한 빨리 도와주세요.",
+    "questions": {
+      "is_urgent": {
+        "type": "noul",
+        "instructions": "이 메시지는 긴급한 대응이 필요한가요?"
+      },
+      "department": {
+        "type": "choice",
+        "instructions": "어느 팀이 이 티켓을 처리해야 하나요?",
+        "criteria": {
+          "billing": "결제, 청구서 또는 환불",
+          "technical": "버그, 장애 또는 통합",
+          "sales": "가격, 업그레이드 또는 신규 계정"
+        }
+      },
+      "frustration": {
+        "type": "score",
+        "instructions": "고객이 얼마나 불만스러워하나요?",
+        "criteria": ["차분함", "불만스러움", "매우 화남"]
+      }
+    }
+  }'
+```
+
+Jev는 각 질문 ID 아래에 하나의 답변을 반환합니다:
+
+```json
+{
+  "model": "jev-latest",
+  "answers": {
+    "is_urgent": {
+      "type": "noul",
+      "noul": 0.95
+    },
+    "department": {
+      "type": "choice",
+      "choice": "billing",
+      "probabilities": {
+        "billing": 0.95,
+        "technical": 0.05,
+        "sales": 0
+      },
+      "confidence": 0.93
+    },
+    "frustration": {
+      "type": "score",
+      "score": 1.27,
+      "legend": {
+        "0": "차분함",
+        "1": "불만스러움",
+        "2": "매우 화남"
+      },
+      "probabilities": {
+        "0": 0,
+        "1": 0.73,
+        "2": 0.27
+      },
+      "confidence": 0.6
+    }
+  },
+  "usage": {
+    "input_tokens": 429,
+    "output_tokens": 73
+  }
+}
+```
+
+확률은 요청마다 달라질 수 있습니다. 프로덕션 임계값을 정하기 전에 여러분 자신의 애플리케이션 예제로 Jev를 평가해 보세요.
+
+## 답변 형태 선택
+
+Jev는 세 가지 질문 유형을 지원합니다:
+
+| 유형 | 질문 | 답변 |
+| --- | --- | --- |
+| `noul` | 이 진술은 참인가요? | `0`(아니오)부터 `1`(예)까지의 확률 |
+| `choice` | 정의된 옵션 중 어느 것이 가장 잘 맞나요? | 선택된 옵션, 각 옵션의 확률, 신뢰도 |
+| `score` | 순서가 있는 평가 기준의 어느 위치에 해당하나요? | 가중 점수, 등급 범례, 확률 분포, 신뢰도 |
+
+### Noul: 이진 판단 내리기
+
+"예"일 확률 자체가 바로 유용할 때 Noul을 사용하세요:
+
+```json
+{
+  "refund_requested": {
+    "type": "noul",
+    "instructions": "고객이 명시적으로 환불을 요청하고 있나요?",
+    "criteria": {
+      "true": "고객이 돈을 돌려받기를 요청함",
+      "false": "고객이 돈을 돌려받기를 요청하지 않음"
+    }
+  }
+}
+```
+
+Noul에는 별도의 `confidence` 필드가 없습니다. `1`에 가까운 값은 강한 "예", `0`에 가까운 값은 강한 "아니오", `0.5`에 가까운 값은 불확실함을 의미합니다.
+
+### Choice: 라우팅 또는 분류
+
+답변이 반드시 정해진 집합 중 하나여야 할 때 Choice를 사용하세요:
+
+```json
+{
+  "request_type": {
+    "type": "choice",
+    "instructions": "고객의 주된 요청은 무엇인가요?",
+    "criteria": {
+      "refund": "이미 지불한 금액을 돌려받기",
+      "troubleshooting": "제품 문제 해결 지원",
+      "information": "조치 없이 질문에 답변하기",
+      "other": null
+    }
+  }
+}
+```
+
+제공한 선택지가 모든 상태를 포괄하지 못할 수 있다면 `other`나 `none` 옵션을 포함하세요.
+
+### Score: 스펙트럼 측정
+
+답변이 순서가 있는 등급 위에 놓일 때 Score를 사용하세요:
+
+```json
+{
+  "severity": {
+    "type": "score",
+    "instructions": "보고된 문제의 심각도는 어느 정도인가요?",
+    "criteria": [
+      "외형적인 문제이거나 실질적인 영향이 없음",
+      "워크플로가 저해되지만 우회 방법이 존재함",
+      "우회 방법 없이 핵심 워크플로가 차단됨"
+    ]
+  }
+}
+```
+
+등급 인덱스는 `0`부터 시작합니다. 반환되는 점수는 확률 가중치가 반영되므로 두 등급 사이의 값이 나올 수 있습니다.
+
+## 신뢰도를 애플리케이션 동작으로 전환하기
+
+Choice와 Score 답변에는 전체 분포와 함께 그로부터 도출된 단일 `confidence` 값이 포함됩니다. 이를 통해 코드에서 답변과 확실성을 별개의 신호로 다룰 수 있습니다:
+
+```javascript
+const department = result.answers.department;
+
+if (department.confidence >= 0.9) {
+  await routeTicket(department.choice);
+} else if (department.confidence >= 0.6) {
+  await askForConfirmation(department.choice);
+} else {
+  await sendToHumanReview();
+}
+```
+
+비용이 크거나, 파괴적이거나, 금전적이거나, 되돌리기 어려운 조치에는 더 높은 임계값을 사용하세요. 신뢰도는 정답을 보장하지 않으며, 애플리케이션이 언제 자동으로 조치를 취하지 말아야 하는지를 결정하는 데 도움을 줍니다.
+
+## 관련된 질문을 함께 묻기
+
+요청 내의 모든 질문은 동일한 state를 받아 각각 독립적으로 평가됩니다. department 답변이 frustration 질문의 숨은 컨텍스트가 되지는 않습니다.
+
+다음과 같은 경우에는 독립적인 질문들을 한꺼번에 처리하세요:
+
+- 동일한 문서, 레코드, 대화 또는 애플리케이션 상태를 평가할 때
+- 첫 번째 결과에 따라 여러 답변이 필요할 수 있을 때
+- 여러 요청에 동일한 state를 반복해서 보내는 것을 피하고 싶을 때
+
+두 번째 요청은 그 state나 사용할 수 있는 선택지가 앞선 답변에 실제로 의존할 때에만 보내세요.
+
+## 구조화된 state 사용하기
+
+`state`는 문자열, JSON 객체 또는 배열이 될 수 있습니다. 구조화된 state를 사용하면 질문이 특정 레코드와 보조 컨텍스트를 참조할 수 있습니다:
+
+```json
+{
+  "ticket": {
+    "subject": "중복 청구",
+    "message": "두 번 청구되었습니다. 중복된 금액을 환불해 주세요."
+  },
+  "account": {
+    "plan": "pro"
+  },
+  "refund_policy": "중복 청구는 환불 대상입니다."
+}
+```
+
+완전한 지시문을 작성하고 관련 필드의 이름을 명시하세요. 예: "`ticket.message`가 `refund_policy`에서 다루는 환불을 요청하고 있나요?"
+
+## Jev와 그 한계 파악하기
+
+계정별로 모델 가용성이 다를 수 있으므로 결정 모델을 조회할 때는 본인의 API 키를 사용하세요:
+
+```bash cURL
+curl "https://api.venice.ai/api/v1/models?type=decision" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+`jev-latest` 모델은 현재 다음을 지원합니다:
+
+- `state`와 가장 긴 단일 질문을 합쳐 최대 32,000 토큰
+- `state`와 모든 질문을 합쳐 최대 64,000 토큰
+- 텍스트 또는 구조화된 JSON 입력
+
+가격, 제한, 가용성은 변경될 수 있으므로 Models API를 기준으로 삼으세요.
+
+## 다른 모델을 사용해야 할 때
+
+소프트웨어가 곧바로 실행에 옮길 수 있는 경계가 명확한 판단에는 Jev를 사용하세요. 다음이 필요할 때는 채팅 또는 추론 모델을 사용하세요:
+
+- 생성된 산문이나 설명
+- 멀티턴 대화
+- 툴 호출
+- 개방형 답변
+- 길게 이어지는 의존적 추론
+
+## 다음 단계
+
+- [`POST /decisions` API 참조](/ko/api-reference/endpoint/decisions/create)
+- [`POST /systemone` TypeSafe 호환성 참조](/ko/api-reference/endpoint/decisions/systemone)
+- [모델 목록 API](/ko/api-reference/endpoint/models/list)
+- [API 속도 제한](/ko/api-reference/rate-limiting)

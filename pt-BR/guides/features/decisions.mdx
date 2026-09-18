@@ -1,0 +1,251 @@
+---
+title: "Decisões Tipadas com Jev"
+sidebarTitle: "Decisões Tipadas"
+description: "Use o Jev para classificar, pontuar e avaliar o estado da aplicação com respostas tipadas, probabilidades e confiança."
+"og:title": "Decisões Tipadas com Jev | Documentação da API Venice"
+"og:description": "Construa fluxos de trabalho conscientes da confiança com a API de Decisões da Venice."
+---
+
+A maioria dos modelos de linguagem é projetada para gerar texto. Quando uma aplicação precisa de uma decisão, isso geralmente significa pedir JSON a um modelo, validar a resposta e extrair o valor que controla o próximo passo.
+
+O Jev é um modelo de decisão System One. Em vez de gerar prosa, ele avalia um `state` em relação a perguntas com tipos de resposta predefinidos e retorna julgamentos prontos para consumo por máquinas.
+
+<Warning>
+  O Jev e a API de Decisões estão em beta. A disponibilidade e o comportamento podem mudar sem aviso prévio.
+</Warning>
+
+## Um ticket de suporte se torna uma decisão
+
+Suponha que esta mensagem chegue:
+
+> Meus pagamentos falharam por três dias e ninguém respondeu. Por favor, ajudem URGENTE.
+
+Sua aplicação precisa saber para onde encaminhá-lo, se é urgente e quão frustrado o cliente parece estar. Envie a mensagem uma única vez e faça as três perguntas juntas:
+
+```bash cURL
+curl https://api.venice.ai/api/v1/decisions \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "jev-latest",
+    "state": "Meus pagamentos falharam por três dias e ninguém respondeu. Por favor, ajudem URGENTE.",
+    "questions": {
+      "is_urgent": {
+        "type": "noul",
+        "instructions": "Esta mensagem requer atenção urgente?"
+      },
+      "department": {
+        "type": "choice",
+        "instructions": "Qual equipe deve tratar este ticket?",
+        "criteria": {
+          "billing": "Pagamentos, faturas ou reembolsos",
+          "technical": "Bugs, indisponibilidades ou integrações",
+          "sales": "Preços, upgrades ou novas contas"
+        }
+      },
+      "frustration": {
+        "type": "score",
+        "instructions": "Quão frustrado está o cliente?",
+        "criteria": ["Calmo", "Frustrado", "Muito irritado"]
+      }
+    }
+  }'
+```
+
+O Jev retorna uma resposta sob cada ID de pergunta:
+
+```json
+{
+  "model": "jev-latest",
+  "answers": {
+    "is_urgent": {
+      "type": "noul",
+      "noul": 0.95
+    },
+    "department": {
+      "type": "choice",
+      "choice": "billing",
+      "probabilities": {
+        "billing": 0.95,
+        "technical": 0.05,
+        "sales": 0
+      },
+      "confidence": 0.93
+    },
+    "frustration": {
+      "type": "score",
+      "score": 1.27,
+      "legend": {
+        "0": "Calmo",
+        "1": "Frustrado",
+        "2": "Muito irritado"
+      },
+      "probabilities": {
+        "0": 0,
+        "1": 0.73,
+        "2": 0.27
+      },
+      "confidence": 0.6
+    }
+  },
+  "usage": {
+    "input_tokens": 429,
+    "output_tokens": 73
+  }
+}
+```
+
+As probabilidades variam entre requisições. Avalie o Jev com exemplos da sua própria aplicação antes de escolher limites para produção.
+
+## Escolha o formato da resposta
+
+O Jev suporta três tipos de perguntas:
+
+| Tipo | Pergunta | Resposta |
+| --- | --- | --- |
+| `noul` | Esta afirmação é verdadeira? | Uma probabilidade de `0` (não) a `1` (sim) |
+| `choice` | Qual opção definida se encaixa melhor? | A opção selecionada, a probabilidade de cada opção e a confiança |
+| `score` | Onde isto se encaixa em uma escala ordenada? | Uma pontuação ponderada, legenda dos níveis, distribuição de probabilidades e confiança |
+
+### Noul: faça um julgamento binário
+
+Use Noul quando a probabilidade de sim é diretamente útil:
+
+```json
+{
+  "refund_requested": {
+    "type": "noul",
+    "instructions": "O cliente solicita explicitamente um reembolso?",
+    "criteria": {
+      "true": "O cliente pede que o dinheiro seja devolvido",
+      "false": "O cliente não pede que o dinheiro seja devolvido"
+    }
+  }
+}
+```
+
+Noul não possui um campo `confidence` separado. Um valor próximo de `1` é um sim forte, próximo de `0` é um não forte, e próximo de `0.5` é incerto.
+
+### Choice: encaminhe ou classifique
+
+Use Choice quando a resposta precisa ser uma opção de um conjunto fechado:
+
+```json
+{
+  "request_type": {
+    "type": "choice",
+    "instructions": "Qual é a solicitação principal do cliente?",
+    "criteria": {
+      "refund": "Devolver dinheiro já pago",
+      "troubleshooting": "Ajudar a resolver um problema do produto",
+      "information": "Responder a uma pergunta sem tomar ação",
+      "other": null
+    }
+  }
+}
+```
+
+Inclua uma opção `other` ou `none` quando as escolhas fornecidas podem não cobrir todos os estados.
+
+### Score: meça um espectro
+
+Use Score quando a resposta se encaixa em níveis ordenados:
+
+```json
+{
+  "severity": {
+    "type": "score",
+    "instructions": "Qual a gravidade do problema relatado?",
+    "criteria": [
+      "Cosmético ou sem impacto material",
+      "O fluxo de trabalho está prejudicado, mas existe uma alternativa",
+      "Fluxo de trabalho crítico bloqueado sem alternativa"
+    ]
+  }
+}
+```
+
+Os índices dos níveis começam em `0`. A pontuação retornada é ponderada por probabilidade, portanto pode ficar entre dois níveis.
+
+## Transforme confiança em comportamento da aplicação
+
+As respostas de Choice e Score incluem tanto a distribuição completa quanto um único valor de `confidence` derivado dela. Isso permite que seu código trate a resposta e a certeza como sinais separados:
+
+```javascript
+const department = result.answers.department;
+
+if (department.confidence >= 0.9) {
+  await routeTicket(department.choice);
+} else if (department.confidence >= 0.6) {
+  await askForConfirmation(department.choice);
+} else {
+  await sendToHumanReview();
+}
+```
+
+Use limites mais altos para ações que sejam caras, destrutivas, financeiras ou difíceis de reverter. A confiança não garante correção; ela ajuda sua aplicação a decidir quando não agir automaticamente.
+
+## Faça perguntas relacionadas em conjunto
+
+Cada pergunta em uma requisição recebe o mesmo state e é avaliada de forma independente. A resposta de departamento não se torna contexto oculto para a pergunta sobre frustração.
+
+Agrupe perguntas independentes quando:
+
+- Elas avaliam o mesmo documento, registro, conversa ou estado da aplicação.
+- Seu código pode precisar de várias respostas dependendo do primeiro resultado.
+- Você quer evitar enviar o mesmo state em múltiplas requisições.
+
+Faça uma segunda requisição apenas quando seu state ou opções disponíveis realmente dependerem de uma resposta anterior.
+
+## Use state estruturado
+
+`state` pode ser uma string, um objeto JSON ou um array. Um state estruturado permite que as perguntas se refiram a registros específicos e ao contexto de apoio:
+
+```json
+{
+  "ticket": {
+    "subject": "Cobrança duplicada",
+    "message": "Fui cobrado duas vezes. Por favor, reembolsem a duplicata."
+  },
+  "account": {
+    "plan": "pro"
+  },
+  "refund_policy": "Cobranças duplicadas se qualificam para reembolso."
+}
+```
+
+Escreva instruções completas e nomeie os campos relevantes, por exemplo: “O `ticket.message` solicita um reembolso coberto pela `refund_policy`?”
+
+## Descubra o Jev e seus limites
+
+Use sua chave de API ao listar modelos de decisão, pois a disponibilidade de modelos pode variar por conta:
+
+```bash cURL
+curl "https://api.venice.ai/api/v1/models?type=decision" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+O modelo `jev-latest` atualmente suporta:
+
+- Até 32.000 tokens para o `state` mais a pergunta individual mais longa
+- Até 64.000 tokens para o `state` mais todas as perguntas combinadas
+- Entrada de texto ou JSON estruturado
+
+Trate a API de Modelos como fonte autoritativa, pois preços, limites e disponibilidade podem mudar.
+
+## Quando usar outro modelo
+
+Use o Jev para julgamentos delimitados que seu software possa aplicar diretamente. Use um modelo de chat ou de raciocínio quando você precisar de:
+
+- Prosa ou explicações geradas
+- Conversa multi-turno
+- Chamada de ferramentas (tool calling)
+- Respostas abertas
+- Uma longa cadeia de raciocínio dependente
+
+## Próximos passos
+
+- [Referência da API `POST /decisions`](/pt-BR/api-reference/endpoint/decisions/create)
+- [Referência de compatibilidade TypeSafe `POST /systemone`](/pt-BR/api-reference/endpoint/decisions/systemone)
+- [API List Models](/pt-BR/api-reference/endpoint/models/list)
+- [Limites de taxa da API](/pt-BR/api-reference/rate-limiting)
