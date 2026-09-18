@@ -1,0 +1,253 @@
+---
+title: "Typed Decisions with Jev"
+sidebarTitle: "Typed Decisions"
+description: "Use Jev to classify, score, and evaluate application state with typed answers, probabilities, and confidence."
+"og:title": "Typed Decisions with Jev | Venice API Docs"
+"og:description": "Build confidence-aware workflows with the Venice Decisions API."
+---
+
+Most language models are designed to generate text. When an application needs a decision, that often means asking a model for JSON, validating the response, and extracting the value that controls the next step.
+
+Jev is a System One decision model. Instead of generating prose, it evaluates a `state` against questions with predefined answer types and returns machine-ready judgments.
+
+<Warning>
+  Jev and the Decisions API are in beta. Availability and behavior may change without notice.
+</Warning>
+
+## A support ticket becomes a decision
+
+Suppose this message arrives:
+
+> My payouts have failed for three days and nobody has replied. Please help ASAP.
+
+Your application needs to know where to route it, whether it is urgent, and how frustrated the customer appears. Send the message once and ask all three questions together:
+
+```bash cURL
+curl https://api.venice.ai/api/v1/decisions \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "jev-latest",
+    "state": "My payouts have failed for three days and nobody has replied. Please help ASAP.",
+    "questions": {
+      "is_urgent": {
+        "type": "noul",
+        "instructions": "Does this message require urgent attention?"
+      },
+      "department": {
+        "type": "choice",
+        "instructions": "Which team should handle this ticket?",
+        "criteria": {
+          "billing": "Payments, invoices, or refunds",
+          "technical": "Bugs, outages, or integrations",
+          "sales": "Pricing, upgrades, or new accounts"
+        }
+      },
+      "frustration": {
+        "type": "score",
+        "instructions": "How frustrated is the customer?",
+        "criteria": ["Calm", "Frustrated", "Very angry"]
+      }
+    }
+  }'
+```
+
+Jev returns one answer under each question ID:
+
+```json
+{
+  "model": "jev-latest",
+  "answers": {
+    "is_urgent": {
+      "type": "noul",
+      "noul": 0.95
+    },
+    "department": {
+      "type": "choice",
+      "choice": "billing",
+      "probabilities": {
+        "billing": 0.95,
+        "technical": 0.05,
+        "sales": 0
+      },
+      "confidence": 0.93
+    },
+    "frustration": {
+      "type": "score",
+      "score": 1.27,
+      "legend": {
+        "0": "Calm",
+        "1": "Frustrated",
+        "2": "Very angry"
+      },
+      "probabilities": {
+        "0": 0,
+        "1": 0.73,
+        "2": 0.27
+      },
+      "confidence": 0.6
+    }
+  },
+  "usage": {
+    "input_tokens": 429,
+    "output_tokens": 73
+  }
+}
+```
+
+Probabilities vary between requests. Evaluate Jev on examples from your own application before choosing production thresholds.
+
+## Choose the answer shape
+
+Jev supports three question types:
+
+| Type | Question | Answer |
+| --- | --- | --- |
+| `noul` | Is this statement true? | A probability from `0` (no) to `1` (yes) |
+| `choice` | Which defined option fits best? | The selected option, every option's probability, and confidence |
+| `score` | Where does this fall on an ordered rubric? | A weighted score, level legend, probability distribution, and confidence |
+
+### Noul: make a binary judgment
+
+Use Noul when the probability of yes is directly useful:
+
+```json
+{
+  "refund_requested": {
+    "type": "noul",
+    "instructions": "Does the customer explicitly request a refund?",
+    "criteria": {
+      "true": "The customer asks for money to be returned",
+      "false": "The customer does not ask for money to be returned"
+    }
+  }
+}
+```
+
+Noul has no separate `confidence` field. A value near `1` is a strong yes, near `0` is a strong no, and near `0.5` is uncertain.
+
+### Choice: route or classify
+
+Use Choice when the answer must be one of a closed set:
+
+```json
+{
+  "request_type": {
+    "type": "choice",
+    "instructions": "What is the customer's primary request?",
+    "criteria": {
+      "refund": "Return money already paid",
+      "troubleshooting": "Help resolve a product problem",
+      "information": "Answer a question without taking action",
+      "other": null
+    }
+  }
+}
+```
+
+Include an `other` or `none` option when the supplied choices may not cover every state.
+
+### Score: measure a spectrum
+
+Use Score when the answer falls along ordered levels:
+
+```json
+{
+  "severity": {
+    "type": "score",
+    "instructions": "How severe is the reported issue?",
+    "criteria": [
+      "Cosmetic or no material impact",
+      "Workflow is impaired but a workaround exists",
+      "Critical workflow is blocked with no workaround"
+    ]
+  }
+}
+```
+
+Level indexes begin at `0`. The returned score is probability-weighted, so it can fall between two levels.
+
+## Turn confidence into application behavior
+
+Choice and Score answers include both the full distribution and a single `confidence` value derived from it. This lets your code treat the answer and certainty as separate signals:
+
+```javascript
+const department = result.answers.department;
+
+if (department.confidence >= 0.9) {
+  await routeTicket(department.choice);
+} else if (department.confidence >= 0.6) {
+  await askForConfirmation(department.choice);
+} else {
+  await sendToHumanReview();
+}
+```
+
+Use higher thresholds for actions that are costly, destructive, financial, or difficult to reverse. Confidence does not guarantee correctness; it helps your application decide when not to act automatically.
+
+## Ask related questions together
+
+Every question in a request receives the same state and is evaluated independently. A department answer does not become hidden context for the frustration question.
+
+Batch independent questions when:
+
+- They evaluate the same document, record, conversation, or application state.
+- Your code may need several answers depending on the first result.
+- You want to avoid sending the same state in multiple requests.
+
+Make a second request only when its state or available choices genuinely depend on an earlier answer.
+
+## Use structured state
+
+`state` can be a string, JSON object, or array. Structured state lets questions refer to specific records and supporting context:
+
+```json
+{
+  "ticket": {
+    "subject": "Duplicate charge",
+    "message": "I was charged twice. Please refund the duplicate."
+  },
+  "account": {
+    "plan": "pro"
+  },
+  "refund_policy": "Duplicate charges qualify for a refund."
+}
+```
+
+Write complete instructions and name the relevant fields, for example: “Does `ticket.message` request a refund covered by `refund_policy`?”
+
+## Discover Jev and its limits
+
+Use your API key when listing decision models because model availability can differ by account:
+
+```bash cURL
+curl "https://api.venice.ai/api/v1/models?type=decision" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+The `jev-latest` model currently supports:
+
+- Up to 32,000 tokens for `state` plus the single longest question
+- Up to 64,000 tokens for `state` plus all questions combined
+- Text or structured JSON input
+- Anonymized processing
+- Input pricing of $0.0525 per million tokens, with free output tokens
+
+Treat the Models API as authoritative because pricing, limits, and availability can change.
+
+## When to use another model
+
+Use Jev for bounded judgments your software can act on directly. Use a chat or reasoning model when you need:
+
+- Generated prose or explanations
+- Multi-turn conversation
+- Tool calling
+- Open-ended answers
+- A long chain of dependent reasoning
+
+## Next steps
+
+- [`POST /decisions` API reference](/api-reference/endpoint/decisions/create)
+- [`POST /systemone` TypeSafe compatibility reference](/api-reference/endpoint/decisions/systemone)
+- [List Models API](/api-reference/endpoint/models/list)
+- [API rate limits](/api-reference/rate-limiting)
