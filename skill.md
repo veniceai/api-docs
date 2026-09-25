@@ -84,12 +84,21 @@ catalog moves; the capability flags on each model are the authoritative answer.
 | Music (async) | `POST /audio/quote`, `/audio/queue`, `/audio/retrieve`, `/audio/complete` |
 | Voice Changer (async) | `POST /audio/voice-changer/quote`, `/audio/voice-changer/queue`, `/audio/voice-changer/retrieve`, `/audio/voice-changer/complete` |
 | Embeddings | `POST /embeddings` |
+| Decisions (beta) | `POST /decisions` (alias `POST /systemone`) |
 | Tools | `POST /augment/search`, `/augment/scrape`, `/augment/text-parser` |
 | Blockchain RPC | `GET /crypto/rpc/networks`, `POST /crypto/rpc/{network}` |
 | Models | `GET /models`, `/models/traits`, `/models/compatibility_mapping` |
 | Characters | `GET /characters`, `/characters/{slug}` |
 | Account | `GET /billing/balance`, `/billing/usage-history`, `/api_keys/*`, `/api_keys/rate_limits` |
 | x402 wallet | `GET /x402/balance/{wallet}`, `POST /x402/top-up`, `GET /x402/transactions/{wallet}` |
+
+For bounded judgments your code acts on directly (yes/no, pick one label,
+score on a rubric), use `POST /decisions` with `jev-latest` instead of asking a
+chat model for JSON. Send a `state` and a `questions` map with at least one
+entry; each question has a `type` of `noul`, `choice`, or `score`, and each
+answer comes back typed with probabilities. Use `/chat/completions` when you
+need prose, multi-turn conversation, or tool calling. The Decisions API is in
+beta. See https://docs.venice.ai/guides/features/decisions.
 
 ## venice_parameters
 
