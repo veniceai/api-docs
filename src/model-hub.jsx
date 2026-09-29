@@ -1,10 +1,14 @@
 // Venice model hub: explorer, model page and compare view.
 //
-// Mintlify evaluates each snippet export in isolation, so everything lives in
-// one closure (VX) and pages import VX plus the thin wrapper they render.
-// Data comes from scripts/build-model-catalog.js: model pages receive their
-// family inline; the explorer and compare view fetch data/model-catalog.json.
-export const VX = (() => {
+// Source for data/model-hub.bundle.json. Build with
+// `node scripts/build-model-hub.js`; pages render it through
+// <HubMount> (snippets/model-hub-mount.jsx), which loads the bundle once
+// and passes in React's element factory plus hooks. JSX compiles to
+// __jsx()/__Fragment, names chosen so local variables can't shadow them.
+// Data comes from scripts/build-model-catalog.js: model pages receive
+// their family inline; the explorer and compare view fetch
+// data/model-catalog.json.
+export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEffect, useRef, useMemo, useCallback }) => {
   /* ------------------------------------------------------------ data */
 
   const CATALOG_URL = '/data/model-catalog.json';
@@ -12,15 +16,6 @@ export const VX = (() => {
   const DEV_CATALOG_URL = 'http://localhost:3333/data/model-catalog.json';
   const API = 'https://api.venice.ai/api/v1';
   const store = { catalog: null, promise: null };
-  // MDX swaps lowercase tags for Mintlify components (scrolling tables,
-  // zoomable images, anchored headings, code blocks). Variable tags render
-  // the plain elements the hub styles itself.
-  const TableEl = 'table';
-  const ImgEl = 'img';
-  const PreEl = 'pre';
-  const H1 = 'h1';
-  const H2 = 'h2';
-  const H3 = 'h3';
 
   const loadCatalog = () => {
     if (store.catalog) return Promise.resolve(store.catalog);
@@ -508,7 +503,7 @@ export const VX = (() => {
           <div className="vx-lightbox-media">
             {item.type === 'video'
               ? <video src={item.url} controls autoPlay loop playsInline />
-              : <ImgEl src={item.url} alt={item.caption || item.title} />}
+              : <img src={item.url} alt={item.caption || item.title} />}
           </div>
           <div className="vx-lightbox-meta">
             <div className="vx-eyebrow">{item.title}</div>
@@ -543,7 +538,7 @@ export const VX = (() => {
               <button type="button" className="vx-shot-media" onClick={() => setOpen(item)} aria-label={`Open ${item.title} sample`}>
                 {item.type === 'video'
                   ? <HoverVideo src={item.url} className="vx-shot-el" />
-                  : <ImgEl className="vx-shot-el" src={item.url} alt={item.caption || item.title} loading="lazy" />}
+                  : <img className="vx-shot-el" src={item.url} alt={item.caption || item.title} loading="lazy" />}
                 <span className="vx-shot-badge">{item.title}</span>
                 <span className="vx-shot-zoom"><Icon name="maximize" size={14} /></span>
               </button>
@@ -1091,7 +1086,7 @@ export const VX = (() => {
 
   const ExplorerTable = ({ rows, columns, sort, setSort, providers, now, compare }) => (
     <div className="vx-table-wrap">
-      <TableEl className="vx-table">
+      <table className="vx-table">
         <thead>
           <tr>
             <th className="vx-th-check" aria-label="Compare" />
@@ -1125,7 +1120,7 @@ export const VX = (() => {
             );
           })}
         </tbody>
-      </TableEl>
+      </table>
     </div>
   );
 
@@ -1143,7 +1138,7 @@ export const VX = (() => {
       <article className={cls('vx-card', selected && 'is-selected')}>
         <a className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} href={href} aria-label={family.name}>
           {media
-            ? (media.type === 'video' ? <HoverVideo src={media.url} className="vx-card-el" /> : <ImgEl className="vx-card-el" src={media.url} alt="" loading="lazy" />)
+            ? (media.type === 'video' ? <HoverVideo src={media.url} className="vx-card-el" /> : <img className="vx-card-el" src={media.url} alt="" loading="lazy" />)
             : <MediaFallback provider={provider} modality={family.modality} />}
           {isVideo && media ? <span className="vx-card-play"><Icon name="play" size={12} />Hover to play</span> : null}
         </a>
@@ -1376,7 +1371,7 @@ export const VX = (() => {
         <header className="vx-hero">
           <div className="vx-hero-text">
             <div className="vx-eyebrow">Model catalog</div>
-            <H1 className="vx-h1">Every model. One API.</H1>
+            <h1 className="vx-h1">Every model. One API.</h1>
             <p className="vx-lede">
               {counts ? `${counts.models} models in ${counts.families} families` : 'Hundreds of models'} across text, image, video, audio and embeddings.
               Private, anonymized or end-to-end encrypted inference, one key, one bill.
@@ -1651,7 +1646,7 @@ export const VX = (() => {
           </div>
           <CopyButton text={samples[lang]} label="Copy" />
         </div>
-        <PreEl className="vx-code-body"><code>{samples[lang]}</code></PreEl>
+        <pre className="vx-code-body"><code>{samples[lang]}</code></pre>
       </div>
     );
   };
@@ -1678,7 +1673,7 @@ export const VX = (() => {
       <div className="vx-section-head">
         <div>
           {eyebrow ? <div className="vx-eyebrow">{eyebrow}</div> : null}
-          <H2 id={`${id}-title`} className="vx-h2">{title}</H2>
+          <h2 id={`${id}-title`} className="vx-h2">{title}</h2>
         </div>
         {actions ? <div className="vx-section-actions">{actions}</div> : null}
       </div>
@@ -1915,7 +1910,7 @@ export const VX = (() => {
     ].filter(row => row[1] != null || row[2] != null);
     return (
       <>
-        <TableEl className="vx-ptable">
+        <table className="vx-ptable">
           <thead>
             <tr><th>Per 1M tokens</th><th className="vx-al-right">{p.extended ? `Prompt ≤ ${tokens(p.extended.threshold)}` : 'Price'}</th>{p.extended ? <th className="vx-al-right">Prompt &gt; {tokens(p.extended.threshold)}</th> : null}</tr>
           </thead>
@@ -1924,8 +1919,8 @@ export const VX = (() => {
               <tr key={label}><td>{label}</td><td className="vx-al-right vx-num">{usd(base)}</td>{p.extended ? <td className="vx-al-right vx-num">{usd(ext)}</td> : null}</tr>
             ))}
           </tbody>
-        </TableEl>
-        <H3 className="vx-h3">Estimate your cost</H3>
+        </table>
+        <h3 className="vx-h3">Estimate your cost</h3>
         <CostEstimator model={model} />
         <p className="vx-footnote">Prompt caching is automatic on supported models; see <a href="/guides/features/prompt-caching">Prompt caching</a>. Prices are billed in USD or DIEM at parity.</p>
       </>
@@ -1981,7 +1976,7 @@ export const VX = (() => {
           <div className="vx-muted">{vp.seconds}s{vp.resolution ? ` · ${vp.resolution}` : ''}{vp.audio ? ' · with audio' : ' · silent'} · {usd(vp.perSecond)}/s · {usd(vp.perSecond != null ? vp.perSecond * 60 : null)}/min</div>
         </div>
         <div className="vx-matrix-wrap">
-          <TableEl className="vx-matrix">
+          <table className="vx-matrix">
             <thead>
               <tr><th>Duration</th>{resKeys.map(r => <th key={r.value} className="vx-al-right">{r.label}</th>)}</tr>
             </thead>
@@ -1997,7 +1992,7 @@ export const VX = (() => {
                 </tr>
               ))}
             </tbody>
-          </TableEl>
+          </table>
         </div>
         <p className="vx-footnote">Quoted from <code>POST /video/quote</code>{p.quotedAt ? ` on ${fmtDate(Math.floor(new Date(p.quotedAt).getTime() / 1000))}` : ''}{p.aspectRatio ? ` at ${p.aspectRatio}` : ''}. Aspect ratio does not change the price. Always quote before queueing for exact billing.</p>
       </div>
@@ -2008,7 +2003,7 @@ export const VX = (() => {
     const p = model.pricing || {};
     return (
       <>
-        <TableEl className="vx-ptable">
+        <table className="vx-ptable">
           <thead><tr><th>Item</th><th className="vx-al-right">Price</th></tr></thead>
           <tbody>
             {p.byResolution ? Object.entries(p.byResolution).map(([res, value]) => (
@@ -2017,7 +2012,7 @@ export const VX = (() => {
             {p.extraInputImage != null ? <tr><td>Each additional input image</td><td className="vx-al-right vx-num">{usd(p.extraInputImage)}</td></tr> : null}
             {p.upscale ? Object.entries(p.upscale).filter(([, v]) => v != null).map(([k, v]) => <tr key={k}><td>Upscale {k}</td><td className="vx-al-right vx-num">{usd(v)}</td></tr>) : null}
           </tbody>
-        </TableEl>
+        </table>
         <p className="vx-footnote">Billed per successful output. {p.perImage ? `$10 buys about ${Math.floor(10 / p.perImage).toLocaleString('en-US')} images at the default resolution.` : ''}</p>
       </>
     );
@@ -2028,7 +2023,7 @@ export const VX = (() => {
     if (model.task === 'tts') {
       return (
         <>
-          <TableEl className="vx-ptable">
+          <table className="vx-ptable">
             <thead><tr><th>Unit</th><th className="vx-al-right">Price</th></tr></thead>
             <tbody>
               <tr><td>1M characters (billed unit)</td><td className="vx-al-right vx-num">{usd(p.per1MChars)}</td></tr>
@@ -2036,14 +2031,14 @@ export const VX = (() => {
               <tr><td>1 hour of speech</td><td className="vx-al-right vx-num">{usd(p.perHour)}</td></tr>
               <tr><td>A 2,000-word article (≈ 12K characters)</td><td className="vx-al-right vx-num">{usd(p.per1MChars != null ? p.per1MChars * 0.012 : null)}</td></tr>
             </tbody>
-          </TableEl>
+          </table>
           <p className="vx-footnote">Billed on input characters. Minute and hour figures assume 150 words per minute, the convention Artificial Analysis uses.</p>
         </>
       );
     }
     if (model.task === 'stt') {
       return (
-        <TableEl className="vx-ptable">
+        <table className="vx-ptable">
           <thead><tr><th>Audio length</th><th className="vx-al-right">Price</th></tr></thead>
           <tbody>
             <tr><td>1 second (billed unit)</td><td className="vx-al-right vx-num">{usd(p.perSecond)}</td></tr>
@@ -2051,7 +2046,7 @@ export const VX = (() => {
             <tr><td>1 hour</td><td className="vx-al-right vx-num">{usd(p.perHour)}</td></tr>
             <tr><td>1,000 minutes</td><td className="vx-al-right vx-num">{usd(p.perMinute != null ? p.perMinute * 1000 : null)}</td></tr>
           </tbody>
-        </TableEl>
+        </table>
       );
     }
     if (p.kind === 'tiered' && p.tiers) {
@@ -2264,7 +2259,7 @@ export const VX = (() => {
     const isVideo = first.modality === 'video';
     return (
       <div className="vx-table-wrap">
-        <TableEl className="vx-table vx-table-compact">
+        <table className="vx-table vx-table-compact">
           <thead>
             <tr>
               <th>Variant</th><th>Model ID</th><th>Privacy</th>
@@ -2301,7 +2296,7 @@ export const VX = (() => {
               </tr>
             ))}
           </tbody>
-        </TableEl>
+        </table>
       </div>
     );
   };
@@ -2405,7 +2400,7 @@ export const VX = (() => {
           <div className="vx-model-title">
             <ProviderLogo provider={provider} size={56} />
             <div className="vx-model-title-text">
-              <H1 className="vx-h1">{family.name}</H1>
+              <h1 className="vx-h1">{family.name}</h1>
               <div className="vx-model-meta">
                 <span>{provider ? provider.name : family.provider}</span>
                 <span className="vx-dot">·</span>
@@ -2476,7 +2471,7 @@ export const VX = (() => {
             {sections.some(([id]) => id === 'capabilities') ? (
               <Section id="capabilities" title="Capabilities">
                 <CapabilityMatrix model={model} />
-                <H3 className="vx-h3">Reasoning</H3>
+                <h3 className="vx-h3">Reasoning</h3>
                 <ReasoningPanel model={model} />
                 <div className="vx-served">
                   <div>
@@ -2723,7 +2718,7 @@ export const VX = (() => {
                 <div className={cls('vx-sbs-media', isVideo ? 'is-video' : 'is-image')}>
                   {item ? (isVideo
                     ? <video ref={el => { refs.current[m.id] = el; }} src={item.url} muted loop playsInline preload="metadata" controls />
-                    : <ImgEl src={item.url} alt={`${m.name}: ${item.title}`} loading="lazy" />)
+                    : <img src={item.url} alt={`${m.name}: ${item.title}`} loading="lazy" />)
                     : <div className="vx-media-fallback"><span>Not rendered yet</span></div>}
                 </div>
                 <figcaption>{m.name}</figcaption>
@@ -2756,7 +2751,7 @@ export const VX = (() => {
     if (!catalog) {
       return (
         <div className="vx vx-compare not-prose">
-          <header className="vx-hero"><div className="vx-hero-text"><div className="vx-eyebrow">Model catalog</div><H1 className="vx-h1">Compare models</H1></div></header>
+          <header className="vx-hero"><div className="vx-hero-text"><div className="vx-eyebrow">Model catalog</div><h1 className="vx-h1">Compare models</h1></div></header>
           {error ? <div className="vx-error">The model catalog could not load.</div> : <ExplorerSkeleton />}
         </div>
       );
@@ -2780,7 +2775,7 @@ export const VX = (() => {
         <header className="vx-hero">
           <div className="vx-hero-text">
             <div className="vx-eyebrow">Model catalog</div>
-            <H1 className="vx-h1">Compare models</H1>
+            <h1 className="vx-h1">Compare models</h1>
             <p className="vx-lede">Up to four models side by side: prices normalized to the same unit, limits, capabilities and, for image and video, the same reference prompts.</p>
           </div>
           <div className="vx-hero-actions">
@@ -2822,7 +2817,7 @@ export const VX = (() => {
 
         {shownModels.length && (modality === 'image' || modality === 'video') ? (
           <section className="vx-section">
-            <div className="vx-section-head"><div><div className="vx-eyebrow">Same prompt, every model</div><H2 className="vx-h2">Side by side</H2></div></div>
+            <div className="vx-section-head"><div><div className="vx-eyebrow">Same prompt, every model</div><h2 className="vx-h2">Side by side</h2></div></div>
             <SideBySide models={shownModels} suite={catalog.mediaSuite} promptFilter={promptFilter} />
           </section>
         ) : null}
@@ -2830,7 +2825,7 @@ export const VX = (() => {
         {shownModels.length ? (
           <section className="vx-section">
             <div className="vx-section-head">
-              <div><H2 className="vx-h2">Specifications</H2></div>
+              <div><h2 className="vx-h2">Specifications</h2></div>
               {modality === 'video' ? (
                 <div className="vx-section-actions">
                   <Segmented size="sm" ariaLabel="Preset" value={(VIDEO_PRESETS.find(p => p.lens.h === lens.h && p.lens.s === lens.s && p.lens.a === lens.a) || {}).key || 'custom'}
@@ -2840,7 +2835,7 @@ export const VX = (() => {
               ) : null}
             </div>
             <div className="vx-table-wrap">
-              <TableEl className="vx-ctable">
+              <table className="vx-ctable">
                 <thead>
                   <tr>
                     <th />
@@ -2889,7 +2884,7 @@ export const VX = (() => {
                     ));
                   })()}
                 </tbody>
-              </TableEl>
+              </table>
             </div>
             <div className="vx-compare-foot">
               <UpcomingNote preview={preview} setPreview={setPreview} compact />
@@ -2901,19 +2896,4 @@ export const VX = (() => {
   };
 
   return { ModelExplorer, ModelPage, ModelCompare };
-})();
-
-export const ModelExplorer = props => {
-  const Component = VX.ModelExplorer;
-  return <Component {...props} />;
-};
-
-export const ModelPage = props => {
-  const Component = VX.ModelPage;
-  return <Component {...props} />;
-};
-
-export const ModelCompare = props => {
-  const Component = VX.ModelCompare;
-  return <Component {...props} />;
 };

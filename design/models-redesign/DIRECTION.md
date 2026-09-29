@@ -92,7 +92,7 @@ Dated snapshots (`deepseek-v4-flash-0731`) and tiers with different capabilities
 
 ## 5. Explorer
 
-Prototype: `/models/overview`, `snippets/model-hub.jsx` (`ModelExplorer`).
+Prototype: `/models/overview`, `src/model-hub.jsx` (`ModelExplorer`).
 
 ### Layout
 
@@ -232,7 +232,9 @@ Blended price understates reasoning models, which can spend several times more o
 | `scripts/quote-video-pricing.js` | Build-time video quote matrix → `data/video-pricing.json` |
 | `scripts/sync-model-media.js` | Reference renders from venice.ai/models → `data/model-media.json` |
 | `data/model-overrides.json` | Curated fields the API doesn't expose yet (endpoint rules, provider fixes, licenses) |
-| `snippets/model-hub.jsx` | All UI: explorer, model page, compare |
+| `src/model-hub.jsx` | All UI source: explorer, model page, compare, written as a factory that receives React |
+| `scripts/build-model-hub.js` | Compiles the source (sucrase) → `data/model-hub.bundle.json` |
+| `snippets/model-hub-mount.jsx` | `<HubMount view="…">`, the only thing pages import: loads the bundle once and renders a view |
 | `model-hub.css` | All styles, namespaced `.vx-*`, light and dark |
 | `models/overview.mdx` and the modality pages | Explorer presets, wrapping the existing static tables |
 | `models/compare.mdx`, `models/methodology.mdx` | Compare view and the public methodology page |
@@ -240,23 +242,24 @@ Blended price understates reasoning models, which can spend several times more o
 
 ### Mintlify constraints we hit
 
-- **Snippet exports are evaluated in isolation.** A page only receives the exports it imports, and components or helpers referenced inside them are not in scope. The fix used here: the whole library lives in one closure (`VX`), and pages import `VX` plus a thin wrapper (`ModelPage`, `ModelExplorer`, `ModelCompare`).
-- **MDX remaps lowercase tags inside snippets** (`table`, `img`, `pre`, headings) to Mintlify components with their own classes. Render them through variable tags (`const TableEl = 'table'`) to get plain elements.
-- **Global `style.css` forces an 18rem sidebar gutter and an 820px column on every page.** `model-hub.css` releases both with `:has(.vx)`.
-- **`mintlify dev` doesn't serve `.json`** from the repo. Locally, the catalog falls back to a data server on port 3333; production serves `/data/*.json` normally.
-- **Every page compiles the snippet it imports.** With 251 model pages importing a 178 KB snippet, `mintlify dev` takes a very long time to start, and snippet edits don't recompile importing pages. For local work, generate a subset with `--pages=`. Splitting the snippet per page type (explorer, model page, compare) would cut the per-page cost; shared helpers would be duplicated because snippets can't import each other.
+- **Every page compiles the snippets it imports**, and root `.js` files are inlined into every docs page's HTML (that's how `model-search.js` ships today). Neither suits a 180 KB UI used by 261 pages, which is why the UI is a separately built bundle behind a 3 KB mount (see [Build cost](#build-cost)).
+- **Snippet exports are evaluated in isolation.** A page only receives the exports it imports; anything else a snippet references is out of scope. `HubMount` is therefore fully self-contained.
+- **MDX remaps lowercase tags in snippets** (`table`, `img`, `pre`, headings) to Mintlify components with their own classes. The bundle avoids this by creating elements through `HubMount`'s `h`, which uses a variable tag.
+- **Global `style.css` forces an 18rem sidebar gutter and an 820px column on every page.** `model-hub.css` releases both with `:has(.vx, .vx-mount)`.
+- **`mintlify dev` doesn't serve `.json`** from the repo. Locally, the bundle and catalog load from a data server on port 3333; production serves `/data/*.json` normally.
 
 ### Running it locally
 
 ```bash
 node scripts/quote-video-pricing.js          # incremental; --force to re-quote everything
 node scripts/sync-model-media.js
-node scripts/build-model-catalog.js          # add --pages=glm-5-3,kling-v3-pro for a fast local preview
-npx http-server . -p 3333 --cors -c-1 &      # any static server with CORS; the explorer reads :3333/data/ on localhost
+node scripts/build-model-catalog.js          # catalog JSON, 251 pages, docs.json
+node scripts/build-model-hub.js              # after editing src/model-hub.jsx
+npx http-server . -p 3333 --cors -c-1 &      # any static server with CORS; hub pages read :3333/data/ on localhost
 npx mintlify dev
 ```
 
-Open `/models/overview`. Add `?preview=1` to any hub page to see the sample layout for performance and benchmarks.
+Open `/models/overview`. Add `?preview=1` to any hub page to see the sample layout for performance and benchmarks. UI changes need only `build-model-hub.js` and a browser refresh; no page recompiles.
 
 ### CI
 
@@ -264,23 +267,25 @@ The hourly `sync-static-models` workflow gains three steps: incremental video qu
 
 ### Localization
 
-Model pages are English-only in this branch. The eight localized trees still use the previous browser (`model-search.js`), which is untouched. Recommended next step: generate model pages per locale with translated chrome (labels live in one dictionary in the snippet) and shared data, or serve English model pages for every locale with a notice. The explorer's labels should move to the same dictionary.
+Model pages are English-only in this branch. The eight localized trees still use the previous browser (`model-search.js`), which is untouched. Recommended next step: generate model pages per locale with translated chrome (move the UI labels in `src/model-hub.jsx` into one dictionary) and shared data, or serve English model pages for every locale with a notice.
 
 ### Performance budget
 
-`data/model-catalog.json` is 437 KB minified (about 60 KB gzipped) and is fetched once per session by the explorer and compare view. Model pages don't fetch it; their data is inline (4 to 30 KB).
+- `data/model-hub.bundle.json`: the compiled UI, about 183 KB (roughly 45 KB gzipped). Fetched once per session on hub pages only, cached by the browser, revalidated on each visit.
+- `data/model-catalog.json`: 437 KB minified (about 60 KB gzipped), fetched once per session by the explorer and compare view. Model pages don't fetch it; their data is inline (4 to 30 KB).
+- Each hub page carries only the 3 KB mount plus its own data and Markdown.
 
-### Build cost (must fix before shipping)
+### Build cost
 
-Every page that imports a snippet compiles it. Measured with `@mdx-js/mdx` 3 on this machine: a generated model page alone compiles in about 0.2 s, the 178 KB snippet in about 1.1 s, so each model page costs about 1.5 s before Mintlify's own render and minify steps. Across 251 model pages that's several minutes of compile. `mint validate` on the full branch passes, but takes about 19 minutes on this machine, and `mint dev` with all pages takes longer than that to start. Every one of the 261 pages also compiles as MDX on its own (checked).
+The first version of this branch imported the whole UI as a Mintlify snippet on every page. Every page compiles what it imports: about 1.5 s per model page (the page is 0.2 s, the 178 KB snippet 1.1 s, measured with `@mdx-js/mdx` 3), so `mint validate` took about 19 minutes and `mint dev` wouldn't start in reasonable time.
 
-Options, in order of preference:
+The branch now ships the UI as a bundle behind `<HubMount>`:
 
-1. **Model pages without the snippet.** Keep the generated page as Markdown (the spec, prices and variants, which is also what search and agents read) plus a placeholder element carrying the family slug. A precompiled bundle served as a root-level script (Mintlify injects root `.js` files on every page, the way `model-search.js` works today) mounts the interactive page into the placeholder. Zero per-page compile cost, one cached bundle, and the frontend team gets a normal build (TypeScript, esbuild, tests). The cost is no server rendering of the rich view, which the Markdown layer covers.
-2. **Split the snippet per page type** (explorer, model page, compare). Cuts per-page cost by roughly 40%; shared helpers get duplicated because snippets can't import each other, so generate the three files from one source.
-3. **Keep one snippet** and accept long builds. Not recommended as the catalog grows.
-
-The explorer and compare view can stay as snippets either way: they're two pages.
+- Pages compile only the 3 KB mount, so the full site builds at roughly its old speed.
+- `HubMount` fetches `/data/model-hub.bundle.json` and instantiates it with `new Function`. The docs' Content-Security-Policy allows `'unsafe-eval'`, and the file is first-party and same-origin. If that's unacceptable, the fallback is to split the UI into per-page-type snippets, which cuts compile cost by about 40%.
+- A root `.js` file was rejected: Mintlify inlines those into every docs page, so it would add 180 KB to all 1,000+ pages.
+- Trade-off: the rich view isn't server-rendered. The page's Markdown (spec, prices, variants) is in the HTML for search and agents, and becomes visible if the bundle fails.
+- `node scripts/build-model-hub.js` must be rerun after UI changes; it fails the build if the output doesn't evaluate. All 251 model pages, the explorer and the compare view were server-rendered through the bundle with React as a check.
 
 ## 11. Performance telemetry (future)
 
@@ -437,7 +442,7 @@ For the design team to refine; the prototype sets the baseline.
 
 ## 15. Decisions needed
 
-1. **Model page rendering:** snippet per page (prototype, slow builds) or Markdown pages plus a precompiled global bundle ([Build cost](#build-cost-must-fix-before-shipping)).
+1. **UI delivery:** the bundle behind `<HubMount>`, loaded with `new Function` (current), or per-page-type snippets if eval is off the table ([Build cost](#build-cost)).
 2. **Sidebar:** custom mode with in-page navigation (prototype) or frame mode that keeps the docs sidebar.
 3. **Endpoint recommendations:** confirm the OpenAI rules (`/responses` for GPT-5-class reasoning, Pro and Codex), and whether `/responses` leaves alpha.
 4. **Benchmark sourcing:** license Artificial Analysis data for redistribution, or cite only.
