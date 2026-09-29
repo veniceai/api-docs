@@ -17,6 +17,10 @@ const MODELS_START = '{/* AUTO-GENERATED:MODELS:START */}';
 const MODELS_END = '{/* AUTO-GENERATED:MODELS:END */}';
 const VOICES_START = '{/* AUTO-GENERATED:VOICES:START */}';
 const VOICES_END = '{/* AUTO-GENERATED:VOICES:END */}';
+// Static catalog wrapped by <ModelExplorer> on the English model pages. The
+// legacy browser in model-search.js mounts into #model-search-placeholder,
+// which the localized pages still use.
+const CATALOG_ID = 'model-catalog-static';
 
 const PRIVATE_TYPES = new Set(['upscale']);
 
@@ -370,21 +374,21 @@ function main() {
 
   updatePage(
     'models/overview.mdx',
-    'model-search-placeholder',
+    CATALOG_ID,
     MODELS_START,
     MODELS_END,
     renderOverviewTables(models)
   );
   updatePage(
     'models/text.mdx',
-    'model-search-placeholder',
+    CATALOG_ID,
     MODELS_START,
     MODELS_END,
     withIntro(live.filter(m => m.type === 'text').length, renderTextTable(models))
   );
   updatePage(
     'models/image.mdx',
-    'model-search-placeholder',
+    CATALOG_ID,
     MODELS_START,
     MODELS_END,
     withIntro(
@@ -394,14 +398,14 @@ function main() {
   );
   updatePage(
     'models/video.mdx',
-    'model-search-placeholder',
+    CATALOG_ID,
     MODELS_START,
     MODELS_END,
     withIntro(live.filter(m => m.type === 'video').length, renderVideoTable(models))
   );
   updatePage(
     'models/text-to-speech.mdx',
-    'model-search-placeholder',
+    CATALOG_ID,
     MODELS_START,
     MODELS_END,
     withIntro(live.filter(m => m.type === 'tts').length, renderTtsTable(models))
@@ -415,21 +419,21 @@ function main() {
   );
   updatePage(
     'models/speech-to-text.mdx',
-    'model-search-placeholder',
+    CATALOG_ID,
     MODELS_START,
     MODELS_END,
     withIntro(live.filter(m => m.type === 'asr').length, renderAsrTable(models))
   );
   updatePage(
     'models/music.mdx',
-    'model-search-placeholder',
+    CATALOG_ID,
     MODELS_START,
     MODELS_END,
     withIntro(live.filter(m => m.type === 'music').length, renderMusicTable(models))
   );
   updatePage(
     'models/embeddings.mdx',
-    'model-search-placeholder',
+    CATALOG_ID,
     MODELS_START,
     MODELS_END,
     withIntro(live.filter(m => m.type === 'embedding').length, renderEmbeddingTable(models))
