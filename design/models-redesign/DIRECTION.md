@@ -121,7 +121,7 @@ All state is in the URL (`?m=video&mode=i2v&privacy=private&lens=1080-10-on&view
 | Music and SFX | Model, type, price per minute or track, max length, lyrics, privacy |
 | Embeddings | Model, dimensions, max input, per 1M tokens, privacy |
 
-Image and video default to a gallery of cards with the model's reference render (video plays on hover). Every card and row has a compare checkbox.
+Image and video default to a gallery of cards with the model's reference render (video plays on hover). Families without renders are listed in a table under the gallery rather than shown as empty tiles. Every card and row has a compare checkbox.
 
 Columns drop by priority below 1280, 1024 and 700 px instead of scrolling sideways. On phones a row is the model name, its headline price and one line with provider, key spec and privacy tier. Sample score, speed and uptime columns show where measured data will sit (hidden with `?preview=0`).
 
@@ -152,7 +152,7 @@ Prototype: `/models/glm-5-3`, `/models/veo-3-1-full-quality`, `/models/nano-bana
    - Text to speech: per 1M characters, per minute, per hour, voices, formats.
 7. **Live strip**: four metrics for the modality. Hidden until telemetry exists (shown with sample data in preview).
 8. **Main column** with a sticky "On this page" list that highlights the current section:
-   - **Reference outputs** (image, video): the prompt suite with prompts shown, lightbox, and "Compare this prompt across models".
+   - **Reference outputs** (image and video families with renders): the prompt suite with prompts shown, lightbox, and "Compare this prompt across models". Omitted until a family is rendered.
    - **Capabilities** (text): an input and output table, every feature as supported or not, then a details list: reasoning, effort levels with the default marked, served precision with a plain-English note, default sampling.
    - **Pricing**: text price table (cached discount, cache write, long-context tier, blended) and a cost estimator (input and output tokens, cached share, requests per day). Video gets a calculator plus the full resolution × duration matrix; clicking a cell selects it. Image gets per-tier prices. Audio gets per minute, hour and article, or duration buckets.
    - **Parameters** (image, video): resolutions, aspect ratios drawn to shape, durations, inputs, audio, prompt limit.
