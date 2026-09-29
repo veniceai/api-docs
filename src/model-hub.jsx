@@ -364,33 +364,25 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   /* ------------------------------------------------------------ atoms */
 
   const ProviderLogo = ({ provider, size = 32 }) => (
-    <span className="vx-logo" style={{ width: size, height: size }} aria-hidden="true">
+    <span className={cls('vx-logo', size <= 24 && 'vx-logo-sm')} style={{ width: size, height: size }} aria-hidden="true">
       <span className="vx-logo-mask" style={{ '--vx-logo': `url('${(provider && provider.logo) || '/images/icons/models/text.svg'}')` }} />
     </span>
   );
 
-  const PrivacyBadge = ({ tier, withText = true }) => {
+  const PrivacyBadge = ({ tier }) => {
     const meta = PRIVACY[tier];
     if (!meta) return null;
-    return (
-      <span className={cls('vx-privacy', `vx-privacy-${tier}`)} title={`${meta.long}. ${meta.desc}`}>
-        <Icon name={meta.icon} size={11} />
-        {withText ? meta.label : null}
-      </span>
-    );
+    return <span className={cls('vx-badge', `vx-privacy-${tier}`)} title={`${meta.long}. ${meta.desc}`}>{meta.label}</span>;
   };
 
   const PrivacyStack = ({ tiers }) => (
-    <span className="vx-privacy-stack">
+    <span className="vx-badges">
       {privacyTiers(tiers).map(tier => <PrivacyBadge key={tier} tier={tier} />)}
     </span>
   );
 
-  const Tag = ({ tone = 'neutral', icon, children, title }) => (
-    <span className={cls('vx-tag', `vx-tag-${tone}`)} title={title}>
-      {icon ? <Icon name={icon} size={11} /> : null}
-      {children}
-    </span>
+  const Tag = ({ tone, children, title }) => (
+    <span className={cls('vx-badge', tone && `vx-badge-${tone}`)} title={title}>{children}</span>
   );
 
   const StatusTags = ({ item, now }) => (
@@ -401,7 +393,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     </>
   );
 
-  const CopyButton = ({ text, label, className, iconOnly }) => {
+  const CopyButton = ({ text, label, className, iconOnly, small }) => {
     const [done, setDone] = useState(false);
     const onClick = event => {
       event.preventDefault();
@@ -412,27 +404,27 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       });
     };
     return (
-      <button type="button" className={cls('vx-copy', iconOnly && 'vx-copy-icon', done && 'is-done', className)} onClick={onClick} aria-label={label || `Copy ${text}`} title={label || 'Copy'}>
-        <Icon name={done ? 'check' : 'copy'} size={13} />
-        {iconOnly ? null : <span>{done ? 'Copied' : (label || 'Copy')}</span>}
+      <button type="button" className={cls(iconOnly ? 'vx-icon-btn' : 'vx-btn', small && 'vx-btn-sm', done && 'is-done', className)} onClick={onClick} aria-label={label || `Copy ${text}`} title={iconOnly ? (label || 'Copy') : undefined}>
+        <Icon name={done ? 'check' : 'copy'} size={14} />
+        {iconOnly ? <span className="vx-sr-only" aria-live="polite">{done ? 'Copied' : ''}</span> : <span aria-live="polite">{done ? 'Copied' : (label || 'Copy')}</span>}
       </button>
     );
   };
 
   const ModelId = ({ id }) => (
-    <span className="vx-id">
+    <span className="vx-id" title={id}>
       <code>{id}</code>
       <CopyButton text={id} iconOnly label={`Copy model ID ${id}`} />
     </span>
   );
 
-  const Segmented = ({ options, value, onChange, size, ariaLabel }) => (
-    <div className={cls('vx-seg', size === 'sm' && 'vx-seg-sm')} role="radiogroup" aria-label={ariaLabel}>
+  const Segmented = ({ options, value, onChange, ariaLabel }) => (
+    <div className="vx-seg" role="radiogroup" aria-label={ariaLabel}>
       {options.map(option => (
         <button key={String(option.value)} type="button" role="radio" aria-checked={value === option.value}
           className={cls('vx-seg-btn', value === option.value && 'is-active')} disabled={option.disabled}
-          onClick={() => onChange(option.value)} title={option.title}>
-          {option.icon ? <Icon name={option.icon} size={13} /> : null}
+          onClick={() => onChange(option.value)} title={option.title} aria-label={option.label ? undefined : option.title}>
+          {option.icon ? <Icon name={option.icon} size={14} /> : null}
           {option.label}
         </button>
       ))}
@@ -442,7 +434,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   const CapIcons = ({ model }) => (
     <span className="vx-caps">
       {TEXT_CAPS.filter(cap => ['tools', 'reasoning', 'vision', 'structured', 'webSearch'].includes(cap.key) && hasCap(model, cap.key)).map(cap => (
-        <span key={cap.key} className="vx-cap" title={cap.label}><Icon name={cap.icon} size={14} /></span>
+        <span key={cap.key} className="vx-cap" title={cap.label}><Icon name={cap.icon} size={15} /><span className="vx-sr-only">{cap.label}</span></span>
       ))}
     </span>
   );
@@ -455,15 +447,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     </div>
   );
 
-  const Empty = ({ icon = 'search', title, children }) => (
-    <div className="vx-empty">
-      <Icon name={icon} size={20} />
+  const Empty = ({ title, children }) => (
+    <div className="vx-empty" role="status">
       <div className="vx-empty-title">{title}</div>
       {children ? <div className="vx-empty-body">{children}</div> : null}
     </div>
   );
 
-  const SampleMark = () => <span className="vx-sample-mark" title="Illustrative values for design review. Not measurements.">Sample data</span>;
+  const SampleMark = () => <span className="vx-badge vx-badge-warn" title="Illustrative values for design review. Not measurements.">Sample data</span>;
 
   /* ------------------------------------------------------------ media */
 
@@ -482,52 +473,54 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const MediaFallback = ({ provider, modality }) => (
-    <div className={cls('vx-media-fallback', `vx-media-${modality}`)}>
-      <ProviderLogo provider={provider} size={44} />
-      <span>Reference renders pending</span>
-    </div>
+  const MediaFallback = ({ label = 'No reference render yet' }) => (
+    <div className="vx-media-fallback"><span>{label}</span></div>
   );
 
   const Lightbox = ({ item, onClose, compareHref }) => {
+    const closeRef = useRef(null);
+    const onCloseRef = useRef(onClose);
+    onCloseRef.current = onClose;
     useEffect(() => {
-      const onKey = e => { if (e.key === 'Escape') onClose(); };
+      if (!item) return undefined;
+      const previous = document.activeElement;
+      if (closeRef.current) closeRef.current.focus();
+      const onKey = e => { if (e.key === 'Escape') onCloseRef.current(); };
       window.addEventListener('keydown', onKey);
-      return () => window.removeEventListener('keydown', onKey);
-    }, [onClose]);
+      return () => {
+        window.removeEventListener('keydown', onKey);
+        if (previous && previous.focus) previous.focus();
+      };
+    }, [item]);
     if (!item) return null;
     return (
       <div className="vx-lightbox" role="dialog" aria-modal="true" aria-label={item.title} onClick={onClose}>
         <div className="vx-lightbox-inner" onClick={e => e.stopPropagation()}>
-          <button type="button" className="vx-lightbox-close" onClick={onClose} aria-label="Close"><Icon name="x" size={18} /></button>
+          <button ref={closeRef} type="button" className="vx-icon-btn vx-lightbox-close" onClick={onClose} aria-label="Close"><Icon name="x" size={18} /></button>
           <div className="vx-lightbox-media">
             {item.type === 'video'
               ? <video src={item.url} controls autoPlay loop playsInline />
               : <img src={item.url} alt={item.caption || item.title} />}
           </div>
           <div className="vx-lightbox-meta">
-            <div className="vx-eyebrow">{item.title}</div>
+            <div className="vx-lightbox-title">{item.title}</div>
             <p>{item.caption}</p>
-            {compareHref ? <a className="vx-btn vx-btn-ghost" href={compareHref}><Icon name="columns" size={14} />Compare this prompt across models</a> : null}
+            {compareHref ? <a className="vx-btn" href={compareHref}>Compare this prompt across models</a> : null}
           </div>
         </div>
       </div>
     );
   };
 
-  const MediaGallery = ({ model, provider, suite }) => {
+  const MediaGallery = ({ model }) => {
     const [open, setOpen] = useState(null);
     const media = model.media || [];
     const isVideo = model.modality === 'video';
     if (!media.length) {
       return (
-        <div className="vx-gallery-empty">
-          <Icon name={isVideo ? 'video' : 'image'} size={18} />
-          <div>
-            <strong>No reference renders yet.</strong>
-            <span> Every {isVideo ? 'video' : 'image'} model is rendered on the Venice reference prompt suite so outputs can be compared side by side. This model has not been rendered yet.</span>
-          </div>
-        </div>
+        <p className="vx-text">
+          No reference renders yet. Every {isVideo ? 'video' : 'image'} model is rendered on the same reference prompts so outputs can be compared side by side; this one has not been rendered.
+        </p>
       );
     }
     return (
@@ -539,10 +532,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 {item.type === 'video'
                   ? <HoverVideo src={item.url} className="vx-shot-el" />
                   : <img className="vx-shot-el" src={item.url} alt={item.caption || item.title} loading="lazy" />}
-                <span className="vx-shot-badge">{item.title}</span>
-                <span className="vx-shot-zoom"><Icon name="maximize" size={14} /></span>
               </button>
-              <figcaption>{item.caption}</figcaption>
+              <figcaption><span className="vx-shot-title">{item.title}</span>{item.caption}</figcaption>
             </figure>
           ))}
         </div>
@@ -603,6 +594,23 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       { key: 'latency', label: 'Latency', unit: 'ms', hint: 'p50 for a 1K-token input.' },
       { key: 'success', label: 'Success rate', unit: '%', hint: 'Requests without a 5xx or timeout.' }
     ]
+  };
+  const TELEMETRY_STT = [
+    { key: 'uptime', label: 'Uptime', unit: '%', hint: '30-day probe success rate.' },
+    { key: 'e2e', label: 'Processing time', unit: 's', hint: 'p50 to transcribe a 1-minute file.' },
+    { key: 'speed', label: 'Speed factor', unit: 'x', hint: 'Seconds of audio transcribed per wall-clock second.' },
+    { key: 'success', label: 'Success rate', unit: '%', hint: 'Requests without a 5xx or timeout.' }
+  ];
+  const TELEMETRY_MUSIC = [
+    { key: 'uptime', label: 'Uptime', unit: '%', hint: '30-day probe success rate.' },
+    { key: 'queue', label: 'Queue time', unit: 's', hint: 'p50 time from /audio/queue to generation start.' },
+    { key: 'gen', label: 'Generation time', unit: 's', hint: 'p50 for a 30-second track, excluding queue.' },
+    { key: 'success', label: 'Success rate', unit: '%', hint: 'Jobs that completed without an error.' }
+  ];
+  const telemetryFor = model => {
+    if (model.task === 'stt') return TELEMETRY_STT;
+    if (model.modality === 'audio' && model.task !== 'tts') return TELEMETRY_MUSIC;
+    return TELEMETRY[model.modality] || TELEMETRY.audio;
   };
   const sampleTelemetry = model => {
     const r = seeded(`t:${model.id}`);
@@ -693,44 +701,20 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     { key: 'production', label: 'Production', title: '10s · 1080p · with audio', lens: { h: 1080, s: 10, a: 'on' } }
   ];
 
-  const QUICK_PICKS = {
-    all: [
-      { key: 'new', label: 'New this month', icon: 'sparkles', apply: { flags: ['new'] } },
-      { key: 'private', label: 'Private & encrypted', icon: 'lock', apply: { privacy: ['e2ee', 'tee'] } },
-      { key: 'picks', label: 'Venice picks', icon: 'star', apply: { flags: ['picks'] } },
-      { key: 'open', label: 'Open weights', icon: 'book', apply: { flags: ['open'] } },
-      { key: 'uncensored', label: 'Uncensored', icon: 'wand', apply: { flags: ['uncensored'] } }
-    ],
-    text: [
-      { key: 'coding', label: 'Coding agents', icon: 'terminal', apply: { caps: ['tools', 'code'], ctx: '200000' } },
-      { key: 'private', label: 'End-to-end encrypted', icon: 'lock', apply: { privacy: ['e2ee'] } },
-      { key: 'long', label: '1M+ context', icon: 'book', apply: { ctx: '1000000' } },
-      { key: 'budget', label: 'Reasoning under $1', icon: 'dollar', apply: { caps: ['reasoning'], price: '1' } },
-      { key: 'vision', label: 'Vision', icon: 'eye', apply: { caps: ['vision'] } },
-      { key: 'uncensored', label: 'Uncensored', icon: 'wand', apply: { flags: ['uncensored'] } }
-    ],
-    image: [
-      { key: 'edit', label: 'Can edit', icon: 'wand', apply: { modes: ['edit'] } },
-      { key: '4k', label: '4K output', icon: 'maximize', apply: { res: '4K' } },
-      { key: 'web', label: 'Web-grounded', icon: 'globe', apply: { caps: ['webSearch'] } },
-      { key: 'private', label: 'Private', icon: 'eyeOff', apply: { privacy: ['private', 'tee', 'e2ee'] } },
-      { key: 'uncensored', label: 'Uncensored', icon: 'sparkles', apply: { flags: ['uncensored'] } }
-    ],
-    video: [
-      { key: 'audio', label: 'Native audio', icon: 'volume', apply: { audio: 'audio' } },
-      { key: 'i2v', label: 'Image to video', icon: 'image', apply: { modes: ['i2v'] } },
-      { key: 'r2v', label: 'Reference to video', icon: 'layers', apply: { modes: ['r2v'] } },
-      { key: '4k', label: '4K', icon: 'maximize', apply: { res: '2160' } },
-      { key: 'private', label: 'Private', icon: 'eyeOff', apply: { privacy: ['private', 'tee', 'e2ee'] } },
-      { key: 'open', label: 'Open source', icon: 'book', apply: { flags: ['open'] } }
-    ],
-    audio: [
-      { key: 'private', label: 'Private', icon: 'eyeOff', apply: { privacy: ['private', 'tee', 'e2ee'] } },
-      { key: 'new', label: 'New this month', icon: 'sparkles', apply: { flags: ['new'] } }
-    ],
-    embedding: [
-      { key: 'private', label: 'Private', icon: 'eyeOff', apply: { privacy: ['private', 'tee', 'e2ee'] } }
-    ]
+  const PAGE_TITLES = {
+    all: 'Models', text: 'Text Models', image: 'Image Models', video: 'Video Models', embedding: 'Embedding Models',
+    tts: 'Text-to-Speech Models', stt: 'Speech-to-Text Models', music: 'Music & Sound Effects Models'
+  };
+  const UNIT_NOTES = { text: 'prices per 1M tokens' };
+  const SCOPE_BLURBS = {
+    all: 'Every model on the Venice API across text, image, video, audio and embeddings, with normalized prices, limits and privacy tiers.',
+    text: 'Chat, reasoning, coding and agent models, priced per 1M tokens.',
+    image: 'Image generation, editing, upscaling and background removal, priced per image.',
+    video: 'Text, image and reference to video, video editing and upscaling, priced per clip from quotes.',
+    tts: 'Speech synthesis with multilingual voices, priced per character.',
+    stt: 'Transcription with timestamps, priced per second of audio.',
+    music: 'Songs, instrumental tracks and sound effects, priced per track or minute.',
+    embedding: 'Vectors for search and retrieval, priced per 1M input tokens.'
   };
 
   const EMPTY_FILTERS = { providers: [], privacy: [], caps: [], modes: [], flags: [], quant: [], ctx: '', price: '', res: '', audio: '', dur: '' };
@@ -796,12 +780,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   const matchesQuery = (text, query) => query.toLowerCase().split(/\s+/).filter(Boolean).every(token => text.includes(token));
 
   const SORTS = {
-    newest: { label: 'Newest', fn: (a, b) => (b.family.updated || 0) - (a.family.updated || 0) },
-    name: { label: 'Name', fn: (a, b) => a.family.name.localeCompare(b.family.name) },
-    price: { label: 'Price', fn: (a, b) => (a.price == null ? 1e9 : a.price) - (b.price == null ? 1e9 : b.price) },
-    context: { label: 'Context', fn: (a, b) => ((b.display.text && b.display.text.context) || 0) - ((a.display.text && a.display.text.context) || 0) },
-    output: { label: 'Output price', fn: (a, b) => ((a.display.pricing && a.display.pricing.output) || 1e9) - ((b.display.pricing && b.display.pricing.output) || 1e9) },
-    input: { label: 'Input price', fn: (a, b) => ((a.display.pricing && a.display.pricing.input) || 1e9) - ((b.display.pricing && b.display.pricing.input) || 1e9) }
+    newest: { label: 'Newest', dir: 'descending', fn: (a, b) => (b.family.updated || 0) - (a.family.updated || 0) },
+    name: { label: 'Name', dir: 'ascending', fn: (a, b) => a.family.name.localeCompare(b.family.name) },
+    price: { label: 'Price', dir: 'ascending', fn: (a, b) => (a.price == null ? 1e9 : a.price) - (b.price == null ? 1e9 : b.price) },
+    context: { label: 'Context', dir: 'descending', fn: (a, b) => ((b.display.text && b.display.text.context) || 0) - ((a.display.text && a.display.text.context) || 0) },
+    output: { label: 'Output price', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.output) || 1e9) - ((b.display.pricing && b.display.pricing.output) || 1e9) },
+    input: { label: 'Input price', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.input) || 1e9) - ((b.display.pricing && b.display.pricing.input) || 1e9) }
   };
 
   const FilterGroup = ({ title, children, defaultOpen = true }) => {
@@ -817,11 +801,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const Check = ({ checked, onChange, label, count, icon, title }) => (
+  const Check = ({ checked, onChange, label, count, title }) => (
     <label className={cls('vx-check', checked && 'is-checked')} title={title}>
       <input type="checkbox" checked={checked} onChange={onChange} />
       <span className="vx-check-box"><Icon name="check" size={11} /></span>
-      {icon ? <Icon name={icon} size={13} className="vx-check-icon" /> : null}
       <span className="vx-check-label">{label}</span>
       {count != null ? <span className="vx-check-count">{count}</span> : null}
     </label>
@@ -845,15 +828,15 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return (
       <aside className="vx-rail" aria-label="Filters">
         <div className="vx-rail-head">
-          <span><Icon name="sliders" size={14} />Filters{count ? <span className="vx-count-pill">{count}</span> : null}</span>
-          {count ? <button type="button" className="vx-link-btn" onClick={onClear}>Clear</button> : null}
+          <span>Filters</span>
+          {count ? <button type="button" className="vx-link-btn" onClick={onClear}>Clear all ({count})</button> : null}
         </div>
 
         {modality === 'text' ? (
           <>
             <FilterGroup title="Capabilities">
               {TEXT_CAPS.filter(c => !['logprobs', 'xSearch', 'audioInput'].includes(c.key)).map(cap => (
-                <Check key={cap.key} checked={filters.caps.includes(cap.key)} onChange={() => toggleIn('caps', cap.key)} label={cap.label} icon={cap.icon} title={cap.desc} />
+                <Check key={cap.key} checked={filters.caps.includes(cap.key)} onChange={() => toggleIn('caps', cap.key)} label={cap.label} title={cap.desc} />
               ))}
             </FilterGroup>
             <FilterGroup title="Context window">
@@ -887,8 +870,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               ))}
             </FilterGroup>
             <FilterGroup title="Features">
-              <Check checked={filters.caps.includes('webSearch')} onChange={() => toggleIn('caps', 'webSearch')} label="Web-grounded generation" icon="globe" />
-              <Check checked={filters.caps.includes('multiImage')} onChange={() => toggleIn('caps', 'multiImage')} label="Multi-image editing" icon="layers" />
+              <Check checked={filters.caps.includes('webSearch')} onChange={() => toggleIn('caps', 'webSearch')} label="Web-grounded generation" />
+              <Check checked={filters.caps.includes('multiImage')} onChange={() => toggleIn('caps', 'multiImage')} label="Multi-image editing" />
             </FilterGroup>
           </>
         ) : null}
@@ -920,15 +903,16 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
         <FilterGroup title="Privacy">
           {PRIVACY_ORDER.map(tier => (
-            <Check key={tier} checked={filters.privacy.includes(tier)} onChange={() => toggleIn('privacy', tier)} label={PRIVACY[tier].long} icon={PRIVACY[tier].icon} title={PRIVACY[tier].desc} />
+            <Check key={tier} checked={filters.privacy.includes(tier)} onChange={() => toggleIn('privacy', tier)} label={PRIVACY[tier].long} title={PRIVACY[tier].desc} />
           ))}
         </FilterGroup>
 
-        <FilterGroup title="More">
-          <Check checked={filters.flags.includes('open')} onChange={() => toggleIn('flags', 'open')} label="Open weights" icon="book" />
-          <Check checked={filters.flags.includes('uncensored')} onChange={() => toggleIn('flags', 'uncensored')} label="Uncensored" icon="wand" />
-          <Check checked={filters.flags.includes('new')} onChange={() => toggleIn('flags', 'new')} label="Added in the last 30 days" icon="sparkles" />
-          <Check checked={filters.flags.includes('stable')} onChange={() => toggleIn('flags', 'stable')} label="Hide beta & deprecated" icon="shieldCheck" />
+        <FilterGroup title="Attributes">
+          <Check checked={filters.flags.includes('picks')} onChange={() => toggleIn('flags', 'picks')} label="Venice picks" title="Featured, recommended or a Venice default for a task" />
+          <Check checked={filters.flags.includes('open')} onChange={() => toggleIn('flags', 'open')} label="Open weights" />
+          <Check checked={filters.flags.includes('uncensored')} onChange={() => toggleIn('flags', 'uncensored')} label="Uncensored" />
+          <Check checked={filters.flags.includes('new')} onChange={() => toggleIn('flags', 'new')} label="Added in the last 30 days" />
+          <Check checked={filters.flags.includes('stable')} onChange={() => toggleIn('flags', 'stable')} label="Hide beta and deprecated" />
         </FilterGroup>
 
         <FilterGroup title="Provider" defaultOpen={modality !== 'all'}>
@@ -951,24 +935,28 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     </span>
   );
 
-  const ModelCell = ({ row, providers, now, query }) => {
+  const modelHref = (family, id) => `/models/${family.slug}${id !== family.primary ? `?v=${encodeURIComponent(id)}` : ''}`;
+  const privacySummary = tiers => privacyTiers(tiers).map(tier => (PRIVACY[tier] ? PRIVACY[tier].label : tier)).join(', ');
+
+  const ModelCell = ({ row, providers, now }) => {
     const { family, display } = row;
     const provider = providers[family.provider];
+    const extra = family.variants.length - 1;
     return (
       <div className="vx-mcell">
-        <ProviderLogo provider={provider} size={30} />
+        <ProviderLogo provider={provider} size={32} />
         <div className="vx-mcell-body">
           <div className="vx-mcell-top">
-            <a className="vx-mcell-name" href={`/models/${family.slug}${display.id !== family.primary ? `?v=${encodeURIComponent(display.id)}` : ''}`}>{family.name}</a>
+            <a className="vx-mcell-name" href={modelHref(family, display.id)}>{family.name}</a>
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-mcell-sub">
             <span className="vx-mcell-provider">{provider ? provider.name : family.provider}</span>
-            <span className="vx-dot">·</span>
-            <code className="vx-mcell-id">{display.id}</code>
+            <code className="vx-mcell-id" title={display.id}>{display.id}</code>
             <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} />
-            {family.variants.length > 1 ? <span className="vx-mcell-more" title={family.variants.join('\n')}>+{family.variants.length - 1}</span> : null}
+            {extra > 0 ? <span className="vx-mcell-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
           </div>
+          <div className="vx-mcell-mobile">{[provider ? provider.name : family.provider, keySpec(display), privacySummary(family.privacy)].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
     );
@@ -976,57 +964,91 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   const modeChips = (family, catalog) => (family.variants || []).map(id => catalog.models[id]).filter(Boolean).map(m => m.variant);
 
-  const explorerColumns = (modality, task, lens, catalog) => {
-    const privacy = { key: 'privacy', label: 'Privacy', render: row => <PrivacyStack tiers={row.family.privacy} /> };
-    const added = { key: 'added', label: 'Added', sort: 'newest', align: 'right', render: row => <span className="vx-muted vx-nowrap">{shortDate(row.family.updated || row.family.created)}</span> };
+  const ModeList = ({ modes, active, labels }) => (
+    <span className="vx-modes">
+      {modes.map(v => <span key={v} className={v === active ? 'is-active' : undefined}>{labels[v] || v}</span>)}
+    </span>
+  );
+
+  // Availability-style percentages read as 99.90%, not 99.9%.
+  const withUnit = (value, unit) => {
+    if (value == null) return '—';
+    if (unit === '%') return `${value >= 99 && value <= 100 ? value.toFixed(2) : value}%`;
+    return `${value}${unit ? ` ${unit}` : ''}`;
+  };
+
+  // Preview-only columns: how scores and live metrics would sit in the table.
+  const previewColumns = (modality, task) => {
+    const scoreLabel = { text: 'Intelligence', image: 'Arena Elo', video: 'Arena Elo', embedding: 'MTEB' }[modality] || (task === 'stt' ? 'WER' : 'Arena Elo');
+    const speed = {
+      text: ['tps', 'Throughput', 'tok/s'], image: ['gen', 'Gen. time', 's'], video: ['gen', 'Gen. time', 's'], embedding: ['latency', 'Latency', 'ms']
+    }[modality] || (task === 'stt' ? ['speed', 'Speed', 'x'] : task === 'music' ? ['gen', 'Gen. time', 's'] : ['ttfa', 'First audio', 'ms']);
+    const cols = [];
+    if (modality !== 'all') {
+      cols.push({ key: 'p-score', label: scoreLabel, align: 'right', hide: 'md', render: row => {
+        const set = benchmarkSetFor(row.display);
+        const main = set ? (set.composite || set.items[0]) : null;
+        return <span className="vx-num">{main ? withUnit(sampleBenchmarks(row.display)[main.key], main.unit === 'Elo' ? '' : main.unit) : '—'}</span>;
+      } });
+      cols.push({ key: 'p-speed', label: speed[1], align: 'right', hide: 'lg', render: row => <span className="vx-num">{withUnit(sampleTelemetry(row.display)[speed[0]], speed[2])}</span> });
+    }
+    cols.push({ key: 'p-uptime', label: 'Uptime', align: 'right', hide: 'md', render: row => <span className="vx-num">{withUnit(sampleTelemetry(row.display).uptime, '%')}</span> });
+    return cols;
+  };
+
+  // `hide` drops a column below a breakpoint (lg 1280px, md 1024px, sm 700px);
+  // the model cell repeats the key spec and privacy tier on small screens.
+  const explorerColumns = (modality, task, lens, catalog, preview) => {
+    const privacy = { key: 'privacy', label: 'Privacy', hide: 'sm', render: row => <PrivacyStack tiers={row.family.privacy} /> };
+    const added = { key: 'added', label: 'Added', sort: 'newest', align: 'right', hide: 'lg', render: row => <span className="vx-muted vx-nowrap">{shortDate(row.family.updated || row.family.created)}</span> };
+    const sample = preview ? previewColumns(modality, task) : [];
     if (modality === 'text') {
       return [
-        { key: 'context', label: 'Context', sort: 'context', align: 'right', render: row => <span className="vx-num">{tokens(row.display.text && row.display.text.context)}</span> },
-        { key: 'input', label: 'Input', sub: '/1M', sort: 'input', align: 'right', render: row => <PriceCell value={row.display.pricing && row.display.pricing.input} /> },
-        { key: 'output', label: 'Output', sub: '/1M', sort: 'output', align: 'right', render: row => <PriceCell value={row.display.pricing && row.display.pricing.output} /> },
-        { key: 'cache', label: 'Cached', sub: '/1M', align: 'right', render: row => <PriceCell value={row.display.pricing && row.display.pricing.cacheRead} /> },
-        { key: 'blended', label: 'Blended', sub: '3:1', sort: 'price', align: 'right', hint: 'Blended = (3 × input + output) / 4, the mix Artificial Analysis uses.', render: row => <PriceCell value={row.price} strong /> },
-        { key: 'caps', label: 'Capabilities', render: row => <CapIcons model={row.display} /> },
+        { key: 'context', label: 'Context', sort: 'context', align: 'right', hide: 'sm', render: row => <span className="vx-num">{tokens(row.display.text && row.display.text.context)}</span> },
+        { key: 'input', label: 'Input', sort: 'input', align: 'right', hide: 'md', render: row => <PriceCell value={row.display.pricing && row.display.pricing.input} /> },
+        { key: 'output', label: 'Output', sort: 'output', align: 'right', hide: 'md', render: row => <PriceCell value={row.display.pricing && row.display.pricing.output} /> },
+        ...(preview ? [] : [{ key: 'cache', label: 'Cached', align: 'right', hide: 'lg', hint: 'Cached input (prompt cache read)', render: row => <PriceCell value={row.display.pricing && row.display.pricing.cacheRead} /> }]),
+        { key: 'blended', label: 'Blended', sort: 'price', align: 'right', hint: 'Blended = (3 × input + output) / 4, the mix Artificial Analysis uses.', render: row => <PriceCell value={row.price} strong /> },
+        ...sample,
+        ...(preview ? [] : [{ key: 'caps', label: 'Capabilities', hide: 'md', render: row => <CapIcons model={row.display} /> }]),
         privacy
       ];
     }
     if (modality === 'image') {
       return [
-        { key: 'tasks', label: 'Tasks', render: row => (
-          <span className="vx-chips">{[...new Set(modeChips(row.family, catalog))].map(v => <span key={v} className="vx-chip">{VARIANT_LABELS[v]}</span>)}</span>
-        ) },
-        { key: 'price', label: `Price @ ${lens.image}`, sort: 'price', align: 'right', render: row => {
+        { key: 'tasks', label: 'Tasks', hide: 'md', render: row => <ModeList modes={[...new Set(modeChips(row.family, catalog))]} labels={VARIANT_LABELS} /> },
+        { key: 'price', label: `Price at ${lens.image}`, sort: 'price', align: 'right', render: row => {
           const p = imagePrice(row.display, lens.image);
           return <PriceCell value={p.value} unit={headlineUnit(row.display)} note={p.exact ? null : `Not offered at ${lens.image}; showing ${p.res}.`} strong />;
         } },
-        { key: 'res', label: 'Max output', align: 'right', render: row => <span className="vx-num">{imageMaxRes(row.display) || '—'}</span> },
-        { key: 'ar', label: 'Aspect ratios', align: 'right', render: row => <span className="vx-num">{((row.display.image && row.display.image.aspectRatios) || []).filter(a => a !== 'auto').length || '—'}</span> },
+        { key: 'res', label: 'Max output', align: 'right', hide: 'sm', render: row => <span className="vx-num">{imageMaxRes(row.display) || '—'}</span> },
+        { key: 'ar', label: 'Aspect ratios', align: 'right', hide: 'lg', render: row => <span className="vx-num">{((row.display.image && row.display.image.aspectRatios) || []).filter(a => a !== 'auto').length || '—'}</span> },
+        ...sample,
         privacy
       ];
     }
     if (modality === 'video') {
       return [
-        { key: 'modes', label: 'Modes', render: row => (
-          <span className="vx-chips">{modeChips(row.family, catalog).map(v => <span key={v} className={cls('vx-chip', row.display.variant === v && 'is-active')}>{MODE_SHORT[v] || v}</span>)}</span>
-        ) },
+        { key: 'modes', label: 'Modes', hide: 'md', render: row => <ModeList modes={modeChips(row.family, catalog)} active={row.display.variant} labels={MODE_SHORT} /> },
         { key: 'persec', label: 'Per second', sort: 'price', align: 'right', render: row => {
           const vp = videoPrice(row.display, lens.video);
           if (vp.status !== 'quoted') return <span className="vx-muted" title="Priced by the length of the source video. Use /video/quote.">By source</span>;
           const notes = [];
           if (!vp.exactRes) notes.push(`${heightLabel(lens.video.h)} not offered; priced at ${vp.resolution}.`);
           if (vp.forcedAudio) notes.push('Audio is always generated by this model.');
-          return <PriceCell value={vp.perSecond} unit="/ s" note={notes.join(' ') || null} strong />;
+          return <PriceCell value={vp.perSecond} unit="/ sec" note={notes.join(' ') || null} strong />;
         } },
-        { key: 'clip', label: `${lens.video.s}s clip`, align: 'right', render: row => {
+        { key: 'clip', label: `${lens.video.s}s clip`, align: 'right', hide: 'sm', render: row => {
           const vp = videoPrice(row.display, lens.video);
           if (vp.status !== 'quoted') return <span className="vx-muted">—</span>;
-          return <span className="vx-price"><span className="vx-price-value">{usd(vp.clip)}</span>{!vp.exactDur ? <span className="vx-price-unit">{vp.seconds}s</span> : null}{vp.audio ? <Icon name="volume" size={12} className="vx-audio-mark" /> : null}</span>;
+          return <span className="vx-price" title={!vp.exactDur ? `${lens.video.s}s not offered; priced at ${vp.seconds}s.` : undefined}><span className="vx-price-value">{usd(vp.clip)}</span>{!vp.exactDur ? <span className="vx-price-unit">{vp.seconds}s</span> : null}</span>;
         } },
-        { key: 'max', label: 'Max', align: 'right', render: row => <span className="vx-num">{heightLabel(maxVideoHeight(row.display))} · {maxVideoSeconds(row.display) || '—'}s</span> },
-        { key: 'audio', label: 'Audio', render: row => {
+        { key: 'max', label: 'Max', align: 'right', hide: 'lg', render: row => <span className="vx-num">{heightLabel(maxVideoHeight(row.display))} · {maxVideoSeconds(row.display) || '—'}s</span> },
+        { key: 'audio', label: 'Audio', hide: 'md', render: row => {
           const a = row.display.video && row.display.video.audio;
-          return a === 'native' ? <Tag tone="accent" icon="volume">Native</Tag> : a === 'optional' ? <Tag icon="volume">Optional</Tag> : <span className="vx-muted">—</span>;
+          return <span className={a === 'native' || a === 'optional' ? undefined : 'vx-muted'}>{a === 'native' ? 'Native' : a === 'optional' ? 'Optional' : 'None'}</span>;
         } },
+        ...sample,
         privacy
       ];
     }
@@ -1034,43 +1056,43 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       if (task === 'stt') {
         return [
           { key: 'hour', label: 'Per audio hour', sort: 'price', align: 'right', render: row => <PriceCell value={row.display.pricing && row.display.pricing.perHour} strong /> },
-          { key: 'k', label: 'Per 1K minutes', align: 'right', render: row => <PriceCell value={row.display.pricing && row.display.pricing.perMinute != null ? row.display.pricing.perMinute * 1000 : null} /> },
+          { key: 'k', label: 'Per 1K minutes', align: 'right', hide: 'sm', render: row => <PriceCell value={row.display.pricing && row.display.pricing.perMinute != null ? row.display.pricing.perMinute * 1000 : null} /> },
+          ...sample,
           privacy
         ];
       }
       if (task === 'music') {
         return [
-          { key: 'type', label: 'Type', render: row => <span className="vx-chip">{TASK_LABELS[row.display.task]}</span> },
+          { key: 'type', label: 'Type', hide: 'md', render: row => TASK_LABELS[row.display.task] },
           { key: 'price', label: 'Price', sort: 'price', align: 'right', render: row => <PriceCell value={row.price} unit={headlineUnit(row.display)} strong /> },
-          { key: 'len', label: 'Max length', align: 'right', render: row => <span className="vx-num">{row.display.audio && row.display.audio.maxDuration ? `${Math.round(row.display.audio.maxDuration / 60 * 10) / 10} min` : '—'}</span> },
-          { key: 'lyrics', label: 'Lyrics', align: 'center', render: row => (row.display.audio && row.display.audio.lyrics ? <Icon name="check" size={14} className="vx-yes" /> : <span className="vx-muted">—</span>) },
+          { key: 'len', label: 'Max length', align: 'right', hide: 'sm', render: row => <span className="vx-num">{row.display.audio && row.display.audio.maxDuration ? `${Math.round(row.display.audio.maxDuration / 60 * 10) / 10} min` : '—'}</span> },
+          { key: 'lyrics', label: 'Lyrics', hide: 'lg', render: row => (row.display.audio && row.display.audio.lyrics ? 'Yes' : <span className="vx-muted">No</span>) },
+          ...sample,
           privacy
         ];
       }
       return [
         { key: 'chars', label: 'Per 1M chars', sort: 'price', align: 'right', render: row => <PriceCell value={row.price} strong /> },
-        { key: 'min', label: 'Per minute', align: 'right', hint: 'At about 825 characters per minute of speech.', render: row => <PriceCell value={row.display.pricing && row.display.pricing.perMinute} /> },
-        { key: 'voices', label: 'Voices', align: 'right', render: row => <span className="vx-num">{(row.display.audio && row.display.audio.voiceCount) || '—'}</span> },
+        { key: 'min', label: 'Per minute', align: 'right', hide: 'sm', hint: 'At about 825 characters per minute of speech.', render: row => <PriceCell value={row.display.pricing && row.display.pricing.perMinute} /> },
+        { key: 'voices', label: 'Voices', align: 'right', hide: 'md', render: row => <span className="vx-num">{(row.display.audio && row.display.audio.voiceCount) || '—'}</span> },
+        ...sample,
         privacy
       ];
     }
     if (modality === 'embedding') {
       return [
-        { key: 'dims', label: 'Dimensions', align: 'right', render: row => <span className="vx-num">{(row.display.embedding && row.display.embedding.dimensions) ? row.display.embedding.dimensions.toLocaleString('en-US') : '—'}</span> },
-        { key: 'max', label: 'Max input', align: 'right', render: row => <span className="vx-num">{tokens(row.display.embedding && row.display.embedding.maxInputTokens)}</span> },
+        { key: 'dims', label: 'Dimensions', align: 'right', hide: 'sm', render: row => <span className="vx-num">{(row.display.embedding && row.display.embedding.dimensions) ? row.display.embedding.dimensions.toLocaleString('en-US') : '—'}</span> },
+        { key: 'max', label: 'Max input', align: 'right', hide: 'md', render: row => <span className="vx-num">{tokens(row.display.embedding && row.display.embedding.maxInputTokens)}</span> },
         { key: 'price', label: 'Per 1M tokens', sort: 'price', align: 'right', render: row => <PriceCell value={row.price} strong /> },
+        ...sample,
         privacy
       ];
     }
     return [
-      { key: 'type', label: 'Type', render: row => (
-        <span className={cls('vx-modality', `vx-modality-${row.family.modality}`)}>
-          <Icon name={(MODALITIES.find(m => m.key === row.family.modality) || {}).icon || 'text'} size={12} />
-          {TASK_LABELS[row.display.task] || row.family.modality}
-        </span>
-      ) },
-      { key: 'price', label: 'Headline price', align: 'right', render: row => <PriceCell value={row.price} unit={headlineUnit(row.display)} strong /> },
-      { key: 'spec', label: 'Key spec', render: row => <span className="vx-muted vx-nowrap">{keySpec(row.display)}</span> },
+      { key: 'type', label: 'Type', hide: 'sm', render: row => <span className="vx-nowrap">{TASK_LABELS[row.display.task] || row.family.modality}</span> },
+      { key: 'price', label: 'Price', align: 'right', hint: 'Blended per 1M tokens for text; per image, second, character or minute elsewhere.', render: row => <PriceCell value={row.price} unit={headlineUnit(row.display)} strong /> },
+      { key: 'spec', label: 'Key spec', hide: 'md', render: row => <span className="vx-muted vx-nowrap">{keySpec(row.display)}</span> },
+      ...sample,
       privacy, added
     ];
   };
@@ -1084,21 +1106,35 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return TASK_LABELS[model.task] || '';
   };
 
+  const hideCls = col => (col.hide ? `vx-hide-${col.hide}` : null);
+
+  const HeaderLabel = ({ col }) => (
+    <>
+      {col.label}
+      {col.sub ? <span className="vx-th-sub">{col.sub}</span> : null}
+    </>
+  );
+
   const ExplorerTable = ({ rows, columns, sort, setSort, providers, now, compare }) => (
     <div className="vx-table-wrap">
       <table className="vx-table">
         <thead>
           <tr>
-            <th className="vx-th-check" aria-label="Compare" />
-            <th className="vx-th-model">Model</th>
+            <th className="vx-th-check"><span className="vx-sr-only">Compare</span></th>
+            <th className="vx-th-model" aria-sort={sort === 'name' ? 'ascending' : undefined}>
+              <button type="button" className={cls('vx-th-btn', sort === 'name' && 'is-sorted')} onClick={() => setSort('name')}>
+                Model<Icon name="chevronDown" size={12} className="vx-sort-icon is-up" />
+              </button>
+            </th>
             {columns.map(col => (
-              <th key={col.key} className={cls(col.align && `vx-al-${col.align}`, col.sort && 'is-sortable', sort === col.sort && 'is-sorted')} title={col.hint}
-                onClick={col.sort ? () => setSort(col.sort) : undefined} aria-sort={sort === col.sort ? 'ascending' : undefined}>
-                <span className="vx-th-inner">
-                  {col.label}
-                  {col.sub ? <span className="vx-th-sub">{col.sub}</span> : null}
-                  {col.sort ? <Icon name="chevronDown" size={12} className="vx-sort-icon" /> : null}
-                </span>
+              <th key={col.key} className={cls(col.align && `vx-al-${col.align}`, hideCls(col))} title={col.hint}
+                aria-sort={col.sort && sort === col.sort ? SORTS[col.sort].dir : undefined}>
+                {col.sort ? (
+                  <button type="button" className={cls('vx-th-btn', sort === col.sort && 'is-sorted')} onClick={() => setSort(col.sort)}>
+                    <HeaderLabel col={col} />
+                    <Icon name="chevronDown" size={12} className={cls('vx-sort-icon', SORTS[col.sort].dir === 'ascending' && 'is-up')} />
+                  </button>
+                ) : <HeaderLabel col={col} />}
               </th>
             ))}
           </tr>
@@ -1115,7 +1151,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   </label>
                 </td>
                 <td className="vx-td-model"><ModelCell row={row} providers={providers} now={now} /></td>
-                {columns.map(col => <td key={col.key} className={col.align ? `vx-al-${col.align}` : undefined}>{col.render(row)}</td>)}
+                {columns.map(col => <td key={col.key} className={cls(col.align && `vx-al-${col.align}`, hideCls(col))}>{col.render(row)}</td>)}
               </tr>
             );
           })}
@@ -1133,19 +1169,18 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const vp = isVideo ? videoPrice(display, lens.video) : null;
     const ip = family.modality === 'image' ? imagePrice(display, lens.image) : null;
     const selected = compare.ids.includes(display.id);
-    const href = `/models/${family.slug}${display.id !== family.primary ? `?v=${encodeURIComponent(display.id)}` : ''}`;
+    const href = modelHref(family, display.id);
     return (
       <article className={cls('vx-card', selected && 'is-selected')}>
-        <a className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} href={href} aria-label={family.name}>
+        <a className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} href={href} tabIndex={-1} aria-hidden="true">
           {media
             ? (media.type === 'video' ? <HoverVideo src={media.url} className="vx-card-el" /> : <img className="vx-card-el" src={media.url} alt="" loading="lazy" />)
-            : <MediaFallback provider={provider} modality={family.modality} />}
-          {isVideo && media ? <span className="vx-card-play"><Icon name="play" size={12} />Hover to play</span> : null}
+            : <MediaFallback />}
+          {isVideo && media ? <span className="vx-card-play"><Icon name="play" size={10} /></span> : null}
         </a>
         <div className="vx-card-body">
           <div className="vx-card-top">
-            <ProviderLogo provider={provider} size={22} />
-            <a className="vx-card-name" href={href}>{family.name}</a>
+            <a className="vx-card-name" href={href} title={family.name}>{family.name}</a>
             <label className={cls('vx-check vx-check-only', selected && 'is-checked')} title={selected ? 'Remove from compare' : 'Add to compare'}>
               <input type="checkbox" checked={selected} onChange={() => compare.toggle(display.id)} aria-label={`Compare ${family.name}`} />
               <span className="vx-check-box"><Icon name="check" size={11} /></span>
@@ -1158,14 +1193,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           <div className="vx-card-foot">
             {isVideo ? (
               vp.status === 'quoted'
-                ? <span className="vx-card-price"><strong>{usd(vp.perSecond)}</strong>/s<span className="vx-muted"> · {usd(vp.clip)} per {vp.seconds}s</span></span>
+                ? <span className="vx-card-price"><strong>{usd(vp.perSecond)}</strong> / sec<span className="vx-muted"> · {usd(vp.clip)} per {vp.seconds}s</span></span>
                 : <span className="vx-card-price vx-muted">Priced by source length</span>
             ) : (
-              <span className="vx-card-price"><strong>{usd(ip ? ip.value : row.price)}</strong>{headlineUnit(display)}</span>
+              <span className="vx-card-price"><strong>{usd(ip ? ip.value : row.price)}</strong> {headlineUnit(display)}</span>
             )}
             <PrivacyStack tiers={family.privacy} />
           </div>
-          {isVideo ? <div className="vx-chips vx-card-modes">{modeChips(family, catalog).map(v => <span key={v} className="vx-chip">{MODE_SHORT[v] || v}</span>)}</div> : null}
+          {isVideo ? <ModeList modes={modeChips(family, catalog)} active={display.variant} labels={MODE_SHORT} /> : null}
         </div>
       </article>
     );
@@ -1176,23 +1211,25 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const models = compare.ids.map(id => catalog && catalog.models[id]).filter(Boolean);
     const modalities = new Set(models.map(m => m.modality));
     return (
-      <div className="vx-tray" role="region" aria-label="Compare tray">
+      <div className="vx-tray" role="region" aria-label="Compare">
         <div className="vx-tray-inner">
-          <span className="vx-tray-label"><Icon name="columns" size={14} />Compare</span>
-          <div className="vx-tray-items">
-            {models.map(m => (
-              <span key={m.id} className="vx-tray-item">
-                {m.name}{m.variant && !['standard', 'generate', 't2v'].includes(m.variant) ? <span className="vx-muted"> · {VARIANT_LABELS[m.variant]}</span> : null}
-                <button type="button" onClick={() => compare.remove(m.id)} aria-label={`Remove ${m.name}`}><Icon name="x" size={12} /></button>
-              </span>
-            ))}
-            {models.length < COMPARE_MAX ? <span className="vx-tray-slot">{COMPARE_MAX - models.length} more</span> : null}
-          </div>
-          {modalities.size > 1 ? <span className="vx-tray-warn" title="Compare works best within one modality.">Mixed modalities</span> : null}
-          <button type="button" className="vx-link-btn" onClick={compare.clear}>Clear</button>
-          <a className={cls('vx-btn vx-btn-primary', models.length < 2 && 'is-disabled')} href={`/models/compare?ids=${models.map(m => encodeURIComponent(m.id)).join(',')}`}>
-            Compare {models.length}<Icon name="arrowRight" size={14} />
-          </a>
+          <span className="vx-tray-label">Compare <span className="vx-muted">{models.length} of {COMPARE_MAX}</span></span>
+          <ul className="vx-tray-items">
+            {models.map(m => {
+              const label = `${m.name}${m.variant && !['standard', 'generate', 't2v'].includes(m.variant) ? ` · ${VARIANT_LABELS[m.variant]}` : ''}`;
+              return (
+                <li key={m.id} className="vx-tray-item">
+                  <span className="vx-tray-name" title={label}>{label}</span>
+                  <button type="button" className="vx-icon-btn vx-icon-btn-sm" onClick={() => compare.remove(m.id)} aria-label={`Remove ${m.name}`}><Icon name="x" size={12} /></button>
+                </li>
+              );
+            })}
+          </ul>
+          {modalities.size > 1 ? <span className="vx-tray-warn" title="Only models of the first modality are compared.">Mixed modalities</span> : null}
+          <button type="button" className="vx-btn vx-btn-tertiary" onClick={compare.clear}>Clear</button>
+          {models.length < 2
+            ? <button type="button" className="vx-btn vx-btn-primary" disabled title="Add at least two models">Compare</button>
+            : <a className="vx-btn vx-btn-primary" href={`/models/compare?ids=${models.map(m => encodeURIComponent(m.id)).join(',')}`}>Compare</a>}
         </div>
       </div>
     );
@@ -1202,47 +1239,34 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (modality === 'video') {
       const preset = VIDEO_PRESETS.find(p => p.lens.h === lens.video.h && p.lens.s === lens.video.s && p.lens.a === lens.video.a);
       return (
-        <div className="vx-lens" aria-label="Price settings">
-          <span className="vx-lens-label"><Icon name="dollar" size={13} />Price a clip at</span>
-          <Segmented size="sm" ariaLabel="Preset" value={preset ? preset.key : 'custom'} onChange={key => {
+        <div className="vx-lens" role="group" aria-label="Price settings">
+          <span className="vx-lens-label">Price at</span>
+          <Segmented ariaLabel="Preset" value={preset ? preset.key : null} onChange={key => {
             const p = VIDEO_PRESETS.find(x => x.key === key);
             if (p) setLens(prev => ({ ...prev, video: { ...p.lens } }));
-          }} options={[...VIDEO_PRESETS.map(p => ({ value: p.key, label: p.label, title: p.title })), { value: 'custom', label: 'Custom', disabled: true }]} />
+          }} options={VIDEO_PRESETS.map(p => ({ value: p.key, label: p.label, title: p.title }))} />
           <select className="vx-select" value={lens.video.h} onChange={e => setLens(prev => ({ ...prev, video: { ...prev.video, h: Number(e.target.value) } }))} aria-label="Resolution">
             {[480, 720, 1080, 1440, 2160].map(h => <option key={h} value={h}>{heightLabel(h)}</option>)}
           </select>
           <select className="vx-select" value={lens.video.s} onChange={e => setLens(prev => ({ ...prev, video: { ...prev.video, s: Number(e.target.value) } }))} aria-label="Duration">
             {[4, 5, 6, 8, 10, 12, 15].map(s => <option key={s} value={s}>{s}s</option>)}
           </select>
-          <Segmented size="sm" ariaLabel="Audio" value={lens.video.a} onChange={a => setLens(prev => ({ ...prev, video: { ...prev.video, a } }))}
-            options={[{ value: 'off', label: 'Silent', icon: 'mute' }, { value: 'on', label: 'Audio', icon: 'volume' }]} />
+          <Segmented ariaLabel="Audio" value={lens.video.a} onChange={a => setLens(prev => ({ ...prev, video: { ...prev.video, a } }))}
+            options={[{ value: 'off', label: 'Silent' }, { value: 'on', label: 'Audio' }]} />
         </div>
       );
     }
     if (modality === 'image') {
       return (
-        <div className="vx-lens" aria-label="Price settings">
-          <span className="vx-lens-label"><Icon name="dollar" size={13} />Price per image at</span>
-          <Segmented size="sm" ariaLabel="Resolution" value={lens.image} onChange={image => setLens(prev => ({ ...prev, image }))}
+        <div className="vx-lens" role="group" aria-label="Price settings">
+          <span className="vx-lens-label">Price at</span>
+          <Segmented ariaLabel="Resolution" value={lens.image} onChange={image => setLens(prev => ({ ...prev, image }))}
             options={['1K', '2K', '4K'].map(r => ({ value: r, label: r }))} />
         </div>
       );
     }
     return null;
   };
-
-  const UpcomingNote = ({ preview, setPreview, compact }) => (
-    <div className={cls('vx-upcoming', compact && 'is-compact')}>
-      <Icon name="activity" size={14} />
-      <span>
-        <strong>Coming to this page:</strong> live uptime, latency, throughput and cache hit rate from Venice probes, plus
-        benchmark scores measured on the models as Venice serves them. <a href="/models/methodology">How we'll measure</a>
-      </span>
-      {preview !== undefined ? (
-        <button type="button" className="vx-link-btn" onClick={() => setPreview(!preview)}>{preview ? 'Hide sample layout' : 'Preview layout'}</button>
-      ) : null}
-    </div>
-  );
 
   const ExplorerSkeleton = () => (
     <div className="vx-skeleton" aria-hidden="true">
@@ -1349,59 +1373,44 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }, [scoped]);
 
     const modelCount = rows.reduce((n, row) => n + row.family.variants.length, 0);
-    const columns = catalog ? explorerColumns(modality, task, lens, catalog) : [];
-    const picks = QUICK_PICKS[modality] || [];
-    const applyPick = pick => setFilters(prev => {
-      const isOn = Object.entries(pick.apply).every(([k, v]) => (Array.isArray(v) ? v.every(x => prev[k].includes(x)) : prev[k] === v));
-      if (isOn) {
-        const next = { ...prev };
-        Object.entries(pick.apply).forEach(([k, v]) => { next[k] = Array.isArray(v) ? prev[k].filter(x => !v.includes(x)) : ''; });
-        return next;
-      }
-      const next = { ...prev };
-      Object.entries(pick.apply).forEach(([k, v]) => { next[k] = Array.isArray(v) ? [...new Set([...prev[k], ...v])] : v; });
-      return next;
-    });
-    const pickActive = pick => Object.entries(pick.apply).every(([k, v]) => (Array.isArray(v) ? v.every(x => filters[k].includes(x)) : filters[k] === v));
+    const columns = catalog ? explorerColumns(modality, task, lens, catalog, preview) : [];
     const counts = catalog ? catalog.counts : null;
     const canGrid = modality === 'image' || modality === 'video';
+    const filterCount = activeFilterCount(filters);
+    const scopeKey = modality === 'audio' ? task : modality;
 
     return (
       <div className="vx vx-explorer not-prose">
         <header className="vx-hero">
           <div className="vx-hero-text">
             <div className="vx-eyebrow">Model catalog</div>
-            <h1 className="vx-h1">Every model. One API.</h1>
-            <p className="vx-lede">
-              {counts ? `${counts.models} models in ${counts.families} families` : 'Hundreds of models'} across text, image, video, audio and embeddings.
-              Private, anonymized or end-to-end encrypted inference, one key, one bill.
-            </p>
+            <h1 className="vx-h1">{PAGE_TITLES[scopeKey] || PAGE_TITLES.all}</h1>
+            <p className="vx-lede">{SCOPE_BLURBS[scopeKey] || SCOPE_BLURBS.all}</p>
           </div>
           <div className="vx-hero-actions">
-            <a className="vx-btn vx-btn-ghost" href="/models/compare"><Icon name="columns" size={14} />Compare{compare.ids.length ? <span className="vx-count-pill">{compare.ids.length}</span> : null}</a>
-            <a className="vx-btn vx-btn-ghost" href="/api-reference/endpoint/models/list"><Icon name="terminal" size={14} />GET /models</a>
+            <a className="vx-btn" href="/models/compare">Compare{compare.ids.length ? <span className="vx-btn-count">{compare.ids.length}</span> : null}</a>
+            <a className="vx-btn vx-btn-tertiary" href="/api-reference/endpoint/models/list">Models API</a>
           </div>
         </header>
 
         <div className="vx-search">
-          <Icon name="search" size={18} />
+          <Icon name="search" size={16} />
           <input ref={searchRef} type="search" value={query} onChange={e => setQuery(e.target.value)}
             placeholder="Search by model, provider or model ID" aria-label="Search models" />
-          {query ? <button type="button" className="vx-search-clear" onClick={() => setQuery('')} aria-label="Clear search"><Icon name="x" size={14} /></button> : <kbd>/</kbd>}
+          {query ? <button type="button" className="vx-icon-btn" onClick={() => setQuery('')} aria-label="Clear search"><Icon name="x" size={14} /></button> : <kbd aria-hidden="true">/</kbd>}
         </div>
 
-        <nav className="vx-tabs" aria-label="Modality">
+        <div className="vx-tabs" role="group" aria-label="Modality">
           {MODALITIES.map(m => {
             const c = m.key === 'all' ? (counts && counts.families) : (counts && counts.byModality[m.key] && counts.byModality[m.key].families);
             return (
               <button key={m.key} type="button" className={cls('vx-tab', modality === m.key && 'is-active')} onClick={() => switchModality(m.key)} aria-pressed={modality === m.key}>
-                {m.icon ? <Icon name={m.icon} size={14} /> : <Icon name="grid" size={14} />}
-                <span>{m.short}</span>
+                {m.short}
                 {c != null ? <span className="vx-tab-count">{c}</span> : null}
               </button>
             );
           })}
-        </nav>
+        </div>
 
         {modality === 'audio' ? (
           <div className="vx-subtabs">
@@ -1409,50 +1418,41 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           </div>
         ) : null}
 
-        {picks.length ? (
-          <div className="vx-picks" aria-label="Quick picks">
-            {picks.map(pick => (
-              <button key={pick.key} type="button" className={cls('vx-pick', pickActive(pick) && 'is-active')} onClick={() => applyPick(pick)}>
-                <Icon name={pick.icon === 'star' ? 'sparkles' : pick.icon} size={13} />{pick.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
         {!catalog ? (
           <>
-            {error ? <div className="vx-error">The interactive catalog could not load. The full model list is below.</div> : <ExplorerSkeleton />}
+            {error
+              ? <div className="vx-error" role="alert">The interactive catalog could not load. The full model list is below.</div>
+              : <><span className="vx-sr-only" role="status">Loading models</span><ExplorerSkeleton /></>}
             <div className={error ? 'vx-fallback' : 'vx-fallback vx-sr-only'}>{children}</div>
           </>
         ) : (
           <div className={cls('vx-layout', railOpen && 'rail-open')}>
             <FilterRail modality={modality} task={task} filters={filters} setFilters={setFilters} providerCounts={providerCounts} providers={providers} onClear={() => setFilters(EMPTY_FILTERS)} />
-            <section className="vx-results" aria-live="polite">
+            <section className="vx-results" aria-label="Models">
               <div className="vx-toolbar">
-                <button type="button" className="vx-btn vx-btn-ghost vx-rail-toggle" onClick={() => setRailOpen(!railOpen)}>
-                  <Icon name="sliders" size={14} />Filters{activeFilterCount(filters) ? <span className="vx-count-pill">{activeFilterCount(filters)}</span> : null}
+                <button type="button" className={cls('vx-btn vx-rail-toggle', filterCount && 'vx-btn-active')} onClick={() => setRailOpen(!railOpen)} aria-expanded={railOpen}>
+                  Filters{filterCount ? <span className="vx-btn-count">{filterCount}</span> : null}
                 </button>
-                <div className="vx-result-count">
+                <div className="vx-result-count" aria-live="polite">
                   <strong>{plural(rows.length, 'family')}</strong>
-                  <span className="vx-muted"> · {plural(modelCount, 'model ID')}</span>
+                  <span className="vx-muted"> · {plural(modelCount, 'model ID')}{UNIT_NOTES[scopeKey] && !(canGrid && view === 'grid') ? ` · ${UNIT_NOTES[scopeKey]}` : ''}</span>
                 </div>
                 <LensBar modality={modality} lens={lens} setLens={setLens} />
                 <div className="vx-toolbar-right">
+                  {preview ? <span className="vx-preview-flag"><SampleMark /><button type="button" className="vx-link-btn" onClick={() => setPreview(false)}>Hide</button></span> : null}
                   <select className="vx-select" value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
                     {['newest', 'price', 'name', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{`Sort: ${SORTS[key].label}`}</option>)}
                   </select>
                   {canGrid ? (
-                    <Segmented size="sm" ariaLabel="View" value={view} onChange={setView} options={[{ value: 'grid', label: '', icon: 'grid', title: 'Gallery' }, { value: 'table', label: '', icon: 'rows', title: 'Table' }]} />
+                    <Segmented ariaLabel="View" value={view} onChange={setView} options={[{ value: 'grid', label: '', icon: 'grid', title: 'Gallery' }, { value: 'table', label: '', icon: 'rows', title: 'Table' }]} />
                   ) : null}
                 </div>
               </div>
 
-              <UpcomingNote preview={preview} setPreview={setPreview} compact />
-              {preview ? <ExplorerPreviewStrip rows={rows} modality={modality} /> : null}
-
               {rows.length === 0 ? (
-                <Empty title="No models match these filters">
-                  <button type="button" className="vx-link-btn" onClick={() => { setFilters(EMPTY_FILTERS); setQuery(''); }}>Clear filters and search</button>
+                <Empty title="No models match">
+                  {query ? <>Nothing matches “{query}”{filterCount ? ' with the current filters' : ''}. </> : 'Try removing a filter. '}
+                  <button type="button" className="vx-btn vx-btn-sm" onClick={() => { setFilters(EMPTY_FILTERS); setQuery(''); }}>Clear {query && filterCount ? 'search and filters' : query ? 'search' : 'filters'}</button>
                 </Empty>
               ) : canGrid && view === 'grid' ? (
                 <div className={cls('vx-cards', modality === 'video' && 'is-video')}>
@@ -1463,51 +1463,22 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               )}
 
               <footer className="vx-explorer-foot">
-                <span>
+                <p>
                   Prices in USD from <code>GET /models</code>{modality === 'video' || modality === 'all' ? <> and build-time <code>POST /video/quote</code> matrices</> : null}.
-                  {catalog.generatedAt ? ` Snapshot ${fmtDate(Math.floor(new Date(catalog.generatedAt).getTime() / 1000))}.` : ''}
-                </span>
-                <a href="/models/methodology">Methodology</a>
-                <a href="/overview/deprecations">Deprecations</a>
-                <a href="/overview/beta-models">Beta models</a>
+                  {catalog.generatedAt ? ` Updated ${fmtDate(Math.floor(new Date(catalog.generatedAt).getTime() / 1000))}.` : ''}
+                  {' '}Uptime, latency and benchmark scores are planned.
+                  {' '}<button type="button" className="vx-link-btn" onClick={() => setPreview(!preview)}>{preview ? 'Hide sample metrics' : 'Preview with sample data'}</button>
+                </p>
+                <nav aria-label="Related pages">
+                  <a href="/models/methodology">Methodology</a>
+                  <a href="/overview/deprecations">Deprecations</a>
+                  <a href="/overview/beta-models">Beta models</a>
+                </nav>
               </footer>
             </section>
           </div>
         )}
         <CompareTray compare={compare} catalog={catalog} />
-      </div>
-    );
-  };
-
-  // Preview-only: shows how benchmark and telemetry data will surface in the explorer.
-  const ExplorerPreviewStrip = ({ rows, modality }) => {
-    const top = rows.slice(0, 6).map(row => {
-      const set = benchmarkSetFor(row.display);
-      const b = sampleBenchmarks(row.display);
-      const t = sampleTelemetry(row.display);
-      const main = set ? (set.composite || set.items[0]) : null;
-      return { row, main, score: main ? b[main.key] : null, t };
-    });
-    return (
-      <div className="vx-preview-strip">
-        <div className="vx-preview-head"><SampleMark /><span>How scores and live metrics will appear in the catalog</span></div>
-        <div className="vx-preview-grid">
-          {top.map(({ row, main, score, t }) => (
-            <div key={row.family.slug} className="vx-preview-card">
-              <div className="vx-preview-name">{row.family.name}</div>
-              {main ? (
-                <div className="vx-preview-score">
-                  <span className="vx-preview-num">{score}</span>
-                  <span className="vx-muted">{main.label}</span>
-                </div>
-              ) : null}
-              <div className="vx-preview-metrics">
-                <span title="Uptime, 30 days"><Icon name="activity" size={12} />{t.uptime}%</span>
-                {modality === 'text' || modality === 'all' ? <span title="Throughput p50"><Icon name="bolt" size={12} />{t.tps} tok/s</span> : <span title="Generation time p50"><Icon name="clock" size={12} />{t.gen}s</span>}
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
     );
   };
@@ -1644,7 +1615,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               <button key={key} type="button" role="tab" aria-selected={lang === key} className={cls('vx-code-tab', lang === key && 'is-active')} onClick={() => setLang(key)}>{label}</button>
             ))}
           </div>
-          <CopyButton text={samples[lang]} label="Copy" />
+          <CopyButton text={samples[lang]} label="Copy" small />
         </div>
         <pre className="vx-code-body"><code>{samples[lang]}</code></pre>
       </div>
@@ -1653,9 +1624,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   /* ------------------------------------------------------------ model page */
 
-  const pageSections = model => {
+  const pageSections = (model, { variants = 1, related = false } = {}) => {
     const list = [];
-    if (model.modality === 'image' || model.modality === 'video') list.push(['examples', 'Examples']);
+    if (model.modality === 'image' || model.modality === 'video') list.push(['examples', 'Reference outputs']);
     if (model.modality === 'text' && model.task === 'chat') list.push(['capabilities', 'Capabilities']);
     list.push(['pricing', 'Pricing']);
     if (model.modality === 'image' || model.modality === 'video') list.push(['parameters', 'Parameters']);
@@ -1663,18 +1634,32 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     list.push(['api', 'API']);
     list.push(['performance', 'Performance']);
     list.push(['benchmarks', 'Benchmarks']);
-    list.push(['variants', 'Variants']);
-    list.push(['related', 'Related']);
+    if (variants > 1) list.push(['variants', 'Variants']);
+    if (related) list.push(['related', 'Related models']);
     return list;
   };
 
-  const Section = ({ id, title, eyebrow, actions, children }) => (
+  const useScrollSpy = ids => {
+    const [active, setActive] = useState(ids[0]);
+    const key = ids.join('|');
+    useEffect(() => {
+      if (typeof IntersectionObserver === 'undefined') return undefined;
+      const seen = new Map();
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => seen.set(entry.target.id, entry.isIntersecting));
+        const first = ids.find(id => seen.get(id));
+        if (first) setActive(first);
+      }, { rootMargin: '-96px 0px -55% 0px' });
+      ids.forEach(id => { const el = document.getElementById(id); if (el) observer.observe(el); });
+      return () => observer.disconnect();
+    }, [key]);
+    return active;
+  };
+
+  const Section = ({ id, title, actions, children }) => (
     <section id={id} className="vx-section" aria-labelledby={`${id}-title`}>
       <div className="vx-section-head">
-        <div>
-          {eyebrow ? <div className="vx-eyebrow">{eyebrow}</div> : null}
-          <h2 id={`${id}-title`} className="vx-h2">{title}</h2>
-        </div>
+        <h2 id={`${id}-title`} className="vx-h2">{title}</h2>
         {actions ? <div className="vx-section-actions">{actions}</div> : null}
       </div>
       {children}
@@ -1685,15 +1670,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const p = model.pricing || {};
     if (model.modality === 'text' && model.task === 'chat') {
       const text = model.text || {};
-      const discount = p.cacheRead != null && p.input ? Math.round((1 - p.cacheRead / p.input) * 100) : null;
       return (
         <div className="vx-stats">
           <Stat label="Context" value={tokens(text.context)} sub={text.context ? `≈ ${pagesFor(text.context)} pages` : null} />
           <Stat label="Max output" value={tokens(text.maxOutput)} sub={text.maxOutput ? 'tokens per response' : 'Not published'} />
           <Stat label="Input" value={usd(p.input)} sub="per 1M tokens" />
           <Stat label="Output" value={usd(p.output)} sub="per 1M tokens" />
-          <Stat label="Cached input" value={usd(p.cacheRead)} sub={discount != null ? `${discount}% off input` : 'No prompt caching'} tone={discount != null ? 'good' : null} />
-          <Stat label="Blended" value={usd(p.blended)} sub="3:1 input to output" hint="(3 × input + output) / 4" />
         </div>
       );
     }
@@ -1717,7 +1699,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       const video = model.video || {};
       return (
         <div className="vx-stats">
-          <Stat label="From" value={p.status === 'quoted' ? `${usd(p.fromPerSecond)}/s` : 'By source'} sub={p.status === 'quoted' ? `up to ${usd(p.toPerSecond)}/s` : 'Priced per second of input'} />
+          <Stat label="From" value={p.status === 'quoted' ? `${usd(p.fromPerSecond)} / sec` : 'By source'} sub={p.status === 'quoted' ? `up to ${usd(p.toPerSecond)} / sec` : 'Priced per second of input'} />
           <Stat label="Draft clip" value={draft.status === 'quoted' ? usd(draft.clip) : '—'} sub={draft.status === 'quoted' ? `${draft.seconds}s · ${draft.resolution || 'default'}${draft.audio ? ' · audio' : ''}` : null} />
           <Stat label="Production clip" value={prod.status === 'quoted' ? usd(prod.clip) : '—'} sub={prod.status === 'quoted' ? `${prod.seconds}s · ${prod.resolution || 'default'}${prod.audio ? ' · audio' : ''}` : null} />
           <Stat label="Max resolution" value={heightLabel(maxVideoHeight(model))} sub={`${(video.resolutions || []).length || 1} options`} />
@@ -1773,96 +1755,109 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   };
 
   const LiveStrip = ({ model, preview }) => {
-    const defs = TELEMETRY[model.modality] || TELEMETRY.audio;
     const t = model.telemetry || (preview ? sampleTelemetry(model) : null);
-    const pick = defs.slice(0, 4);
+    if (!t) return null;
+    const defs = telemetryFor(model).slice(0, 4);
     return (
-      <div className={cls('vx-live', !t && 'is-pending')}>
-        <span className="vx-live-label"><span className="vx-live-dot" />Live performance{!model.telemetry && preview ? <SampleMark /> : null}</span>
-        {pick.map(def => (
+      <div className="vx-live">
+        <span className="vx-live-label"><span className="vx-live-dot" aria-hidden="true" />Live, last 30 days</span>
+        {defs.map(def => (
           <span key={def.key} className="vx-live-item" title={def.hint}>
-            <span className="vx-muted">{def.label}</span>
-            <strong>{t && t[def.key] != null ? `${t[def.key]}${def.unit === '%' ? '%' : ` ${def.unit}`}` : '—'}</strong>
+            <span className="vx-muted">{def.label}</span> <strong>{withUnit(t[def.key], def.unit)}</strong>
           </span>
         ))}
-        {!t ? <a className="vx-live-soon" href="#performance">Coming soon</a> : null}
+        {!model.telemetry ? <SampleMark /> : null}
       </div>
     );
   };
+
+  const Supported = ({ on, children, title }) => (
+    <li className={on ? 'is-on' : 'is-off'} title={title}>
+      <Icon name={on ? 'check' : 'minus'} size={14} className={on ? 'vx-yes' : 'vx-no'} />
+      <span>{children}</span>
+      <span className="vx-sr-only">{on ? '(supported)' : '(not supported)'}</span>
+    </li>
+  );
 
   const CapabilityMatrix = ({ model }) => {
     const text = model.text || {};
     const caps = text.caps || {};
     const io = [
       { label: 'Text', input: true, output: true },
-      { label: 'Image', input: caps.vision, output: false, note: caps.vision && caps.maxImages ? `up to ${caps.maxImages}` : null },
-      { label: 'Video', input: caps.videoInput, output: false, note: caps.videoInput && caps.maxVideos ? `up to ${caps.maxVideos}` : null },
+      { label: 'Image', input: caps.vision, output: false, note: caps.vision && caps.maxImages ? `up to ${caps.maxImages} per request` : null },
+      { label: 'Video', input: caps.videoInput, output: false, note: caps.videoInput && caps.maxVideos ? `up to ${caps.maxVideos} per request` : null },
       { label: 'Audio', input: caps.audioInput, output: false }
     ];
+    const mark = on => (on
+      ? <><Icon name="check" size={14} className="vx-yes" /><span className="vx-sr-only">Yes</span></>
+      : <><Icon name="minus" size={14} className="vx-no" /><span className="vx-sr-only">No</span></>);
     return (
       <div className="vx-capgrid">
-        <div className="vx-io">
-          <div className="vx-io-head"><span>Modality</span><span>Input</span><span>Output</span></div>
-          {io.map(row => (
-            <div key={row.label} className="vx-io-row">
-              <span>{row.label}{row.note ? <span className="vx-muted"> · {row.note}</span> : null}</span>
-              <span>{row.input ? <Icon name="check" size={14} className="vx-yes" /> : <Icon name="minus" size={14} className="vx-no" />}</span>
-              <span>{row.output ? <Icon name="check" size={14} className="vx-yes" /> : <Icon name="minus" size={14} className="vx-no" />}</span>
-            </div>
-          ))}
+        <div>
+          <h3 className="vx-h3">Input and output</h3>
+          <table className="vx-dtable vx-io">
+            <thead><tr><th>Modality</th><th className="vx-al-center">Input</th><th className="vx-al-center">Output</th></tr></thead>
+            <tbody>
+              {io.map(row => (
+                <tr key={row.label}>
+                  <td>{row.label}{row.note ? <span className="vx-muted"> · {row.note}</span> : null}</td>
+                  <td className="vx-al-center">{mark(row.input)}</td>
+                  <td className="vx-al-center">{mark(row.output)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <ul className="vx-features">
-          {TEXT_CAPS.filter(c => c.key !== 'effort').map(cap => {
-            const on = hasCap(model, cap.key);
-            return (
-              <li key={cap.key} className={on ? 'is-on' : 'is-off'} title={cap.desc}>
-                <Icon name={on ? 'check' : 'minus'} size={14} className={on ? 'vx-yes' : 'vx-no'} />
-                <Icon name={cap.icon} size={14} className="vx-feature-icon" />
-                <span>{cap.label}</span>
-              </li>
-            );
-          })}
-          <li className={caps.e2ee ? 'is-on' : 'is-off'}>
-            <Icon name={caps.e2ee ? 'check' : 'minus'} size={14} className={caps.e2ee ? 'vx-yes' : 'vx-no'} />
-            <Icon name="lock" size={14} className="vx-feature-icon" /><span>End-to-end encryption</span>
-          </li>
-          <li className={caps.tee ? 'is-on' : 'is-off'}>
-            <Icon name={caps.tee ? 'check' : 'minus'} size={14} className={caps.tee ? 'vx-yes' : 'vx-no'} />
-            <Icon name="shield" size={14} className="vx-feature-icon" /><span>TEE attestation</span>
-          </li>
-        </ul>
+        <div>
+          <h3 className="vx-h3">Features</h3>
+          <ul className="vx-features">
+            {TEXT_CAPS.filter(c => !['effort', 'vision', 'videoInput', 'audioInput'].includes(c.key)).map(cap => (
+              <Supported key={cap.key} on={hasCap(model, cap.key)} title={cap.desc}>{cap.label}</Supported>
+            ))}
+          </ul>
+        </div>
       </div>
     );
   };
 
-  const ReasoningPanel = ({ model }) => {
-    const r = model.text && model.text.reasoning;
-    if (!r) return <p className="vx-muted">This model answers directly without a separate reasoning phase.</p>;
-    const levels = r.effort || [];
+  // Reasoning, serving precision and sampling defaults as one definition list.
+  const TechDetails = ({ model }) => {
+    const text = model.text || {};
+    const r = text.reasoning;
+    const levels = (r && r.effort) || [];
+    const q = text.quantization;
+    const sampling = text.sampling && Object.keys(text.sampling).length ? text.sampling : null;
     return (
-      <div className="vx-reasoning">
-        <div className="vx-reasoning-head">
-          <Icon name="brain" size={16} />
-          <div>
-            <strong>Reasoning model</strong>
-            <span className="vx-muted"> · {levels.length ? `${levels.length} effort levels` : 'effort is not adjustable'}</span>
-          </div>
-        </div>
+      <dl className="vx-dl">
+        <dt>Reasoning</dt>
+        <dd>
+          {!r ? 'No separate reasoning phase; the model answers directly.' : levels.length
+            ? <>Adjustable with <code>reasoning_effort</code> (or <code>reasoning.effort</code>). Higher effort spends more output tokens and time. <a href="/guides/features/reasoning-models#reasoning-effort">Reasoning guide</a></>
+            : <>Always on; effort is not adjustable, so leave <code>reasoning_effort</code> unset. To skip thinking, send <code>{'"reasoning": { "enabled": false }'}</code>. <a href="/guides/features/reasoning-models">Reasoning guide</a></>}
+        </dd>
         {levels.length ? (
           <>
-            <div className="vx-effort">
-              {levels.map(level => (
-                <span key={level} className={cls('vx-effort-step', level === r.defaultEffort && 'is-default')}>
-                  {level}{level === r.defaultEffort ? <em>default</em> : null}
-                </span>
-              ))}
-            </div>
-            <p className="vx-footnote">Set <code>reasoning_effort</code> (or <code>reasoning.effort</code>). Higher effort spends more output tokens and time. <a href="/guides/features/reasoning-models#reasoning-effort">Reasoning guide</a></p>
+            <dt>Effort levels</dt>
+            <dd className="vx-effort">
+              {levels.map(level => <code key={level} className={cls(level === r.defaultEffort && 'is-default')}>{level}</code>)}
+              {r.defaultEffort ? <span className="vx-muted">Default: {r.defaultEffort}</span> : null}
+            </dd>
           </>
-        ) : (
-          <p className="vx-footnote">This model does not expose effort levels, so leave <code>reasoning_effort</code> unset. To skip thinking, send <code>{'"reasoning": { "enabled": false }'}</code>. <a href="/guides/features/reasoning-models">Reasoning guide</a></p>
-        )}
-      </div>
+        ) : null}
+        <dt>Served precision</dt>
+        <dd>
+          {q ? <><strong>{QUANT_LABELS[q] || q}</strong> <span className="vx-muted">{QUANT_NOTES[q]}</span></>
+            : model.privacy === 'anonymized'
+              ? <span className="vx-muted">Set by the upstream provider, which does not disclose it.</span>
+              : <span className="vx-muted">Not disclosed. Venice serves this model on its own infrastructure; <code>GET /models</code> does not report precision yet.</span>}
+        </dd>
+        {sampling ? (
+          <>
+            <dt>Default sampling</dt>
+            <dd>{Object.entries(sampling).map(([k, v]) => `${k} ${v}`).join(' · ')} <span className="vx-muted">when a request omits them</span></dd>
+          </>
+        ) : null}
+      </dl>
     );
   };
 
@@ -1878,9 +1873,11 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const perReq = ((inTok - cached) * (rate.input || 0) + cached * (rate.cacheRead != null ? rate.cacheRead : rate.input || 0) + outTok * (rate.output || 0)) / 1e6;
     const field = (label, value, set, step, max, suffix) => (
       <label className="vx-field">
-        <span>{label}</span>
-        <input type="number" min="0" step={step} max={max} value={value} onChange={e => set(Math.max(0, Math.min(max || Infinity, Number(e.target.value) || 0)))} />
-        {suffix ? <em>{suffix}</em> : null}
+        <span className="vx-field-label">{label}</span>
+        <span className="vx-field-control">
+          <input type="number" inputMode="numeric" min="0" step={step} max={max} value={value} onChange={e => set(Math.max(0, Math.min(max || Infinity, Number(e.target.value) || 0)))} />
+          {suffix ? <span className="vx-field-suffix" aria-hidden="true">{suffix}</span> : null}
+        </span>
       </label>
     );
     return (
@@ -1891,38 +1888,43 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           {p.cacheRead != null ? field('Cached share', cachePct, setCachePct, 5, 100, '%') : null}
           {field('Requests per day', daily, setDaily, 100, 100000000)}
         </div>
-        <div className="vx-estimator-out">
-          <Stat label="Per request" value={usd(perReq)} sub={ext ? `long-context rate (>${tokens(ext.threshold)})` : null} />
-          <Stat label="Per 1K requests" value={usd(perReq * 1000)} />
-          <Stat label="Per month" value={usd(perReq * daily * 30)} sub={`${daily.toLocaleString('en-US')} requests/day`} tone="accent" />
-        </div>
+        <p className="vx-estimator-out" aria-live="polite">
+          <strong className="vx-estimate">{usd(perReq * daily * 30)}</strong> per month
+          <span className="vx-muted"> · {usd(perReq)} per request · {usd(perReq * 1000)} per 1K requests{ext ? ` · long-context rate above ${tokens(ext.threshold)}` : ''}</span>
+        </p>
       </div>
     );
   };
 
   const TextPricing = ({ model }) => {
     const p = model.pricing || {};
+    const discount = p.cacheRead != null && p.input ? Math.round((1 - p.cacheRead / p.input) * 100) : null;
     const rows = [
       ['Input', p.input, p.extended && p.extended.input],
-      ['Cached input (read)', p.cacheRead, p.extended && p.extended.cacheRead],
+      ['Cached input (read)', p.cacheRead, p.extended && p.extended.cacheRead, discount != null ? `${discount}% off input` : null],
       ['Cache write', p.cacheWrite, p.extended && p.extended.cacheWrite],
-      ['Output', p.output, p.extended && p.extended.output]
+      ['Output', p.output, p.extended && p.extended.output],
+      ['Blended', p.blended, null, '3:1 input to output, the price the catalog sorts by']
     ].filter(row => row[1] != null || row[2] != null);
     return (
       <>
-        <table className="vx-ptable">
+        <table className="vx-dtable">
           <thead>
             <tr><th>Per 1M tokens</th><th className="vx-al-right">{p.extended ? `Prompt ≤ ${tokens(p.extended.threshold)}` : 'Price'}</th>{p.extended ? <th className="vx-al-right">Prompt &gt; {tokens(p.extended.threshold)}</th> : null}</tr>
           </thead>
           <tbody>
-            {rows.map(([label, base, ext]) => (
-              <tr key={label}><td>{label}</td><td className="vx-al-right vx-num">{usd(base)}</td>{p.extended ? <td className="vx-al-right vx-num">{usd(ext)}</td> : null}</tr>
+            {rows.map(([label, base, ext, note]) => (
+              <tr key={label}>
+                <td>{label}{note ? <span className="vx-muted"> · {note}</span> : null}</td>
+                <td className="vx-al-right vx-num">{usd(base)}</td>
+                {p.extended ? <td className="vx-al-right vx-num">{ext != null ? usd(ext) : '—'}</td> : null}
+              </tr>
             ))}
           </tbody>
         </table>
         <h3 className="vx-h3">Estimate your cost</h3>
         <CostEstimator model={model} />
-        <p className="vx-footnote">Prompt caching is automatic on supported models; see <a href="/guides/features/prompt-caching">Prompt caching</a>. Prices are billed in USD or DIEM at parity.</p>
+        <p className="vx-footnote">Prompt caching is automatic on supported models; see <a href="/guides/features/prompt-caching">Prompt caching</a>. Billed in USD or DIEM at parity. Months are 30 days.</p>
       </>
     );
   };
@@ -1941,14 +1943,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       setA(video.audio === 'native' ? 'on' : 'off');
     }, [model.id]);
     if (p.status === 'input-dependent') {
-      return (
-        <div className="vx-note">
-          <Icon name="info" size={16} />
-          <span>This mode bills by the length of the source video you upload. Call <code>POST /video/quote</code> with your <code>video_url</code> for an exact price before queueing.</span>
-        </div>
-      );
+      return <p className="vx-text">This mode bills by the length of the source video you upload. Call <code>POST /video/quote</code> with your <code>video_url</code> for an exact price before queueing.</p>;
     }
-    if (p.status !== 'quoted') return <div className="vx-note"><Icon name="info" size={16} /><span>Use <code>POST /video/quote</code> for this model's price.</span></div>;
+    if (p.status !== 'quoted') return <p className="vx-text">Use <code>POST /video/quote</code> for this model's price.</p>;
     const vp = videoPrice(model, { h, s, a });
     const audioKey = video.audio === 'optional' ? a : (video.audio === 'native' ? 'on' : 'off');
     const resKeys = res.length ? res : [{ value: '-', label: 'Default', height: 0 }];
@@ -1956,45 +1953,51 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       <div className="vx-calc">
         <div className="vx-calc-controls">
           {res.length > 1 ? (
-            <div className="vx-calc-row"><span className="vx-calc-label">Resolution</span>
-              <Segmented size="sm" ariaLabel="Resolution" value={h} onChange={setH} options={res.map(r => ({ value: r.height, label: r.label }))} />
+            <div className="vx-control"><span className="vx-control-label">Resolution</span>
+              <Segmented ariaLabel="Resolution" value={h} onChange={setH} options={res.map(r => ({ value: r.height, label: r.label }))} />
             </div>
           ) : null}
           {durs.length > 1 ? (
-            <div className="vx-calc-row"><span className="vx-calc-label">Duration</span>
-              <Segmented size="sm" ariaLabel="Duration" value={s} onChange={setS} options={durs.map(d => ({ value: d.seconds, label: `${d.seconds}s` }))} />
+            <div className="vx-control"><span className="vx-control-label">Duration</span>
+              <Segmented ariaLabel="Duration" value={s} onChange={setS} options={durs.map(d => ({ value: d.seconds, label: `${d.seconds}s` }))} />
             </div>
           ) : null}
           {video.audio === 'optional' ? (
-            <div className="vx-calc-row"><span className="vx-calc-label">Audio</span>
-              <Segmented size="sm" ariaLabel="Audio" value={a} onChange={setA} options={[{ value: 'off', label: 'Silent', icon: 'mute' }, { value: 'on', label: 'With audio', icon: 'volume' }]} />
+            <div className="vx-control"><span className="vx-control-label">Audio</span>
+              <Segmented ariaLabel="Audio" value={a} onChange={setA} options={[{ value: 'off', label: 'Silent' }, { value: 'on', label: 'With audio' }]} />
             </div>
           ) : null}
         </div>
-        <div className="vx-calc-result">
-          <div className="vx-calc-price">{usd(vp.clip)}</div>
-          <div className="vx-muted">{vp.seconds}s{vp.resolution ? ` · ${vp.resolution}` : ''}{vp.audio ? ' · with audio' : ' · silent'} · {usd(vp.perSecond)}/s · {usd(vp.perSecond != null ? vp.perSecond * 60 : null)}/min</div>
-        </div>
-        <div className="vx-matrix-wrap">
-          <table className="vx-matrix">
+        <p className="vx-calc-result" aria-live="polite">
+          <strong className="vx-estimate">{usd(vp.clip)}</strong> per clip
+          <span className="vx-muted"> · {vp.seconds}s{vp.resolution ? ` · ${vp.resolution}` : ''}{vp.audio ? ' · with audio' : ' · silent'} · {usd(vp.perSecond)} / sec · {usd(vp.perSecond != null ? vp.perSecond * 60 : null)} / min</span>
+        </p>
+        <div className="vx-table-wrap">
+          <table className="vx-dtable vx-matrix">
+            <caption className="vx-sr-only">Clip price by duration and resolution{video.audio === 'optional' ? (a === 'on' ? ', with audio' : ', silent') : ''}</caption>
             <thead>
               <tr><th>Duration</th>{resKeys.map(r => <th key={r.value} className="vx-al-right">{r.label}</th>)}</tr>
             </thead>
             <tbody>
               {durs.map(d => (
-                <tr key={d.value} className={d.seconds === s ? 'is-row' : undefined}>
-                  <td>{d.seconds}s</td>
+                <tr key={d.value}>
+                  <th scope="row">{d.seconds}s</th>
                   {resKeys.map(r => {
                     const q = p.quotes && p.quotes[`${r.value}|${d.value}|${audioKey}`];
                     const active = d.seconds === s && (r.height === h || !res.length);
-                    return <td key={r.value} className={cls('vx-al-right vx-num', active && 'is-active')}>{usd(q)}</td>;
+                    return (
+                      <td key={r.value} className="vx-al-right">
+                        <button type="button" className={cls('vx-cell-btn', active && 'is-active')} aria-pressed={active} disabled={q == null}
+                          onClick={() => { setS(d.seconds); if (r.height) setH(r.height); }}>{usd(q)}</button>
+                      </td>
+                    );
                   })}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p className="vx-footnote">Quoted from <code>POST /video/quote</code>{p.quotedAt ? ` on ${fmtDate(Math.floor(new Date(p.quotedAt).getTime() / 1000))}` : ''}{p.aspectRatio ? ` at ${p.aspectRatio}` : ''}. Aspect ratio does not change the price. Always quote before queueing for exact billing.</p>
+        <p className="vx-footnote">Quoted from <code>POST /video/quote</code>{p.quotedAt ? ` on ${fmtDate(Math.floor(new Date(p.quotedAt).getTime() / 1000))}` : ''}{p.aspectRatio ? ` at ${p.aspectRatio}` : ''}. Aspect ratio does not change the price. Quote before queueing for exact billing.</p>
       </div>
     );
   };
@@ -2003,7 +2006,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const p = model.pricing || {};
     return (
       <>
-        <table className="vx-ptable">
+        <table className="vx-dtable">
           <thead><tr><th>Item</th><th className="vx-al-right">Price</th></tr></thead>
           <tbody>
             {p.byResolution ? Object.entries(p.byResolution).map(([res, value]) => (
@@ -2023,7 +2026,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (model.task === 'tts') {
       return (
         <>
-          <table className="vx-ptable">
+          <table className="vx-dtable">
             <thead><tr><th>Unit</th><th className="vx-al-right">Price</th></tr></thead>
             <tbody>
               <tr><td>1M characters (billed unit)</td><td className="vx-al-right vx-num">{usd(p.per1MChars)}</td></tr>
@@ -2038,7 +2041,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }
     if (model.task === 'stt') {
       return (
-        <table className="vx-ptable">
+        <table className="vx-dtable">
           <thead><tr><th>Audio length</th><th className="vx-al-right">Price</th></tr></thead>
           <tbody>
             <tr><td>1 second (billed unit)</td><td className="vx-al-right vx-num">{usd(p.perSecond)}</td></tr>
@@ -2050,53 +2053,58 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       );
     }
     if (p.kind === 'tiered' && p.tiers) {
-      const max = Math.max(...p.tiers.map(t => t.usd || 0));
       return (
-        <div className="vx-tiers">
-          {p.tiers.map(t => (
-            <div key={t.upTo} className="vx-tier">
-              <span className="vx-tier-label">{t.from ? `${t.from}–` : 'up to '}{t.upTo}s</span>
-              <span className="vx-tier-bar"><span style={{ width: `${max ? (t.usd / max) * 100 : 0}%` }} /></span>
-              <span className="vx-num">{usd(t.usd)}</span>
-            </div>
-          ))}
+        <>
+          <table className="vx-dtable">
+            <thead><tr><th>Track length</th><th className="vx-al-right">Price</th></tr></thead>
+            <tbody>
+              {p.tiers.map(t => (
+                <tr key={t.upTo}><td>{t.from ? `${t.from}–${t.upTo}s` : `Up to ${t.upTo}s`}</td><td className="vx-al-right vx-num">{usd(t.usd)}</td></tr>
+              ))}
+            </tbody>
+          </table>
           <p className="vx-footnote">Billed by duration bucket. Use <code>POST /audio/quote</code> for an exact price.</p>
-        </div>
+        </>
       );
     }
-    return <p className="vx-footnote">{p.kind === 'per-second' ? `${usd(p.perSecond)} per second of generated audio.` : p.kind === 'per-track' ? `${usd(p.perTrack)} per generated track.` : 'Use POST /audio/quote for this model.'}</p>;
+    return <p className="vx-text">{p.kind === 'per-second' ? `${usd(p.perSecond)} per second of generated audio.` : p.kind === 'per-track' ? `${usd(p.perTrack)} per generated track.` : 'Use POST /audio/quote for this model.'}</p>;
   };
+
+  const ValueList = ({ values, active }) => (
+    <span className="vx-values">
+      {values.map(v => <span key={v} className={v === active ? 'is-default' : undefined}>{v}{v === active ? ' (default)' : ''}</span>)}
+    </span>
+  );
 
   const Parameters = ({ model }) => {
     if (model.modality === 'image') {
       const image = model.image || {};
       return (
-        <dl className="vx-params">
-          {image.resolutions && image.resolutions.length ? <><dt>Resolutions</dt><dd className="vx-chips">{image.resolutions.map(r => <span key={r} className={cls('vx-chip', r === image.defaultResolution && 'is-active')}>{r}</span>)}</dd></> : null}
+        <dl className="vx-dl">
+          {image.resolutions && image.resolutions.length ? <><dt>Resolutions</dt><dd><ValueList values={image.resolutions} active={image.defaultResolution} /></dd></> : null}
           {image.aspectRatios && image.aspectRatios.length ? <><dt>Aspect ratios</dt><dd className="vx-ratios">{image.aspectRatios.map(ar => <AspectShape key={ar} ratio={ar} active={ar === image.defaultAspectRatio} />)}</dd></> : null}
           {image.promptLimit ? <><dt>Prompt limit</dt><dd>{image.promptLimit.toLocaleString('en-US')} characters</dd></> : null}
-          {image.steps ? <><dt>Steps</dt><dd>default {image.steps.default}, max {image.steps.max}</dd></> : null}
-          {image.maxInputImages ? <><dt>Input images</dt><dd>up to {image.maxInputImages}{image.combineImages ? ', combined into one edit' : ''}</dd></> : null}
+          {image.steps ? <><dt>Steps</dt><dd>Default {image.steps.default}, max {image.steps.max}</dd></> : null}
+          {image.maxInputImages ? <><dt>Input images</dt><dd>Up to {image.maxInputImages}{image.combineImages ? ', combined into one edit' : ''}</dd></> : null}
           <dt>Web-grounded</dt><dd>{image.webSearch ? 'Yes, can search the web for reference' : 'No'}</dd>
           <dt>Style references</dt><dd>{image.styleReferences ? 'Supported' : 'No'}</dd>
         </dl>
       );
     }
     const video = model.video || {};
+    const inputs = ['Prompt',
+      video.inputs && video.inputs.image ? 'Image' : null,
+      video.inputs && video.inputs.reference ? 'Reference images' : null,
+      video.inputs && video.inputs.video ? 'Video' : null,
+      video.inputs && video.inputs.audio ? 'Audio' : null].filter(Boolean);
     return (
-      <dl className="vx-params">
+      <dl className="vx-dl">
         <dt>Mode</dt><dd>{VARIANT_LABELS[model.variant] || model.variant}</dd>
-        <dt>Inputs</dt><dd className="vx-chips">
-          <span className="vx-chip">Prompt</span>
-          {video.inputs && video.inputs.image ? <span className="vx-chip">Image</span> : null}
-          {video.inputs && video.inputs.reference ? <span className="vx-chip">Reference images</span> : null}
-          {video.inputs && video.inputs.video ? <span className="vx-chip">Video</span> : null}
-          {video.inputs && video.inputs.audio ? <span className="vx-chip">Audio</span> : null}
-        </dd>
-        {video.resolutions && video.resolutions.length ? <><dt>Resolutions</dt><dd className="vx-chips">{video.resolutions.map(r => <span key={r.value} className="vx-chip">{r.label}</span>)}</dd></> : null}
-        {video.durations && video.durations.length ? <><dt>Durations</dt><dd className="vx-chips">{video.durations.map(d => <span key={d.value} className="vx-chip">{d.seconds ? `${d.seconds}s` : d.value}</span>)}</dd></> : null}
+        <dt>Inputs</dt><dd><ValueList values={inputs} /></dd>
+        {video.resolutions && video.resolutions.length ? <><dt>Resolutions</dt><dd><ValueList values={video.resolutions.map(r => r.label)} /></dd></> : null}
+        {video.durations && video.durations.length ? <><dt>Durations</dt><dd><ValueList values={video.durations.map(d => (d.seconds ? `${d.seconds}s` : d.value))} /></dd></> : null}
         {video.aspectRatios && video.aspectRatios.length ? <><dt>Aspect ratios</dt><dd className="vx-ratios">{video.aspectRatios.map(ar => <AspectShape key={ar} ratio={ar} />)}</dd></> : null}
-        <dt>Audio</dt><dd>{video.audio === 'native' ? 'Always generated' : video.audio === 'optional' ? 'Optional, set "audio": true' : 'Silent output'}</dd>
+        <dt>Audio</dt><dd>{video.audio === 'native' ? 'Always generated' : video.audio === 'optional' ? <>Optional; set <code>"audio": true</code></> : 'Silent output'}</dd>
         {video.promptLimit ? <><dt>Prompt limit</dt><dd>{video.promptLimit.toLocaleString('en-US')} characters</dd></> : null}
       </dl>
     );
@@ -2104,7 +2112,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   const AspectShape = ({ ratio, active }) => {
     const [w, h] = String(ratio).split(':').map(Number);
-    if (!w || !h) return <span className="vx-chip">{ratio}</span>;
+    if (!w || !h) return <span className="vx-ratio"><span>{ratio}</span></span>;
     const scale = 22 / Math.max(w, h);
     return (
       <span className={cls('vx-ratio', active && 'is-active')} title={ratio}>
@@ -2114,10 +2122,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
+  const VOICE_LIMIT = 48;
+
   const Voices = ({ model }) => {
     const [q, setQ] = useState('');
+    const [all, setAll] = useState(false);
     const voices = (model.audio && model.audio.voices) || [];
-    const shown = voices.filter(v => v.toLowerCase().includes(q.toLowerCase()));
+    const matches = voices.filter(v => v.toLowerCase().includes(q.toLowerCase()));
+    const shown = all || q ? matches : matches.slice(0, VOICE_LIMIT);
     return (
       <div className="vx-voices">
         <div className="vx-voices-head">
@@ -2125,12 +2137,16 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             <Icon name="search" size={14} />
             <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder={`Filter ${voices.length} voices`} aria-label="Filter voices" />
           </div>
-          <span className="vx-muted">Click a voice to copy its ID.</span>
+          <span className="vx-muted">Select a voice to copy its ID.</span>
         </div>
-        <div className="vx-voice-grid">
-          {shown.map(v => <VoiceChip key={v} voice={v} />)}
-        </div>
-        <p className="vx-footnote">Audio previews for every voice (a fixed sentence, loudness-normalized) are part of the media roadmap.</p>
+        {shown.length ? (
+          <div className="vx-voice-grid">
+            {shown.map(v => <VoiceChip key={v} voice={v} />)}
+          </div>
+        ) : <p className="vx-muted">No voice matches “{q}”.</p>}
+        {!q && matches.length > VOICE_LIMIT ? (
+          <button type="button" className="vx-link-btn vx-more" onClick={() => setAll(!all)}>{all ? 'Show fewer' : `Show all ${matches.length} voices`}</button>
+        ) : null}
       </div>
     );
   };
@@ -2138,118 +2154,116 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   const VoiceChip = ({ voice }) => {
     const [done, setDone] = useState(false);
     return (
-      <button type="button" className={cls('vx-voice', done && 'is-done')} onClick={() => copyText(voice).then(() => { setDone(true); setTimeout(() => setDone(false), 1200); })}>
-        <Icon name={done ? 'check' : 'mic'} size={12} />{voice}
+      <button type="button" className={cls('vx-voice', done && 'is-done')} aria-label={`Copy voice ID ${voice}`}
+        onClick={() => copyText(voice).then(() => { setDone(true); setTimeout(() => setDone(false), 1200); })}>
+        {done ? <Icon name="check" size={12} /> : null}{voice}
       </button>
     );
   };
 
-  const Endpoints = ({ model, endpointId, setEndpointId }) => (
-    <div className="vx-endpoints">
-      {(model.endpoints || []).map(e => (
-        <button key={e.id} type="button" disabled={e.supported === false}
-          className={cls('vx-endpoint', endpointId === e.id && 'is-active', e.supported === false && 'is-unsupported')}
-          onClick={() => setEndpointId(e.id)} title={e.note || e.recommendation}>
-          <span className="vx-endpoint-top">
-            <span className="vx-method">{e.method}</span>
-            <code>{e.path}</code>
-          </span>
-          <span className="vx-endpoint-bottom">
-            <span>{e.name}</span>
-            {e.recommended ? <Tag tone="accent" icon="check">Recommended</Tag> : null}
-            {e.status === 'alpha' ? <Tag tone="beta">Alpha</Tag> : null}
-            {e.supported === false ? <Tag>Not supported</Tag> : null}
-          </span>
-        </button>
-      ))}
-    </div>
+  const MethodPath = ({ method, path }) => (
+    <span className="vx-endpoint"><span className="vx-method">{method}</span><code>{path}</code></span>
   );
 
-  const PerformancePanel = ({ model, preview }) => {
-    const defs = TELEMETRY[model.modality] || TELEMETRY.audio;
-    const t = model.telemetry || (preview ? sampleTelemetry(model) : null);
+  const Endpoints = ({ model, endpointId, setEndpointId }) => {
+    const list = model.endpoints || [];
+    const active = list.find(e => e.id === endpointId) || list[0];
+    if (!active) return null;
+    const isFlow = list.some(e => /-(retrieve|quote)$/.test(e.id));
     return (
-      <div className={cls('vx-perf', !t && 'is-pending')}>
-        {!t ? (
-          <div className="vx-pending-note">
-            <Icon name="activity" size={16} />
-            <div>
-              <strong>Not published yet.</strong> Venice will measure every model with synthetic probes, never customer prompts, and publish rolling
-              30-day uptime with p50 and p95 latency, the probe region and sample counts. <a href="/models/methodology#performance">Methodology</a>
-            </div>
-          </div>
+      <div className="vx-endpoints">
+        {list.length > 1 ? (
+          <Segmented ariaLabel="Endpoint" value={active.id} onChange={setEndpointId}
+            options={list.map(e => ({ value: e.id, label: `${e.name}${e.status === 'alpha' ? ' (Alpha)' : ''}`, disabled: e.supported === false, title: e.supported === false ? (e.note || 'Not supported for this model') : undefined }))} />
         ) : null}
-        <div className="vx-perf-grid">
-          {defs.map(def => (
-            <div key={def.key} className="vx-perf-card" title={def.hint}>
-              <div className="vx-perf-label">{def.label}</div>
-              <div className="vx-perf-value">{t && t[def.key] != null ? t[def.key] : '—'}<span>{t && t[def.key] != null ? (def.unit === '%' ? '%' : ` ${def.unit}`) : ''}</span></div>
-              <div className="vx-perf-hint">{def.hint}</div>
-            </div>
-          ))}
+        <p className="vx-endpoint-line">
+          <MethodPath method={active.method} path={active.path} />
+          {active.recommended && list.length > 1 && !isFlow ? <Tag tone="accent">Recommended</Tag> : null}
+          {active.recommendation ? <span className="vx-text-2">{active.recommendation}</span> : null}
+        </p>
+      </div>
+    );
+  };
+
+  const listText = items => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0] || '');
+  const lowerFirst = s => (/^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s);
+
+  const PreviewToggle = ({ preview, setPreview }) => (
+    <button type="button" className="vx-link-btn" onClick={() => setPreview(!preview)}>{preview ? 'Hide sample data' : 'Preview with sample data'}</button>
+  );
+
+  const PerformancePanel = ({ model, preview, setPreview }) => {
+    const defs = telemetryFor(model);
+    const t = model.telemetry || (preview ? sampleTelemetry(model) : null);
+    if (!t) {
+      return (
+        <p className="vx-text">
+          Not measured yet. Venice will publish {listText(defs.map(d => lowerFirst(d.label)))} for this model from synthetic probes (never customer
+          prompts), as rolling 30-day values with p50 and p95. <a href="/models/methodology#performance">How it will be measured</a>
+          {' · '}<PreviewToggle preview={preview} setPreview={setPreview} />
+        </p>
+      );
+    }
+    return (
+      <>
+        <div className="vx-stats vx-stats-plain">
+          {defs.map(def => <Stat key={def.key} label={def.label} value={withUnit(t[def.key], def.unit)} sub={def.hint} />)}
         </div>
-        <div className="vx-uptime" aria-label="Daily uptime, last 30 days">
-          <div className="vx-uptime-head"><span>Daily uptime · 30 days</span>{t && !model.telemetry ? <SampleMark /> : null}</div>
-          <div className="vx-uptime-bars">
+        <div className="vx-uptime">
+          <div className="vx-uptime-head"><span>Daily uptime, last 30 days</span>{!model.telemetry ? <SampleMark /> : null}</div>
+          <div className="vx-uptime-bars" role="img" aria-label={`Daily uptime for the last 30 days, lowest ${Math.min(...(t.daily || [100]))}%`}>
             {Array.from({ length: 30 }, (_, i) => {
-              const v = t && t.daily ? t.daily[i] : null;
+              const v = t.daily ? t.daily[i] : null;
               const tone = v == null ? 'none' : v >= 99.9 ? 'ok' : v >= 99 ? 'warn' : 'bad';
               return <span key={i} className={`vx-bar vx-bar-${tone}`} title={v == null ? 'No data' : `${v}%`} />;
             })}
           </div>
         </div>
-      </div>
+        {!model.telemetry ? <p className="vx-footnote">Sample values for layout review, not measurements. <PreviewToggle preview={preview} setPreview={setPreview} /></p> : null}
+      </>
     );
   };
 
-  const BenchmarksPanel = ({ model, preview }) => {
+  const BenchmarksPanel = ({ model, preview, setPreview }) => {
     const set = benchmarkSetFor(model);
-    if (!set) return <p className="vx-muted">No benchmark set is defined for this model type yet.</p>;
+    if (!set) return <p className="vx-text">No benchmark set is defined for this model type yet.</p>;
     const scores = model.benchmarks || (preview ? sampleBenchmarks(model) : null);
+    const items = [set.composite, ...set.items].filter(Boolean);
+    if (!scores) {
+      return (
+        <p className="vx-text">
+          Not evaluated yet. The planned set is {listText(items.map(i => i.label))}. Each score will name its source (Venice-verified on this
+          endpoint, independent, or lab-reported) with the harness version, reasoning effort and date. <a href="/models/methodology#benchmarks">Methodology</a>
+          {' · '}<PreviewToggle preview={preview} setPreview={setPreview} />
+        </p>
+      );
+    }
     const bar = (item, value) => {
       if (value == null) return 0;
       const lo = item.min || 0;
       const pct = ((value - lo) / ((item.max || 100) - lo)) * 100;
-      return Math.max(3, Math.min(100, item.lowerIsBetter ? 100 - pct : pct));
+      return Math.max(2, Math.min(100, item.lowerIsBetter ? 100 - pct : pct));
     };
     return (
-      <div className={cls('vx-bench', !scores && 'is-pending')}>
-        {!scores ? (
-          <div className="vx-pending-note">
-            <Icon name="trophy" size={16} />
-            <div>
-              <strong>Not evaluated yet.</strong> Scores will show where each number comes from: <em>Venice-verified</em> (run on this endpoint),
-              <em> independent</em> (a third party), or <em>lab-reported</em>, with the harness version, reasoning effort and test date. <a href="/models/methodology#benchmarks">Methodology</a>
-            </div>
-          </div>
-        ) : null}
-        {set.composite ? (
-          <div className="vx-bench-composite">
-            <div>
-              <div className="vx-eyebrow">{set.composite.source}</div>
-              <div className="vx-bench-composite-label">{set.composite.label}</div>
-            </div>
-            <div className="vx-bench-composite-value">{scores ? scores[set.composite.key] : '—'}</div>
-            {scores && !model.benchmarks ? <SampleMark /> : null}
-          </div>
-        ) : null}
-        <div className="vx-bench-list">
-          {set.items.map(item => {
-            const value = scores ? scores[item.key] : null;
-            return (
-              <div key={item.key} className="vx-bench-row">
-                <div className="vx-bench-meta">
-                  <span className="vx-bench-cat">{item.category}</span>
-                  <span className="vx-bench-name">{item.label}{item.inHouse ? <Tag tone="accent" icon="shieldCheck">Venice</Tag> : null}</span>
-                </div>
-                <div className="vx-bench-bar"><span style={{ width: `${bar(item, value)}%` }} /></div>
-                <div className="vx-bench-value">{value != null ? `${value}${item.unit === '%' ? '%' : item.unit ? ` ${item.unit}` : ''}` : '—'}</div>
-              </div>
-            );
-          })}
-        </div>
-        {scores && !model.benchmarks ? <p className="vx-footnote"><SampleMark /> Values are illustrative placeholders for layout review.</p> : null}
-      </div>
+      <>
+        <table className="vx-dtable vx-bench">
+          <thead><tr><th>Benchmark</th><th className="vx-hide-sm">Measures</th><th className="vx-al-right">Score</th><th className="vx-hide-sm" aria-hidden="true" /></tr></thead>
+          <tbody>
+            {items.map(item => {
+              const value = scores[item.key];
+              return (
+                <tr key={item.key} className={item === set.composite ? 'is-composite' : undefined}>
+                  <td>{item.label}{item.source ? <span className="vx-muted"> · {item.source}</span> : null}{item.inHouse ? <> <Tag tone="accent">Venice</Tag></> : null}</td>
+                  <td className="vx-muted vx-hide-sm">{item.category || 'Composite'}</td>
+                  <td className="vx-al-right vx-num">{withUnit(value, item.unit)}</td>
+                  <td className="vx-bench-bar-cell vx-hide-sm" aria-hidden="true"><span className="vx-bench-bar"><span style={{ width: `${bar(item, value)}%` }} /></span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {!model.benchmarks ? <p className="vx-footnote"><SampleMark /> Illustrative values for layout review. <PreviewToggle preview={preview} setPreview={setPreview} /></p> : null}
+      </>
     );
   };
 
@@ -2259,40 +2273,40 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const isVideo = first.modality === 'video';
     return (
       <div className="vx-table-wrap">
-        <table className="vx-table vx-table-compact">
+        <table className="vx-dtable vx-variants-table">
           <thead>
             <tr>
-              <th>Variant</th><th>Model ID</th><th>Privacy</th>
-              {isText ? <><th className="vx-al-right">Context</th><th className="vx-al-right">Max output</th><th className="vx-al-right">Input / Output</th><th>Effort</th><th>Precision</th></> : null}
-              {isVideo ? <><th>Inputs</th><th className="vx-al-right">From</th><th className="vx-al-right">Max</th></> : null}
+              <th>Variant</th><th>Model ID</th><th className="vx-hide-sm">Privacy</th>
+              {isText ? <><th className="vx-al-right vx-hide-sm">Context</th><th className="vx-al-right vx-hide-md">Max output</th><th className="vx-al-right">Input / output</th><th className="vx-hide-md">Effort</th><th className="vx-hide-lg">Precision</th></> : null}
+              {isVideo ? <><th className="vx-hide-md">Inputs</th><th className="vx-al-right">From</th><th className="vx-al-right vx-hide-sm">Max</th></> : null}
               {!isText && !isVideo ? <th className="vx-al-right">Price</th> : null}
-              <th className="vx-al-right">Added</th>
+              <th className="vx-al-right vx-hide-md">Added</th>
             </tr>
           </thead>
           <tbody>
             {models.map(m => (
               <tr key={m.id} className={cls(m.id === activeId && 'is-selected', 'is-clickable')} onClick={() => onSelect(m.id)}>
-                <td><strong>{VARIANT_LABELS[m.variant] || m.variant}</strong></td>
-                <td><span className="vx-id vx-id-inline"><code>{m.id}</code><CopyButton text={m.id} iconOnly /></span></td>
-                <td><PrivacyBadge tier={m.privacy} /></td>
+                <td><button type="button" className="vx-row-btn" aria-pressed={m.id === activeId} onClick={e => { e.stopPropagation(); onSelect(m.id); }}>{VARIANT_LABELS[m.variant] || m.variant}</button></td>
+                <td><span className="vx-id vx-id-inline" title={m.id}><code>{m.id}</code><CopyButton text={m.id} iconOnly label={`Copy model ID ${m.id}`} /></span></td>
+                <td className="vx-hide-sm"><PrivacyBadge tier={m.privacy} /></td>
                 {isText ? (
                   <>
-                    <td className="vx-al-right vx-num">{tokens(m.text && m.text.context)}</td>
-                    <td className="vx-al-right vx-num">{tokens(m.text && m.text.maxOutput)}</td>
+                    <td className="vx-al-right vx-num vx-hide-sm">{tokens(m.text && m.text.context)}</td>
+                    <td className="vx-al-right vx-num vx-hide-md">{tokens(m.text && m.text.maxOutput)}</td>
                     <td className="vx-al-right vx-num">{usd(m.pricing && m.pricing.input)} / {usd(m.pricing && m.pricing.output)}</td>
-                    <td>{m.text && m.text.reasoning && m.text.reasoning.effort && m.text.reasoning.effort.length ? m.text.reasoning.effort.join(', ') : '—'}</td>
-                    <td>{m.text && m.text.quantization ? QUANT_LABELS[m.text.quantization] || m.text.quantization : 'Not disclosed'}</td>
+                    <td className="vx-hide-md vx-wrap">{m.text && m.text.reasoning && m.text.reasoning.effort && m.text.reasoning.effort.length ? m.text.reasoning.effort.join(', ') : <span className="vx-muted">—</span>}</td>
+                    <td className="vx-hide-lg">{m.text && m.text.quantization ? QUANT_LABELS[m.text.quantization] || m.text.quantization : <span className="vx-muted">Not disclosed</span>}</td>
                   </>
                 ) : null}
                 {isVideo ? (
                   <>
-                    <td className="vx-chips">{['image', 'reference', 'video'].filter(k => m.video && m.video.inputs && m.video.inputs[k]).map(k => <span key={k} className="vx-chip">{k}</span>)}</td>
-                    <td className="vx-al-right vx-num">{m.pricing && m.pricing.status === 'quoted' ? `${usd(m.pricing.fromPerSecond)}/s` : 'By source'}</td>
-                    <td className="vx-al-right vx-num">{heightLabel(maxVideoHeight(m))}</td>
+                    <td className="vx-hide-md">{['Prompt', ...['image', 'reference', 'video'].filter(k => m.video && m.video.inputs && m.video.inputs[k]).map(k => k[0].toUpperCase() + k.slice(1))].join(', ')}</td>
+                    <td className="vx-al-right vx-num">{m.pricing && m.pricing.status === 'quoted' ? `${usd(m.pricing.fromPerSecond)} / sec` : 'By source'}</td>
+                    <td className="vx-al-right vx-num vx-hide-sm">{heightLabel(maxVideoHeight(m))}</td>
                   </>
                 ) : null}
                 {!isText && !isVideo ? <td className="vx-al-right vx-num">{usd(m.headline && m.headline.value)} <span className="vx-muted">{headlineUnit(m)}</span></td> : null}
-                <td className="vx-al-right vx-muted">{shortDate(m.created)}</td>
+                <td className="vx-al-right vx-muted vx-hide-md">{shortDate(m.created)}</td>
               </tr>
             ))}
           </tbody>
@@ -2301,26 +2315,23 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const RelatedCards = ({ items, providers, title }) => {
+  const RelatedList = ({ items, providers, title }) => {
     if (!items || !items.length) return null;
     return (
       <div className="vx-related">
-        <div className="vx-related-title">{title}</div>
-        <div className="vx-related-grid">
+        <h3 className="vx-h3">{title}</h3>
+        <ul className="vx-related-list">
           {items.map(item => (
-            <a key={item.slug} className="vx-related-card" href={`/models/${item.slug}`}>
-              <ProviderLogo provider={providers[item.provider]} size={26} />
-              <span className="vx-related-body">
-                <span className="vx-related-name">{item.name}</span>
-                <span className="vx-muted">
-                  {(providers[item.provider] && providers[item.provider].name) || item.provider}
-                  {item.modality === 'video' && item.videoFrom != null ? ` · from ${usd(item.videoFrom)}/s` : item.headline && item.headline.value != null ? ` · ${usd(item.headline.value)} ${item.headline.unit}` : ''}
-                </span>
+            <li key={item.slug}>
+              <ProviderLogo provider={providers[item.provider]} size={24} />
+              <a href={`/models/${item.slug}`}>{item.name}</a>
+              <span className="vx-muted">
+                {(providers[item.provider] && providers[item.provider].name) || item.provider}
+                {item.modality === 'video' && item.videoFrom != null ? ` · from ${usd(item.videoFrom)} / sec` : item.headline && item.headline.value != null ? ` · ${usd(item.headline.value)} ${item.headline.unit}` : ''}
               </span>
-              <Icon name="chevronRight" size={14} />
-            </a>
+            </li>
           ))}
-        </div>
+        </ul>
       </div>
     );
   };
@@ -2371,7 +2382,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const provider = providers[family.provider] || providers[model.provider];
     const recommended = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
     const activeEndpoint = (model.endpoints || []).find(e => e.id === endpointId && e.supported !== false) || recommended;
-    const sections = pageSections(model);
+    const hasRelated = Boolean(related && ((related.versions || []).length || (related.similar || []).length));
+    const sections = pageSections(model, { variants: models.length, related: hasRelated });
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const has = id => sections.some(([key]) => key === id);
     const modalityMeta = MODALITIES.find(m => m.key === family.modality) || MODALITIES[0];
     const inCompare = compare.ids.includes(model.id);
 
@@ -2386,6 +2400,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       setTimeout(() => setCopied(false), 1500);
     });
 
+    const variantPrice = m => (m.modality === 'text' && m.pricing ? `${usd(m.pricing.input)} / ${usd(m.pricing.output)} per 1M`
+      : m.modality === 'video' ? (m.pricing && m.pricing.status === 'quoted' ? `from ${usd(m.pricing.fromPerSecond)} / sec` : 'priced by source')
+        : m.headline && m.headline.value != null ? `${usd(m.headline.value)} ${headlineUnit(m)}` : '');
+
     return (
       <div className="vx vx-page not-prose">
         <nav className="vx-crumbs" aria-label="Breadcrumb">
@@ -2398,46 +2416,42 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
         <header className="vx-model-head">
           <div className="vx-model-title">
-            <ProviderLogo provider={provider} size={56} />
+            <ProviderLogo provider={provider} size={40} />
             <div className="vx-model-title-text">
               <h1 className="vx-h1">{family.name}</h1>
               <div className="vx-model-meta">
-                <span>{provider ? provider.name : family.provider}</span>
-                <span className="vx-dot">·</span>
-                <span className={cls('vx-modality', `vx-modality-${family.modality}`)}><Icon name={modalityMeta.icon || 'text'} size={12} />{TASK_LABELS[model.task] || modalityMeta.label}</span>
-                <span className="vx-dot">·</span>
-                <span>Added {fmtDate(model.created)}</span>
-                {model.openWeights ? <><span className="vx-dot">·</span><Tag icon="book">Open weights</Tag></> : null}
-                {model.license ? <Tag>{model.license}</Tag> : null}
-                <StatusTags item={{ ...family, created: model.created, beta: model.beta, deprecation: model.deprecation }} now={now} />
-                {model.uncensored ? <Tag tone="accent" icon="wand">Uncensored</Tag> : null}
+                <span className="vx-meta-item">{provider ? provider.name : family.provider}</span>
+                <span className="vx-meta-item">{TASK_LABELS[model.task] || modalityMeta.label}</span>
+                <span className="vx-meta-item">Added {fmtDate(model.created)}</span>
+                <span className="vx-badges">
+                  {models.length === 1 ? <PrivacyBadge tier={model.privacy} /> : null}
+                  {model.openWeights ? <Tag>Open weights</Tag> : null}
+                  {model.license ? <Tag>{model.license}</Tag> : null}
+                  <StatusTags item={{ ...family, created: model.created, beta: model.beta, deprecation: model.deprecation }} now={now} />
+                  {model.uncensored ? <Tag>Uncensored</Tag> : null}
+                </span>
               </div>
             </div>
           </div>
           <div className="vx-model-actions">
-            <button type="button" className={cls('vx-btn', inCompare ? 'vx-btn-active' : 'vx-btn-ghost')} onClick={() => compare.toggle(model.id)}>
-              <Icon name={inCompare ? 'check' : 'columns'} size={14} />{inCompare ? 'In compare' : 'Compare'}
+            <button type="button" className={cls('vx-btn', inCompare && 'vx-btn-active')} aria-pressed={inCompare} onClick={() => compare.toggle(model.id)}>
+              {inCompare ? <><Icon name="check" size={14} />Added to compare</> : 'Add to compare'}
             </button>
-            <button type="button" className="vx-btn vx-btn-ghost" onClick={copyForAgents} title="Copy a Markdown spec for an AI agent or README">
-              <Icon name={copied ? 'check' : 'copy'} size={14} />{copied ? 'Copied' : 'Copy for AI'}
+            <button type="button" className="vx-btn vx-btn-tertiary" onClick={copyForAgents} title="Copy a Markdown spec for an AI agent or README">
+              <span aria-live="polite">{copied ? 'Copied' : 'Copy for AI'}</span>
             </button>
-            {model.source ? <a className="vx-btn vx-btn-ghost" href={model.source} target="_blank" rel="noopener"><Icon name="external" size={14} />Source</a> : null}
+            {model.source ? <a className="vx-btn vx-btn-tertiary" href={model.source} target="_blank" rel="noopener">Source<Icon name="external" size={12} /></a> : null}
           </div>
         </header>
+
+        {model.description || family.description ? <p className="vx-description">{model.description || family.description}</p> : null}
 
         {models.length > 1 ? (
           <div className="vx-variants" role="radiogroup" aria-label="Variant">
             {models.map(m => (
               <button key={m.id} type="button" role="radio" aria-checked={m.id === model.id} className={cls('vx-variant', m.id === model.id && 'is-active')} onClick={() => selectVariant(m.id)}>
-                <span className="vx-variant-top">
-                  <span className="vx-variant-name">{VARIANT_LABELS[m.variant] || m.variant}</span>
-                  <PrivacyBadge tier={m.privacy} />
-                </span>
-                <span className="vx-variant-sub">
-                  {m.modality === 'text' && m.pricing ? `${usd(m.pricing.input)} / ${usd(m.pricing.output)} per 1M`
-                    : m.modality === 'video' ? (m.pricing && m.pricing.status === 'quoted' ? `from ${usd(m.pricing.fromPerSecond)}/s` : 'priced by source')
-                    : m.headline && m.headline.value != null ? `${usd(m.headline.value)} ${headlineUnit(m)}` : ''}
-                </span>
+                <span className="vx-variant-name">{VARIANT_LABELS[m.variant] || m.variant}</span>
+                <span className="vx-variant-sub">{[m.privacy !== m.variant && PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : null, variantPrice(m)].filter(Boolean).join(' · ')}</span>
               </button>
             ))}
           </div>
@@ -2445,54 +2459,25 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
         <div className="vx-idbar">
           <ModelId id={model.id} />
-          {recommended ? (
-            <span className="vx-idbar-endpoint">
-              <span className="vx-method">{recommended.method}</span>
-              <code>{recommended.path}</code>
-              {recommended.recommended && (model.endpoints || []).length > 1 ? <span className="vx-muted">recommended</span> : null}
-            </span>
-          ) : null}
-          <PrivacyBadge tier={model.privacy} />
+          {recommended ? <MethodPath method={recommended.method} path={recommended.path} /> : null}
         </div>
-
-        {model.description || family.description ? <p className="vx-description">{model.description || family.description}</p> : null}
 
         <KeyStats model={model} />
         <LiveStrip model={model} preview={preview} />
 
         <div className="vx-page-layout">
           <main className="vx-page-main">
-            {sections.some(([id]) => id === 'examples') ? (
-              <Section id="examples" title="Reference outputs" eyebrow="Same prompts, every model">
-                <MediaGallery model={model.media && model.media.length ? model : (models.find(m => m.media && m.media.length) || model)} provider={provider} />
+            {has('examples') ? (
+              <Section id="examples" title="Reference outputs">
+                <MediaGallery model={model.media && model.media.length ? model : (models.find(m => m.media && m.media.length) || model)} />
               </Section>
             ) : null}
 
-            {sections.some(([id]) => id === 'capabilities') ? (
+            {has('capabilities') ? (
               <Section id="capabilities" title="Capabilities">
                 <CapabilityMatrix model={model} />
-                <h3 className="vx-h3">Reasoning</h3>
-                <ReasoningPanel model={model} />
-                <div className="vx-served">
-                  <div>
-                    <div className="vx-served-label">Served precision</div>
-                    <div className="vx-served-value">{model.text && model.text.quantization ? QUANT_LABELS[model.text.quantization] || model.text.quantization : (model.privacy === 'anonymized' ? 'Set by the upstream provider' : 'Not published yet')}</div>
-                    <div className="vx-muted">
-                      {model.text && model.text.quantization
-                        ? QUANT_NOTES[model.text.quantization]
-                        : model.privacy === 'anonymized'
-                          ? 'This model is proxied to its lab, which does not disclose serving precision.'
-                          : 'Venice serves this model on its own infrastructure; the precision field is not in GET /models yet.'}
-                    </div>
-                  </div>
-                  {model.text && model.text.sampling && Object.keys(model.text.sampling).length ? (
-                    <div>
-                      <div className="vx-served-label">Default sampling</div>
-                      <div className="vx-served-value">{Object.entries(model.text.sampling).map(([k, v]) => `${k} ${v}`).join(' · ')}</div>
-                      <div className="vx-muted">Applied when a request omits them.</div>
-                    </div>
-                  ) : null}
-                </div>
+                <h3 className="vx-h3">Details</h3>
+                <TechDetails model={model} />
               </Section>
             ) : null}
 
@@ -2501,65 +2486,64 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               {model.modality === 'image' ? <ImagePricing model={model} /> : null}
               {model.modality === 'video' ? <VideoCalculator model={model} /> : null}
               {model.modality === 'audio' ? <AudioPricing model={model} /> : null}
-              {model.modality === 'embedding' ? <p className="vx-footnote">Billed on input tokens only. Embedding one million 500-token documents costs about {usd((model.pricing && model.pricing.input || 0) * 500)}.</p> : null}
-              {model.task === 'decision' ? <p className="vx-footnote">Billed per 1M state tokens in and decision tokens out.</p> : null}
+              {model.modality === 'embedding' ? <p className="vx-text">Billed on input tokens only. Embedding one million 500-token documents costs about {usd((model.pricing && model.pricing.input || 0) * 500)}.</p> : null}
+              {model.task === 'decision' ? <p className="vx-text">Billed per 1M state tokens in and decision tokens out.</p> : null}
             </Section>
 
-            {sections.some(([id]) => id === 'parameters') ? (
+            {has('parameters') ? (
               <Section id="parameters" title="Parameters">
                 <Parameters model={model} />
               </Section>
             ) : null}
 
-            {sections.some(([id]) => id === 'voices') ? (
+            {has('voices') ? (
               <Section id="voices" title="Voices">
                 <Voices model={model} />
               </Section>
             ) : null}
 
-            <Section id="api" title="API">
+            <Section id="api" title="API" actions={<a className="vx-link-btn" href="https://venice.ai/settings/api" target="_blank" rel="noopener">Get an API key</a>}>
               <Endpoints model={model} endpointId={activeEndpoint && activeEndpoint.id} setEndpointId={setEndpointId} />
-              {activeEndpoint && activeEndpoint.recommendation ? <div className="vx-note vx-note-accent"><Icon name="info" size={16} /><span>{activeEndpoint.recommendation}</span></div> : null}
-              {model.privacy === 'e2ee' ? <div className="vx-note"><Icon name="lock" size={16} /><span>E2EE requests encrypt the prompt client-side and send attestation headers. Follow the <a href="/guides/features/tee-e2ee-models">TEE & E2EE guide</a>; the samples below show the plain request shape.</span></div> : null}
+              {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
               <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
             </Section>
 
-            <Section id="performance" title="Performance" eyebrow="Measured by Venice" actions={!model.telemetry ? <button type="button" className="vx-link-btn" onClick={() => setPreview(!preview)}>{preview ? 'Hide sample layout' : 'Preview layout'}</button> : null}>
-              <PerformancePanel model={model} preview={preview} />
+            <Section id="performance" title="Performance">
+              <PerformancePanel model={model} preview={preview} setPreview={setPreview} />
             </Section>
 
-            <Section id="benchmarks" title="Benchmarks" eyebrow="As served by Venice" actions={!model.benchmarks ? <button type="button" className="vx-link-btn" onClick={() => setPreview(!preview)}>{preview ? 'Hide sample layout' : 'Preview layout'}</button> : null}>
-              <BenchmarksPanel model={model} preview={preview} />
+            <Section id="benchmarks" title="Benchmarks">
+              <BenchmarksPanel model={model} preview={preview} setPreview={setPreview} />
             </Section>
 
-            <Section id="variants" title={models.length > 1 ? `${models.length} variants` : 'Model ID'}>
-              <VariantsTable models={models} activeId={model.id} onSelect={selectVariant} />
-            </Section>
+            {has('variants') ? (
+              <Section id="variants" title="Variants">
+                <VariantsTable models={models} activeId={model.id} onSelect={selectVariant} />
+              </Section>
+            ) : null}
 
-            <Section id="related" title="Related models">
-              <RelatedCards title="Other versions" items={related && related.versions} providers={providers} />
-              <RelatedCards title="Similar price and capability" items={related && related.similar} providers={providers} />
-            </Section>
+            {has('related') ? (
+              <Section id="related" title="Related models">
+                <div className="vx-related-grid">
+                  <RelatedList title="Other versions" items={related.versions} providers={providers} />
+                  <RelatedList title="Similar price and capability" items={related.similar} providers={providers} />
+                </div>
+              </Section>
+            ) : null}
 
             <details className="vx-spec-source">
-              <summary><Icon name="code" size={14} />Plain-text specification</summary>
+              <summary><Icon name="chevronRight" size={12} />Plain-text specification</summary>
               <div className="vx-spec-body">{children}</div>
             </details>
           </main>
 
           <aside className="vx-page-rail" aria-label="On this page">
-            <div className="vx-rail-card">
-              <div className="vx-rail-title">On this page</div>
-              <nav className="vx-toc">
-                {sections.map(([id, label]) => <a key={id} href={`#${id}`}>{label}</a>)}
-              </nav>
-            </div>
-            <div className="vx-rail-card">
-              <div className="vx-rail-title">Use it</div>
-              <ModelId id={model.id} />
-              <a className="vx-btn vx-btn-primary vx-btn-block" href="https://venice.ai/settings/api" target="_blank" rel="noopener"><Icon name="zap" size={14} />Get an API key</a>
-              <a className="vx-btn vx-btn-ghost vx-btn-block" href={`/models/compare?ids=${encodeURIComponent(model.id)}`}><Icon name="columns" size={14} />Compare with…</a>
-            </div>
+            <div className="vx-toc-title">On this page</div>
+            <nav className="vx-toc">
+              {sections.map(([id, label]) => (
+                <a key={id} href={`#${id}`} className={cls(activeSection === id && 'is-active')} aria-current={activeSection === id ? 'location' : undefined}>{label}</a>
+              ))}
+            </nav>
           </aside>
         </div>
         <CompareTray compare={compare} catalog={catalog || { models: Object.fromEntries(models.map(m => [m.id, m])) }} />
@@ -2643,7 +2627,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return rows;
   };
 
-  const AddModel = ({ catalog, modality, exclude, onAdd }) => {
+  const AddModel = ({ catalog, modality, exclude, onAdd, disabled }) => {
     const [q, setQ] = useState('');
     const [open, setOpen] = useState(false);
     const results = useMemo(() => {
@@ -2658,6 +2642,16 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       }
       return out.slice(0, 12);
     }, [catalog, q, modality, exclude]);
+    if (disabled) {
+      return (
+        <div className="vx-add">
+          <div className="vx-search vx-search-sm is-disabled">
+            <Icon name="plus" size={14} />
+            <input type="search" disabled placeholder="Remove a model to add another" aria-label="Add a model to compare" />
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="vx-add">
         <div className="vx-search vx-search-sm">
@@ -2665,16 +2659,16 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           <input type="search" value={q} onFocus={() => setOpen(true)} onChange={e => { setQ(e.target.value); setOpen(true); }}
             placeholder={modality ? `Add a ${modality === 'embedding' ? 'embedding' : modality} model` : 'Add a model'} aria-label="Add a model to compare" />
         </div>
-        {open && results.length ? (
-          <div className="vx-add-menu" role="listbox">
-            {results.map(({ family, model }) => (
-              <button key={model.id} type="button" role="option" className="vx-add-item" onClick={() => { onAdd(model.id); setQ(''); setOpen(false); }}>
+        {open && q ? (
+          <div className="vx-add-menu" role="listbox" aria-label="Matching models">
+            {results.length ? results.map(({ family, model }) => (
+              <button key={model.id} type="button" role="option" aria-selected="false" className="vx-add-item" onClick={() => { onAdd(model.id); setQ(''); setOpen(false); }}>
                 <ProviderLogo provider={catalog.providers[family.provider]} size={20} />
-                <span>{family.name}</span>
+                <span className="vx-add-name">{family.name}</span>
                 {family.variants.length > 1 ? <span className="vx-muted">{VARIANT_LABELS[model.variant]}</span> : null}
-                <code>{model.id}</code>
+                <code title={model.id}>{model.id}</code>
               </button>
-            ))}
+            )) : <div className="vx-add-empty">No {modality ? `${modality === 'embedding' ? 'embedding' : modality} ` : ''}models match “{q}”.</div>}
           </div>
         ) : null}
       </div>
@@ -2690,12 +2684,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const shown = prompts.find(p => p.id === active) || prompts[0];
     const withMedia = models.filter(m => (m.media || []).length);
     if (!prompts.length || !withMedia.length) {
-      return (
-        <div className="vx-gallery-empty">
-          <Icon name={isVideo ? 'video' : 'image'} size={18} />
-          <div><strong>No shared reference renders for these models yet.</strong><span> Side-by-side output appears once each model is rendered on the reference prompt suite.</span></div>
-        </div>
-      );
+      return <p className="vx-text">No shared reference renders for these models yet. Side-by-side output appears once each model is rendered on the reference prompts.</p>;
     }
     const playAll = () => {
       const vids = Object.values(refs.current).filter(Boolean);
@@ -2706,10 +2695,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return (
       <div className="vx-sbs">
         <div className="vx-sbs-head">
-          <Segmented size="sm" ariaLabel="Prompt" value={shown && shown.id} onChange={setActive} options={prompts.map(p => ({ value: p.id, label: p.title }))} />
-          {isVideo ? <button type="button" className="vx-btn vx-btn-ghost" onClick={playAll}><Icon name={playing ? 'pause' : 'play'} size={13} />{playing ? 'Pause all' : 'Play all in sync'}</button> : null}
+          <Segmented ariaLabel="Prompt" value={shown && shown.id} onChange={setActive} options={prompts.map(p => ({ value: p.id, label: p.title }))} />
+          {isVideo ? <button type="button" className="vx-btn" onClick={playAll} aria-pressed={playing}>{playing ? 'Pause all' : 'Play all in sync'}</button> : null}
         </div>
-        {shown ? <p className="vx-sbs-prompt"><span className="vx-eyebrow">Prompt</span>{shown.prompt}</p> : null}
+        {shown ? <p className="vx-sbs-prompt"><span className="vx-sbs-prompt-label">Prompt</span>{shown.prompt}</p> : null}
         <div className="vx-sbs-grid" style={{ gridTemplateColumns: `repeat(${models.length}, minmax(0, 1fr))` }}>
           {models.map(m => {
             const item = (m.media || []).find(x => x.prompt === (shown && shown.id));
@@ -2719,7 +2708,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   {item ? (isVideo
                     ? <video ref={el => { refs.current[m.id] = el; }} src={item.url} muted loop playsInline preload="metadata" controls />
                     : <img src={item.url} alt={`${m.name}: ${item.title}`} loading="lazy" />)
-                    : <div className="vx-media-fallback"><span>Not rendered yet</span></div>}
+                    : <MediaFallback label="Not rendered for this prompt" />}
                 </div>
                 <figcaption>{m.name}</figcaption>
               </figure>
@@ -2748,11 +2737,28 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }, []);
     useEffect(() => { if (ready) writeParams({ ids }); }, [ids, ready]);
 
+    const header = (
+      <>
+        <nav className="vx-crumbs" aria-label="Breadcrumb"><a href="/models/overview">Models</a><Icon name="chevronRight" size={12} /><span aria-current="page">Compare</span></nav>
+        <header className="vx-hero">
+          <div className="vx-hero-text">
+            <h1 className="vx-h1">Compare models</h1>
+            <p className="vx-lede">Up to four models side by side: prices in the same unit, limits, capabilities and, for image and video, outputs from the same prompts.</p>
+          </div>
+          <div className="vx-hero-actions">
+            {catalog && ids.length ? <CopyButton text={typeof window !== 'undefined' ? window.location.href : ''} label="Copy link" /> : null}
+          </div>
+        </header>
+      </>
+    );
+
     if (!catalog) {
       return (
         <div className="vx vx-compare not-prose">
-          <header className="vx-hero"><div className="vx-hero-text"><div className="vx-eyebrow">Model catalog</div><h1 className="vx-h1">Compare models</h1></div></header>
-          {error ? <div className="vx-error">The model catalog could not load.</div> : <ExplorerSkeleton />}
+          {header}
+          {error
+            ? <div className="vx-error" role="alert">The model catalog could not load. Refresh the page, or browse <a href="/models/overview">all models</a>.</div>
+            : <><span className="vx-sr-only" role="status">Loading models</span><ExplorerSkeleton /></>}
         </div>
       );
     }
@@ -2767,83 +2773,83 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const shownModels = mixed ? models.filter(m => m.modality === modality) : models;
     const add = id => setIds(prev => (prev.includes(id) ? prev : [...prev, id].slice(0, COMPARE_MAX)));
     const removeId = id => { setIds(prev => prev.filter(x => x !== id)); compare.remove(id); };
-    const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const measured = preview || shownModels.some(m => m.telemetry || m.benchmarks);
+    const benchSet = shownModels.length ? benchmarkSetFor(shownModels[0]) : null;
+    const benchItems = benchSet ? [benchSet.composite, ...benchSet.items].filter(Boolean).slice(0, 4) : [];
+    const cols = shownModels.length + 1;
 
     return (
       <div className="vx vx-compare not-prose">
-        <nav className="vx-crumbs" aria-label="Breadcrumb"><a href="/models/overview">Models</a><Icon name="chevronRight" size={12} /><span aria-current="page">Compare</span></nav>
-        <header className="vx-hero">
-          <div className="vx-hero-text">
-            <div className="vx-eyebrow">Model catalog</div>
-            <h1 className="vx-h1">Compare models</h1>
-            <p className="vx-lede">Up to four models side by side: prices normalized to the same unit, limits, capabilities and, for image and video, the same reference prompts.</p>
-          </div>
-          <div className="vx-hero-actions">
-            {models.length ? <CopyButton text={shareUrl} label="Copy link" /> : null}
-          </div>
-        </header>
+        {header}
 
         <div className="vx-compare-bar">
-          {models.map(m => (
-            <span key={m.id} className="vx-compare-chip">
-              <ProviderLogo provider={catalog.providers[m.provider]} size={20} />
-              <a href={`/models/${m.family}${m.id !== (m._family && m._family.primary) ? `?v=${encodeURIComponent(m.id)}` : ''}`}>{m.name}</a>
-              {m._family && m._family.variants.length > 1 ? <span className="vx-muted">{VARIANT_LABELS[m.variant]}</span> : null}
-              <button type="button" onClick={() => removeId(m.id)} aria-label={`Remove ${m.name}`}><Icon name="x" size={12} /></button>
-            </span>
-          ))}
-          {models.length < COMPARE_MAX ? <AddModel catalog={catalog} modality={modality} exclude={ids} onAdd={add} /> : null}
+          {models.map(m => {
+            const label = `${m.name}${m._family && m._family.variants.length > 1 ? ` · ${VARIANT_LABELS[m.variant]}` : ''}`;
+            return (
+              <span key={m.id} className="vx-compare-chip">
+                <ProviderLogo provider={catalog.providers[m.provider]} size={20} />
+                <a href={m._family ? modelHref(m._family, m.id) : `/models/${m.family}`} title={label}>{label}</a>
+                <button type="button" className="vx-icon-btn vx-icon-btn-sm" onClick={() => removeId(m.id)} aria-label={`Remove ${m.name}`}><Icon name="x" size={12} /></button>
+              </span>
+            );
+          })}
+          <AddModel catalog={catalog} modality={modality} exclude={ids} onAdd={add} disabled={models.length >= COMPARE_MAX} />
         </div>
 
         {!models.length ? (
           <div className="vx-suggest">
-            <div className="vx-related-title">Start with a common comparison</div>
-            <div className="vx-suggest-grid">
+            <h2 className="vx-h3">Start with a common comparison</h2>
+            <ul className="vx-suggest-list">
               {SUGGESTED.map(s => {
                 const valid = s.ids.filter(id => catalog.models[id]);
                 if (valid.length < 2) return null;
                 return (
-                  <button key={s.label} type="button" className="vx-suggest-card" onClick={() => setIds(valid)}>
-                    <span className="vx-suggest-label">{s.label}</span>
-                    <span className="vx-muted">{valid.map(id => catalog.models[id].name).join(' vs ')}</span>
-                  </button>
+                  <li key={s.label}>
+                    <button type="button" className="vx-suggest-item" onClick={() => setIds(valid)}>
+                      <span className="vx-suggest-label">{s.label}</span>
+                      <span className="vx-muted">{valid.map(id => catalog.models[id].name).join(' vs ')}</span>
+                      <Icon name="arrowRight" size={14} />
+                    </button>
+                  </li>
                 );
               })}
-            </div>
+            </ul>
           </div>
         ) : null}
 
-        {mixed ? <div className="vx-note"><Icon name="info" size={16} /><span>Comparisons stay within one modality. Showing {TASK_LABELS[modality] || modality} models only.</span></div> : null}
+        {mixed ? <p className="vx-text vx-mixed">Comparisons stay within one modality, so only the {TASK_LABELS[models[0].task] || modality} models are shown.</p> : null}
 
         {shownModels.length && (modality === 'image' || modality === 'video') ? (
-          <section className="vx-section">
-            <div className="vx-section-head"><div><div className="vx-eyebrow">Same prompt, every model</div><h2 className="vx-h2">Side by side</h2></div></div>
+          <section className="vx-section" aria-labelledby="sbs-title">
+            <div className="vx-section-head"><h2 id="sbs-title" className="vx-h2">Side by side</h2></div>
             <SideBySide models={shownModels} suite={catalog.mediaSuite} promptFilter={promptFilter} />
           </section>
         ) : null}
 
         {shownModels.length ? (
-          <section className="vx-section">
+          <section className="vx-section" aria-labelledby="specs-title">
             <div className="vx-section-head">
-              <div><h2 className="vx-h2">Specifications</h2></div>
+              <h2 id="specs-title" className="vx-h2">Specifications</h2>
               {modality === 'video' ? (
                 <div className="vx-section-actions">
-                  <Segmented size="sm" ariaLabel="Preset" value={(VIDEO_PRESETS.find(p => p.lens.h === lens.h && p.lens.s === lens.s && p.lens.a === lens.a) || {}).key || 'custom'}
+                  <span className="vx-lens-label">Price at</span>
+                  <Segmented ariaLabel="Preset" value={(VIDEO_PRESETS.find(p => p.lens.h === lens.h && p.lens.s === lens.s && p.lens.a === lens.a) || {}).key || null}
                     onChange={key => { const p = VIDEO_PRESETS.find(x => x.key === key); if (p) setLens({ ...p.lens }); }}
-                    options={[...VIDEO_PRESETS.map(p => ({ value: p.key, label: `${p.label} · ${p.title}` })), { value: 'custom', label: 'Custom', disabled: true }]} />
+                    options={VIDEO_PRESETS.map(p => ({ value: p.key, label: `${p.label} · ${p.title}` }))} />
                 </div>
               ) : null}
             </div>
+            {rows.some(r => r.target != null) ? <p className="vx-footnote vx-legend"><span className="vx-best-swatch" aria-hidden="true" />Best value in the row</p> : null}
             <div className="vx-table-wrap">
-              <table className="vx-ctable">
+              <table className="vx-dtable vx-ctable">
                 <thead>
                   <tr>
-                    <th />
+                    <th><span className="vx-sr-only">Specification</span></th>
                     {shownModels.map(m => (
-                      <th key={m.id}>
+                      <th key={m.id} scope="col">
                         <div className="vx-ctable-model">
-                          <ProviderLogo provider={catalog.providers[m.provider]} size={28} />
-                          <div><div className="vx-ctable-name">{m.name}</div><code>{m.id}</code></div>
+                          <ProviderLogo provider={catalog.providers[m.provider]} size={24} />
+                          <div className="vx-ctable-text"><div className="vx-ctable-name">{m.name}</div><code title={m.id}>{m.id}</code></div>
                         </div>
                       </th>
                     ))}
@@ -2851,44 +2857,53 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 </thead>
                 <tbody>
                   {rows.map((r, i) => r.group ? (
-                    <tr key={`g${i}`} className="vx-ctable-group"><td colSpan={shownModels.length + 1}>{r.group}</td></tr>
+                    <tr key={`g${i}`} className="vx-ctable-group"><th colSpan={cols} scope="colgroup">{r.group}</th></tr>
                   ) : (
                     <tr key={r.label}>
-                      <td className="vx-ctable-label" title={r.hint}>{r.label}</td>
-                      {r.values.map((v, j) => (
-                        <td key={j} className={cls(r.target != null && v === r.target && 'is-best')}>{r.format(v)}</td>
-                      ))}
-                    </tr>
-                  ))}
-                  <tr className="vx-ctable-group"><td colSpan={shownModels.length + 1}>Performance &amp; benchmarks {preview ? <SampleMark /> : null}</td></tr>
-                  {(TELEMETRY[modality] || TELEMETRY.audio).slice(0, 3).map(def => (
-                    <tr key={def.key}>
-                      <td className="vx-ctable-label" title={def.hint}>{def.label}</td>
-                      {shownModels.map(m => {
-                        const t = m.telemetry || (preview ? sampleTelemetry(m) : null);
-                        return <td key={m.id} className="vx-muted">{t && t[def.key] != null ? `${t[def.key]}${def.unit === '%' ? '%' : ` ${def.unit}`}` : 'Coming soon'}</td>;
+                      <th scope="row" className="vx-ctable-label" title={r.hint}>{r.label}</th>
+                      {r.values.map((v, j) => {
+                        const raw = typeof v === 'object' && v !== null ? v.n : v;
+                        const shown = r.format(raw);
+                        // Values that display identically are ties, even if they differ past the shown precision.
+                        const best = r.target != null && raw != null && (raw === r.target || (typeof shown === 'string' && shown === r.format(r.target)));
+                        return <td key={j} className={cls(best && 'is-best')}>{r.format(v)}{best ? <span className="vx-sr-only"> (best)</span> : null}</td>;
                       })}
                     </tr>
                   ))}
-                  {(() => {
-                    const set = benchmarkSetFor(shownModels[0]);
-                    const items = set ? [set.composite, ...set.items].filter(Boolean).slice(0, 4) : [];
-                    return items.map(item => (
-                      <tr key={item.key}>
-                        <td className="vx-ctable-label">{item.label}</td>
-                        {shownModels.map(m => {
-                          const b = m.benchmarks || (preview ? sampleBenchmarks(m) : null);
-                          return <td key={m.id} className="vx-muted">{b && b[item.key] != null ? b[item.key] : 'Not evaluated'}</td>;
-                        })}
-                      </tr>
-                    ));
-                  })()}
+                  <tr className="vx-ctable-group"><th colSpan={cols} scope="colgroup">Performance and benchmarks {preview ? <SampleMark /> : null}</th></tr>
+                  {measured ? (
+                    <>
+                      {telemetryFor(shownModels[0]).slice(0, 3).map(def => (
+                        <tr key={def.key}>
+                          <th scope="row" className="vx-ctable-label" title={def.hint}>{def.label}</th>
+                          {shownModels.map(m => {
+                            const t = m.telemetry || (preview ? sampleTelemetry(m) : null);
+                            return <td key={m.id}>{t && t[def.key] != null ? withUnit(t[def.key], def.unit) : <span className="vx-muted">Not measured</span>}</td>;
+                          })}
+                        </tr>
+                      ))}
+                      {benchItems.map(item => (
+                        <tr key={item.key}>
+                          <th scope="row" className="vx-ctable-label">{item.label}</th>
+                          {shownModels.map(m => {
+                            const b = m.benchmarks || (preview ? sampleBenchmarks(m) : null);
+                            return <td key={m.id}>{b && b[item.key] != null ? withUnit(b[item.key], item.unit) : <span className="vx-muted">Not evaluated</span>}</td>;
+                          })}
+                        </tr>
+                      ))}
+                    </>
+                  ) : (
+                    <tr>
+                      <td colSpan={cols} className="vx-muted">
+                        Uptime, latency and {benchItems.length ? listText(benchItems.map(i => i.label)) : 'benchmark'} scores appear here once measured.
+                        {' '}<a href="/models/methodology">Methodology</a>
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
-            <div className="vx-compare-foot">
-              <UpcomingNote preview={preview} setPreview={setPreview} compact />
-            </div>
+            <p className="vx-footnote"><PreviewToggle preview={preview} setPreview={setPreview} /></p>
           </section>
         ) : null}
       </div>
