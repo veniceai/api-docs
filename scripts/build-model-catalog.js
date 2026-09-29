@@ -847,15 +847,15 @@ function renderPage(family, variants, related, providers, familiesBySlug, models
     'mode: "custom"',
     '---',
     '',
-    'import { VX, ModelPage } from "/snippets/model-hub.jsx"',
+    'import { HubMount } from "/snippets/model-hub-mount.jsx"',
     '',
     GENERATED_MARKER,
     '',
-    `<ModelPage data={${JSON.stringify(pageData)}}>`,
+    `<HubMount view="ModelPage" data={${JSON.stringify(pageData)}}>`,
     '',
     specMarkdown(family, variants, providers),
     '',
-    '</ModelPage>',
+    '</HubMount>',
     ''
   ].join('\n');
 }
