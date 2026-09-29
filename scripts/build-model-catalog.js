@@ -749,23 +749,6 @@ function mdxString(value) {
   return JSON.stringify(String(value ?? ''));
 }
 
-function describeFamily(family, primary, providers) {
-  const provider = providers[family.provider]?.name;
-  const bits = [];
-  const fmt = n => (n == null ? null : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(n < 0.01 ? 4 : 3)}`);
-  if (primary.modality === 'text' && primary.text) {
-    if (primary.text.context) bits.push(`${fmtTokens(primary.text.context)} context`);
-    if (primary.pricing.input != null) bits.push(`${fmt(primary.pricing.input)} in / ${fmt(primary.pricing.output)} out per 1M tokens`);
-  } else if (primary.modality === 'image' && primary.pricing.perImage != null) {
-    bits.push(`${fmt(primary.pricing.perImage)} ${primary.headline.unit}`);
-  } else if (primary.modality === 'video' && primary.pricing.fromPerSecond != null) {
-    bits.push(`from ${fmt(primary.pricing.fromPerSecond)} per second of video`);
-  }
-  const lead = `${family.name}${provider ? ` by ${provider}` : ''} on the Venice API`;
-  const ids = family.variants.slice(0, 3).join(', ');
-  return `${lead}${bits.length ? `: ${bits.join(', ')}` : ''}. Pricing, capabilities, limits and code samples. Model ID: ${ids}.`;
-}
-
 // API text lands in MDX, where braces and angle brackets are syntax.
 function mdxText(value) {
   return String(value || '')
@@ -776,16 +759,356 @@ function mdxText(value) {
     .replace(/\|/g, '\\|');
 }
 
-function specMarkdown(family, variants, providers) {
-  const lines = [];
-  const provider = providers[family.provider]?.name;
-  lines.push(`**${mdxText(family.name)}**${provider ? ` by ${mdxText(provider)}` : ''} is available on the Venice API.`);
-  if (family.description) lines.push('', mdxText(family.description));
-  lines.push('', '| Model ID | Variant | Privacy | Price |', '|---|---|---|---|');
-  for (const v of variants) {
-    lines.push(`| \`${v.id}\` | ${VARIANT_LABELS[v.variant] || v.variant} | ${v.privacy.toUpperCase()} | ${priceLabel(v)} |`);
+// Escapes prose but leaves `code spans` literal, since MDX doesn't parse inside them.
+function mdxInline(value) {
+  return String(value || '').split('`').map((part, i) => (i % 2 ? `\`${part}\`` : mdxText(part))).join('');
+}
+
+// ---------------------------------------------------------------- SEO copy
+// Every model page targets "<model> API". Titles, descriptions and FAQ answers
+// are generated from the same data as the page, so they can't contradict it.
+
+const TASK_PHRASES = {
+  chat: 'large language', decision: 'decision', 'image-generation': 'image generation', 'image-edit': 'image editing',
+  'image-upscale': 'image upscaling', 'background-removal': 'background removal', tts: 'text-to-speech',
+  stt: 'speech-to-text', music: 'music generation', sfx: 'sound effects', embedding: 'embedding'
+};
+const MODE_PHRASES = {
+  t2v: 'text to video', i2v: 'image to video', r2v: 'reference to video', flf: 'first and last frame to video',
+  v2v: 'video editing', motion: 'motion control', transition: 'video transitions', 'multi-angle': 'multi-angle video', upscale: 'video upscaling'
+};
+const PRIVACY_LABELS = { e2ee: 'End-to-end encrypted', tee: 'Trusted execution (TEE)', private: 'Private', anonymized: 'Anonymized' };
+// [singular, plural] predicates for "<subject> ...".
+const PRIVACY_TEXT = {
+  e2ee: ['is end-to-end encrypted', 'are end-to-end encrypted', ': prompts are encrypted on your device and decrypted only inside an attested hardware enclave, so neither Venice nor the GPU provider can read them'],
+  tee: ['runs', 'run', ' inside a hardware-secured trusted execution environment with cryptographic attestation'],
+  private: ['is private', 'are private', ': requests run on infrastructure Venice controls with zero data retention, and prompts and outputs are never stored or used for training'],
+  anonymized: ['is anonymized', 'are anonymized', ': Venice forwards requests to the provider without your identity, but the provider may retain prompt data, so use a private model for sensitive work']
+};
+
+function money(n) {
+  if (n == null || !Number.isFinite(n)) return null;
+  if (n === 0) return 'free';
+  const a = Math.abs(n);
+  if (a >= 1000) return `$${Math.round(n).toLocaleString('en-US')}`;
+  if (a >= 100) return `$${n.toFixed(0)}`;
+  if (a >= 0.1) return `$${n.toFixed(2)}`;
+  if (a >= 0.01) return `$${n.toFixed(3).replace(/0$/, '')}`;
+  return `$${Number(n.toPrecision(2))}`;
+}
+
+function listPhrase(items) {
+  const list = items.filter(Boolean);
+  if (list.length < 2) return list[0] || '';
+  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
+}
+
+function heightLabel(h) {
+  return h >= 2160 ? '4K' : h >= 1440 ? '1440p' : h ? `${h}p` : null;
+}
+
+function uniq(values) {
+  return [...new Set(values.filter(v => v != null && v !== ''))];
+}
+
+function privacySummary(tiers) {
+  if (tiers.includes('e2ee') && tiers.length > 1) return 'Private and end-to-end encrypted variants';
+  if (tiers.includes('e2ee')) return 'End-to-end encrypted';
+  if (tiers.includes('tee')) return 'Runs in a trusted execution environment';
+  if (tiers.includes('private')) return 'Private, with zero data retention';
+  return 'Anonymized access without your identity';
+}
+
+function privacySentence(tiers) {
+  if (tiers.includes('e2ee') && tiers.length > 1) return 'Private and end-to-end encrypted variants are available.';
+  if (tiers.includes('e2ee')) return 'It is end-to-end encrypted.';
+  if (tiers.includes('tee')) return 'It runs in a trusted execution environment.';
+  if (tiers.includes('private')) return 'It runs privately, with zero data retention.';
+  return 'Requests are anonymized, so the provider never sees your identity.';
+}
+
+function readableDate(ts) {
+  return ts ? new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : null;
+}
+
+// The 720p, 5-second, silent clip the explorer's Draft preset prices.
+function draftClip(model) {
+  const p = model.pricing || {};
+  const video = model.video || {};
+  if (p.status !== 'quoted' || !p.quotes) return null;
+  const res = (video.resolutions || []).filter(r => r.height).sort((a, b) => a.height - b.height);
+  const pick = res.find(r => r.height === 720) || res.find(r => r.height > 720) || res[res.length - 1];
+  const durs = (video.durations || []).filter(d => d.seconds);
+  const dur = durs.find(d => d.seconds === 5) || durs.reduce((best, d) => (!best || Math.abs(d.seconds - 5) < Math.abs(best.seconds - 5) ? d : best), null);
+  if (!dur) return null;
+  const audio = video.audio === 'native' ? 'on' : 'off';
+  const price = p.quotes[`${pick ? pick.value : '-'}|${dur.value}|${audio}`];
+  return price == null ? null : { price, seconds: dur.seconds, resolution: pick ? pick.label : null, audio: audio === 'on' };
+}
+
+function familyFacts(family, variants, providers) {
+  const primary = variants.find(v => v.id === family.primary) || variants[0];
+  const provider = providers[family.provider]?.name || null;
+  const tasks = uniq(variants.map(v => v.task));
+  const facts = { primary, provider, tasks, privacy: privacySummary(family.privacy || [primary.privacy]) };
+  if (family.modality === 'video') {
+    facts.modes = uniq(variants.map(v => MODE_PHRASES[v.variant] || MODE_PHRASES[v.video?.mode]));
+    facts.maxHeight = Math.max(0, ...variants.flatMap(v => (v.video?.resolutions || []).map(r => r.height || 0)));
+    facts.maxSeconds = Math.max(0, ...variants.flatMap(v => (v.video?.durations || []).map(d => d.seconds || 0)));
+    const quoted = variants.filter(v => v.pricing?.status === 'quoted');
+    facts.fromPerSecond = quoted.length ? Math.min(...quoted.map(v => v.pricing.fromPerSecond).filter(n => n != null)) : null;
+    facts.toPerSecond = quoted.length ? Math.max(...quoted.map(v => v.pricing.toPerSecond).filter(n => n != null)) : null;
+    facts.audio = variants.some(v => v.video?.audio === 'native') ? 'native' : variants.some(v => v.video?.audio === 'optional') ? 'optional' : 'none';
+    facts.draft = draftClip(primary);
   }
+  if (family.modality === 'image') {
+    const res = uniq(variants.flatMap(v => v.image?.resolutions || []));
+    facts.maxRes = ['4K', '2K', '1K'].find(r => res.includes(r)) || res[res.length - 1] || null;
+    facts.fromPrice = Math.min(...variants.map(v => v.pricing?.perImage).filter(n => n != null));
+    if (!Number.isFinite(facts.fromPrice)) facts.fromPrice = null;
+  }
+  return facts;
+}
+
+function seoTitle(family) {
+  return `${family.name} API`;
+}
+
+// Mintlify uses og:title as the document <title>; keep it within ~60 characters.
+function seoHeadTitle(family) {
+  const name = family.name;
+  return [`${name} API: Pricing, Specs and Examples | Venice`, `${name} API: Pricing and Specs | Venice`, `${name} API | Venice`]
+    .find(title => title.length <= 60) || `${name} API`;
+}
+
+function seoDescription(family, variants, providers) {
+  const f = familyFacts(family, variants, providers);
+  const p = f.primary.pricing || {};
+  const name = family.name;
+  let lead;
+  const extras = [` ${f.privacy}.`];
+  if (family.modality === 'text' && f.primary.text) {
+    const t = f.primary.text;
+    const caps = [t.reasoning && 'reasoning', t.caps?.tools && 'function calling', t.caps?.vision && 'vision'].filter(Boolean);
+    lead = `${name} API on Venice: ${t.context ? `${fmtTokens(t.context)} context, ` : ''}${money(p.input)} input and ${money(p.output)} output per 1M tokens.`;
+    if (caps.length) extras.push(` Supports ${listPhrase(caps)}.`);
+  } else if (family.modality === 'video') {
+    const scope = [f.maxHeight ? `up to ${heightLabel(f.maxHeight)}` : null, f.maxSeconds ? `${f.maxSeconds}s clips` : null].filter(Boolean).join(' and ');
+    const price = f.fromPerSecond != null ? `from ${money(f.fromPerSecond)} per second` : 'priced per clip with /video/quote';
+    lead = `${name} API on Venice: ${listPhrase(f.modes) || 'video generation'}${scope ? `, ${scope}` : ''}, ${price}.`;
+    if (f.audio !== 'none') extras.push(' Generates audio.');
+  } else if (family.modality === 'image') {
+    lead = `${name} API on Venice: ${listPhrase(f.tasks.map(t => TASK_PHRASES[t]))}${f.maxRes ? ` up to ${f.maxRes}` : ''}${f.fromPrice != null ? `, from ${money(f.fromPrice)} per image` : ''}.`;
+  } else if (f.primary.task === 'tts') {
+    const voices = f.primary.audio?.voices?.length;
+    lead = `${name} API on Venice: text to speech${voices ? ` with ${voices} voices` : ''} at ${money(p.per1MChars)} per 1M characters${p.perMinute != null ? ` (about ${money(p.perMinute)} per minute)` : ''}.`;
+  } else if (f.primary.task === 'stt') {
+    lead = `${name} API on Venice: speech to text at ${money(p.perHour)} per audio hour${p.perMinute != null ? ` (${money(p.perMinute * 1000)} per 1,000 minutes)` : ''}.`;
+  } else if (family.modality === 'audio') {
+    const price = p.perMinute != null ? `${money(p.perMinute)} per minute of audio` : p.perTrack != null ? `${money(p.perTrack)} per track` : 'priced with /audio/quote';
+    lead = `${name} API on Venice: ${TASK_PHRASES[f.primary.task] || 'audio generation'}, ${price}.`;
+  } else if (family.modality === 'embedding') {
+    const e = f.primary.embedding || {};
+    lead = `${name} embeddings API on Venice: ${[e.dimensions ? `${e.dimensions.toLocaleString('en-US')} dimensions` : null, e.maxInputTokens ? `${fmtTokens(e.maxInputTokens)} input tokens` : null, `${money(p.input)} per 1M tokens`].filter(Boolean).join(', ')}.`;
+  } else {
+    lead = `${name} API on Venice: ${TASK_PHRASES[f.primary.task] || 'model'} access${p.input != null ? ` at ${money(p.input)} per 1M input tokens` : ''}.`;
+  }
+  extras.push(' Pricing, specs and code examples.');
+  return extras.reduce((text, extra) => (text.length + extra.length <= 160 ? text + extra : text), lead);
+}
+
+function seoKeywords(family, variants, providers) {
+  const provider = providers[family.provider]?.name;
+  const primary = variants.find(v => v.id === family.primary) || variants[0];
+  const task = family.task === 'chat' ? 'LLM' : family.modality === 'video' ? MODE_PHRASES[primary.variant] || 'video generation' : TASK_PHRASES[family.task] || family.modality;
+  return uniq([`${family.name} API`, `${family.name} API pricing`, `${family.name} pricing`, family.name,
+    provider ? `${provider} ${family.name}` : null, ...variants.map(v => v.id), `${task} API`, 'Venice API']);
+}
+
+function faqFor(family, variants, providers) {
+  const f = familyFacts(family, variants, providers);
+  const name = family.name;
+  const primary = f.primary;
+  const p = primary.pricing || {};
+  const faq = [];
+  const variantName = v => VARIANT_LABELS[v.variant] || v.variant;
+
+  let cost;
+  if (family.modality === 'text' && primary.text) {
+    cost = `${money(p.input)} per 1M input tokens and ${money(p.output)} per 1M output tokens${p.cacheRead != null ? `, with cached input at ${money(p.cacheRead)} per 1M` : ''}.`;
+    const others = variants.filter(v => v !== primary && v.pricing && (v.pricing.input !== p.input || v.pricing.output !== p.output));
+    if (others.length) cost += ` ${others.map(v => `The ${variantName(v)} variant costs ${money(v.pricing.input)} input and ${money(v.pricing.output)} output.`).join(' ')}`;
+  } else if (family.modality === 'video') {
+    cost = f.fromPerSecond != null
+      ? `From ${money(f.fromPerSecond)} to ${money(f.toPerSecond)} per second of video, depending on resolution, duration and audio.${f.draft ? ` A ${f.draft.seconds}-second ${f.draft.resolution || ''} clip${f.draft.audio ? ' with audio' : ''} costs ${money(f.draft.price)}.` : ''} Call \`POST /video/quote\` for the exact price before queueing.`
+      : `Price depends on the input video. Call \`POST /video/quote\` for the exact price before queueing.`;
+  } else if (family.modality === 'image') {
+    const byRes = p.byResolution ? Object.entries(p.byResolution).map(([res, value]) => `${money(value)} at ${res}`) : [];
+    cost = byRes.length ? `${listPhrase(byRes)} per image.` : `${money(p.perImage)} ${primary.headline?.unit || 'per image'}.`;
+    const edit = variants.find(v => v.task === 'image-edit' && v !== primary);
+    if (edit && edit.pricing?.perImage != null) cost += ` Editing costs ${money(edit.pricing.perImage)} per edit.`;
+  } else if (primary.task === 'tts') {
+    cost = `${money(p.per1MChars)} per 1M characters of input text, about ${money(p.perMinute)} per minute of generated speech.`;
+  } else if (primary.task === 'stt') {
+    cost = `${money(p.perSecond)} per second of audio, which is ${money(p.perHour)} per hour.`;
+  } else if (family.modality === 'audio') {
+    cost = p.perMinute != null ? `${money(p.perMinute)} per minute of generated audio.` : p.perTrack != null ? `${money(p.perTrack)} per generated track.` : 'Call `POST /audio/quote` for the exact price.';
+  } else if (p.input != null) {
+    cost = `${money(p.input)} per 1M input tokens.`;
+  }
+  if (cost) faq.push({ q: `How much does the ${name} API cost?`, a: `${cost} Prices are in USD and can be paid in DIEM at parity.` });
+
+  const ids = variants.length > 1
+    ? `Use \`${primary.id}\` as the \`model\` parameter. Other variants: ${variants.filter(v => v !== primary).map(v => `\`${v.id}\` (${variantName(v)})`).join(', ')}.`
+    : `Use \`${primary.id}\` as the \`model\` parameter.`;
+  faq.push({ q: `What is the ${name} model ID?`, a: ids });
+
+  const tiers = uniq(variants.map(v => v.privacy));
+  const privacy = tiers.map(tier => {
+    const holders = variants.filter(v => v.privacy === tier);
+    const split = variants.length > 1 && tiers.length > 1;
+    const subject = split ? `The ${listPhrase(holders.map(variantName))} ${holders.length > 1 ? 'variants' : 'variant'}` : name;
+    const [one, many, detail] = PRIVACY_TEXT[tier] || [`is ${tier}`, `are ${tier}`, ''];
+    return `${subject} ${split && holders.length > 1 ? many : one}${detail}.`;
+  }).join(' ');
+  faq.push({ q: `Is the ${name} API private?`, a: privacy });
+
+  if (family.modality === 'text' && primary.text) {
+    const t = primary.text;
+    faq.push({ q: `What is the context window of ${name}?`, a: `${t.context ? `${fmtTokens(t.context)} tokens of context` : 'The context window is not published'}${t.maxOutput ? `, with up to ${fmtTokens(t.maxOutput)} output tokens per response` : ''}.` });
+    const on = [t.caps?.tools && 'function calling', t.caps?.structured && 'structured outputs', t.reasoning && 'reasoning', t.caps?.vision && 'image input', t.caps?.webSearch && 'web search', p.cacheRead != null && 'prompt caching'].filter(Boolean);
+    const effort = t.reasoning?.effort?.length ? ` Reasoning effort is adjustable with \`reasoning_effort\`: ${listPhrase(t.reasoning.effort)}${t.reasoning.defaultEffort ? ` (default ${t.reasoning.defaultEffort})` : ''}.` : '';
+    if (on.length) faq.push({ q: `What does ${name} support?`, a: `${name} supports ${listPhrase(on)}.${effort}` });
+  } else if (family.modality === 'video') {
+    const v = primary.video || {};
+    const parts = [
+      v.resolutions?.length ? `Resolutions: ${v.resolutions.map(r => r.label).join(', ')}.` : null,
+      v.durations?.length ? `Durations: ${v.durations.map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ')}.` : null,
+      v.aspectRatios?.length ? `Aspect ratios: ${v.aspectRatios.join(', ')}.` : null,
+      `Audio: ${v.audio === 'native' ? 'always generated' : v.audio === 'optional' ? 'optional, with `"audio": true`' : 'none'}.`
+    ].filter(Boolean);
+    faq.push({ q: `What resolutions and durations does ${name} support?`, a: parts.join(' ') });
+  } else if (family.modality === 'image') {
+    const i = primary.image || {};
+    const parts = [
+      i.resolutions?.length ? `Resolutions: ${i.resolutions.join(', ')}.` : null,
+      i.aspectRatios?.length ? `Aspect ratios: ${i.aspectRatios.filter(a => a !== 'auto').join(', ')}.` : null,
+      i.promptLimit ? `Prompts up to ${i.promptLimit.toLocaleString('en-US')} characters.` : null
+    ].filter(Boolean);
+    if (parts.length) faq.push({ q: `What resolutions does ${name} support?`, a: parts.join(' ') });
+  } else if (primary.task === 'tts' && primary.audio?.voices?.length) {
+    const voices = primary.audio.voices;
+    faq.push({ q: `How many voices does ${name} have?`, a: `${voices.length} voices, for example ${voices.slice(0, 3).map(v => `\`${v}\``).join(', ')}.${primary.audio.formats?.length ? ` Output formats: ${primary.audio.formats.join(', ')}.` : ''}` });
+  } else if (family.modality === 'embedding' && primary.embedding) {
+    const e = primary.embedding;
+    faq.push({ q: `How many dimensions do ${name} embeddings have?`, a: `${e.dimensions ? `${e.dimensions.toLocaleString('en-US')} dimensions` : 'Dimensions are not published'}${e.maxInputTokens ? `, with up to ${fmtTokens(e.maxInputTokens)} input tokens per item` : ''}.` });
+  }
+
+  const endpoints = primary.endpoints || [];
+  const recommended = endpoints.find(e => e.recommended) || endpoints[0];
+  if (recommended) {
+    const flow = endpoints.some(e => /-(retrieve|quote)$/.test(e.id));
+    const alternatives = endpoints.filter(e => e !== recommended && e.supported !== false && !flow);
+    const answer = flow
+      ? `Queue a job with \`${recommended.method} ${recommended.path}\`, then poll \`${(endpoints.find(e => /-retrieve$/.test(e.id)) || recommended).path}\` for the result.`
+      : `Call \`${recommended.method} ${recommended.path}\`.${alternatives.length ? ` ${listPhrase(alternatives.map(e => `\`${e.path}\`${e.status === 'alpha' ? ' (Alpha)' : ''}`))} ${alternatives.length > 1 ? 'are' : 'is'} also supported.` : ''}${recommended.recommendation ? ` ${recommended.recommendation}` : ''}`;
+    faq.push({ q: `Which endpoint does the ${name} API use?`, a: answer });
+  }
+  return faq;
+}
+
+// The page's server-rendered text: what crawlers and readers without
+// JavaScript get, and what "Plain-text specification" shows.
+function specMarkdown(family, variants, providers, related, familiesBySlug, modelsById, faq, samples) {
+  const f = familyFacts(family, variants, providers);
+  const primary = f.primary;
+  const name = mdxText(family.name);
+  const lines = [`# ${name} API`, ''];
+  const kind = family.modality === 'video' ? listPhrase(f.modes) || 'video' : listPhrase(f.tasks.map(t => TASK_PHRASES[t]).filter(Boolean)) || family.modality;
+  const article = /^[aeiou]/i.test(kind) ? 'an' : 'a';
+  lines.push(`${name} is ${article} ${mdxText(kind)} model${f.provider ? ` by ${mdxText(f.provider)}` : ''}, available on the Venice API as \`${primary.id}\`. ${privacySentence(family.privacy || [primary.privacy])}`);
+  if (family.description) lines.push('', mdxText(family.description));
+
+  lines.push('', `## ${name} API pricing`, '', '| Model ID | Variant | Privacy | Price |', '|---|---|---|---|');
+  for (const v of variants) {
+    lines.push(`| \`${v.id}\` | ${VARIANT_LABELS[v.variant] || v.variant} | ${PRIVACY_LABELS[v.privacy] || v.privacy} | ${priceLabel(v)} |`);
+  }
+  const quotes = primary.pricing?.quotes;
+  if (family.modality === 'video' && quotes && primary.video?.resolutions?.length && primary.video?.durations?.length) {
+    const res = primary.video.resolutions.filter(r => r.height).sort((a, b) => a.height - b.height);
+    const audio = primary.video.audio === 'native' ? 'on' : 'off';
+    lines.push('', `Clip prices for \`${primary.id}\`${audio === 'on' ? ' with audio' : ', silent'}:`, '', `| Duration | ${res.map(r => r.label).join(' | ')} |`, `|---|${res.map(() => '---').join('|')}|`);
+    for (const d of primary.video.durations) {
+      lines.push(`| ${d.seconds ? `${d.seconds}s` : d.value} | ${res.map(r => money(quotes[`${r.value}|${d.value}|${audio}`]) || '—').join(' | ')} |`);
+    }
+  }
+
+  const tierLabels = uniq(variants.map(v => PRIVACY_LABELS[v.privacy] || v.privacy)).join(', ');
+  const specs = [['Provider', f.provider], ['Released', readableDate(primary.created)], ['Privacy', tierLabels],
+    ['Open weights', family.openWeights ? 'Yes' : null], ['License', primary.license]];
+  if (primary.text) {
+    const t = primary.text;
+    specs.push(['Context window', t.context ? `${fmtTokens(t.context)} tokens` : null], ['Max output', t.maxOutput ? `${fmtTokens(t.maxOutput)} tokens` : null],
+      ['Reasoning effort', t.reasoning?.effort?.length ? t.reasoning.effort.join(', ') : t.reasoning ? 'Not adjustable' : null],
+      ['Served precision', t.quantization ? t.quantization.toUpperCase() : null]);
+  }
+  if (primary.video) {
+    const v = primary.video;
+    specs.push(['Modes', listPhrase(f.modes)], ['Resolutions', v.resolutions?.map(r => r.label).join(', ')], ['Durations', v.durations?.map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ')],
+      ['Aspect ratios', v.aspectRatios?.join(', ')], ['Audio', v.audio === 'native' ? 'Always generated' : v.audio === 'optional' ? 'Optional' : 'None']);
+  }
+  if (primary.image) {
+    const i = primary.image;
+    specs.push(['Resolutions', i.resolutions?.join(', ')], ['Aspect ratios', i.aspectRatios?.filter(a => a !== 'auto').join(', ')], ['Prompt limit', i.promptLimit ? `${i.promptLimit.toLocaleString('en-US')} characters` : null]);
+  }
+  if (primary.task === 'tts') specs.push(['Voices', primary.audio?.voices?.length || null], ['Formats', primary.audio?.formats?.join(', ')]);
+  if (primary.embedding) specs.push(['Dimensions', primary.embedding.dimensions?.toLocaleString('en-US')], ['Max input', primary.embedding.maxInputTokens ? `${fmtTokens(primary.embedding.maxInputTokens)} tokens` : null]);
+  const specRows = specs.filter(([, value]) => value != null && value !== '');
+  if (specRows.length) {
+    lines.push('', `## ${name} specifications`, '', '| Spec | Value |', '|---|---|', ...specRows.map(([label, value]) => `| ${label} | ${mdxText(value)} |`));
+  }
+
+  const recommended = (primary.endpoints || []).find(e => e.recommended) || (primary.endpoints || [])[0];
+  if (samples && samples.curl) {
+    lines.push('', `## How to use the ${name} API`, '');
+    if (recommended) lines.push(`Send requests to \`${recommended.method} https://api.venice.ai/api/v1${recommended.path}\` with \`"model": "${primary.id}"\` and your API key.`, '');
+    lines.push('```bash', samples.curl, '```');
+  }
+
+  if (faq.length) {
+    lines.push('', `## ${name} API FAQ`);
+    faq.forEach(item => lines.push('', `### ${mdxInline(item.q)}`, '', mdxInline(item.a)));
+  }
+
+  const links = [...(related.versions || []), ...(related.similar || [])]
+    .filter((slug, i, all) => all.indexOf(slug) === i && familiesBySlug[slug])
+    .map(slug => {
+      const other = familiesBySlug[slug];
+      const price = priceLabel(modelsById[other.primary]);
+      return `- [${mdxText(other.name)} API](/models/${slug}): ${mdxText(price)}`;
+    });
+  if (links.length) lines.push('', '## Related models', '', ...links);
   return lines.join('\n');
+}
+
+// Reuses the request builders from the compiled hub bundle, so the page's
+// static text shows the same example as the interactive API section.
+let hubSamples;
+function codeSamplesFor(model) {
+  if (hubSamples === undefined) {
+    hubSamples = null;
+    try {
+      const bundle = JSON.parse(fs.readFileSync(path.join(DATA, 'model-hub.bundle.json'), 'utf-8'));
+      const noop = () => null;
+      const hub = new Function(`return (${bundle.code})`)()({ h: noop, Fragment: noop, useState: noop, useEffect: noop, useRef: noop, useMemo: noop, useCallback: noop });
+      hubSamples = hub.codeSamples || null;
+    } catch (error) {
+      console.warn(`Code samples unavailable: ${error.message}`);
+    }
+  }
+  if (!hubSamples) return null;
+  const endpoint = (model.endpoints || []).find(e => e.recommended);
+  return hubSamples(model, endpoint && endpoint.id);
 }
 
 function priceLabel(model) {
@@ -825,9 +1148,8 @@ function relatedSummary(slugs, familiesBySlug, modelsById) {
 }
 
 function renderPage(family, variants, related, providers, familiesBySlug, modelsById) {
-  const primary = variants[0];
-  const providerName = providers[family.provider]?.name;
-  const keywords = [...new Set([family.name, providerName, ...family.variants].filter(Boolean))];
+  const primary = variants.find(v => v.id === family.primary) || variants[0];
+  const faq = faqFor(family, variants, providers);
   const pageData = {
     family: compactFamily(family),
     models: variants.map(stripForPage),
@@ -836,14 +1158,15 @@ function renderPage(family, variants, related, providers, familiesBySlug, models
       versions: relatedSummary(related.versions, familiesBySlug, modelsById)
     },
     providers: Object.fromEntries([...new Set([family.provider, ...related.similar.concat(related.versions).map(s => familiesBySlug[s].provider)])]
-      .filter(slug => providers[slug]).map(slug => [slug, providers[slug]]))
+      .filter(slug => providers[slug]).map(slug => [slug, providers[slug]])),
+    faq
   };
   return [
     '---',
-    `title: ${mdxString(family.name)}`,
-    `description: ${mdxString(describeFamily(family, primary, providers))}`,
-    `"og:title": ${mdxString(`${family.name} · Venice API models`)}`,
-    `keywords: ${JSON.stringify(keywords)}`,
+    `title: ${mdxString(seoTitle(family))}`,
+    `description: ${mdxString(seoDescription(family, variants, providers))}`,
+    `"og:title": ${mdxString(seoHeadTitle(family))}`,
+    `keywords: ${JSON.stringify(seoKeywords(family, variants, providers))}`,
     'mode: "custom"',
     '---',
     '',
@@ -851,11 +1174,20 @@ function renderPage(family, variants, related, providers, familiesBySlug, models
     '',
     GENERATED_MARKER,
     '',
-    `<HubMount view="ModelPage" data={${JSON.stringify(pageData)}}>`,
+    `<HubMount view="ModelPage" data={${JSON.stringify(pageData)}} />`,
     '',
-    specMarkdown(family, variants, providers),
+    // Outside <HubMount>: Mintlify server-renders page MDX, but not snippet
+    // component children, raw <details> or <noscript>. This is the text
+    // crawlers without JavaScript read; <Accordion> keeps it collapsed.
+    '<div className="vx-static">',
     '',
-    '</HubMount>',
+    '<Accordion title="Plain-text specification">',
+    '',
+    specMarkdown(family, variants, providers, related, familiesBySlug, modelsById, faq, codeSamplesFor(primary)),
+    '',
+    '</Accordion>',
+    '',
+    '</div>',
     ''
   ].join('\n');
 }

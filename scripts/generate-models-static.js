@@ -24,6 +24,17 @@ const CATALOG_ID = 'model-catalog-static';
 
 const PRIVATE_TYPES = new Set(['upscale']);
 
+// Model ID → family page slug, from the catalog build-model-catalog.js writes.
+// Missing on a fresh checkout; names are then left unlinked.
+const FAMILY_BY_ID = (() => {
+  try {
+    const catalog = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'model-catalog.json'), 'utf-8'));
+    return Object.fromEntries(Object.entries(catalog.models || {}).map(([id, model]) => [id, model.family]));
+  } catch {
+    return {};
+  }
+})();
+
 function readModels() {
   if (!fs.existsSync(SNAPSHOT_PATH)) {
     throw new Error('Missing data/static-models.json');
@@ -134,8 +145,10 @@ function markdownTable(headers, rows) {
 }
 
 function row(model, extraCols = []) {
+  const name = tableCell(getModelName(model));
+  const slug = FAMILY_BY_ID[model.id];
   return [
-    tableCell(getModelName(model)),
+    slug ? `[${name.replace(/[[\]]/g, '\\$&')}](/models/${slug})` : name,
     inlineCode(model.id),
     ...extraCols
   ];

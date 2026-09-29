@@ -38,7 +38,7 @@ Four decisions carry most of the value:
 1. **Families, not IDs.** 366 model IDs collapse into 251 families (snapshot of Sep 28). Video drops from 132 rows to 53, because text-to-video, image-to-video and reference-to-video modes of one model are one family. E2EE and Fast variants hang off their base model. The page is the family; the variant is a switch.
 2. **One reference price per modality, next to the native unit.** Text shows a blended 3:1 price. Video prices come from a full quote matrix computed at build time, which replaces the per-row live quotes and the "Variable" label. Audio shows per minute and per hour.
 3. **Same prompts, every model.** Image and video models are shown on Venice's standard prompt suite (already produced for venice.ai/models), so the explorer gallery and the compare view are real comparisons rather than a highlight reel.
-4. **Built for the data we don't have yet.** Performance and benchmark modules are designed, placed and specified now, render an honest "not published yet" state today, and show a watermarked sample layout with `?preview=1`.
+4. **Built for the data we don't have yet.** Performance and benchmark modules are designed, placed and specified now. For this first version they show labeled sample values by default so the layout can be reviewed; `?preview=0` shows the honest "not measured yet" state they fall back to without data.
 
 ## 2. What is wrong today
 
@@ -55,7 +55,7 @@ Four decisions carry most of the value:
 2. **Normalize, then disclose.** Always show a comparable number and the assumption behind it, and always show the native billing unit next to it.
 3. **Privacy is a first-class dimension.** E2EE, TEE, Private and Anonymized are Venice's differentiator. Every row, card and page shows the tier, and filtering by tier shows the price of that tier's variant.
 4. **Measure the model as served.** Benchmarks and telemetry describe Venice's endpoint, not the lab's press release, and say so.
-5. **Honest empty states.** Missing data is shown as missing, with what will appear and when. Sample values only ever appear behind `?preview=1` and are watermarked.
+5. **Honest empty states.** Missing data is shown as missing, with what will appear and when. Sample values always carry a "Sample data" label. They are on by default in the prototype (`SAMPLE_DATA_DEFAULT` in `src/model-hub.jsx`) and must be switched off before launch, since search engines that run JavaScript would index them.
 6. **Agent-readable.** Every page has a plain-text spec, a "Copy for AI" button and stable URLs. The catalog JSON is public.
 7. **Generated, not hand-written.** Every number comes from `GET /models`, `POST /video/quote` or a declared data file. A curated overrides file covers gaps until the API exposes them.
 
@@ -123,7 +123,7 @@ All state is in the URL (`?m=video&mode=i2v&privacy=private&lens=1080-10-on&view
 
 Image and video default to a gallery of cards with the model's reference render (video plays on hover). Every card and row has a compare checkbox.
 
-Columns drop by priority below 1280, 1024 and 700 px instead of scrolling sideways. On phones a row is the model name, its headline price and one line with provider, key spec and privacy tier. With `?preview=1`, sample score, speed and uptime columns show where measured data will sit.
+Columns drop by priority below 1280, 1024 and 700 px instead of scrolling sideways. On phones a row is the model name, its headline price and one line with provider, key spec and privacy tier. Sample score, speed and uptime columns show where measured data will sit (hidden with `?preview=0`).
 
 ### The row follows the filters
 
@@ -158,10 +158,21 @@ Prototype: `/models/glm-5-3`, `/models/veo-3-1-full-quality`, `/models/nano-bana
    - **Parameters** (image, video): resolutions, aspect ratios drawn to shape, durations, inputs, audio, prompt limit.
    - **Voices** (text to speech): searchable, click to copy, first 48 shown.
    - **API**: an endpoint selector when there are alternatives, with the recommendation as text; Recommended is only badged for alternatives, not for steps of one flow (queue, retrieve, quote). Alpha and unsupported endpoints are marked. Code in cURL, Python and TypeScript, generated for the selected variant and endpoint (reasoning effort, video inputs, voices filled in). "Get an API key" sits in the section header.
-   - **Performance** and **Benchmarks**: one sentence each naming what will be published and how, until data exists; see sections [11](#11-performance-telemetry-future) and [12](#12-benchmarks-future).
+   - **Performance**: p50 with p95 for latency metrics, the window for the rest, 30-day uptime bars and the probe setup. **Benchmarks**: the composite index, serving parity for open-weight models Venice hosts, a reasoning-effort switch, and per-benchmark score ± 95% interval with its provenance (Venice-verified, independent or lab-reported), source and test date. Both show labeled sample values in the prototype; without data they fall back to one sentence naming what will be published. See sections [11](#11-performance-telemetry-future) and [12](#12-benchmarks-future).
    - **Variants** table (families with more than one variant): differences on one screen (context, max output, prices, effort levels, precision).
    - **Related** (when there are any): other versions of the same line, and similar models by task, price and recency.
-   - **Plain-text specification**: a collapsed Markdown block, also present in the page source for search and LLM ingestion.
+   - **FAQ**: cost, model ID, privacy, the modality's key limits and which endpoint to call, generated from the same data as the page.
+   - **Plain-text specification**: a collapsed disclosure holding the server-rendered text version of the page (below).
+
+### SEO
+
+Each model page targets "<model> API":
+
+- **Title and description.** `title` is "Wan 3.0 Prime Pro API" (also used for the social image and site search). `og:title`, which Mintlify uses as the document `<title>`, adds "Pricing, Specs and Examples | Venice" within 60 characters. The meta description is written per modality, 110–160 characters: what the model does, its limits, the starting price and the privacy tier.
+- **Headings.** The visible H1 is "<model> API".
+- **Server-rendered text.** Mintlify server-renders page MDX but not the children of snippet components, so the interactive page is invisible to crawlers that don't run JavaScript. The generator therefore writes a full text version after `<HubMount>`: H1, intro, pricing (with the clip-price matrix for video), specifications, a cURL example from the same builder the API section uses, the FAQ and links to related model pages. It sits in the collapsed "Plain-text specification" disclosure.
+- **Links.** Related-model links in that text, and model names in the modality pages' static tables, point to model pages with "<model> API" or model-name anchors. Pages stay in the sitemap through the hidden, `searchable` navigation group.
+- **Structured data.** Mintlify emits its own JSON-LD (WebPage, BreadcrumbList, TechArticle) from the frontmatter, so no custom schema is added.
 
 ### Endpoint guidance
 
@@ -181,7 +192,7 @@ Prototype: `/models/compare?ids=veo3.1-full-text-to-video,kling-v3-pro-text-to-v
 - Entry points: the explorer tray, "Compare" on model pages, the lightbox's "Compare this prompt", suggested comparisons, or a pasted link.
 - **Side by side** (image and video): prompt tabs, the prompt text, then each model's render of it. Video has "Play all in sync".
 - **Specifications**: rows grouped as overview, pricing, limits and capabilities, with the best value per row highlighted and one legend above the table. Values that display the same share the highlight; rows where every model has the same value get none. Video pricing follows the Draft/Production lens.
-- **Performance and benchmarks**: one row names what will appear until data exists; `?preview=1` shows the rows with sample data.
+- **Performance and benchmarks**: rows with labeled sample data in the prototype; without data, one row names what will appear.
 
 ## 8. Pricing normalization
 
@@ -262,7 +273,7 @@ npx http-server . -p 3333 --cors -c-1 &      # any static server with CORS; hub 
 npx mintlify dev
 ```
 
-Open `/models/overview`. Add `?preview=1` to any hub page to see the sample layout for performance and benchmarks. UI changes need only `build-model-hub.js` and a browser refresh; no page recompiles.
+Open `/models/overview`. Sample performance and benchmark data is on by default; add `?preview=0` to any hub page to see the empty states. UI changes need only `build-model-hub.js` and a browser refresh; no page recompiles.
 
 ### CI
 
