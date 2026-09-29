@@ -472,8 +472,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const ref = useRef(null);
     const play = () => { if (ref.current) ref.current.play().catch(() => {}); };
     const stop = () => { if (ref.current && !autoPlay) { ref.current.pause(); } };
+    // Without a poster, the #t fragment makes browsers seek and paint a first frame.
     return (
-      <video ref={ref} className={className} src={src} poster={poster} muted loop playsInline preload="metadata"
+      <video ref={ref} className={className} src={poster || /#t=/.test(src) ? src : `${src}#t=0.1`} poster={poster} muted loop playsInline preload="metadata"
         autoPlay={autoPlay} onMouseEnter={play} onMouseLeave={stop} onFocus={play} onBlur={stop} />
     );
   };
@@ -522,11 +523,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const media = model.media || [];
     const isVideo = model.modality === 'video';
     if (!media.length) {
-      return (
-        <p className="vx-text">
-          No reference renders yet. Every {isVideo ? 'video' : 'image'} model is rendered on the same reference prompts so outputs can be compared side by side; this one has not been rendered.
-        </p>
-      );
+      return <p className="vx-text">This variant has not been rendered on the reference prompts yet.</p>;
     }
     return (
       <>
@@ -1040,8 +1037,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       } });
       if (modality !== 'video') cols.push({ key: 'p-speed', label: speed[1], align: 'right', hide: 'lg', render: row => <span className="vx-num">{withUnit(sampleTelemetry(row.display)[speed[0]], speed[2])}</span> });
     }
-    // Text and video tables are already at full width; speed and uptime live on their model pages.
-    if (modality !== 'text' && modality !== 'video') {
+    // Text, image and video tables are already at full width; speed and uptime live on their model pages.
+    if (modality !== 'text' && modality !== 'video' && modality !== 'image') {
       cols.push({ key: 'p-uptime', label: 'Uptime', align: 'right', hide: 'md', render: row => <span className="vx-num">{withUnit(sampleTelemetry(row.display).uptime, '%')}</span> });
     }
     return cols;
@@ -1254,6 +1251,33 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           {isVideo ? <ModeList modes={modeChips(family, catalog)} active={display.variant} labels={MODE_SHORT} /> : null}
         </div>
       </article>
+    );
+  };
+
+  const hasRenders = (family, catalog) => family.variants.some(id => ((catalog.models[id] || {}).media || []).length);
+
+  // Families without reference renders go in a table under the gallery rather
+  // than as empty tiles, so the grid only shows real outputs.
+  const Gallery = ({ rows, columns, sort, setSort, providers, now, lens, compare, catalog, modality }) => {
+    const rendered = rows.filter(row => hasRenders(row.family, catalog));
+    const pending = rows.filter(row => !hasRenders(row.family, catalog));
+    return (
+      <>
+        {rendered.length ? (
+          <div className={cls('vx-cards', modality === 'video' && 'is-video')}>
+            {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} providers={providers} now={now} lens={lens} compare={compare} catalog={catalog} />)}
+          </div>
+        ) : null}
+        {pending.length ? (
+          <section className="vx-unrendered" aria-labelledby="vx-unrendered-title">
+            <h3 id="vx-unrendered-title" className="vx-h3">No reference renders yet <span className="vx-muted">{plural(pending.length, 'family')}</span></h3>
+            <p className="vx-footnote">
+              These models haven't been rendered on the shared prompts. Editing and upscaling models need an input image, so they'll get before-and-after samples instead.
+            </p>
+            <ExplorerTable rows={pending} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} compare={compare} />
+          </section>
+        ) : null}
+      </>
     );
   };
 
@@ -1506,9 +1530,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   <button type="button" className="vx-btn vx-btn-sm" onClick={() => { setFilters(EMPTY_FILTERS); setQuery(''); }}>Clear {query && filterCount ? 'search and filters' : query ? 'search' : 'filters'}</button>
                 </Empty>
               ) : canGrid && view === 'grid' ? (
-                <div className={cls('vx-cards', modality === 'video' && 'is-video')}>
-                  {rows.map(row => <ExplorerCard key={row.family.slug} row={row} providers={providers} now={now} lens={lens} compare={compare} catalog={catalog} />)}
-                </div>
+                <Gallery rows={rows} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} lens={lens} compare={compare} catalog={catalog} modality={modality} />
               ) : (
                 <ExplorerTable rows={rows} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} compare={compare} />
               )}
@@ -1675,9 +1697,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   /* ------------------------------------------------------------ model page */
 
-  const pageSections = (model, { variants = 1, related = false, faq = false } = {}) => {
+  const pageSections = (model, { variants = 1, related = false, faq = false, examples = false } = {}) => {
     const list = [];
-    if (model.modality === 'image' || model.modality === 'video') list.push(['examples', 'Reference outputs']);
+    if (examples) list.push(['examples', 'Reference outputs']);
     if (model.modality === 'text' && model.task === 'chat') list.push(['capabilities', 'Capabilities']);
     list.push(['pricing', 'Pricing']);
     if (model.modality === 'image' || model.modality === 'video') list.push(['parameters', 'Parameters']);
@@ -2476,7 +2498,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const activeEndpoint = (model.endpoints || []).find(e => e.id === endpointId && e.supported !== false) || recommended;
     const hasRelated = Boolean(related && ((related.versions || []).length || (related.similar || []).length));
     const faq = data.faq || [];
-    const sections = pageSections(model, { variants: models.length, related: hasRelated, faq: faq.length > 0 });
+    const hasExamples = (model.modality === 'image' || model.modality === 'video') && models.some(m => (m.media || []).length);
+    const sections = pageSections(model, { variants: models.length, related: hasRelated, faq: faq.length > 0, examples: hasExamples });
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const has = id => sections.some(([key]) => key === id);
     const modalityMeta = MODALITIES.find(m => m.key === family.modality) || MODALITIES[0];
