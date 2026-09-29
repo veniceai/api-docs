@@ -271,8 +271,8 @@ Model pages are English-only in this branch. The eight localized trees still use
 
 ### Performance budget
 
-- `data/model-hub.bundle.json`: the compiled UI, about 183 KB (roughly 45 KB gzipped). Fetched once per session on hub pages only, cached by the browser, revalidated on each visit.
-- `data/model-catalog.json`: 437 KB minified (about 60 KB gzipped), fetched once per session by the explorer and compare view. Model pages don't fetch it; their data is inline (4 to 30 KB).
+- `data/model-hub.bundle.json`: the compiled UI, about 189 KB (45 KB gzipped). Fetched once per session on hub pages only, cached by the browser, revalidated on each visit.
+- `data/model-catalog.json`: about 590 KB minified (50 KB gzipped), fetched once per session by the explorer and compare view. Model pages don't fetch it; their data is inline (4 to 30 KB).
 - Each hub page carries only the 3 KB mount plus its own data and Markdown.
 
 ### Build cost
