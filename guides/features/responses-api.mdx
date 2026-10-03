@@ -1,0 +1,156 @@
+---
+title: "Responses API"
+description: "Use Venice through OpenAI's Responses API format: typed output items, streaming events, and function calling, plus the current limitations of the beta endpoint."
+'og:title': "Responses API | Venice API Docs"
+'og:description': "How to use the Venice Responses API, what it supports, and its current limitations."
+---
+
+`POST /responses` accepts requests in [OpenAI's Responses API format](https://platform.openai.com/docs/api-reference/responses) and returns typed output items: `reasoning`, `message`, `function_call`, and `web_search_call`. It works with every Venice text model and accepts an API key or [x402 wallet auth](/guides/integrations/x402-venice-api).
+
+<Warning>
+  **This endpoint is in beta** and available to all API users. Venice converts each Responses request into a [Chat Completions](/api-reference/endpoint/chat/completions) request, runs it, and converts the result back. Anything the Chat Completions format cannot express is ignored today. Read [Limitations](#limitations) before building on it.
+</Warning>
+
+## When to use it
+
+Use `/responses` when your client already speaks the Responses format, for example coding agents and SDKs built on OpenAI's `responses.create`. For everything else, [`/chat/completions`](/api-reference/endpoint/chat/completions) is the most complete way to use Venice: it supports structured outputs, file inputs, E2EE models, and every [`venice_parameters`](/api-reference/endpoint/chat/completions#body-venice-parameters) option.
+
+## Quick start
+
+<CodeGroup>
+
+```bash cURL
+curl https://api.venice.ai/api/v1/responses \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "venice-uncensored",
+    "input": "Explain why the sky is blue in one sentence.",
+    "venice_parameters": { "include_venice_system_prompt": false }
+  }'
+```
+
+```python Python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://api.venice.ai/api/v1", api_key="YOUR_VENICE_API_KEY")
+
+response = client.responses.create(
+    model="venice-uncensored",
+    input="Explain why the sky is blue in one sentence.",
+    extra_body={"venice_parameters": {"include_venice_system_prompt": False}},
+)
+print(response.output_text)
+```
+
+```javascript JavaScript
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://api.venice.ai/api/v1", apiKey: process.env.VENICE_API_KEY });
+
+const response = await client.responses.create({
+  model: "venice-uncensored",
+  input: "Explain why the sky is blue in one sentence.",
+  venice_parameters: { include_venice_system_prompt: false },
+});
+console.log(response.output_text);
+```
+
+</CodeGroup>
+
+The response contains an `output` array of typed items and a `usage` object:
+
+```json
+{
+  "id": "resp_...",
+  "object": "response",
+  "model": "venice-uncensored-1-2",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_...",
+      "role": "assistant",
+      "status": "completed",
+      "content": [{ "type": "output_text", "text": "Sunlight scatters off air molecules...", "annotations": [] }]
+    }
+  ],
+  "usage": { "input_tokens": 18, "output_tokens": 21, "total_tokens": 39 }
+}
+```
+
+## Conversations are stateless
+
+Venice does not store responses. Send the whole conversation in `input` on every request, appending the previous `output` items and any tool results.
+
+```python
+history = [{"role": "user", "content": "What is the weather in Paris? Use the tool."}]
+tools = [{
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}]
+
+first = client.responses.create(model="venice-uncensored", input=history, tools=tools)
+call = next(item for item in first.output if item.type == "function_call")
+
+history += first.output
+history.append({"type": "function_call_output", "call_id": call.call_id, "output": '{"temp_c": 18}'})
+
+second = client.responses.create(model="venice-uncensored", input=history, tools=tools)
+print(second.output_text)
+```
+
+`previous_response_id`, `store`, and `conversation` are accepted but ignored, so they do not give the model any earlier context.
+
+## Streaming
+
+Set `stream: true` to receive server-sent events: `response.created`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.function_call_arguments.delta`, `response.content_part.done`, `response.output_item.done`, and finally `response.completed`, `response.incomplete`, or `response.failed`. The stream ends with `data: [DONE]`.
+
+Two events differ from OpenAI's:
+
+- Reasoning text streams as `response.reasoning.delta`, not as OpenAI's reasoning summary events.
+- When web search runs, a `response.web_search.done` event carries the search results before the answer streams.
+
+## Supported parameters
+
+| Parameter | Notes |
+| --- | --- |
+| `model`, `input` | `input` can be a string or an array of messages and items. Message content supports `input_text` and `input_image`. |
+| `stream` | Server-sent events, described above. |
+| `max_output_tokens`, `temperature`, `top_p` | Mapped to Chat Completions. OpenAI reasoning models ignore sampling parameters. |
+| `reasoning.effort`, `reasoning.enabled` | `enabled: false` disables thinking on models that allow it. |
+| `include: ["reasoning.encrypted_content"]` | Returns encrypted reasoning on reasoning items. |
+| `tools` | Function tools, in either the flat Responses shape or the nested Chat shape. `web_search` runs Venice web search, and `x_search` runs xAI native search on [supported models](/models/text). |
+| `tool_choice` | `auto`, `none`, `required`, or `{"type": "function", "function": {"name": "..."}}`. |
+| `web_search` | `true` turns on Venice web search, the same as a `web_search` tool. |
+| `anon_user_id` | Optional end-user identifier for your own users. |
+| `venice_parameters` | `character_slug`, `enable_web_search`, `enable_web_scraping`, `enable_web_citations`, `include_venice_system_prompt`, `include_search_results_in_stream`, and `enable_e2ee`. |
+
+Web search is billed as search augmentation, as on `/chat/completions`.
+
+## Limitations
+
+These are the current gaps between Venice's `/responses` and OpenAI's Responses API. Unless noted, the request still succeeds and the field is ignored.
+
+| Area | Current behavior | What to do instead |
+| --- | --- | --- |
+| Venice system prompt | Added by default, unlike `/chat/completions`. It adds input tokens to every request and tells the model to answer in the prompt's language. | Set `venice_parameters.include_venice_system_prompt` to `false`. |
+| `instructions` | Ignored. | Put instructions in a `developer` or `system` message at the start of `input`. |
+| Stored state | `previous_response_id`, `store`, and `conversation` are ignored. | Send the full conversation in `input`. |
+| Structured outputs | `text.format` is ignored. | Use `response_format` on [`/chat/completions`](/guides/features/structured-responses). |
+| Reasoning replay | Reasoning items sent back in `input` are not passed to the model. `reasoning.summary` is ignored. | Nothing needed; the model reasons afresh each turn. |
+| Custom tools | Converted to function tools, so calls come back as `function_call` items. Freeform custom tools can lose their raw input. | Use `function` tools with a string parameter. |
+| Hosted tools | `code_interpreter`, `file_search`, `computer_use_preview`, and other provider-hosted tools are ignored. | Run those tools in your application and expose them as `function` tools. |
+| `tool_choice` | OpenAI's Responses shape `{"type": "function", "name": "..."}` returns **400**. | Use `{"type": "function", "function": {"name": "..."}}`. |
+| File inputs | `input_file` content parts return **400**. | Send files through [`/chat/completions`](/guides/features/file-inputs). |
+| Image detail | `detail` accepts `auto`, `low`, and `high`. `original` returns **400**. | Use `high`. |
+| E2EE models | Return **400**, unless `venice_parameters.enable_e2ee` is `false`. | Use [`/chat/completions`](/guides/features/tee-e2ee-models) with E2EE headers. |
+
+## Related
+
+- [API reference for `POST /responses`](/api-reference/endpoint/responses/create)
+- [Function calling](/guides/features/function-calling)
+- [Reasoning models](/guides/features/reasoning-models)
+- [OpenAI migration guide](/guides/getting-started/openai-migration)
