@@ -1,0 +1,208 @@
+---
+title: "Responses API"
+description: "通过 OpenAI 的 Responses API 格式使用 Venice：请求的处理方式、在 OpenAI 模型和其他模型上支持哪些功能、streaming，以及该 beta endpoint 当前的限制。"
+'og:title': "Responses API | Venice API 文档"
+'og:description': "如何使用 Venice Responses API、它支持哪些功能以及当前的限制。"
+---
+
+`POST /responses` 接受 [OpenAI Responses API 格式](https://platform.openai.com/docs/api-reference/responses)的请求，并返回带类型的输出项，例如 `reasoning`、`message` 和 `function_call`。它适用于所有 Venice 文本模型，并支持 API 密钥或 [x402 钱包认证](/zh/guides/integrations/x402-venice-api)。
+
+<Warning>
+  **该 endpoint 目前处于 beta 阶段**，所有 API 用户均可使用。OpenAI 模型以原生方式提供服务，因此其行为与 OpenAI 自己的 Responses API 一致。其他所有模型都会经过一个转换层，存在一些功能差距。在基于它进行构建之前，请先阅读[请求的处理方式](#请求的处理方式)和[限制](#限制)。
+</Warning>
+
+## 何时使用
+
+当你的客户端已经使用 Responses 格式时（例如基于 OpenAI `responses.create` 构建的编程智能体和 SDK），请使用 `/responses`。这是通过 Venice 在 OpenAI 模型上运行 Codex 风格智能体的最佳方式。
+
+对于非 OpenAI 模型，[`/chat/completions`](/zh/api-reference/endpoint/chat/completions) 仍然是功能最完整的选择：它在所有模型上都支持结构化输出、文件输入、E2EE 模型以及所有 [`venice_parameters`](/zh/api-reference/endpoint/chat/completions#body-venice-parameters) 选项。
+
+## 快速开始
+
+<CodeGroup>
+
+```bash cURL
+curl https://api.venice.ai/api/v1/responses \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "venice-uncensored",
+    "input": "Explain why the sky is blue in one sentence.",
+    "venice_parameters": { "include_venice_system_prompt": false }
+  }'
+```
+
+```python Python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://api.venice.ai/api/v1", api_key="YOUR_VENICE_API_KEY")
+
+response = client.responses.create(
+    model="venice-uncensored",
+    input="Explain why the sky is blue in one sentence.",
+    extra_body={"venice_parameters": {"include_venice_system_prompt": False}},
+)
+print(response.output_text)
+```
+
+```javascript JavaScript
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://api.venice.ai/api/v1", apiKey: process.env.VENICE_API_KEY });
+
+const response = await client.responses.create({
+  model: "venice-uncensored",
+  input: "Explain why the sky is blue in one sentence.",
+  venice_parameters: { include_venice_system_prompt: false },
+});
+console.log(response.output_text);
+```
+
+</CodeGroup>
+
+响应包含一个由带类型输出项组成的 `output` 数组和一个 `usage` 对象：
+
+```json
+{
+  "id": "resp_...",
+  "object": "response",
+  "model": "venice-uncensored-1-2",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_...",
+      "role": "assistant",
+      "status": "completed",
+      "content": [{ "type": "output_text", "text": "Sunlight scatters off air molecules...", "annotations": [] }]
+    }
+  ],
+  "usage": { "input_tokens": 18, "output_tokens": 21, "total_tokens": 39 }
+}
+```
+
+## 请求的处理方式
+
+Venice 以两种模式之一处理每个请求。
+
+- **原生（Native）。** 对 OpenAI 模型的请求会不经转换直接转发到 OpenAI 的 Responses API。这涵盖除 `openai-gpt-oss-120b` 之外的所有 `openai-*` 模型。响应项、ID、推理内容和流事件都会按 OpenAI 返回的原样传回。
+- **转换（Translated）。** 其他所有模型以及 `openai-gpt-oss-120b` 都会经过转换层：Venice 将请求转换为 [Chat Completions](/zh/api-reference/endpoint/chat/completions) 请求并执行，然后将结果转换回来。Chat Completions 格式无法表达的内容会被忽略或拒绝。参见[限制](#限制)。
+
+使用了 Venice 专属功能的 OpenAI 模型请求会以转换模式处理，以确保该功能继续可用。这包括 Venice 网页搜索（`web_search` 工具、`web_search: true` 或 `venice_parameters.enable_web_search`）、`x_search`、`venice_parameters.character_slug` 和 `venice_parameters.enable_web_scraping`。包含原生模式无法处理的字段（列于[原生模式](#原生模式)下）的请求也会以同样方式回退。
+
+你可以通过请求头控制和查看所使用的模式：
+
+| Header | Direction | Values |
+| --- | --- | --- |
+| `x-venice-responses-mode` | 请求 | `auto`（默认）按上文所述自动选择模式。`native` 要求使用原生模式，如果请求无法以原生方式处理，则返回 **400**。`compat` 始终使用转换模式。 |
+| `x-venice-responses-lane` | 响应 | `native` 或 `compat`：实际处理该请求的模式。 |
+| `x-venice-responses-compat-reason` | 响应 | 当 OpenAI 模型请求回退到转换模式时，导致回退的字段，例如 `tools[0]` 或 `previous_response_id`。 |
+
+## 对话是无状态的
+
+无论哪种模式，Venice 都不会存储响应。每次请求时都需要在 `input` 中发送完整对话，并附加之前的 `output` 项以及所有工具结果。
+
+```python
+history = [{"role": "user", "content": "What is the weather in Paris? Use the tool."}]
+tools = [{
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}]
+
+first = client.responses.create(model="venice-uncensored", input=history, tools=tools)
+call = next(item for item in first.output if item.type == "function_call")
+
+history += first.output
+history.append({"type": "function_call_output", "call_id": call.call_id, "output": '{"temp_c": 18}'})
+
+second = client.responses.create(model="venice-uncensored", input=history, tools=tools)
+print(second.output_text)
+```
+
+`store` 始终被视为 `false`。由于没有存储任何内容，`previous_response_id` 和 `conversation` 无法被解析。在默认的 `auto` 模式下，此类请求会以转换模式处理，这些字段会被忽略。使用 `x-venice-responses-mode: native` 时，这些请求会返回 **400**。
+
+## 原生模式
+
+原生模式支持 OpenAI 自身 endpoint 所支持的 Responses 功能，包括：
+
+- `instructions`，按原样应用。
+- 通过 `text.format` 实现的结构化输出。OpenAI 会严格校验 schema，因此无效的 schema 会返回 **400**。例如，`strict: true` 要求 `additionalProperties: false`，而 `json_object` 要求输入中某处包含单词 "json"。
+- 采用 OpenAI Responses 格式 `{"type": "function", "name": "..."}` 的函数工具和 `tool_choice`，以及并行工具调用。
+- 由客户端执行的工具：`custom`（自由格式输入）、`namespace`、`tool_search`、`apply_patch`、使用本地环境的 `shell` 和 `local_shell`，以及计算机操作（computer use）。
+- 推理摘要，默认开启。推理模型始终会在推理项上返回 `encrypted_content`。在下一轮中将这些项放回 `input` 发送，即可保留模型的推理上下文。
+- 使用 `prompt_cache_key` 的提示缓存。Venice 会将该键限定在你的账户范围内，因此绝不会与其他用户共享缓存，并会在响应中返回你原始的键。
+- 图片输入（包括 `detail: "original"`），以及带有内联 `file_data` 的 `input_file`。
+- Pro 模型（`*-pro`），会自动以 OpenAI 的 Pro 推理模式运行。
+
+在原生模式下，Venice 系统提示词默认处于**关闭**状态，因此你的 `instructions` 会原样生效。设置 `venice_parameters.include_venice_system_prompt: true` 即可添加它。
+
+以下功能需要服务器端存储或由提供商托管的资源，因此无法以原生方式使用：
+
+| Not available natively | Use instead |
+| --- | --- |
+| `previous_response_id`、`conversation`、已存储的 `prompt` 模板、`background`、`item_reference` | 在 `input` 中发送完整对话，并使用 `stream: true` 代替 `background`。 |
+| `file_id` 引用和远程 `input_file.file_url` | 通过 `file_data` 以内联方式发送文件。 |
+| 托管工具：`code_interpreter`、`file_search`、`image_generation`、远程 `mcp`，以及没有本地环境的 `shell` | 在你的应用中运行该工具，并将其作为 `function`、`custom` 或本地 `shell` 工具公开。图片请使用 [`/image/generate`](/zh/api-reference/endpoint/image/generate)。 |
+| `auto` 或 `default` 以外的 `service_tier` | 省略该字段。 |
+
+这些限制同样适用于在对话后续通过 `additional_tools` 或 `tool_search_output` 项加载的工具。在其中声明的 Venice 搜索工具也会使请求转到转换模式处理。
+
+无法识别的请求字段也会按同样方式处理：使用 `auto` 时，请求会以转换模式处理；使用 `native` 时，会返回 **400**。
+
+## Streaming
+
+设置 `stream: true` 即可接收服务器发送事件（SSE）。两种模式都会以 `data: [DONE]` 结束流。
+
+在原生模式下，事件与 OpenAI 完全一致，包括用于推理摘要的 `response.reasoning_summary_text.delta` 和用于工具参数的 `response.function_call_arguments.delta`。
+
+在转换模式下，事件依次为 `response.created`、`response.output_item.added`、`response.content_part.added`、`response.output_text.delta`、`response.function_call_arguments.delta`、`response.content_part.done`、`response.output_item.done`，最后是 `response.completed`、`response.incomplete` 或 `response.failed`。其中有两个事件与 OpenAI 不同：
+
+- 推理文本以 `response.reasoning.delta` 的形式流式传输，而不是 OpenAI 的推理摘要事件。
+- 执行网页搜索时，会在答案开始流式传输之前，通过 `response.web_search.done` 事件返回搜索结果。
+
+## 转换模式参数
+
+| Parameter | Notes |
+| --- | --- |
+| `model`、`input` | `input` 可以是字符串，也可以是由消息和项组成的数组。消息内容支持 `input_text` 和 `input_image`。 |
+| `stream` | 服务器发送事件，如上文所述。 |
+| `max_output_tokens`、`temperature`、`top_p` | 映射到 Chat Completions。OpenAI 推理模型会忽略采样参数。 |
+| `reasoning.effort`、`reasoning.enabled` | 在允许的模型上，`enabled: false` 会关闭思考。 |
+| `include: ["reasoning.encrypted_content"]` | 在推理项上返回加密的推理内容。 |
+| `tools` | 采用扁平 Responses 格式或嵌套 Chat 格式的函数工具、`custom` 工具、`namespace` 工具，以及由客户端执行的 `tool_search` 搭配 `defer_loading` 工具。`web_search` 运行 Venice 网页搜索，`x_search` 在[支持的模型](/zh/models/text)上运行 xAI 原生搜索。 |
+| `tool_choice` | `auto`、`none`、`required`、OpenAI 的 Responses 格式 `{"type": "function", "name": "..."}`（或 `"type": "custom"`，可选 `namespace`），或 Chat 格式 `{"type": "function", "function": {"name": "..."}}`。 |
+| `web_search` | `true` 会开启 Venice 网页搜索，效果与 `web_search` 工具相同。 |
+| `anon_user_id` | 可选的终端用户标识符，用于标识你自己的用户。 |
+| `venice_parameters` | `character_slug`、`enable_web_search`、`enable_web_scraping`、`enable_web_citations`、`include_venice_system_prompt`、`include_search_results_in_stream` 和 `enable_e2ee`。 |
+
+网页搜索按搜索增强计费，与 `/chat/completions` 相同。
+
+转换模式下需要提前考虑的几种行为：
+
+- `instructions` 会作为系统消息应用。
+- 自定义工具会返回带有原始 `input` 的 `custom_tool_call` 项。如果模型返回格式错误的自定义工具参数，或调用了请求中未声明的工具，该调用会以普通的 `function_call` 形式返回并保留原始参数，以便你的客户端报告工具错误并继续执行。
+- 在自定义工具的输入流式传输期间，其调用项及后续项可能要等到输入完成后才会到达。等待期间，流会发送 SSE keep-alive 注释。
+- 对于不支持 `detail: "original"` 的提供商，图片的该设置会以 `high` 发送。
+
+## 限制
+
+以下差距适用于转换模式：所有非 OpenAI 模型、`openai-gpt-oss-120b`，以及使用了 Venice 专属功能的 OpenAI 模型请求。除非另有说明，请求仍会成功，相应字段会被忽略。
+
+| Area | Current behavior | What to do instead |
+| --- | --- | --- |
+| Venice 系统提示词 | 默认添加，这与 `/chat/completions` 和原生模式不同。它会为每个请求增加输入 token，并指示模型使用提示词的语言作答。 | 将 `venice_parameters.include_venice_system_prompt` 设置为 `false`。 |
+| 存储的状态 | `previous_response_id`、`store` 和 `conversation` 会被忽略。 | 在 `input` 中发送完整对话。 |
+| 结构化输出 | `text.format` 会被忽略。 | 在 [`/chat/completions`](/zh/guides/features/structured-responses) 上使用 `response_format`。 |
+| 推理回放 | 在 `input` 中回传的推理项不会传递给模型。`reasoning.summary` 会被忽略。 | 无需任何操作；模型每一轮都会重新推理。 |
+| 托管工具 | `code_interpreter`、`file_search`、`computer_use_preview` 及其他由提供商托管的工具会被忽略。托管的 `tool_search` 会返回 **400**。 | 在你的应用中运行这些工具并将其作为 `function` 工具公开，同时使用由客户端执行的 `tool_search`。 |
+| 文件输入 | `input_file` 内容部分会返回 **400**。 | 通过 [`/chat/completions`](/zh/guides/features/file-inputs) 发送文件。 |
+| E2EE 模型 | 返回 **400**，除非 `venice_parameters.enable_e2ee` 为 `false`。 | 使用带 E2EE 请求头的 [`/chat/completions`](/zh/guides/features/tee-e2ee-models)。 |
+
+## 相关内容
+
+- [`POST /responses` 的 API 参考](/zh/api-reference/endpoint/responses/create)
+- [函数调用](/zh/guides/features/function-calling)
+- [推理模型](/zh/guides/features/reasoning-models)
+- [OpenAI 迁移指南](/zh/guides/getting-started/openai-migration)
