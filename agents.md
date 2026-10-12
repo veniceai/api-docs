@@ -5,7 +5,7 @@
 ## TL;DR
 
 - **Base URL:** `https://api.venice.ai/api/v1`
-- **Auth:** `Authorization: Bearer <VENICE_API_KEY>` — or **x402 wallet auth** (USDC on Base or Solana, no API key or account needed)
+- **Auth:** `Authorization: Bearer $VENICE_API_KEY`, using the key's value, not the variable name — or **x402 wallet auth** (USDC on Base or Solana, no API key or account needed)
 - **OpenAI-compatible:** Use any OpenAI SDK; only change `base_url` and the model ID
 - **Discover models at runtime:** `GET /models` (text), `GET /models?type=image|video|audio|tts|embedding` — never hardcode model lists; they change frequently
 - **Default text model trait:** `GET /models/traits` maps traits like `text:default`, `text:uncensored`, `image:fast` to current model IDs
@@ -28,7 +28,7 @@ curl https://api.venice.ai/api/v1/chat/completions \
   }'
 ```
 
-Python (OpenAI SDK): `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=VENICE_API_KEY)`
+Python (OpenAI SDK): `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=os.environ["VENICE_API_KEY"])`
 
 ## Endpoints overview
 

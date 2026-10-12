@@ -17,7 +17,7 @@ parsing, and blockchain RPC. Zero data retention.
 ## TL;DR
 
 - **Base URL:** `https://api.venice.ai/api/v1`
-- **Auth:** `Authorization: Bearer <VENICE_API_KEY>`, or an x402 wallet (USDC on
+- **Auth:** `Authorization: Bearer $VENICE_API_KEY` (the key's value, not the variable name), or an x402 wallet (USDC on
   Base or Solana) with no key and no account
 - **OpenAI-compatible:** use any OpenAI SDK and change only `base_url` and the model ID
 - **Never hardcode model IDs.** Resolve them at runtime from `GET /models` and
@@ -38,7 +38,7 @@ curl https://api.venice.ai/api/v1/chat/completions \
   }'
 ```
 
-Python: `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=VENICE_API_KEY)`
+Python: `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=os.environ["VENICE_API_KEY"])`
 
 ## Picking a model
 
@@ -117,7 +117,7 @@ need `enable_x_search` or the thinking controls.
 
 | Mode | Header | Use for |
 | --- | --- | --- |
-| API key | `Authorization: Bearer <VENICE_API_KEY>` | server apps, usage analytics, bundled credits |
+| API key | `Authorization: Bearer $VENICE_API_KEY` | server apps, usage analytics, bundled credits |
 | x402 wallet | `SIGN-IN-WITH-X: <base64 SIWX JSON>` | agents and serverless, no account, pay per request |
 
 x402 settles in USDC on Base or Solana. A `402` response carries a
