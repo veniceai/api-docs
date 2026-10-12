@@ -508,9 +508,18 @@ function generatePricingMdx() {
   sections.push('  </Card>');
   sections.push('</CardGroup>');
   sections.push('');
-  sections.push('### Pro Users');
-  sections.push('');
-  sections.push('Pro subscribers receive a one-time $10 Venice credit when upgrading to Pro. Use it to test and build small apps.');
+  sections.push("### How API usage is billed");
+  sections.push("");
+  sections.push("API usage is pay-as-you-go. Venice deducts each paid request from your balance at the rates listed on this page. Your balance can come from USD credits, crypto credits, or daily Diem from staked DIEM.");
+  sections.push("");
+  sections.push("- If your balance can't cover a request, Venice returns `402` with the `INSUFFICIENT_BALANCE` error code. See [Error Codes](/api-reference/error-codes).");
+  sections.push("- Some requests cost nothing. [`GET /models`](/api-reference/endpoint/models/list) works with or without an API key, and [`GET /api_keys/rate_limits`](/api-reference/endpoint/api_keys/rate_limits) returns your limits and balances at no charge.");
+  sections.push("- Video and some other media models show `Variable` pricing. Call [`POST /video/quote`](/api-reference/endpoint/video/quote) to get the exact price for a request before you queue it.");
+  sections.push("- Request limits depend on model size and on your Default or Partner tier, not on price. See [Rate Limits](/api-reference/rate-limiting).");
+  sections.push("");
+  sections.push("### Pro Users");
+  sections.push("");
+  sections.push("Pro subscribers receive a one-time $10 Venice credit when upgrading to Pro. Use it to test and build small apps. After you spend the credit, API requests draw from your USD, crypto, or Diem balance like any other account.");
   sections.push('');
 
   return sections.join('\n');
