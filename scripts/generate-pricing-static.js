@@ -512,6 +512,10 @@ function generatePricingMdx() {
   sections.push('');
   sections.push('Pro subscribers receive a one-time $10 Venice credit when upgrading to Pro. Use it to test and build small apps.');
   sections.push('');
+  sections.push('A Pro subscription does not make API usage free and does not include a set of free API models. Every API request is billed at the per-model rates on this page. Venice deducts the cost from your account balance in this order: DIEM, then bundled credits, then USD. See [VVV & DIEM](/overview/vvv-diem) for how each balance works.');
+  sections.push('');
+  sections.push('The API does not group models into base and premium tiers. Each model has its own price in the tables above. A small number of models are limited to Pro accounts. Requests to those models from other accounts return `401` with the `PRO_ONLY_MODEL` error code. See [Error codes](/api-reference/error-codes).');
+  sections.push('');
 
   return sections.join('\n');
 }
