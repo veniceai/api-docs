@@ -1,0 +1,208 @@
+---
+title: "Responses API"
+description: "Usa Venice a través del formato Responses API de OpenAI: cómo se procesan las solicitudes, qué funciona en modelos de OpenAI y de otros proveedores, streaming y las limitaciones actuales del endpoint en beta."
+'og:title': "Responses API | Documentación de la API de Venice"
+'og:description': "Cómo usar la Responses API de Venice, qué admite y cuáles son sus limitaciones actuales."
+---
+
+`POST /responses` acepta solicitudes en el [formato Responses API de OpenAI](https://platform.openai.com/docs/api-reference/responses) y devuelve elementos de salida tipados como `reasoning`, `message` y `function_call`. Funciona con todos los modelos de texto de Venice y acepta una API key o [autenticación con billetera x402](/es/guides/integrations/x402-venice-api).
+
+<Warning>
+  **Este endpoint está en beta** y disponible para todos los usuarios de la API. Los modelos de OpenAI se sirven de forma nativa, por lo que se comportan como la propia Responses API de OpenAI. Todos los demás modelos pasan por una capa de traducción con algunas carencias. Lee [Procesamiento de las solicitudes](#procesamiento-de-las-solicitudes) y [Limitaciones](#limitaciones) antes de construir sobre él.
+</Warning>
+
+## Cuándo usarlo
+
+Usa `/responses` cuando tu cliente ya hable el formato Responses, por ejemplo agentes de programación y SDK construidos sobre `responses.create` de OpenAI. Es la mejor forma de ejecutar agentes al estilo Codex en modelos de OpenAI a través de Venice.
+
+Para modelos que no son de OpenAI, [`/chat/completions`](/es/api-reference/endpoint/chat/completions) sigue siendo la opción más completa: admite salidas estructuradas, entradas de archivos, modelos E2EE y todas las opciones de [`venice_parameters`](/es/api-reference/endpoint/chat/completions#body-venice-parameters) en todos los modelos.
+
+## Inicio rápido
+
+<CodeGroup>
+
+```bash cURL
+curl https://api.venice.ai/api/v1/responses \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "venice-uncensored",
+    "input": "Explain why the sky is blue in one sentence.",
+    "venice_parameters": { "include_venice_system_prompt": false }
+  }'
+```
+
+```python Python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://api.venice.ai/api/v1", api_key="YOUR_VENICE_API_KEY")
+
+response = client.responses.create(
+    model="venice-uncensored",
+    input="Explain why the sky is blue in one sentence.",
+    extra_body={"venice_parameters": {"include_venice_system_prompt": False}},
+)
+print(response.output_text)
+```
+
+```javascript JavaScript
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://api.venice.ai/api/v1", apiKey: process.env.VENICE_API_KEY });
+
+const response = await client.responses.create({
+  model: "venice-uncensored",
+  input: "Explain why the sky is blue in one sentence.",
+  venice_parameters: { include_venice_system_prompt: false },
+});
+console.log(response.output_text);
+```
+
+</CodeGroup>
+
+La respuesta contiene un array `output` de elementos tipados y un objeto `usage`:
+
+```json
+{
+  "id": "resp_...",
+  "object": "response",
+  "model": "venice-uncensored-1-2",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_...",
+      "role": "assistant",
+      "status": "completed",
+      "content": [{ "type": "output_text", "text": "Sunlight scatters off air molecules...", "annotations": [] }]
+    }
+  ],
+  "usage": { "input_tokens": 18, "output_tokens": 21, "total_tokens": 39 }
+}
+```
+
+## Procesamiento de las solicitudes
+
+Venice sirve cada solicitud en uno de dos modos.
+
+- **Nativo.** Las solicitudes para modelos de OpenAI se reenvían a la Responses API de OpenAI sin traducción. Esto abarca todos los modelos `openai-*` excepto `openai-gpt-oss-120b`. Los elementos de respuesta, los ID, el razonamiento y los eventos de streaming se devuelven exactamente como los devuelve OpenAI.
+- **Traducido.** Todos los demás modelos, además de `openai-gpt-oss-120b`, pasan por una capa de traducción: Venice convierte la solicitud en una solicitud de [Chat Completions](/es/api-reference/endpoint/chat/completions), la ejecuta y vuelve a convertir el resultado. Todo lo que el formato Chat Completions no puede expresar se ignora o se rechaza. Consulta [Limitaciones](#limitaciones).
+
+Las solicitudes a modelos de OpenAI que usan una función exclusiva de Venice se sirven en modo traducido para que la función siga funcionando. Esto incluye la búsqueda web de Venice (una herramienta `web_search`, `web_search: true` o `venice_parameters.enable_web_search`), `x_search`, `venice_parameters.character_slug` y `venice_parameters.enable_web_scraping`. Las solicitudes con campos que el modo nativo no puede servir, enumerados en [Modo nativo](#modo-nativo), recurren al modo traducido de la misma manera.
+
+Puedes controlar e inspeccionar el modo con encabezados:
+
+| Header | Direction | Values |
+| --- | --- | --- |
+| `x-venice-responses-mode` | Solicitud | `auto` (predeterminado) elige el modo como se describe arriba. `native` exige el modo nativo y devuelve **400** si la solicitud no puede servirse de forma nativa. `compat` usa siempre el modo traducido. |
+| `x-venice-responses-lane` | Respuesta | `native` o `compat`: el modo que sirvió la solicitud. |
+| `x-venice-responses-compat-reason` | Respuesta | Cuando una solicitud a un modelo de OpenAI recurrió al modo traducido, el campo que lo provocó, por ejemplo `tools[0]` o `previous_response_id`. |
+
+## Las conversaciones no tienen estado
+
+Venice no almacena respuestas en ninguno de los dos modos. Envía la conversación completa en `input` en cada solicitud, añadiendo los elementos `output` anteriores y cualquier resultado de herramientas.
+
+```python
+history = [{"role": "user", "content": "What is the weather in Paris? Use the tool."}]
+tools = [{
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}]
+
+first = client.responses.create(model="venice-uncensored", input=history, tools=tools)
+call = next(item for item in first.output if item.type == "function_call")
+
+history += first.output
+history.append({"type": "function_call_output", "call_id": call.call_id, "output": '{"temp_c": 18}'})
+
+second = client.responses.create(model="venice-uncensored", input=history, tools=tools)
+print(second.output_text)
+```
+
+`store` siempre se trata como `false`. `previous_response_id` y `conversation` no pueden resolverse porque no se almacena nada. Con el modo `auto` predeterminado, estas solicitudes se sirven en modo traducido, donde esos campos se ignoran. Con `x-venice-responses-mode: native` devuelven **400**.
+
+## Modo nativo
+
+El modo nativo admite las funciones de Responses que admite el propio endpoint de OpenAI, entre ellas:
+
+- `instructions`, aplicadas tal como están escritas.
+- Salidas estructuradas con `text.format`. OpenAI valida los esquemas de forma estricta, por lo que un esquema no válido devuelve **400**. Por ejemplo, `strict: true` requiere `additionalProperties: false`, y `json_object` requiere que la palabra "json" aparezca en algún lugar del input.
+- Herramientas de función y `tool_choice` en la forma de Responses de OpenAI `{"type": "function", "name": "..."}`, además de llamadas a herramientas en paralelo.
+- Herramientas ejecutadas por el cliente: `custom` (entrada de formato libre), `namespace`, `tool_search`, `apply_patch`, `shell` y `local_shell` con un entorno local, y computer use.
+- Resúmenes de razonamiento, activados por defecto. Los modelos de razonamiento siempre devuelven `encrypted_content` en los elementos de razonamiento. Devuelve esos elementos en `input` en el siguiente turno para conservar el contexto de razonamiento del modelo.
+- Caché de prompts con `prompt_cache_key`. Venice limita la clave a tu cuenta, de modo que nunca comparte una caché con otros usuarios, y devuelve tu clave original en la respuesta.
+- Entradas de imagen, incluido `detail: "original"`, e `input_file` con `file_data` en línea.
+- Modelos Pro (`*-pro`), que ejecutan automáticamente el modo de razonamiento Pro de OpenAI.
+
+El prompt de sistema de Venice está **desactivado** por defecto en modo nativo, por lo que tus `instructions` se aplican sin cambios. Establece `venice_parameters.include_venice_system_prompt: true` para añadirlo.
+
+Estas funciones requieren almacenamiento en el servidor o recursos alojados por el proveedor, por lo que no están disponibles de forma nativa:
+
+| Not available natively | Use instead |
+| --- | --- |
+| `previous_response_id`, `conversation`, plantillas `prompt` almacenadas, `background`, `item_reference` | Envía la conversación completa en `input` y usa `stream: true` en lugar de `background`. |
+| Referencias `file_id` y `input_file.file_url` remotos | Envía los archivos en línea con `file_data`. |
+| Herramientas alojadas: `code_interpreter`, `file_search`, `image_generation`, `mcp` remoto y `shell` sin un entorno local | Ejecuta la herramienta en tu aplicación y exponla como una herramienta `function`, `custom` o `shell` local. Usa [`/image/generate`](/es/api-reference/endpoint/image/generate) para imágenes. |
+| `service_tier` distinto de `auto` o `default` | Omítelo. |
+
+Estas restricciones también se aplican a las herramientas cargadas más adelante en la conversación mediante elementos `additional_tools` o `tool_search_output`. Una herramienta de búsqueda de Venice declarada allí también envía la solicitud al modo traducido.
+
+Los campos de solicitud no reconocidos se tratan de la misma manera: con `auto` la solicitud se sirve en modo traducido, y con `native` devuelve **400**.
+
+## Streaming
+
+Establece `stream: true` para recibir server-sent events. Ambos modos terminan el stream con `data: [DONE]`.
+
+En modo nativo, los eventos son exactamente los de OpenAI, incluidos `response.reasoning_summary_text.delta` para los resúmenes de razonamiento y `response.function_call_arguments.delta` para los argumentos de las herramientas.
+
+En modo traducido, los eventos son `response.created`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.function_call_arguments.delta`, `response.content_part.done`, `response.output_item.done` y, por último, `response.completed`, `response.incomplete` o `response.failed`. Dos eventos difieren de los de OpenAI:
+
+- El texto de razonamiento se transmite como `response.reasoning.delta`, no como los eventos de resumen de razonamiento de OpenAI.
+- Cuando se ejecuta la búsqueda web, un evento `response.web_search.done` lleva los resultados de búsqueda antes de que se transmita la respuesta.
+
+## Parámetros del modo traducido
+
+| Parameter | Notes |
+| --- | --- |
+| `model`, `input` | `input` puede ser una cadena o un array de mensajes y elementos. El contenido de los mensajes admite `input_text` e `input_image`. |
+| `stream` | Server-sent events, descritos arriba. |
+| `max_output_tokens`, `temperature`, `top_p` | Se asignan a Chat Completions. Los modelos de razonamiento de OpenAI ignoran los parámetros de muestreo. |
+| `reasoning.effort`, `reasoning.enabled` | `enabled: false` desactiva el razonamiento en los modelos que lo permiten. |
+| `include: ["reasoning.encrypted_content"]` | Devuelve el razonamiento cifrado en los elementos de razonamiento. |
+| `tools` | Herramientas de función en la forma plana de Responses o en la forma anidada de Chat, herramientas `custom`, herramientas `namespace` y `tool_search` ejecutado por el cliente con herramientas `defer_loading`. `web_search` ejecuta la búsqueda web de Venice, y `x_search` ejecuta la búsqueda nativa de xAI en los [modelos compatibles](/es/models/text). |
+| `tool_choice` | `auto`, `none`, `required`, la forma de Responses de OpenAI `{"type": "function", "name": "..."}` (o `"type": "custom"`, con un `namespace` opcional), o la forma de Chat `{"type": "function", "function": {"name": "..."}}`. |
+| `web_search` | `true` activa la búsqueda web de Venice, igual que una herramienta `web_search`. |
+| `anon_user_id` | Identificador opcional de usuario final para tus propios usuarios. |
+| `venice_parameters` | `character_slug`, `enable_web_search`, `enable_web_scraping`, `enable_web_citations`, `include_venice_system_prompt`, `include_search_results_in_stream` y `enable_e2ee`. |
+
+La búsqueda web se factura como aumento de búsqueda, igual que en `/chat/completions`.
+
+Algunos comportamientos del modo traducido que conviene tener en cuenta:
+
+- Las `instructions` se aplican como un mensaje de sistema.
+- Las herramientas personalizadas devuelven elementos `custom_tool_call` con el `input` sin procesar. Si un modelo devuelve argumentos mal formados para una herramienta personalizada, o llama a una herramienta que no está declarada en la solicitud, la llamada se devuelve como un `function_call` normal con los argumentos originales, para que tu cliente pueda informar de un error de herramienta y continuar.
+- Mientras se transmite el input de una herramienta personalizada, su elemento de llamada y los elementos posteriores pueden llegar solo después de que el input esté completo. El stream envía comentarios SSE de keep-alive mientras espera.
+- `detail: "original"` de las imágenes se envía como `high` a los proveedores que no lo admiten.
+
+## Limitaciones
+
+Estas carencias se aplican al modo traducido: todos los modelos que no son de OpenAI, `openai-gpt-oss-120b` y las solicitudes a modelos de OpenAI que usan funciones exclusivas de Venice. Salvo que se indique lo contrario, la solicitud se completa igualmente y el campo se ignora.
+
+| Area | Current behavior | What to do instead |
+| --- | --- | --- |
+| Prompt de sistema de Venice | Se añade por defecto, a diferencia de `/chat/completions` y del modo nativo. Añade tokens de entrada a cada solicitud e indica al modelo que responda en el idioma del prompt. | Establece `venice_parameters.include_venice_system_prompt` en `false`. |
+| Estado almacenado | `previous_response_id`, `store` y `conversation` se ignoran. | Envía la conversación completa en `input`. |
+| Salidas estructuradas | `text.format` se ignora. | Usa `response_format` en [`/chat/completions`](/es/guides/features/structured-responses). |
+| Reenvío del razonamiento | Los elementos de razonamiento devueltos en `input` no se pasan al modelo. `reasoning.summary` se ignora. | No es necesario hacer nada; el modelo razona desde cero en cada turno. |
+| Herramientas alojadas | `code_interpreter`, `file_search`, `computer_use_preview` y otras herramientas alojadas por el proveedor se ignoran. `tool_search` alojado devuelve **400**. | Ejecuta esas herramientas en tu aplicación, exponlas como herramientas `function` y usa `tool_search` ejecutado por el cliente. |
+| Entradas de archivos | Las partes de contenido `input_file` devuelven **400**. | Envía archivos a través de [`/chat/completions`](/es/guides/features/file-inputs). |
+| Modelos E2EE | Devuelven **400**, salvo que `venice_parameters.enable_e2ee` sea `false`. | Usa [`/chat/completions`](/es/guides/features/tee-e2ee-models) con encabezados E2EE. |
+
+## Relacionado
+
+- [Referencia de la API para `POST /responses`](/es/api-reference/endpoint/responses/create)
+- [Llamada a funciones](/es/guides/features/function-calling)
+- [Modelos de razonamiento](/es/guides/features/reasoning-models)
+- [Guía de migración desde OpenAI](/es/guides/getting-started/openai-migration)

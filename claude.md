@@ -5,7 +5,7 @@
 ## Essentials
 
 - **Base URL:** `https://api.venice.ai/api/v1`
-- **Auth:** `Authorization: Bearer <VENICE_API_KEY>` (or x402 USDC wallet auth — no key needed)
+- **Auth:** `Authorization: Bearer $VENICE_API_KEY`, using the key's value, not the variable name (or x402 USDC wallet auth — no key needed)
 - **OpenAI-compatible:** Anthropic-style SDKs are not used here; use the OpenAI SDK with a custom `base_url`, or plain HTTP
 - **Docs index:** https://docs.venice.ai/llms.txt · **Everything in one file:** https://docs.venice.ai/llms-full.txt
 - **Any docs page as Markdown:** append `.md` to its URL

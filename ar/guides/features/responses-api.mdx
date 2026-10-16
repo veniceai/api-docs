@@ -1,0 +1,208 @@
+---
+title: "Responses API"
+description: "استخدم Venice عبر تنسيق Responses API من OpenAI: كيف تتم معالجة الطلبات، وما الذي يعمل على نماذج OpenAI والنماذج الأخرى، والبث (streaming)، والقيود الحالية لنقطة النهاية التجريبية."
+'og:title': "Responses API | Venice API Docs"
+'og:description': "كيفية استخدام Responses API من Venice، وما الذي تدعمه، وقيودها الحالية."
+---
+
+تقبل `POST /responses` الطلبات بتنسيق [Responses API من OpenAI](https://platform.openai.com/docs/api-reference/responses) وتُعيد عناصر مخرجات مُصنَّفة حسب النوع مثل `reasoning` و`message` و`function_call`. تعمل مع كل نماذج النصوص في Venice وتقبل مفتاح API أو [مصادقة محفظة x402](/ar/guides/integrations/x402-venice-api).
+
+<Warning>
+  **نقطة النهاية هذه في مرحلة تجريبية (beta)** ومتاحة لجميع مستخدمي API. تُخدَم نماذج OpenAI بشكل أصلي، لذا تتصرف مثل Responses API الخاصة بـ OpenAI نفسها. أما كل النماذج الأخرى فتمر عبر طبقة ترجمة بها بعض الفجوات. اقرأ [كيف تتم معالجة الطلبات](#كيف-تتم-معالجة-الطلبات) و[القيود](#القيود) قبل البناء عليها.
+</Warning>
+
+## متى تستخدمها
+
+استخدم `/responses` عندما يكون عميلك يتعامل بالفعل بتنسيق Responses، على سبيل المثال وكلاء البرمجة وحزم SDK المبنية على `responses.create` من OpenAI. إنها أفضل طريقة لتشغيل وكلاء بأسلوب Codex على نماذج OpenAI عبر Venice.
+
+بالنسبة للنماذج غير التابعة لـ OpenAI، تظل [`/chat/completions`](/ar/api-reference/endpoint/chat/completions) الخيار الأكثر اكتمالًا: فهي تدعم المخرجات المهيكلة، ومدخلات الملفات، ونماذج E2EE، وكل خيارات [`venice_parameters`](/ar/api-reference/endpoint/chat/completions#body-venice-parameters) على كل نموذج.
+
+## البدء السريع
+
+<CodeGroup>
+
+```bash cURL
+curl https://api.venice.ai/api/v1/responses \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "venice-uncensored",
+    "input": "Explain why the sky is blue in one sentence.",
+    "venice_parameters": { "include_venice_system_prompt": false }
+  }'
+```
+
+```python Python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://api.venice.ai/api/v1", api_key="YOUR_VENICE_API_KEY")
+
+response = client.responses.create(
+    model="venice-uncensored",
+    input="Explain why the sky is blue in one sentence.",
+    extra_body={"venice_parameters": {"include_venice_system_prompt": False}},
+)
+print(response.output_text)
+```
+
+```javascript JavaScript
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "https://api.venice.ai/api/v1", apiKey: process.env.VENICE_API_KEY });
+
+const response = await client.responses.create({
+  model: "venice-uncensored",
+  input: "Explain why the sky is blue in one sentence.",
+  venice_parameters: { include_venice_system_prompt: false },
+});
+console.log(response.output_text);
+```
+
+</CodeGroup>
+
+تحتوي الاستجابة على مصفوفة `output` من العناصر المُصنَّفة حسب النوع وعلى كائن `usage`:
+
+```json
+{
+  "id": "resp_...",
+  "object": "response",
+  "model": "venice-uncensored-1-2",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_...",
+      "role": "assistant",
+      "status": "completed",
+      "content": [{ "type": "output_text", "text": "Sunlight scatters off air molecules...", "annotations": [] }]
+    }
+  ],
+  "usage": { "input_tokens": 18, "output_tokens": 21, "total_tokens": 39 }
+}
+```
+
+## كيف تتم معالجة الطلبات
+
+تعالج Venice كل طلب بأحد وضعين.
+
+- **أصلي (Native).** تُمرَّر طلبات نماذج OpenAI إلى Responses API من OpenAI دون ترجمة. يشمل ذلك كل نماذج `openai-*` باستثناء `openai-gpt-oss-120b`. تعود عناصر الاستجابة والمعرّفات والتفكير المنطقي وأحداث البث تمامًا كما تُعيدها OpenAI.
+- **مُترجَم (Translated).** كل النماذج الأخرى، بالإضافة إلى `openai-gpt-oss-120b`، تمر عبر طبقة ترجمة: تحوّل Venice الطلب إلى طلب [Chat Completions](/ar/api-reference/endpoint/chat/completions)، وتشغّله، ثم تحوّل النتيجة مرة أخرى. أي شيء لا يستطيع تنسيق Chat Completions التعبير عنه يُتجاهَل أو يُرفَض. راجع [القيود](#القيود).
+
+تُعالَج طلبات نماذج OpenAI التي تستخدم ميزة خاصة بـ Venice فقط في الوضع المُترجَم حتى تستمر الميزة في العمل. يشمل ذلك بحث الويب في Venice (أداة `web_search`، أو `web_search: true`، أو `venice_parameters.enable_web_search`)، و`x_search`، و`venice_parameters.character_slug`، و`venice_parameters.enable_web_scraping`. كما تنتقل بالطريقة نفسها الطلبات التي تحتوي على حقول لا يستطيع الوضع الأصلي خدمتها، والمدرجة ضمن [الوضع الأصلي](#الوضع-الأصلي).
+
+يمكنك التحكم في الوضع وفحصه باستخدام الترويسات:
+
+| الترويسة | الاتجاه | القيم |
+| --- | --- | --- |
+| `x-venice-responses-mode` | الطلب | `auto` (الافتراضي) يختار الوضع كما هو موضح أعلاه. `native` يشترط الوضع الأصلي ويُعيد **400** إذا تعذّرت خدمة الطلب بشكل أصلي. `compat` يستخدم الوضع المُترجَم دائمًا. |
+| `x-venice-responses-lane` | الاستجابة | `native` أو `compat`: الوضع الذي عالج الطلب. |
+| `x-venice-responses-compat-reason` | الاستجابة | عندما ينتقل طلب نموذج OpenAI إلى الوضع المُترجَم، يشير إلى الحقل الذي تسبب في ذلك، على سبيل المثال `tools[0]` أو `previous_response_id`. |
+
+## المحادثات عديمة الحالة
+
+لا تخزّن Venice الاستجابات في أي من الوضعين. أرسل المحادثة كاملة في `input` مع كل طلب، مع إلحاق عناصر `output` السابقة وأي نتائج للأدوات.
+
+```python
+history = [{"role": "user", "content": "What is the weather in Paris? Use the tool."}]
+tools = [{
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}]
+
+first = client.responses.create(model="venice-uncensored", input=history, tools=tools)
+call = next(item for item in first.output if item.type == "function_call")
+
+history += first.output
+history.append({"type": "function_call_output", "call_id": call.call_id, "output": '{"temp_c": 18}'})
+
+second = client.responses.create(model="venice-uncensored", input=history, tools=tools)
+print(second.output_text)
+```
+
+يُعامَل `store` دائمًا على أنه `false`. لا يمكن تحليل `previous_response_id` و`conversation` لأنه لا يُخزَّن شيء. مع الوضع الافتراضي `auto`، تُعالَج هذه الطلبات في الوضع المُترجَم، حيث تُتجاهَل تلك الحقول. ومع `x-venice-responses-mode: native` تُعيد **400**.
+
+## الوضع الأصلي
+
+يدعم الوضع الأصلي ميزات Responses التي تدعمها نقطة النهاية الخاصة بـ OpenAI نفسها، بما في ذلك:
+
+- `instructions`، وتُطبَّق كما هي مكتوبة.
+- المخرجات المهيكلة باستخدام `text.format`. تتحقق OpenAI من المخططات بصرامة، لذا يُعيد المخطط غير الصالح **400**. على سبيل المثال، يتطلب `strict: true` وجود `additionalProperties: false`، ويتطلب `json_object` وجود كلمة "json" في مكان ما من المدخلات.
+- أدوات الدوال و`tool_choice` بصيغة Responses من OpenAI `{"type": "function", "name": "..."}`، بالإضافة إلى استدعاءات الأدوات المتوازية.
+- الأدوات المُنفَّذة لدى العميل: `custom` (مدخلات حرة)، و`namespace`، و`tool_search`، و`apply_patch`، و`shell` و`local_shell` مع بيئة محلية، واستخدام الحاسوب (computer use).
+- ملخصات التفكير المنطقي، مُفعَّلة افتراضيًا. تُعيد نماذج التفكير المنطقي دائمًا `encrypted_content` على عناصر التفكير المنطقي. أرسل تلك العناصر مرة أخرى في `input` في الدور التالي للحفاظ على سياق التفكير المنطقي للنموذج.
+- التخزين المؤقت للمطالبات باستخدام `prompt_cache_key`. تحصر Venice نطاق المفتاح في حسابك، فلا يشارك ذاكرة التخزين المؤقت مع مستخدمين آخرين أبدًا، وتُعيد مفتاحك الأصلي في الاستجابة.
+- مدخلات الصور، بما في ذلك `detail: "original"`، و`input_file` مع `file_data` المُضمَّنة.
+- نماذج Pro (`*-pro`)، التي تشغّل وضع التفكير المنطقي Pro من OpenAI تلقائيًا.
+
+تكون مطالبة النظام الخاصة بـ Venice **مُعطَّلة** افتراضيًا في الوضع الأصلي، لذا تُطبَّق `instructions` الخاصة بك دون تغيير. اضبط `venice_parameters.include_venice_system_prompt: true` لإضافتها.
+
+تتطلب العناصر التالية تخزينًا من جهة الخادم أو موارد مستضافة لدى المزوّد، لذا فهي غير متاحة بشكل أصلي:
+
+| غير متاح بشكل أصلي | استخدم بدلًا من ذلك |
+| --- | --- |
+| `previous_response_id`، و`conversation`، وقوالب `prompt` المخزّنة، و`background`، و`item_reference` | أرسل المحادثة كاملة في `input`، واستخدم `stream: true` بدلًا من `background`. |
+| مراجع `file_id` و`input_file.file_url` البعيدة | أرسل الملفات مُضمَّنة باستخدام `file_data`. |
+| الأدوات المستضافة: `code_interpreter`، و`file_search`، و`image_generation`، و`mcp` البعيدة، و`shell` بدون بيئة محلية | شغّل الأداة في تطبيقك واعرضها كأداة `function` أو `custom` أو `shell` محلية. استخدم [`/image/generate`](/ar/api-reference/endpoint/image/generate) للصور. |
+| `service_tier` بقيمة غير `auto` أو `default` | احذفه. |
+
+تنطبق هذه القيود أيضًا على الأدوات التي تُحمَّل لاحقًا في المحادثة عبر عناصر `additional_tools` أو `tool_search_output`. كما أن أداة بحث Venice المُعرَّفة هناك توجّه الطلب أيضًا إلى الوضع المُترجَم.
+
+تُعامَل حقول الطلب غير المعروفة بالطريقة نفسها: مع `auto` يُعالَج الطلب في الوضع المُترجَم، ومع `native` يُعيد **400**.
+
+## البث
+
+اضبط `stream: true` لتلقي أحداث مُرسَلة من الخادم (server-sent events). ينهي كلا الوضعين البث بـ `data: [DONE]`.
+
+في الوضع الأصلي، تكون الأحداث مطابقة تمامًا لأحداث OpenAI، بما في ذلك `response.reasoning_summary_text.delta` لملخصات التفكير المنطقي و`response.function_call_arguments.delta` لمعامِلات الأدوات.
+
+في الوضع المُترجَم، تكون الأحداث `response.created`، و`response.output_item.added`، و`response.content_part.added`، و`response.output_text.delta`، و`response.function_call_arguments.delta`، و`response.content_part.done`، و`response.output_item.done`، وأخيرًا `response.completed` أو `response.incomplete` أو `response.failed`. يختلف حدثان عن أحداث OpenAI:
+
+- يُبَث نص التفكير المنطقي كـ `response.reasoning.delta`، وليس كأحداث ملخص التفكير المنطقي الخاصة بـ OpenAI.
+- عند تشغيل بحث الويب، يحمل حدث `response.web_search.done` نتائج البحث قبل بث الإجابة.
+
+## معاملات الوضع المترجم
+
+| المعامل | ملاحظات |
+| --- | --- |
+| `model`، `input` | يمكن أن يكون `input` سلسلة نصية أو مصفوفة من الرسائل والعناصر. يدعم محتوى الرسائل `input_text` و`input_image`. |
+| `stream` | أحداث مُرسَلة من الخادم، موضحة أعلاه. |
+| `max_output_tokens`، `temperature`، `top_p` | تُربَط بمعاملات Chat Completions. تتجاهل نماذج التفكير المنطقي من OpenAI معاملات أخذ العينات. |
+| `reasoning.effort`، `reasoning.enabled` | يُعطّل `enabled: false` التفكير على النماذج التي تسمح بذلك. |
+| `include: ["reasoning.encrypted_content"]` | يُعيد التفكير المنطقي المُشفَّر على عناصر التفكير المنطقي. |
+| `tools` | أدوات الدوال إما بصيغة Responses المسطّحة أو بصيغة Chat المتداخلة، وأدوات `custom`، وأدوات `namespace`، و`tool_search` المُنفَّذة لدى العميل مع أدوات `defer_loading`. تشغّل `web_search` بحث الويب في Venice، وتشغّل `x_search` البحث الأصلي من xAI على [النماذج المدعومة](/ar/models/text). |
+| `tool_choice` | `auto`، أو `none`، أو `required`، أو صيغة Responses من OpenAI `{"type": "function", "name": "..."}` (أو `"type": "custom"`، مع `namespace` اختياري)، أو صيغة Chat `{"type": "function", "function": {"name": "..."}}`. |
+| `web_search` | تُفعّل `true` بحث الويب في Venice، تمامًا مثل أداة `web_search`. |
+| `anon_user_id` | معرّف اختياري للمستخدم النهائي خاص بمستخدميك. |
+| `venice_parameters` | `character_slug`، و`enable_web_search`، و`enable_web_scraping`، و`enable_web_citations`، و`include_venice_system_prompt`، و`include_search_results_in_stream`، و`enable_e2ee`. |
+
+يُحتسَب بحث الويب كتعزيز بالبحث، كما هو الحال في `/chat/completions`.
+
+بعض سلوكيات الوضع المُترجَم التي ينبغي التخطيط لها:
+
+- تُطبَّق `instructions` كرسالة نظام.
+- تُعيد الأدوات المخصصة عناصر `custom_tool_call` مع `input` الخام. إذا أعاد النموذج معامِلات أداة مخصصة مشوّهة، أو استدعى أداة غير مُعرَّفة في الطلب، يعود الاستدعاء كـ `function_call` عادي مع المعامِلات الأصلية، حتى يتمكن عميلك من الإبلاغ عن خطأ في الأداة والمتابعة.
+- أثناء بث مدخلات أداة مخصصة، قد لا يصل عنصر الاستدعاء الخاص بها والعناصر اللاحقة إلا بعد اكتمال المدخلات. يرسل البث تعليقات SSE للإبقاء على الاتصال (keep-alive) أثناء الانتظار.
+- تُرسَل قيمة الصورة `detail: "original"` كـ `high` إلى المزوّدين الذين لا يدعمونها.
+
+## القيود
+
+تنطبق هذه الفجوات على الوضع المُترجَم: كل النماذج غير التابعة لـ OpenAI، و`openai-gpt-oss-120b`، وطلبات نماذج OpenAI التي تستخدم ميزات خاصة بـ Venice فقط. ما لم يُذكَر خلاف ذلك، يظل الطلب ناجحًا ويُتجاهَل الحقل.
+
+| المجال | السلوك الحالي | ما يجب فعله بدلًا من ذلك |
+| --- | --- | --- |
+| مطالبة النظام الخاصة بـ Venice | تُضاف افتراضيًا، على عكس `/chat/completions` والوضع الأصلي. تضيف رموز إدخال إلى كل طلب وتطلب من النموذج الإجابة بلغة المطالبة. | اضبط `venice_parameters.include_venice_system_prompt` على `false`. |
+| الحالة المخزّنة | تُتجاهَل `previous_response_id` و`store` و`conversation`. | أرسل المحادثة كاملة في `input`. |
+| المخرجات المهيكلة | يُتجاهَل `text.format`. | استخدم `response_format` على [`/chat/completions`](/ar/guides/features/structured-responses). |
+| إعادة تمرير التفكير المنطقي | لا تُمرَّر عناصر التفكير المنطقي المُرسَلة مرة أخرى في `input` إلى النموذج. يُتجاهَل `reasoning.summary`. | لا حاجة لأي شيء؛ يفكّر النموذج من جديد في كل دور. |
+| الأدوات المستضافة | تُتجاهَل `code_interpreter` و`file_search` و`computer_use_preview` وغيرها من الأدوات المستضافة لدى المزوّد. تُعيد `tool_search` المستضافة **400**. | شغّل تلك الأدوات في تطبيقك واعرضها كأدوات `function`، واستخدم `tool_search` المُنفَّذة لدى العميل. |
+| مدخلات الملفات | تُعيد أجزاء المحتوى `input_file` **400**. | أرسل الملفات عبر [`/chat/completions`](/ar/guides/features/file-inputs). |
+| نماذج E2EE | تُعيد **400**، ما لم تكن `venice_parameters.enable_e2ee` بقيمة `false`. | استخدم [`/chat/completions`](/ar/guides/features/tee-e2ee-models) مع ترويسات E2EE. |
+
+## ذات صلة
+
+- [مرجع API لـ `POST /responses`](/ar/api-reference/endpoint/responses/create)
+- [استدعاء الدوال](/ar/guides/features/function-calling)
+- [نماذج التفكير المنطقي](/ar/guides/features/reasoning-models)
+- [دليل الترحيل من OpenAI](/ar/guides/getting-started/openai-migration)
