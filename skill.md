@@ -77,19 +77,28 @@ catalog moves; the capability flags on each model are the authoritative answer.
 
 | Surface | Endpoints |
 | --- | --- |
-| Chat / text | `POST /chat/completions`; `POST /responses` (alpha) |
+| Chat / text | `POST /chat/completions`; `POST /responses` (beta, see https://docs.venice.ai/guides/features/responses-api) |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`; OpenAI-style `POST /images/generations` |
 | Video (async) | `POST /video/quote`, `/video/queue`, `GET /video/retrieve?id=`, `POST /video/complete` |
 | Audio | `POST /audio/speech` (TTS), `POST /audio/voices` (voice cloning), `POST /audio/transcriptions` (STT) |
 | Music (async) | `POST /audio/quote`, `/audio/queue`, `/audio/retrieve`, `/audio/complete` |
 | Voice Changer (async) | `POST /audio/voice-changer/quote`, `/audio/voice-changer/queue`, `/audio/voice-changer/retrieve`, `/audio/voice-changer/complete` |
 | Embeddings | `POST /embeddings` |
+| Decisions (beta) | `POST /decisions` (alias `POST /systemone`) |
 | Tools | `POST /augment/search`, `/augment/scrape`, `/augment/text-parser` |
 | Blockchain RPC | `GET /crypto/rpc/networks`, `POST /crypto/rpc/{network}` |
 | Models | `GET /models`, `/models/traits`, `/models/compatibility_mapping` |
 | Characters | `GET /characters`, `/characters/{slug}` |
 | Account | `GET /billing/balance`, `/billing/usage-history`, `/api_keys/*`, `/api_keys/rate_limits` |
 | x402 wallet | `GET /x402/balance/{wallet}`, `POST /x402/top-up`, `GET /x402/transactions/{wallet}` |
+
+For bounded judgments your code acts on directly (yes/no, pick one label,
+score on a rubric), use `POST /decisions` with `jev-latest` instead of asking a
+chat model for JSON. Send a `state` and a `questions` map with at least one
+entry; each question has a `type` of `noul`, `choice`, or `score`, and each
+answer comes back typed with probabilities. Use `/chat/completions` when you
+need prose, multi-turn conversation, or tool calling. The Decisions API is in
+beta. See https://docs.venice.ai/guides/features/decisions.
 
 ## venice_parameters
 
@@ -112,6 +121,11 @@ Feature suffixes on the model ID do the same thing, for example
 `include_venice_system_prompt`, and `include_search_results_in_stream`.
 Anything else is dropped without an error, so use `/chat/completions` when you
 need `enable_x_search` or the thinking controls.
+
+OpenAI models run natively on `/responses` (instructions, structured outputs,
+custom and Codex tools, encrypted reasoning replay). Other models are
+translated through Chat Completions, which ignores `text.format` and hosted
+tools. Guide: https://docs.venice.ai/guides/features/responses-api
 
 ## Authentication
 
@@ -183,7 +197,7 @@ ln -s ~/src/venice-skills/skills ~/.claude/skills/venice
 | `venice-image-generate`, `venice-image-edit` | generation, edit, upscale |
 | `venice-video` | video generation, editing, upscaling, and async job lifecycle |
 | `venice-audio-speech`, `venice-audio-music`, `venice-audio-transcription` | TTS, voice cloning, music, STT |
-| `venice-embeddings`, `venice-characters`, `venice-responses` | embeddings, personas, the alpha Responses API |
+| `venice-embeddings`, `venice-characters`, `venice-responses` | embeddings, personas, the beta Responses API |
 | `venice-augment` | document parsing and web search |
 | `venice-x402`, `venice-crypto-rpc` | wallet credits, JSON-RPC proxy |
 | `venice-billing`, `venice-api-keys` | balance, usage history, key management |
