@@ -1,0 +1,173 @@
+---
+title: "Imagens com fundo transparente"
+description: "Gere e edite imagens PNG ou WebP com um canal alfa real usando transparent_background em /image/generate, /image/edit e /image/multi-edit, ou background: transparent no endpoint compatível com OpenAI."
+'og:title': "Imagens com fundo transparente | Documentação da API Venice"
+'og:description': "Produza stickers, logos, recortes de produtos e assets de UI com transparência alfa nativa a partir da API de imagens da Venice. Quais modelos suportam, quais formatos funcionam e o que significam os erros 400."
+---
+
+A API de imagens da Venice pode retornar imagens com um canal alfa real em vez de um fundo branco ou xadrez pintado. O modelo compõe o sujeito com transparência desde o início, então bordas, sombras e regiões semitransparentes (vidro, cabelo, fumaça) carregam alfa por pixel em vez de uma máscara rígida.
+
+Isso é diferente de `/image/background-remove`, que recebe uma imagem opaca já finalizada e segmenta o primeiro plano depois. Use a transparência nativa quando você já for gerar ou editar o asset de qualquer forma; use a remoção de fundo quando você tiver apenas a imagem opaca.
+
+<Frame as="div" caption="Mesmo prompt e seed no gpt-image-2-5-flare. Esquerda: saída padrão. Direita: transparent_background: true, exibida sobre um fundo xadrez. A sombra projetada sobrevive como alfa parcial.">
+  <img src="/images/guides/transparent-backgrounds/before-after.webp" alt="Lado a lado: um copo de chá gelado renderizado sobre um fundo de estúdio opaco versus o mesmo copo sobre um fundo transparente exibido sobre um xadrez" />
+</Frame>
+
+## O que você precisa
+
+| Requisito | Detalhe |
+|---|---|
+| Modelo | Um marcado com `supportsTransparentBackground: true` nas constraints de `GET /models`. Atualmente `gpt-image-1-5`, `gpt-image-2-5-flare` e `gpt-image-2-5-sunburst` (além de suas variantes `-edit` para os endpoints de edição) |
+| Formato de saída | `png` ou `webp`. JPEG não tem canal alfa, então `jpeg` é rejeitado |
+| Parâmetro | `transparent_background: true` em `/image/generate`, `/image/edit`, `/image/multi-edit`. `background: "transparent"` em `/images/generations` |
+
+Qualquer outra combinação retorna `400` antes de a inferência ser executada, então você não é cobrado por uma requisição rejeitada.
+
+## Passo 1: Gere uma imagem transparente
+
+`/image/generate` é o endpoint nativo. Defina `format` como `png` ou `webp` e `transparent_background` como `true`.
+
+```bash
+curl https://api.venice.ai/api/v1/image/generate \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -o sticker.png \
+  -d '{
+    "model": "gpt-image-2-5-flare",
+    "prompt": "A die-cut sticker of a cartoon rocket ship, bold outlines, flat colors, no background",
+    "format": "png",
+    "transparent_background": true,
+    "quality": "low",
+    "return_binary": true
+  }'
+```
+
+A resposta é `content-type: image/png` com layout de pixels RGBA. Sem `return_binary`, você recebe o envelope JSON habitual com uma string base64 em `images[0]`.
+
+`format` tem como padrão `webp`, que também suporta alfa, então omitir `format` funciona. Apenas um `"format": "jpeg"` explícito falha.
+
+<Tip>
+Diga "no background" ou "isolated on transparent background" no prompt, além de definir a flag. A flag garante um canal alfa; o prompt evita que o modelo desenhe um piso, mesa ou cenário que acabaria opaco dentro da caixa delimitadora do sujeito.
+</Tip>
+
+## Passo 2: Verifique o canal alfa
+
+Não confie na extensão do arquivo. Verifique o modo de pixel e observe a distribuição do alfa para confirmar que o fundo é realmente transparente, e não um preenchimento branco achatado.
+
+```python
+from PIL import Image
+
+im = Image.open("sticker.png")
+print(im.format, im.mode, im.size)  # PNG RGBA (1024, 1024)
+
+alpha = im.getchannel("A")
+hist = alpha.histogram()
+total = sum(hist)
+print(f"fully transparent: {100 * hist[0] / total:.1f}%")
+print(f"partially transparent: {100 * sum(hist[1:255]) / total:.1f}%")
+print("subject bbox:", alpha.getbbox())
+```
+
+Um resultado correto tem uma grande parcela de pixels com alfa `0` (o fundo), uma faixa de valores parciais ao longo das bordas (anti-aliasing e sombras suaves) e a caixa delimitadora do sujeito menor que o canvas. Se `im.mode` for `RGB` ou a parcela transparente for `0%`, o canal alfa foi perdido em algum ponto do seu pipeline, geralmente por uma etapa de redimensionamento ou recodificação que o descartou.
+
+<Frame as="div" caption="O canal alfa da imagem acima, isolado. A sombra sob o copo esmaece ao longo de dezenas de níveis de cinza em vez de saltar do branco para o preto, que é o que você quer para compor sobre fundos arbitrários.">
+  <img src="/images/guides/transparent-backgrounds/alpha-channel.webp" alt="Três painéis: a imagem transparente sobre um xadrez, seu canal alfa como máscara em escala de cinza e um recorte ampliado da borda da sombra mostrando um gradiente suave" />
+</Frame>
+
+<Note>
+Os modelos GPT Image atualmente retornam a região opaca com alfa `252`–`254` em vez de `255`. Visualmente é indistinguível, mas se você usar um limiar `== 255` para encontrar o sujeito, obterá uma máscara vazia. Use um limiar `> 0` ou `>= 250`.
+</Note>
+
+## Passo 3: Use o endpoint compatível com OpenAI
+
+Se você já usa o SDK da OpenAI, `/images/generations` aceita o mesmo parâmetro `background` que a OpenAI usa. Defina-o como `"transparent"` e escolha `png` ou `webp` como `output_format`.
+
+```python
+import base64
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://api.venice.ai/api/v1",
+    api_key=VENICE_API_KEY,
+)
+
+result = client.images.generate(
+    model="gpt-image-2-5-flare",
+    prompt="A flat vector icon of a paper airplane, isolated, no background",
+    output_format="webp",
+    background="transparent",
+    quality="low",
+)
+
+with open("icon.webp", "wb") as f:
+    f.write(base64.b64decode(result.data[0].b64_json))
+```
+
+`background` aceita `transparent`, `opaque` ou `auto`. `opaque`, `auto` e `null` mantêm o comportamento padrão do modelo, então o único valor que muda algo é `transparent`. `output_format` tem como padrão `png` neste endpoint, então você pode omiti-lo.
+
+## Passo 4: Edite com transparência
+
+Tanto `/image/edit` quanto `/image/multi-edit` também aceitam `transparent_background`. A imagem de origem não precisa ser transparente; você pode enviar uma foto opaca e pedir ao modelo que isole o sujeito enquanto o edita.
+
+```bash
+curl https://api.venice.ai/api/v1/image/edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "model=gpt-image-2-5-flare-edit" \
+  -F "prompt=Make the apple green and remove the background" \
+  -F "image=@apple.jpg" \
+  -F "transparent_background=true" \
+  -o apple-green.png
+```
+
+Nos endpoints de edição, `output_format` é inferido quando omitido: normalmente PNG para edições 1K e JPEG para 2K/4K, mas quando `transparent_background` é `true`, a inferência muda para PNG em todas as resoluções. Então você só precisa enviar `output_format` explicitamente se quiser WebP.
+
+A forma multi-edit é idêntica, com `images[]` em vez de `image`. É a opção natural para compor uma foto de produto em uma nova cena e receber o resultado composto como um recorte que você pode posicionar no seu próprio layout.
+
+## Preços
+
+A transparência não adiciona sobretaxa. Você paga o preço normal por imagem do modelo, que no GPT Image 2.5 depende de `resolution` e `quality`. Uma geração `1K` `low` no `gpt-image-2-5-flare` é a forma mais barata de iterar em um sticker ou ícone antes de pagar por `high` ou `4K`. Veja [Modelos de imagem](/pt-BR/models/image) para a tabela de preços atualizada.
+
+## Erros
+
+A validação é executada antes de o modelo ser chamado. Ambas as mensagens indicam a correção.
+
+| Requisição | Status | Corpo |
+|---|---|---|
+| `transparent_background: true` com `format` / `output_format` `jpeg` | `400` | `Transparent background requires png or webp output format.` |
+| `transparent_background: true` em um modelo sem a flag | `400` | `Transparent background is not supported by model 'flux-2-pro'. Use a model with "supportsTransparentBackground": true in its constraints (see GET /api/v1/models).` |
+| `background: "transparent"` com `output_format: "jpeg"` em `/images/generations` | `400` | `Transparent background requires png or webp output format.` |
+
+`transparent_background: false` com `jpeg` funciona normalmente e retorna um JPEG opaco comum.
+
+## Descubra os modelos suportados em tempo de execução
+
+Os IDs de modelo mudam. Em vez de fixar a lista acima no código, filtre `GET /models` pela flag de constraint. A chave só está presente, como `true`, nos modelos que a suportam.
+
+```bash
+curl -s "https://api.venice.ai/api/v1/models?type=image" \
+  | jq -r '.data[] | select(.model_spec.constraints.supportsTransparentBackground == true) | .id'
+```
+
+Use `type=inpaint` para os endpoints de edição, que retornam os IDs de modelo `-edit`.
+
+## Quando usar isto vs. `/image/background-remove`
+
+| | `transparent_background` | `/image/background-remove` |
+|---|---|---|
+| Entrada | Um prompt (e, opcionalmente, uma imagem de origem para editar) | Uma imagem opaca existente |
+| Como o alfa é produzido | O modelo compõe com transparência desde o início | Um modelo de segmentação mascara o primeiro plano depois |
+| Sombras e reflexos | Mantidos, com alfa parcial, porque o modelo os renderizou como parte do sujeito | Removidos junto com o fundo, já que não fazem parte do primeiro plano |
+| Escolha de modelo | Apenas GPT Image 1.5 / 2.5 | Modelo interno fixo, sem campo `model` |
+| Custo | Preço normal de geração ou edição do modelo | Preço fixo de remoção de fundo |
+
+Se você vai gerar o asset de qualquer forma, solicite transparência desde o início e pule a segunda chamada. Recorra a `/image/background-remove` quando a imagem opaca já existir e você não quiser gerá-la novamente.
+
+<Frame as="div" caption="Um único sticker transparente da requisição do Passo 1, colocado sobre três fundos sem nenhum processamento adicional.">
+  <img src="/images/guides/transparent-backgrounds/backgrounds.webp" alt="O mesmo sticker de foguete de desenho animado composto sobre uma cor sólida escura, um gradiente quente e um xadrez" />
+</Frame>
+
+## Relacionados
+
+- [Geração de imagens](/pt-BR/guides/media/image-generation) para dimensionamento, níveis de qualidade e a lista completa de parâmetros de `/image/generate`
+- [Edição de imagens](/pt-BR/guides/media/image-editing) para `/image/edit`, `/image/multi-edit` e `/image/background-remove`
+- [Modelos de imagem](/pt-BR/models/image) para preços e constraints atuais
