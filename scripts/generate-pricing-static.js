@@ -27,8 +27,8 @@ function extractStaticModels() {
 // Helper functions (same logic as model-search.js)
 function formatPrice(price) {
   if (price === null || price === undefined) return '-';
-  if (price < 0.01 && price > 0) return '$' + price.toFixed(4);
-  return '$' + price.toFixed(2);
+  const [whole, fraction = ''] = price.toFixed(8).replace(/0+$/, '').split('.');
+  return '$' + whole + '.' + fraction.padEnd(2, '0');
 }
 
 const FREE_LABEL = 'Free';
