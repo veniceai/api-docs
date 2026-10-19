@@ -508,34 +508,34 @@ function generatePricingMdx() {
   sections.push('  </Card>');
   sections.push('</CardGroup>');
   sections.push('');
-  sections.push('### How API usage is billed');
-  sections.push('');
-  sections.push('API requests are pay-per-use at the rates on this page. There is no unmetered API tier. A Free account can call the API, and those requests are billed at the same rates.');
-  sections.push('');
-  sections.push('Venice deducts each paid request in this order: DIEM, then earned credits, then bundled credits, then USD. Each balance is worth one dollar per unit. See [VVV & DIEM](/overview/vvv-diem).');
-  sections.push('');
-  sections.push('If those balances cannot cover the request, the API returns `402` with `INSUFFICIENT_BALANCE`. See [Error codes](/api-reference/error-codes).');
-  sections.push('');
-  sections.push('Paid plans include a monthly bundled-credit allowance. The API spends it in the order above. Free accounts do not receive this allowance.');
-  sections.push('');
-  sections.push('| Plan | Monthly allowance |');
-  sections.push('| --- | --- |');
-  sections.push('| Pro | $1 |');
-  sections.push('| Plus | $75 |');
-  sections.push('| Max | $225 |');
-  sections.push('');
-  sections.push('Each model has its own price. The API does not group models into base and premium price tiers. Some models are limited to paid plans (Pro, Plus, and Max). Other accounts receive `401` with `PRO_ONLY_MODEL`.');
-  sections.push('');
-  sections.push('Rows marked `Variable` are priced per request. Quote the job before you queue it. See [Rate Limits](/api-reference/rate-limiting).');
-  sections.push('');
-  sections.push("Request limits depend on the model and on your Default or Partner tier, not on the model's price. See [Rate Limits](/api-reference/rate-limiting).");
-  sections.push('');
-  sections.push('### Paid plans');
-  sections.push('');
-  sections.push('Pro, Plus, and Max subscribers receive a one-time $5 USD credit on the API balance. It is issued once, into the USD balance, and spent at the rates on this page. Accounts that upgraded by staking VVV do not receive it.');
-  sections.push('');
-  sections.push('A paid subscription does not include free or unlimited API usage.');
-  sections.push('');
+  sections.push(`### How API usage is billed
+
+API requests are pay-per-use at the rates on this page. There is no unmetered API tier. A Free account can call the API, and those requests are billed at the same rates.
+
+Venice deducts each paid request in this order: DIEM, then earned credits, then bundled credits, then USD. Each balance is worth one dollar per unit. See [VVV & DIEM](/overview/vvv-diem).
+
+If those balances cannot cover the request, the API returns \`402\` with \`INSUFFICIENT_BALANCE\`. See [Error codes](/api-reference/error-codes).
+
+Paid plans include a monthly bundled-credit allowance. The API spends it in the order above. Free accounts do not receive this allowance.
+
+| Plan | Monthly allowance |
+| --- | --- |
+| Pro | $1 |
+| Plus | $75 |
+| Max | $225 |
+
+Each model has its own price. The API does not group models into base and premium price tiers. Some models are limited to paid plans (Pro, Plus, and Max). Other accounts receive \`401\` with \`PRO_ONLY_MODEL\`.
+
+Rows marked \`Variable\` are priced per request. Quote the job before you queue it. See [Rate Limits](/api-reference/rate-limiting).
+
+Request limits depend on the model and on your Default or Partner tier, not on the model's price. See [Rate Limits](/api-reference/rate-limiting).
+
+### Paid plans
+
+Pro, Plus, and Max subscribers receive a one-time $5 USD credit on the API balance. It is issued once, into the USD balance, and spent at the rates on this page. Accounts that upgraded by staking VVV do not receive it.
+
+A paid subscription does not include free or unlimited API usage.
+`);
 
   return sections.join('\n');
 }
