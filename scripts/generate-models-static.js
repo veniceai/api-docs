@@ -29,10 +29,10 @@ function readModels() {
   return models;
 }
 
-// Show the exact price (up to 6 decimals, at least 2) so sub-cent list prices like $0.125 aren't rounded up.
+// Show the exact price (up to 8 decimals, at least 2) so sub-cent list prices like $0.125 aren't rounded up.
 function formatPrice(price) {
   if (price === null || price === undefined) return '—';
-  const [whole, fraction = ''] = price.toFixed(6).replace(/0+$/, '').split('.');
+  const [whole, fraction = ''] = price.toFixed(8).replace(/0+$/, '').split('.');
   return '$' + whole + '.' + fraction.padEnd(2, '0');
 }
 
