@@ -34,7 +34,7 @@ Python (OpenAI SDK): `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=os
 
 | Surface | Endpoints |
 | --- | --- |
-| Chat / text | `POST /chat/completions` (streaming, vision, audio/video input, tool calling), `POST /responses` (alpha) |
+| Chat / text | `POST /chat/completions` (streaming, vision, audio/video input, tool calling), `POST /responses` (beta) |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`, OpenAI-style `POST /images/generations` |
 | Video | `POST /video/queue` → `GET /video/retrieve?id=`, or `POST /video/complete` (one call); `POST /video/quote` for pricing |
 | Audio | `POST /audio/speech` (TTS), `POST /audio/transcriptions` (STT); music via `/audio/queue`, `/audio/retrieve`, `/audio/quote`, `/audio/complete`; voice changer via `/audio/voice-changer/quote`, `/audio/voice-changer/queue`, `/audio/voice-changer/retrieve`, `/audio/voice-changer/complete` |
@@ -79,6 +79,7 @@ Feature suffixes also work on model IDs, e.g. `venice-uncensored:web` enables we
 - Crypto RPC for agents: https://docs.venice.ai/guides/integrations/crypto-rpc-agents.md
 - Venice MCP server: https://docs.venice.ai/guides/integrations/venice-mcp.md
 - Venice Agent Skills: https://docs.venice.ai/guides/integrations/venice-skills.md
+- Responses API (beta; native for OpenAI models): https://docs.venice.ai/guides/features/responses-api.md
 - Structured responses (JSON schema): https://docs.venice.ai/guides/features/structured-responses.md
 - Reasoning models: https://docs.venice.ai/guides/features/reasoning-models.md
 - File inputs (PDF/Office/code in chat): https://docs.venice.ai/guides/features/file-inputs.md
