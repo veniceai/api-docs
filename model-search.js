@@ -774,10 +774,11 @@
     return { dateStr, isNew };
   }
 
+  // Show the exact price (up to 8 decimals, at least 2) so sub-cent list prices like $0.125 aren't rounded up.
   function formatPrice(price) {
     if (price === null || price === undefined) return '-';
-    if (price < 0.01 && price > 0) return '$' + price.toFixed(4);
-    return '$' + price.toFixed(2);
+    const [whole, fraction = ''] = price.toFixed(8).replace(/0+$/, '').split('.');
+    return '$' + whole + '.' + fraction.padEnd(2, '0');
   }
 
   function formatDecisionTokenPrice(price) {
