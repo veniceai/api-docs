@@ -53,7 +53,7 @@ The response maps trait names to whichever model currently fills that role. Text
 traits are `default`, `most_intelligent`, `most_uncensored`, `default_reasoning`,
 `default_vision`, `default_code`, and `function_calling_default`; image traits
 include `default`, `fastest`, `highest_quality`, and `most_uncensored`.
-Filter the full catalog with `GET /models?type=image|video|audio|tts|embedding`.
+Filter the full catalog with `GET /models?type=image|video|tts|asr|music|embedding`, or `?type=all`.
 Before relying on a feature, check that model's `model_spec.capabilities` flags
 (`supportsWebSearch`, `supportsReasoning`, `supportsE2EE`, `supportsFunctionCalling`,
 `supportsVision`, and similar). Per-model pricing is on `model_spec.pricing`.
@@ -79,7 +79,7 @@ catalog moves; the capability flags on each model are the authoritative answer.
 | --- | --- |
 | Chat / text | `POST /chat/completions`; `POST /responses` (beta, see https://docs.venice.ai/guides/features/responses-api) |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`; OpenAI-style `POST /images/generations` |
-| Video (async) | `POST /video/quote`, `/video/queue`, `GET /video/retrieve?id=`, `POST /video/complete` |
+| Video (async) | `POST /video/quote`, `/video/queue`, `/video/retrieve` (JSON body `{model, queue_id}`), `/video/complete` |
 | Audio | `POST /audio/speech` (TTS), `POST /audio/voices` (voice cloning), `POST /audio/transcriptions` (STT) |
 | Music (async) | `POST /audio/quote`, `/audio/queue`, `/audio/retrieve`, `/audio/complete` |
 | Voice Changer (async) | `POST /audio/voice-changer/quote`, `/audio/voice-changer/queue`, `/audio/voice-changer/retrieve`, `/audio/voice-changer/complete` |
@@ -88,8 +88,8 @@ catalog moves; the capability flags on each model are the authoritative answer.
 | Tools | `POST /augment/search`, `/augment/scrape`, `/augment/text-parser` |
 | Blockchain RPC | `GET /crypto/rpc/networks`, `POST /crypto/rpc/{network}` |
 | Models | `GET /models`, `/models/traits`, `/models/compatibility_mapping` |
-| Characters | `GET /characters`, `/characters/{slug}` |
-| Account | `GET /billing/balance`, `/billing/usage-history`, `/api_keys/*`, `/api_keys/rate_limits` |
+| Characters | `GET /characters`, `/characters/{slug}`, `/characters/{slug}/reviews` |
+| Account | `GET /billing/balance`, `/billing/usage-history`, `/billing/usage-analytics`, `/api_keys/*`, `/api_keys/rate_limits` |
 | x402 wallet | `GET /x402/balance/{wallet}`, `POST /x402/top-up`, `GET /x402/transactions/{wallet}` |
 
 For bounded judgments your code acts on directly (yes/no, pick one label,
@@ -113,8 +113,8 @@ Venice-only features ride in a `venice_parameters` object on `/chat/completions`
 - `strip_thinking_response` / `disable_thinking`: control `<think>` blocks
 - `enable_e2ee`: end-to-end encryption on E2EE-capable models
 
-Feature suffixes on the model ID do the same thing, for example
-`kimi-k3:web` or `kimi-k3:enable_web_search=on`.
+Feature suffixes on the model ID do the same thing as `key=value` pairs, for
+example `kimi-k3:enable_web_search=on`. A suffix without `=` is ignored.
 
 `POST /responses` accepts a narrower set: `character_slug`, `enable_e2ee`,
 `enable_web_search`, `enable_web_scraping`, `enable_web_citations`,
@@ -168,7 +168,7 @@ VVV on Base, with no human in the loop.
 - `POST /responses` silently drops `n`, `stop`, `seed`, and `prompt_cache_key`.
   They are accepted and ignored rather than rejected. E2EE models are not
   supported there either.
-- `GET /billing/usage` is deprecated. Use `GET /billing/usage-history`, which is
+- `GET /billing/usage` is removed and returns `410`. Use `GET /billing/usage-history`, which is
   keyset-paginated and takes `startTimestamp` / `endTimestamp` rather than the
   old parameter names.
 - Crypto RPC is per-network: `POST /crypto/rpc/{network}`, with the live slug
