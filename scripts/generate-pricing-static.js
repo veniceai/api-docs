@@ -490,7 +490,7 @@ function generatePricingMdx() {
   sections.push('<Info>');
   sections.push('**Web Scraping** automatically detects up to 5 URLs per request, scrapes and converts content into structured markdown, and adds the extracted text into model context. Only successfully scraped URLs are billed.');
   sections.push('');
-  sections.push("**X Search** enables xAI's native search for supported Grok models (e.g., `grok-4-20-beta`). This searches both the web and X/Twitter for real-time information. Billed per search result returned by the model (e.g., if the model returns 10 search results, you are charged for 10 results at $0.01 each = $0.10).");
+  sections.push("**X Search** enables xAI's native search for supported Grok models (e.g., `grok-4-20`). This searches both the web and X/Twitter for real-time information. Billed per search result returned by the model (e.g., if the model returns 10 search results, you are charged for 10 results at $0.01 each = $0.10).");
   sections.push('');
   sections.push('These charges apply in addition to standard model token pricing.');
   sections.push('</Info>');
