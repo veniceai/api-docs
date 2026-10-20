@@ -24,7 +24,7 @@ curl https://api.venice.ai/api/v1/api_keys/rate_limits \
 
 ### Text- und Embedding-Modelle
 
-Text- und Embedding-Modelle sind in vier Größen gruppiert. Jede Modellkarte auf der [Models-Seite](/de/models/text) zeigt ihr Größen-Badge an. Alle Embedding-Modelle sind XS.
+Text- und Embedding-Modelle sind in vier Größen gruppiert. Alle Embedding-Modelle sind XS.
 
 | Größe | Requests/min | Tokens/min | Partner-Requests/min | Partner-Tokens/min |
 |:-----|-------------:|-----------:|---------------------:|-------------------:|
@@ -46,17 +46,23 @@ Text- und Embedding-Modelle sind in vier Größen gruppiert. Jede Modellkarte au
 
 ### Video- und Musik-Modelle
 
-Video-, Musik- und Voice-Changer-Jobs unterliegen keinen Rate-Limits. Sie werden pro Generierung über Ihr Guthaben abgerechnet, sodass in der Praxis die Kosten und nicht eine Anfrageobergrenze die Beschränkung darstellen. Kalkulieren Sie einen Auftrag zuerst mit [`POST /video/quote`](/de/api-reference/endpoint/video/quote), [`POST /audio/quote`](/de/api-reference/endpoint/audio/quote) oder [`POST /audio/voice-changer/quote`](/de/api-reference/endpoint/audio/voice-changer/quote).
+Queue- und Retrieve-Anfragen für Video, Musik und Voice-Changer unterliegen Anfragelimits pro Konto. Behandeln Sie `429`-Antworten mit Backoff und fragen Sie Retrieve-Endpoints in einem moderaten Intervall ab statt in einer engen Schleife. Jobs werden pro Generierung über Ihr Guthaben abgerechnet, kalkulieren Sie einen Auftrag daher zuerst mit [`POST /video/quote`](/de/api-reference/endpoint/video/quote), [`POST /audio/quote`](/de/api-reference/endpoint/audio/quote) oder [`POST /audio/voice-changer/quote`](/de/api-reference/endpoint/audio/voice-changer/quote).
 
 ## Fehlerbehandlung
 
 Fehlgeschlagene Anfragen (500, 503, 429) sollten mit exponentiellem Backoff wiederholt werden.
 
-Speziell bei 429-Fehlern prüfen Sie den Header `x-ratelimit-reset-requests` für den genauen Unix-Zeitstempel, ab dem Sie es erneut versuchen können. Die meisten HTTP-Bibliotheken verfügen über integrierte Retry-Mechanismen, die dies automatisch übernehmen.
+Bei 429-Fehlern auf Inferenz-Endpoints gibt der Header `x-ratelimit-reset-requests` als Unix-Zeitstempel in Millisekunden den spätesten Zeitpunkt an, bis zu dem das Request-Fenster vollständig geleert ist. Bis dahin zu warten ist immer sicher; ein früherer erneuter Versuch kann ebenfalls erfolgreich sein.
+
+```javascript
+const reset = Number(response.headers.get('x-ratelimit-reset-requests'));
+const waitMs = Math.max(0, reset - Date.now());
+await new Promise((resolve) => setTimeout(resolve, waitMs));
+```
 
 ### Fehlerbudgets
 
-Zwei weitere Limits schützen die API vor Clients, die wiederholt gegen eine Wand laufen. Beide werden pro Modell und API-Key über ein rollierendes Fenster von 30 Sekunden gezählt, und beide geben `429` zurück:
+Zwei weitere Limits schützen die API vor Clients, die wiederholt gegen eine Wand laufen. Beide werden pro Modell und API-Key gezählt, und beide geben `429` zurück. Fehlgeschlagene Anfragen werden in festen 30-Sekunden-Fenstern gezählt:
 
 | Budget | Schwellenwert | Gilt für |
 |:-------|----------:|:-----------|
@@ -65,28 +71,33 @@ Zwei weitere Limits schützen die API vor Clients, die wiederholt gegen eine Wan
 
 Das zweite Budget zählt Anfragen, die von einem Modell ein Feature verlangen, das es nicht unterstützt. Ein Beispiel ist die Anforderung von Vision oder Tool Calling bei einem Modell ohne diese Fähigkeit. Die Überschreitung eines der beiden Budgets erscheint in den [Rate-Limit-Logs](/de/api-reference/endpoint/api_keys/rate_limit_logs) als `FAILED_REQUESTS` oder `UNSUPPORTED_FEATURE_REQUESTS`.
 
-Beide geben eine `customMessage` zurück, die den ausgelösten Schwellenwert benennt:
+Das Feld `error` im Response-Body benennt den ausgelösten Schwellenwert. Für das Budget für fehlgeschlagene Anfragen lautet es:
 
 ```
 Too many failed attempts (> 50) resulting in a non-success status code. Please wait 30 seconds and try again. See https://docs.venice.ai/api-reference/rate-limiting for more information.
 ```
 
-Diese Antworten setzen `x-ratelimit-remaining` und `x-ratelimit-resets` anstelle der unten aufgeführten fensterbezogenen Header.
-
 ## Response-Header
 
-Jede Antwort enthält diese Header:
+Inferenz-Antworten (Chat Completions, Responses, Bild, Audio und Embeddings) enthalten diese Header. Sie werden nicht auf Models-, API-Key-, Billing- oder x402-Routen gesendet; dasselbe gilt für die `x-venice-balance-*`-Header.
 
 | Header | Beschreibung |
 |:-------|:------------|
 | `x-ratelimit-limit-requests` | Max. Anfragen, die im aktuellen Fenster erlaubt sind |
 | `x-ratelimit-remaining-requests` | Verbleibende Anfragen im aktuellen Fenster |
-| `x-ratelimit-reset-requests` | Unix-Zeitstempel, wann das Fenster zurückgesetzt wird |
+| `x-ratelimit-reset-requests` | Unix-Zeitstempel in Millisekunden, bis zu dem das aktuelle Fenster vollständig geleert ist (Anfragezeitpunkt plus volle Fensterlänge, unabhängig von der Nutzung) |
 | `x-ratelimit-limit-tokens` | Max. erlaubte Tokens pro Minute |
 | `x-ratelimit-remaining-tokens` | Verbleibende Tokens in der aktuellen Minute |
-| `x-ratelimit-reset-tokens` | Sekunden bis zum Zurücksetzen des Token-Limits |
+| `x-ratelimit-reset-tokens` | Unix-Zeitstempel in Millisekunden, wann das Token-Limit zurückgesetzt wird |
 
-Der Endpoint `/crypto/rpc/{network}` verwendet eigene Limits und eigene Header (`X-RateLimit-Limit`, `X-RateLimit-Remaining` und `X-RateLimit-Reset`), die nur bei 429-Antworten gesetzt werden. Details finden Sie unter [Crypto RPC](/de/api-reference/endpoint/crypto/rpc).
+Das Budget für fehlgeschlagene Anfragen hat eigene Header, die bei jeder Antwort auf eine Anfrage mit einem API-Key gesendet werden, einschließlich `401`-Antworten:
+
+| Header | Beschreibung |
+|:-------|:------------|
+| `x-ratelimit-remaining` | Verbleibende fehlgeschlagene Anfragen im aktuellen 30-Sekunden-Fenster |
+| `x-ratelimit-resets` | Unix-Zeitstempel in Millisekunden, wann das aktuelle 30-Sekunden-Fenster zurückgesetzt wird |
+
+Der Endpoint `/crypto/rpc/{network}` verwendet eigene Limits und eigene Header (`X-RateLimit-Limit`, `X-RateLimit-Remaining` und `X-RateLimit-Reset`), die nur bei 429-Antworten gesetzt werden. Anders als bei den oben genannten Millisekunden-Headern ist `X-RateLimit-Reset` ein Unix-Zeitstempel in Sekunden. Details finden Sie unter [Crypto RPC](/de/api-reference/endpoint/crypto/rpc).
 
 ## Partner-Stufe
 

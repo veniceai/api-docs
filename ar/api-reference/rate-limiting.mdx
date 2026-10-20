@@ -24,7 +24,7 @@ curl https://api.venice.ai/api/v1/api_keys/rate_limits \
 
 ### نماذج النصوص والـ Embedding
 
-تُجمَّع نماذج النصوص والـ embedding في أربعة أحجام. تعرض كل بطاقة نموذج في [صفحة النماذج](/ar/models/text) شارة حجمها. جميع نماذج الـ embedding من الحجم XS.
+تُجمَّع نماذج النصوص والـ embedding في أربعة أحجام. جميع نماذج الـ embedding من الحجم XS.
 
 | الحجم | طلبات/دقيقة | Tokens/دقيقة | طلبات الشريك/دقيقة | Tokens الشريك/دقيقة |
 |:-----|-------------:|-----------:|---------------------:|-------------------:|
@@ -46,17 +46,23 @@ curl https://api.venice.ai/api/v1/api_keys/rate_limits \
 
 ### نماذج الفيديو والموسيقى
 
-مهام الفيديو والموسيقى وتغيير الصوت غير خاضعة لحدود المعدل. تُحتسب فوترتها لكل عملية توليد من رصيدك، لذا فإن القيد العملي هو التكلفة وليس سقف الطلبات. قم بتسعير المهمة أولًا باستخدام [`POST /video/quote`](/ar/api-reference/endpoint/video/quote) أو [`POST /audio/quote`](/ar/api-reference/endpoint/audio/quote) أو [`POST /audio/voice-changer/quote`](/ar/api-reference/endpoint/audio/voice-changer/quote).
+تخضع طلبات الإدراج في قائمة الانتظار والاسترجاع للفيديو والموسيقى وتغيير الصوت لحدود طلبات لكل حساب. تعامل مع استجابات `429` باستخدام backoff، واستعلم endpoints الاسترجاع على فترات معتدلة بدلًا من حلقة متقاربة. تُحتسب فوترة المهام لكل عملية توليد من رصيدك، لذا قم بتسعير المهمة أولًا باستخدام [`POST /video/quote`](/ar/api-reference/endpoint/video/quote) أو [`POST /audio/quote`](/ar/api-reference/endpoint/audio/quote) أو [`POST /audio/voice-changer/quote`](/ar/api-reference/endpoint/audio/voice-changer/quote).
 
 ## التعامل مع الأخطاء
 
 يجب إعادة محاولة الطلبات الفاشلة (500، 503، 429) باستخدام exponential backoff.
 
-بالنسبة لأخطاء 429 تحديدًا، تحقق من header `x-ratelimit-reset-requests` للحصول على الطابع الزمني Unix الدقيق متى يمكنك إعادة المحاولة. تحتوي معظم مكتبات HTTP على آليات إعادة محاولة مدمجة تتعامل مع هذا تلقائيًا.
+بالنسبة لأخطاء 429 على endpoints الاستدلال، يعطي header `x-ratelimit-reset-requests` أقصى وقت، كطابع Unix زمني بالميلي ثانية، تكون فيه نافذة الطلبات قد خلت تمامًا. الانتظار حتى ذلك الوقت آمن دائمًا؛ وقد تنجح إعادة المحاولة قبله أيضًا.
+
+```javascript
+const reset = Number(response.headers.get('x-ratelimit-reset-requests'));
+const waitMs = Math.max(0, reset - Date.now());
+await new Promise((resolve) => setTimeout(resolve, waitMs));
+```
 
 ### ميزانيات الأخطاء
 
-يحمي حدّان إضافيان الـ API من العملاء الذين يستمرون في إعادة المحاولة دون جدوى. يُحسب كلاهما لكل نموذج ولكل مفتاح API خلال نافذة متحركة مدتها 30 ثانية، ويعيد كلاهما `429`:
+يحمي حدّان إضافيان الـ API من العملاء الذين يستمرون في إعادة المحاولة دون جدوى. يُحسب كلاهما لكل نموذج ولكل مفتاح API، ويعيد كلاهما `429`. تُحسب الطلبات الفاشلة في نوافذ ثابتة مدتها 30 ثانية:
 
 | الميزانية | العتبة | ينطبق على |
 |:-------|----------:|:-----------|
@@ -65,28 +71,33 @@ curl https://api.venice.ai/api/v1/api_keys/rate_limits \
 
 تحسب الميزانية الثانية الطلبات التي تطلب من نموذج ميزة لا يدعمها. على سبيل المثال، طلب الرؤية أو استدعاء الأدوات من نموذج لا يمتلك تلك القدرة. يظهر تجاوز أي من الميزانيتين في [سجلات حدود المعدل](/ar/api-reference/endpoint/api_keys/rate_limit_logs) باسم `FAILED_REQUESTS` أو `UNSUPPORTED_FEATURE_REQUESTS`.
 
-يعيد كلاهما `customMessage` يحدد العتبة التي تم تجاوزها:
+يحدد الحقل `error` في جسم الاستجابة العتبة التي تم تجاوزها. بالنسبة لميزانية الطلبات الفاشلة يكون نصه:
 
 ```
 Too many failed attempts (> 50) resulting in a non-success status code. Please wait 30 seconds and try again. See https://docs.venice.ai/api-reference/rate-limiting for more information.
 ```
 
-تعيّن هذه الاستجابات `x-ratelimit-remaining` و`x-ratelimit-resets` بدلًا من رؤوس النافذة المذكورة أدناه.
-
 ## رؤوس الاستجابة
 
-تتضمن كل استجابة هذه الرؤوس:
+تتضمن استجابات الاستدلال (chat completions وresponses والصور والصوت والـ embeddings) هذه الرؤوس. لا تُرسَل على مسارات النماذج أو مفاتيح API أو الفوترة أو x402، وينطبق الأمر نفسه على رؤوس `x-venice-balance-*`.
 
 | Header | الوصف |
 |:-------|:------------|
 | `x-ratelimit-limit-requests` | الحد الأقصى للطلبات المسموح بها في النافذة الحالية |
 | `x-ratelimit-remaining-requests` | الطلبات المتبقية في النافذة الحالية |
-| `x-ratelimit-reset-requests` | طابع Unix الزمني عند إعادة تعيين النافذة |
+| `x-ratelimit-reset-requests` | طابع Unix الزمني بالميلي ثانية الذي تكون فيه النافذة الحالية قد خلت تمامًا (وقت الطلب مضافًا إليه طول النافذة الكامل، بغض النظر عن الاستخدام) |
 | `x-ratelimit-limit-tokens` | الحد الأقصى لـ tokens المسموح به في الدقيقة |
 | `x-ratelimit-remaining-tokens` | الـ tokens المتبقية في الدقيقة الحالية |
-| `x-ratelimit-reset-tokens` | الثواني حتى إعادة تعيين حد الـ tokens |
+| `x-ratelimit-reset-tokens` | طابع Unix الزمني بالميلي ثانية عند إعادة تعيين حد الـ tokens |
 
-يستخدم endpoint `/crypto/rpc/{network}` حدوده الخاصة ورؤوسه الخاصة `X-RateLimit-Limit` و`X-RateLimit-Remaining` و`X-RateLimit-Reset`، والتي تُعيَّن فقط في استجابات 429. راجع [Crypto RPC](/ar/api-reference/endpoint/crypto/rpc) لمزيد من التفاصيل.
+لميزانية الطلبات الفاشلة رؤوسها الخاصة، وتُرسَل في كل استجابة لطلب مُرسَل بمفتاح API، بما في ذلك استجابات `401`:
+
+| Header | الوصف |
+|:-------|:------------|
+| `x-ratelimit-remaining` | الطلبات الفاشلة المتبقية في النافذة الحالية ومدتها 30 ثانية |
+| `x-ratelimit-resets` | طابع Unix الزمني بالميلي ثانية عند إعادة تعيين النافذة الحالية ومدتها 30 ثانية |
+
+يستخدم endpoint `/crypto/rpc/{network}` حدوده الخاصة ورؤوسه الخاصة `X-RateLimit-Limit` و`X-RateLimit-Remaining` و`X-RateLimit-Reset`، والتي تُعيَّن فقط في استجابات 429. على عكس رؤوس الميلي ثانية أعلاه، فإن `X-RateLimit-Reset` طابع Unix زمني بالثواني. راجع [Crypto RPC](/ar/api-reference/endpoint/crypto/rpc) لمزيد من التفاصيل.
 
 ## مستوى الشريك
 
