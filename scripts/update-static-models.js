@@ -13,6 +13,8 @@ const API_BASE = 'https://api.venice.ai/api/v1/models';
 const MODEL_TYPES = ['text', 'decision', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video', 'music'];
 const SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-models.json');
 const TRAITS_SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-traits.json');
+const REMOVED_DEPRECATIONS_PATH = path.join(__dirname, '..', 'data', 'removed-deprecations.json');
+const REMOVED_RETENTION_DAYS = 30;
 
 async function fetchAllModels() {
   const results = await Promise.all(MODEL_TYPES.map(async type => {
@@ -97,6 +99,44 @@ function sortModels(models) {
   });
 }
 
+function readJsonArray(filePath) {
+  if (!fs.existsSync(filePath)) return [];
+  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+function getRemovalDate(model) {
+  const deprecation = model.model_spec?.deprecation;
+  return deprecation?.removesAt || deprecation?.date || null;
+}
+
+// /models drops a model on its removal date, so the deprecations page would
+// lose it immediately. Keep removed models here until the retention window ends.
+function updateRemovedDeprecations(previousModels, liveModels, now = new Date()) {
+  const liveIds = new Set(liveModels.map(m => m.id));
+  const byId = new Map(readJsonArray(REMOVED_DEPRECATIONS_PATH).map(m => [m.id, m]));
+
+  for (const model of previousModels) {
+    if (liveIds.has(model.id) || !getRemovalDate(model)) continue;
+    byId.set(model.id, {
+      id: model.id,
+      type: model.type,
+      model_spec: {
+        name: model.model_spec?.name,
+        deprecation: model.model_spec.deprecation
+      }
+    });
+  }
+
+  const cutoff = new Date(now);
+  cutoff.setUTCDate(cutoff.getUTCDate() - REMOVED_RETENTION_DAYS);
+
+  return [...byId.values()]
+    .filter(m => !liveIds.has(m.id))
+    .filter(m => new Date(getRemovalDate(m)) >= cutoff)
+    .sort((a, b) => new Date(getRemovalDate(a)) - new Date(getRemovalDate(b)) || a.id.localeCompare(b.id));
+}
+
 async function main() {
   console.log('Fetching models and text traits from API...');
   const [models, traits] = await Promise.all([
@@ -109,10 +149,13 @@ async function main() {
   const cleaned = sortModels(models.map(cleanModel));
   const modelsJson = JSON.stringify(cleaned);
   const traitsJson = JSON.stringify(traits);
+  const removed = updateRemovedDeprecations(readJsonArray(SNAPSHOT_PATH), cleaned);
+  const removedJson = JSON.stringify(removed, null, 2) + '\n';
 
   fs.mkdirSync(path.dirname(SNAPSHOT_PATH), { recursive: true });
   writeIfChanged(SNAPSHOT_PATH, modelsJson, 'data/static-models.json');
   writeIfChanged(TRAITS_SNAPSHOT_PATH, traitsJson, 'data/static-traits.json');
+  writeIfChanged(REMOVED_DEPRECATIONS_PATH, removedJson, 'data/removed-deprecations.json');
 
   // Pricing is last because its generator exits the process when unchanged.
   console.log('Regenerating Popular models cards...');
