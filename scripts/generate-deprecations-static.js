@@ -7,6 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { getRemovalDate: getModelRemovalDate } = require('./model-helpers');
 
 const ROOT = path.join(__dirname, '..');
 const MODELS_PATH = path.join(ROOT, 'data', 'static-models.json');
@@ -66,11 +67,6 @@ function renderTraitsList(traits) {
   return entries
     .map(([trait, modelId]) => `- ${inlineCode(trait)} → currently routes to ${inlineCode(modelId)}`)
     .join('\n');
-}
-
-function getModelRemovalDate(model) {
-  const deprecation = model.model_spec?.deprecation;
-  return deprecation?.removesAt || deprecation?.date || null;
 }
 
 function getDeprecationStatus(removalDate, now) {

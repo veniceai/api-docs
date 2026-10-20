@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { getRemovalDate } = require('./model-helpers');
 
 const API_BASE = 'https://api.venice.ai/api/v1/models';
 const MODEL_TYPES = ['text', 'decision', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video', 'music'];
@@ -78,10 +79,14 @@ function cleanModel(m) {
   if (spec.availableContextTokens) clean.model_spec.availableContextTokens = spec.availableContextTokens;
   if (spec.maxStateTokens) clean.model_spec.maxStateTokens = spec.maxStateTokens;
   if (spec.maxTotalTokens) clean.model_spec.maxTotalTokens = spec.maxTotalTokens;
+  if (spec.maxCompletionTokens) clean.model_spec.maxCompletionTokens = spec.maxCompletionTokens;
   if (spec.pricing) clean.model_spec.pricing = spec.pricing;
   clean.model_spec.traits = spec.traits || [];
   if (spec.name) clean.model_spec.name = spec.name;
   if (spec.capabilities) clean.model_spec.capabilities = spec.capabilities;
+  if (spec.constraints) clean.model_spec.constraints = spec.constraints;
+  if (spec.model_sets) clean.model_spec.model_sets = spec.model_sets;
+  if (typeof spec.offline === 'boolean') clean.model_spec.offline = spec.offline;
   if (spec.deprecation) clean.model_spec.deprecation = spec.deprecation;
   if (spec.voices) clean.model_spec.voices = spec.voices;
   return clean;
@@ -103,11 +108,6 @@ function readJsonArray(filePath) {
   if (!fs.existsSync(filePath)) return [];
   const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
   return Array.isArray(parsed) ? parsed : [];
-}
-
-function getRemovalDate(model) {
-  const deprecation = model.model_spec?.deprecation;
-  return deprecation?.removesAt || deprecation?.date || null;
 }
 
 // /models drops a model on its removal date, so the deprecations page would
@@ -157,7 +157,6 @@ async function main() {
   writeIfChanged(TRAITS_SNAPSHOT_PATH, traitsJson, 'data/static-traits.json');
   writeIfChanged(REMOVED_DEPRECATIONS_PATH, removedJson, 'data/removed-deprecations.json');
 
-  // Pricing is last because its generator exits the process when unchanged.
   console.log('Regenerating Popular models cards...');
   require('./generate-popular-models.js');
 
@@ -167,7 +166,7 @@ async function main() {
   console.log('Regenerating static model catalogs...');
   require('./generate-models-static.js');
 
-  console.log('Regenerating pricing.mdx...');
+  console.log('Regenerating pricing.mdx and prompt caching prices...');
   require('./generate-pricing-static.js');
 }
 
