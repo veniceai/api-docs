@@ -89,6 +89,7 @@ function cleanModel(m) {
   if (typeof spec.offline === 'boolean') clean.model_spec.offline = spec.offline;
   if (spec.deprecation) clean.model_spec.deprecation = spec.deprecation;
   if (spec.voices) clean.model_spec.voices = spec.voices;
+  if (spec.voice_changer) clean.model_spec.voice_changer = true;
   return clean;
 }
 

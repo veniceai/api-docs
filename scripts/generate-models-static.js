@@ -186,6 +186,7 @@ function renderQualityTable(group) {
 
 function formatMusicPrice(model) {
   const pricing = model.model_spec?.pricing || {};
+  if (pricing.durations && model.model_spec?.voice_changer) return 'Duration-tiered — use Voice Changer Quote API';
   if (pricing.durations) return 'Duration-tiered — use Audio Quote API';
   if (pricing.generation?.usd != null) return `${formatPrice(pricing.generation.usd)} / generation`;
   if (pricing.per_second?.usd != null) return `${formatPrice(pricing.per_second.usd)} / second`;

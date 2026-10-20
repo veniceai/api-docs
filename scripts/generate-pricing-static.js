@@ -588,7 +588,7 @@ function generatePricingMdx(models) {
   sections.push('</div>');
   sections.push('');
   sections.push('<Info>');
-  sections.push('For exact pricing before generation, use the [Audio Quote API](/api-reference/endpoint/audio/quote). Duration-based models have fixed price tiers, per-second models charge based on output length, and per-character models charge based on input text length.');
+  sections.push('For exact pricing before generation, use the [Audio Quote API](/api-reference/endpoint/audio/quote). Duration-based models have fixed price tiers, per-second models charge based on output length, and per-character models charge based on input text length. Voice Changer models are billed by the length of the source recording; quote them with the [Voice Changer Quote API](/api-reference/endpoint/audio/voice-changer/quote).');
   sections.push('</Info>');
   sections.push('');
   sections.push('### Video');
