@@ -24,7 +24,7 @@ curl https://api.venice.ai/api/v1/api_keys/rate_limits \
 
 ### Text and Embedding Models
 
-Text and embedding models are grouped into four sizes. Each model card on the [Models page](/models/text) displays its size badge. Every embedding model is XS.
+Text and embedding models are grouped into four sizes. Every embedding model is XS.
 
 | Size | Requests/min | Tokens/min | Partner requests/min | Partner tokens/min |
 |:-----|-------------:|-----------:|---------------------:|-------------------:|
@@ -46,17 +46,23 @@ Text and embedding models are grouped into four sizes. Each model card on the [M
 
 ### Video and Music Models
 
-Video, music, and voice-changer jobs are not rate limited. They are billed per generation against your credit balance, so cost rather than a request ceiling is the practical constraint. Price a job first with [`POST /video/quote`](/api-reference/endpoint/video/quote), [`POST /audio/quote`](/api-reference/endpoint/audio/quote), or [`POST /audio/voice-changer/quote`](/api-reference/endpoint/audio/voice-changer/quote).
+Video, music, and voice-changer queue and retrieve requests are subject to per-account request limits. Handle `429` responses with backoff, and poll retrieve endpoints at a modest interval rather than in a tight loop. Jobs are billed per generation against your credit balance, so price a job first with [`POST /video/quote`](/api-reference/endpoint/video/quote), [`POST /audio/quote`](/api-reference/endpoint/audio/quote), or [`POST /audio/voice-changer/quote`](/api-reference/endpoint/audio/voice-changer/quote).
 
 ## Handling Errors
 
 Failed requests (500, 503, 429) should be retried with exponential backoff.
 
-For 429 errors specifically, check the `x-ratelimit-reset-requests` header for the exact Unix timestamp when you can retry. Most HTTP libraries have built-in retry mechanisms that handle this automatically.
+For 429 errors on inference endpoints, the `x-ratelimit-reset-requests` header gives the latest time, as a Unix timestamp in milliseconds, by which the request window has fully cleared. Waiting until then is always safe; retrying earlier may also succeed. Most HTTP libraries have built-in retry mechanisms that handle this automatically.
+
+```javascript
+const reset = Number(response.headers.get('x-ratelimit-reset-requests'));
+const waitMs = Math.max(0, reset - Date.now());
+await new Promise((resolve) => setTimeout(resolve, waitMs));
+```
 
 ### Error Budgets
 
-Two further limits protect the API against clients that retry into a wall. Both are counted per model per API key over a rolling 30 seconds, and both return `429`:
+Two further limits protect the API against clients that retry into a wall. Both are counted per model per API key, and both return `429`. Failed requests are counted in fixed 30-second windows:
 
 | Budget | Threshold | Applies to |
 |:-------|----------:|:-----------|
@@ -65,28 +71,33 @@ Two further limits protect the API against clients that retry into a wall. Both 
 
 The second budget counts requests that ask a model for a feature it does not support — for example requesting vision or tool calling from a model without that capability. Exceeding either budget appears in [rate limit logs](/api-reference/endpoint/api_keys/rate_limit_logs) as `FAILED_REQUESTS` or `UNSUPPORTED_FEATURE_REQUESTS`.
 
-Both return a `customMessage` naming the threshold that tripped:
+The response body's `error` field names the threshold that tripped. For the failed-request budget it reads:
 
 ```
 Too many failed attempts (> 50) resulting in a non-success status code. Please wait 30 seconds and try again. See https://docs.venice.ai/api-reference/rate-limiting for more information.
 ```
 
-These responses set `x-ratelimit-remaining` and `x-ratelimit-resets` instead of the per-window headers below.
-
 ## Response Headers
 
-Every response includes these headers:
+Inference responses (chat completions, responses, image, audio, and embeddings) include these headers. They are not sent on models, API key, billing, or x402 routes, and the same applies to the `x-venice-balance-*` headers.
 
 | Header | Description |
 |:-------|:------------|
 | `x-ratelimit-limit-requests` | Max requests allowed in current window |
 | `x-ratelimit-remaining-requests` | Requests remaining in current window |
-| `x-ratelimit-reset-requests` | Unix timestamp when window resets |
+| `x-ratelimit-reset-requests` | Unix timestamp in milliseconds by which the current window has fully cleared (request time plus the full window length, regardless of usage) |
 | `x-ratelimit-limit-tokens` | Max tokens allowed per minute |
 | `x-ratelimit-remaining-tokens` | Tokens remaining in current minute |
-| `x-ratelimit-reset-tokens` | Seconds until token limit resets |
+| `x-ratelimit-reset-tokens` | Unix timestamp in milliseconds when the token limit resets |
 
-The `/crypto/rpc/{network}` endpoint uses its own limits and its own `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers, which are set only on 429 responses. See [Crypto RPC](/api-reference/endpoint/crypto/rpc) for details.
+The failed-request budget has its own headers, sent on every response to a request made with an API key, including `401` responses:
+
+| Header | Description |
+|:-------|:------------|
+| `x-ratelimit-remaining` | Failed requests remaining in the current 30-second window |
+| `x-ratelimit-resets` | Unix timestamp in milliseconds when the current 30-second window resets |
+
+The `/crypto/rpc/{network}` endpoint uses its own limits and its own `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers, which are set only on 429 responses. Unlike the millisecond headers above, `X-RateLimit-Reset` is a Unix timestamp in seconds. See [Crypto RPC](/api-reference/endpoint/crypto/rpc) for details.
 
 ## Partner Tier
 
