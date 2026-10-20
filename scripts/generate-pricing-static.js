@@ -445,7 +445,7 @@ function generateCachePricingBlock(models) {
   return [
     '<div id="cache-pricing-placeholder">',
     '',
-    "Prices per 1M tokens. Models without cache pricing listed still benefit from caching at the provider level, they just aren't billed separately.",
+    "Prices per 1M tokens. A dash means that cache read or write isn't billed separately from input.",
     '',
     renderCachePricingTable(models),
     '</div>'

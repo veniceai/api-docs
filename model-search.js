@@ -1975,7 +1975,7 @@
 
   function renderCachePricingContent(models) {
     return `<div class="vpt-cache-pricing">
-      <p>Prices per 1M tokens. Models without cache pricing listed still benefit from caching at the provider level, they just aren't billed separately.</p>
+      <p>Prices per 1M tokens. A dash means that cache read or write isn't billed separately from input.</p>
       ${renderCachePricingTable(models)}
     </div>`;
   }
