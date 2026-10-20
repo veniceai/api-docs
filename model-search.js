@@ -1952,20 +1952,40 @@
     el.style.overflow = 'visible';
   }
 
+  // /models drops a model on its removal date; this snapshot keeps it listed
+  // for the 30-day window after removal.
+  const REMOVED_DEPRECATIONS_URL = '/data/removed-deprecations.json';
+  let removedDeprecationsPromise = null;
+
+  function ensureRemovedDeprecations() {
+    if (removedDeprecationsPromise) return removedDeprecationsPromise;
+    removedDeprecationsPromise = fetch(REMOVED_DEPRECATIONS_URL)
+      .then(r => (r.ok ? r.json() : []))
+      .then(models => (Array.isArray(models) ? models : []))
+      .catch(() => []);
+    return removedDeprecationsPromise;
+  }
+
+  function withRemovedDeprecations(models, removed) {
+    const liveIds = new Set(models.map(m => m.id));
+    return [...models, ...removed.filter(m => !liveIds.has(m.id))];
+  }
+
   async function initDeprecations() {
     const el = document.getElementById('deprecation-tracker-placeholder');
     if (!el) return;
 
     const cachedModels = getCachedModels();
-    const initialModels = cachedModels && cachedModels.length > 0
-      ? cachedModels
-      : await ensureStaticModels();
-    el.innerHTML = renderDeprecationTable(initialModels);
+    const [initialModels, removed] = await Promise.all([
+      cachedModels && cachedModels.length > 0 ? cachedModels : ensureStaticModels(),
+      ensureRemovedDeprecations()
+    ]);
+    el.innerHTML = renderDeprecationTable(withRemovedDeprecations(initialModels, removed));
     ensurePlaceholderVisible(el);
 
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0 && document.body.contains(el)) {
-        el.innerHTML = renderDeprecationTable(freshModels);
+        el.innerHTML = renderDeprecationTable(withRemovedDeprecations(freshModels, removed));
         ensurePlaceholderVisible(el);
       }
     }).catch(() => {});

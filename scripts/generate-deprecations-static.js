@@ -11,6 +11,7 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const MODELS_PATH = path.join(ROOT, 'data', 'static-models.json');
 const TRAITS_PATH = path.join(ROOT, 'data', 'static-traits.json');
+const REMOVED_DEPRECATIONS_PATH = path.join(ROOT, 'data', 'removed-deprecations.json');
 const DEPRECATIONS_PAGE_PATH = path.join(ROOT, 'overview', 'deprecations.mdx');
 const TRAITS_PAGE_PATH = path.join(ROOT, 'api-reference', 'endpoint', 'models', 'traits.mdx');
 
@@ -189,10 +190,14 @@ function main() {
   if (!traits || typeof traits !== 'object' || Array.isArray(traits)) {
     throw new Error('Trait snapshot must be an object');
   }
+  const removed = fs.existsSync(REMOVED_DEPRECATIONS_PATH) ? readJson(REMOVED_DEPRECATIONS_PATH) : [];
+  if (!Array.isArray(removed)) throw new Error('Removed deprecations must be an array');
+  const liveIds = new Set(models.map(m => m.id));
+  const trackedModels = [...models, ...removed.filter(m => !liveIds.has(m.id))];
 
   const deprecationsPage = fs.readFileSync(DEPRECATIONS_PAGE_PATH, 'utf-8');
   const traitsPage = fs.readFileSync(TRAITS_PAGE_PATH, 'utf-8');
-  const updatedDeprecationsPage = updateDeprecationsPage(deprecationsPage, traits, models);
+  const updatedDeprecationsPage = updateDeprecationsPage(deprecationsPage, traits, trackedModels);
   const updatedTraitsPage = updateTraitsApiPage(traitsPage, traits);
 
   writeIfChanged(DEPRECATIONS_PAGE_PATH, updatedDeprecationsPage);
