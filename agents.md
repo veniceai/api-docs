@@ -94,3 +94,4 @@ When editing English `.mdx` pages that have locale copies under `ar/`, `de/`, `e
 - Edit the English source only unless you are deliberately updating every locale by hand.
 - Do not add new localized nav entries in `docs.json` for pages you have not translated — add the English path only; Mintlify regenerates locale files and nav after merge to `main`.
 - Do not commit plan or design scratch files (`docs/plans/`, `docs/superpowers/`).
+- Never link to or leak information from internal documents, such as work tickets or product design documents. This applies to docs pages, code comments, commit messages, and pull request descriptions. Do not include URLs to internal documents, and do not quote, paraphrase, or summarize their contents. Only publish information that is already public or has been explicitly approved for publication.
