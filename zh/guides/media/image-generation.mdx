@@ -232,12 +232,13 @@ curl https://api.venice.ai/api/v1/image/styles
 | `width` | integer | 否 | `1024` | 基于像素的模型（如 `venice-sd35`）的输出宽度（像素）。会被 Qwen Image 系列拒绝——见下方说明 |
 | `height` | integer | 否 | `1024` | 基于像素的模型（如 `venice-sd35`）的输出高度（像素）。会被 Qwen Image 系列拒绝——见下方说明 |
 | `format` | string | 否 | `webp` | 输出格式：`jpeg`、`png` 或 `webp` |
-| `variants` | integer | 否 | `1` | 要生成的图像数（`1`-`4`），仅当 `return_binary` 为 `false` 时 |
+| `variants` | integer | 否 | `1` | 要生成的图像数（`1`-`4`），仅当 `return_binary` 为 `false` 时。提供商明确的内容政策拒绝可能会省略个别变体；请参阅[部分变体结果](#部分变体结果) |
 | `return_binary` | boolean | 否 | `false` | 返回原始图像字节而非 base64 JSON |
 | `safe_mode` | boolean | 否 | `true` | 启用时模糊成人内容 |
 | `seed` | integer | 否 | 随机 | 重用相同 seed 以实现更一致的迭代 |
 | `cfg_scale` | number | 否 | 模型相关 | 较高值推动模型更紧密地遵循 prompt |
 | `style_preset` | string | 否 | - | 从[图像风格](/zh/api-reference/endpoint/image/styles)应用预设风格 |
+| `style_references` | array | 否 | - | 用于引导输出美学风格的风格参考图像。每个条目为 `{ "image": <url or base64>, "strength": <0.1-1> }`。仅限支持的模型；请参阅[风格参考](#风格参考) |
 | `aspect_ratio` | string | 条件 | - | 由支持基于比例尺寸的模型使用，例如 `qwen-image-2`、`gpt-image-2`、`nano-banana-2` 和 `nano-banana-pro` |
 | `resolution` | string | 条件 | - | 由支持分辨率分级（如 `1K`、`2K` 或 `4K`）的模型使用 |
 | `enable_web_search` | boolean | 条件 | `false` | 允许支持的模型使用当前 web 信息；产生额外费用 |
@@ -321,6 +322,51 @@ curl https://api.venice.ai/api/v1/image/styles
 
 当前风格列表请参阅[图像风格](/zh/api-reference/endpoint/image/styles)。
 
+### 风格参考
+
+`style_references` 比 `style_preset` 更进一步：它不使用命名预设，而是以一张或多张参考图像作为生成条件。每个条目包含 `image` 和可选的 `strength`：
+
+```json
+{
+  "model": "krea-v2-large",
+  "prompt": "A quiet Venetian courtyard at golden hour",
+  "style_references": [
+    {
+      "image": "https://example.com/reference-painting.png",
+      "strength": 0.5
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `image` | string | 是 | 参考图像，可以是 `http://` 或 `https://` URL、base64 字符串或 base64 data URI。必须是栅格图像（JPEG、PNG、WebP、HEIF、HEIC 或 AVIF），不能是 SVG，且必须小于 8 MB |
+| `strength` | number | 否 | 参考图像对输出的引导强度，范围为 `0.1` 到 `1`。默认为 `0.5`。对于 `supportsStyleReferenceStrength` 为 `false` 的模型会被忽略 |
+
+是否支持因模型而异。请查看 `GET /models?type=image`：
+
+- 仅在接受该字段的模型上，`model_spec.supportsStyleReferences` 为 `true`。
+- `model_spec.constraints.maxStyleReferences` 是该模型可接受的条目数量。
+- `model_spec.constraints.supportsStyleReferenceStrength` 表示 `strength` 是否有效。
+
+```bash
+curl -s "https://api.venice.ai/api/v1/models?type=image" \
+  | jq -r '.data[] | select(.model_spec.supportsStyleReferences == true) | "\(.id) max=\(.model_spec.constraints.maxStyleReferences)"'
+```
+
+向不支持的模型发送 `style_references` 会返回 `400`；超出该模型的数量上限，或发送损坏、无法访问或过大的参考图像，也会返回 `400`。某些模型会在基础图像价格之上，对每张返回的图像额外收取风格参考费用，例如 Krea v2 Large 和 Krea v2 Medium。该费用仅针对实际返回的图像收取。基础单张图像价格请参阅[图像模型](/zh/models/image)。
+
+### 部分变体结果
+
+当 `variants` 大于 `1` 时，个别变体可能会被提供商的内容政策拒绝，而其余变体生成成功。在这种情况下，端点仍会返回 `200`，但图像数量少于您请求的数量：
+
+- 当有一个或多个变体被省略时，JSON 响应体会包含 `content_policy_violation_count`，即被省略的变体数量。
+- `x-venice-content-violation-count` 响应头携带相同的计数。
+- `x-venice-is-content-violation` 和 `x-venice-is-blurred` 描述的是实际返回的图像。
+
+如果所有请求的变体都被拒绝，则不会返回任何图像，请求将改为以 `422` 失败。不要假设 `len(images) == variants`；请将数组长度与 `variants` 进行比较，并在存在时检查 `content_policy_violation_count`。
+
 ---
 
 ## OpenAI 兼容端点
@@ -339,7 +385,19 @@ curl https://api.venice.ai/api/v1/image/styles
 
 `size` 仅适用于按像素尺寸设置的模型，即在 `GET /models?type=image` 返回的 `model_spec.constraints` 中 `widthHeightDivisor` 大于 `1` 的模型。大多数模型（包括 `qwen-image-2`）改为按宽高比和分辨率设置输出尺寸，并会忽略 `size`。
 
-使用 OpenAI 兼容路由可加快迁移。当您需要 Venice 专属选项（如 `cfg_scale`、`style_preset`、`variants` 或二进制响应）时，请使用 `/image/generate`。
+为兼容 SDK，部分 OpenAI 参数会被接受但被忽略（`n` 仅限为 `1`）：
+
+| 参数 | 在 `/images/generations` 上的行为 |
+|---|---|
+| `quality` | 接受但忽略。计费使用模型的默认质量等级 |
+| `style` | 接受但忽略 |
+| `output_compression` | 接受但忽略 |
+| `user` | 接受后丢弃，且不是 `anon_user_id` 的别名 |
+| `n` | 仅支持 `1`；其他值会被验证拒绝 |
+
+此路由不提供等级控制：没有 `resolution` 或 `aspect_ratio` 字段，`quality` 也无法提高或降低费用。对于分级的 GPT Image 模型，当您需要选择 `quality`、`resolution` 或 `aspect_ratio` 时，请使用原生 `/image/generate` 端点。
+
+使用 OpenAI 兼容路由可加快迁移。当您需要 Venice 专属选项（如 `cfg_scale`、`style_preset`、`style_references`、`variants` 或二进制响应）时，请使用 `/image/generate`。
 
 ### 在 `/images/generations` 上控制成人内容模糊
 
@@ -385,6 +443,7 @@ OpenAI 兼容端点不接受 `safe_mode`。发送该参数会返回 `400` 及 `U
 | `402` | 余额不足 | 在 [venice.ai/settings/api](https://venice.ai/settings/api?utm_source=venice-api-documentation) 充值 |
 | `404` | 未知模型 | 对照 `GET /models?type=image` 检查模型 ID |
 | `415` | 内容类型无效 | 使用 `Content-Type: application/json` 发送 JSON |
+| `422` | 内容政策违规 | 提供商明确拒绝了该 prompt 或图像。请调整 prompt 或更换模型。响应体包含 `error` 和布尔值 `retryable`，还可能包含 `suggested_prompt` 和 `recommended_model` |
 | `429` | 速率限制超出或模型过载 | 使用退避重试；查看 `Retry-After` 请求头 |
 | `500` | 推理处理失败 | 重试请求 |
 | `503` | 模型容量已满 | 短暂延迟后重试 |

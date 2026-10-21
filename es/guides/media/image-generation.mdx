@@ -232,12 +232,13 @@ Usa el endpoint de estilos cuando quieras nombres exactos de presets en lugar de
 | `width` | integer | No | `1024` | Ancho de salida en píxeles para modelos basados en píxeles como `venice-sd35`. Rechazado por la familia Qwen Image — consulta la nota más abajo |
 | `height` | integer | No | `1024` | Alto de salida en píxeles para modelos basados en píxeles como `venice-sd35`. Rechazado por la familia Qwen Image — consulta la nota más abajo |
 | `format` | string | No | `webp` | Formato de salida: `jpeg`, `png` o `webp` |
-| `variants` | integer | No | `1` | Número de imágenes a generar (`1`-`4`), solo cuando `return_binary` es `false` |
+| `variants` | integer | No | `1` | Número de imágenes a generar (`1`-`4`), solo cuando `return_binary` es `false`. Un rechazo explícito por la política de contenido del proveedor puede omitir variantes individuales; consulta [Resultados parciales de variantes](#resultados-parciales-de-variantes) |
 | `return_binary` | boolean | No | `false` | Devuelve bytes de imagen en bruto en lugar de JSON con base64 |
 | `safe_mode` | boolean | No | `true` | Difumina contenido para adultos cuando está habilitado |
 | `seed` | integer | No | aleatorio | Reutiliza la misma seed para iteraciones más consistentes |
 | `cfg_scale` | number | No | depende del modelo | Valores más altos hacen que el modelo siga el prompt más estrictamente |
 | `style_preset` | string | No | - | Aplica un estilo preset de [Image Styles](/es/api-reference/endpoint/image/styles) |
+| `style_references` | array | No | - | Imágenes de referencia de estilo que guían la estética de la salida. Cada entrada es `{ "image": <url or base64>, "strength": <0.1-1> }`. Solo en modelos compatibles; consulta [Referencias de estilo](#referencias-de-estilo) |
 | `aspect_ratio` | string | Condicional | - | Usado por modelos que admiten tamaño basado en ratio, como `qwen-image-2`, `gpt-image-2`, `nano-banana-2` y `nano-banana-pro` |
 | `resolution` | string | Condicional | - | Usado por modelos que admiten niveles de resolución como `1K`, `2K` o `4K` |
 | `enable_web_search` | boolean | Condicional | `false` | Permite a los modelos admitidos usar información actual de la web; añade coste extra |
@@ -321,6 +322,51 @@ Si el modelo seleccionado lo admite, `style_preset` te permite dirigir la salida
 
 Consulta [Image Styles](/es/api-reference/endpoint/image/styles) para ver la lista de estilos actual.
 
+### Referencias de estilo
+
+`style_references` va un paso más allá que `style_preset`: en lugar de un preset con nombre, condiciona la generación a una o más imágenes de referencia. Cada entrada tiene una `image` y un `strength` opcional:
+
+```json
+{
+  "model": "krea-v2-large",
+  "prompt": "A quiet Venetian courtyard at golden hour",
+  "style_references": [
+    {
+      "image": "https://example.com/reference-painting.png",
+      "strength": 0.5
+    }
+  ]
+}
+```
+
+| Campo | Tipo | Obligatorio | Descripción |
+|---|---|---|---|
+| `image` | string | Sí | Imagen de referencia como URL `http://` o `https://`, cadena base64 o data URI en base64. Debe ser una imagen rasterizada (JPEG, PNG, WebP, HEIF, HEIC o AVIF), no puede ser SVG y debe pesar menos de 8 MB |
+| `strength` | number | No | Con qué intensidad guía la referencia la salida, de `0.1` a `1`. Por defecto es `0.5`. Se ignora en los modelos donde `supportsStyleReferenceStrength` es `false` |
+
+La compatibilidad depende de cada modelo. Consulta `GET /models?type=image`:
+
+- `model_spec.supportsStyleReferences` es `true` solo en los modelos que aceptan el campo.
+- `model_spec.constraints.maxStyleReferences` es el número de entradas que acepta el modelo.
+- `model_spec.constraints.supportsStyleReferenceStrength` indica si `strength` tiene algún efecto.
+
+```bash
+curl -s "https://api.venice.ai/api/v1/models?type=image" \
+  | jq -r '.data[] | select(.model_spec.supportsStyleReferences == true) | "\(.id) max=\(.model_spec.constraints.maxStyleReferences)"'
+```
+
+Enviar `style_references` a un modelo sin compatibilidad devuelve `400`, igual que superar el límite de ese modelo o enviar una referencia corrupta, inaccesible o demasiado grande. Algunos modelos cobran una tarifa por referencia de estilo por cada imagen devuelta, además del precio base de la imagen; por ejemplo, Krea v2 Large y Krea v2 Medium. La tarifa solo se cobra por las imágenes que realmente se devuelven. Consulta [Image Models](/es/models/image) para ver los precios base por imagen.
+
+### Resultados parciales de variantes
+
+Con `variants` mayor que `1`, la política de contenido del proveedor puede rechazar variantes individuales mientras el resto se generan correctamente. En ese caso, el endpoint sigue devolviendo `200` con menos imágenes de las que solicitaste:
+
+- Cuando se omiten una o más variantes, el cuerpo JSON incluye `content_policy_violation_count`, el número de variantes omitidas.
+- La cabecera de respuesta `x-venice-content-violation-count` contiene el mismo recuento.
+- `x-venice-is-content-violation` y `x-venice-is-blurred` describen las imágenes que se devolvieron.
+
+Si se rechazan todas las variantes solicitadas, no se devuelve ninguna imagen y la solicitud falla con `422`. No supongas que `len(images) == variants`; compara la longitud del array con `variants` y, cuando esté presente, comprueba `content_policy_violation_count`.
+
 ---
 
 ## Endpoint compatible con OpenAI
@@ -339,7 +385,19 @@ Si ya estás usando los SDK de imagen de OpenAI o integraciones existentes de DA
 
 `size` solo se aplica a los modelos con tamaño en píxeles, que tienen un `widthHeightDivisor` mayor que `1` en `model_spec.constraints` de `GET /models?type=image`. La mayoría de los modelos, incluido `qwen-image-2`, determinan el tamaño de la salida por relación de aspecto y resolución, e ignoran `size`.
 
-Usa la ruta compatible con OpenAI para migraciones más rápidas. Usa `/image/generate` cuando necesites opciones específicas de Venice como `cfg_scale`, `style_preset`, `variants` o respuestas binarias.
+Algunos parámetros de OpenAI se aceptan por compatibilidad con los SDK, pero se ignoran (`n` está restringido a `1`):
+
+| Parámetro | Comportamiento en `/images/generations` |
+|---|---|
+| `quality` | Se acepta y se ignora. La facturación usa el nivel de calidad predeterminado del modelo |
+| `style` | Se acepta y se ignora |
+| `output_compression` | Se acepta y se ignora |
+| `user` | Se acepta, se descarta y no es un alias de `anon_user_id` |
+| `n` | Solo se admite `1`; la validación rechaza otros valores |
+
+El control de niveles no existe en esta ruta: no hay campo `resolution` ni `aspect_ratio`, y `quality` no puede subir ni bajar el cargo. Para los modelos GPT Image con niveles, usa el endpoint nativo `/image/generate` cuando necesites elegir `quality`, `resolution` o `aspect_ratio`.
+
+Usa la ruta compatible con OpenAI para migraciones más rápidas. Usa `/image/generate` cuando necesites opciones específicas de Venice como `cfg_scale`, `style_preset`, `style_references`, `variants` o respuestas binarias.
 
 ### Control del desenfoque de contenido adulto en `/images/generations`
 
@@ -385,6 +443,7 @@ La misma división se aplica a la transparencia: `/image/generate` usa `transpar
 | `402` | Saldo insuficiente | Añade créditos en [venice.ai/settings/api](https://venice.ai/settings/api?utm_source=venice-api-documentation) |
 | `404` | Modelo desconocido | Comprueba el ID del modelo con `GET /models?type=image` |
 | `415` | Tipo de contenido no válido | Envía JSON con `Content-Type: application/json` |
+| `422` | Infracción de la política de contenido | El proveedor rechazó explícitamente el prompt o la imagen. Ajusta el prompt o cambia de modelo. El cuerpo incluye `error` y un booleano `retryable`, y también puede incluir `suggested_prompt` y `recommended_model` |
 | `429` | Límite de velocidad excedido o modelo sobrecargado | Reintenta con backoff; comprueba la cabecera `Retry-After` |
 | `500` | Procesamiento de inferencia fallido | Reintenta la solicitud |
 | `503` | Modelo a capacidad máxima | Reintenta tras una breve demora |
