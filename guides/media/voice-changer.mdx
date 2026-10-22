@@ -7,6 +7,8 @@ description: "Convert a source recording into another voice with Venice's asynch
 
 Voice Changer is speech-to-speech: it re-records a source file in a different voice while preserving delivery, pacing, and timing. It is asynchronous and uses its own endpoints — not [`/audio/queue`](/api-reference/endpoint/audio/queue), and not [text-to-speech](/guides/media/text-to-speech) or [voice cloning](/guides/media/voice-cloning).
 
+Use it when you already have a performance you want to keep. A 7-second source comes back as a 7-second MP3 with the same pauses and emphasis in the new voice. If you only have text, use [text-to-speech](/guides/media/text-to-speech) instead; if you want to make your own voice available as a target, see [voice cloning](/guides/media/voice-cloning).
+
 <Note>
 A queued conversion is charged immediately. Save `queue_id` from the queue response before you do anything else.
 </Note>
@@ -40,7 +42,9 @@ export VENICE_API_KEY="your-api-key"
 
 ## Choose a model
 
-Voice-changer models are returned by `GET /models?type=music` with `model_spec.voice_changer` set to `true`. There is no `?type=voice-changer` filter. Browse [Music & Sound Effects Models](/models/music) for the current list. The examples below use `elevenlabs-voice-changer`, and `Aria` is one of that model's voice names. Pass a name from `voices`, or omit `voice` to use `default_voice`.
+Voice-changer models are returned by `GET /models?type=music` with `model_spec.voice_changer` set to `true`. There is no `?type=voice-changer` filter. Browse [Music & Sound Effects Models](/models/music) for the current list.
+
+At the time of writing there is one model, `elevenlabs-voice-changer`. It accepts `mp3`, `wav`, `ogg`, `mp4`, and `aac` sources up to 300 seconds, exposes 20 named voices (`Aria` is the default), accepts a raw ElevenLabs Voice ID in place of a name, and supports both `remove_background_noise` and `seed`. Read these values from the API rather than hardcoding them; the query below returns everything the rest of this guide depends on.
 
 ```bash
 curl "https://api.venice.ai/api/v1/models?type=music" \
@@ -72,13 +76,31 @@ Check each model's metadata before setting optional fields:
 
 Unsupported fields cause an HTTP `400` response. Recordings longer than `max_source_audio_duration_seconds` are rejected with HTTP `422` before any charge. The error body reports that maximum, in the form `Source audio must be at most N seconds.`
 
+<Warning>
+Voice names are not validated at queue time. Queueing with a `voice` the model does not have returns `200` and a `queue_id`, then the first retrieve returns `400` with `The requested voice is not available. Check the Voice ID and try again.` and `credits_refunded: true`. You get the money back, but you lose the round trip. Check `voices` before you queue.
+</Warning>
+
 ## 1. Get a price quote
 
-Voice Changer is billed from the length of the source recording, rounded up to the next whole minute. An exact multiple of 60 seconds stays on that minute's tier. One second past it uses the next tier. For `elevenlabs-voice-changer`, quote returns $0.35 for 60 seconds and $0.69 for 61 seconds. Read `pricing.durations` or call quote for the model you are using. The amount charged is computed from the length Venice measures when the recording is queued.
+Voice Changer is billed from the length of the source recording, rounded up to the next whole minute. An exact multiple of 60 seconds stays on that minute's tier. One second past it uses the next tier. The amount charged is computed from the length Venice measures when the recording is queued.
+
+For `elevenlabs-voice-changer` the tiers are:
+
+| Source length | Price |
+|---|---|
+| 1–60 s | $0.35 |
+| 61–120 s | $0.69 |
+| 121–180 s | $1.04 |
+| 181–240 s | $1.38 |
+| 241–300 s | $1.73 |
+
+A 7-second clip and a 60-second clip cost the same. If you are converting many short segments, concatenate them into one file under a minute boundary rather than queueing each separately. These tiers come from `pricing.durations` in `/models`; read them from there rather than from this table.
 
 <Note>
 Quote does not require authentication. Queue, retrieve, and complete requests do.
 </Note>
+
+`duration_seconds` must be a positive integer no larger than `max_source_audio_duration_seconds`. `0`, a float such as `7.5`, and anything over the model maximum return `400` with a validation error.
 
 ```bash
 curl https://api.venice.ai/api/v1/audio/voice-changer/quote \
@@ -100,9 +122,9 @@ The response contains the estimated cost in USD and the duration the quote was c
 
 ## 2. Queue the conversion
 
-Supply the source recording exactly one of two ways: as a multipart `file` upload, or as an `audio_url` in a JSON body. Supplying both, or neither, is rejected.
+Supply the source recording exactly one of two ways: as a multipart `file` upload, or as an `audio_url` in a JSON body. Supplying both, or neither, returns `400` with ``Provide exactly one source recording: the multipart `file` field or `audio_url`.``
 
-A file that contains a video track is rejected. Extract the audio and upload that. When you pass a URL, the URL has to be publicly reachable. Venice fetches and validates the bytes itself, and the URL is never handed to the provider.
+Venice sniffs the file's bytes, not its extension. A text file renamed `.mp3` is rejected with `Source audio must be one of: MP3, WAV, OGG, MP4, AAC.` A file that contains a video track is rejected too; extract the audio and upload that. When you pass a URL, it has to be publicly reachable without headers or cookies. Venice fetches and validates the bytes itself, and the URL is never handed to the provider. A URL that returns an error surfaces as `400` with `Upstream returned 404 Not Found` (or whatever status the host sent).
 
 When using `curl -F`, do not set `Content-Type` manually. `curl` adds the `multipart/form-data` header and required boundary. In a multipart body, send `remove_background_noise` as `true` or `false` and `seed` as digits.
 
@@ -129,20 +151,22 @@ curl https://api.venice.ai/api/v1/audio/voice-changer/queue \
 ```
 </CodeGroup>
 
-`remove_background_noise` and `seed` are accepted only when the model reports support for them. Omit `voice` to use `default_voice`. When `supports_custom_voice_id` is true, `voice` may be a provider Voice ID instead of a name from `voices`.
+`remove_background_noise` and `seed` are accepted only when the model reports support for them. Omit `voice` to use `default_voice`. When `supports_custom_voice_id` is true, `voice` may be a provider Voice ID instead of a name from `voices`. For `elevenlabs-voice-changer` that means any ElevenLabs Voice ID you have access to, including voices from the ElevenLabs library that are not in Venice's `voices` list.
 
 A successful request returns the model, a queue ID, and the measured source length:
 
 ```json
 {
+  "duration_seconds": 7.008,
   "model": "elevenlabs-voice-changer",
-  "queue_id": "0190f2c4-9c1e-7a3b-8f42-2c9d5e7a1b34",
-  "status": "QUEUED",
-  "duration_seconds": 52
+  "queue_id": "01a164db-8652-7fa9-94d6-25754090bd64",
+  "status": "QUEUED"
 }
 ```
 
-Save `model` and `queue_id`. Retrieve and complete both require them. Compare `duration_seconds` with your quote to reconcile the estimate against the billed length.
+Save `model` and `queue_id`. Retrieve and complete both require them. `duration_seconds` is the length Venice measured, to the millisecond, and is what the charge is based on. If you quoted 60 seconds and this says `61.2`, you were billed the next tier up.
+
+Queue returns `x-ratelimit-limit-requests` and `x-ratelimit-remaining-requests` headers. The default queue limit is 40 requests per minute; retrieve allows 120.
 
 <Warning>
 Queue is not safe to retry. A successful queue request has already been charged. If you have the `queue_id`, poll retrieve with it. If the queue response never arrived, you do not have an id to poll, and sending the recording again can charge you a second time.
@@ -180,15 +204,29 @@ A processing response looks like this:
 }
 ```
 
-Both timing values are milliseconds. Wait for the gap between `execution_duration` and `average_execution_time` before polling again. A completed response also includes `x-venice-audio-format`, `x-venice-audio-duration` (seconds), `x-venice-inference-time` (seconds), `x-venice-model-id`, and `x-venice-model-name`.
+Both timing values are milliseconds. `average_execution_time` is the running average for the model, and `execution_duration` is how long this job has been running. Wait for the gap before polling again, but treat the average as a hint, not a deadline: a 148-second source took about 24 seconds of inference against an average of 7 seconds, so `execution_duration` will overtake `average_execution_time` on longer inputs. When that happens, back off to a fixed interval (5 seconds is reasonable) and keep polling.
 
-A provider failure, and a conversion that never reaches the provider (HTTP `504`), returns `credits_refunded` on the error body. The [Retrieve Voice Changer API](/api-reference/endpoint/audio/voice-changer/retrieve) describes when that flag is false and what the `error` string tells you to do. Polling again replays the same result.
+Short clips often finish before your first poll. A 7-second source returned audio on the first retrieve call, roughly 5 seconds after queue.
 
-Set `delete_media_on_completion` to `true` on retrieve to delete stored media in the same call that returns the audio. The audio cannot be retrieved again afterwards. Otherwise call [`POST /audio/voice-changer/complete`](/api-reference/endpoint/audio/voice-changer/complete) after the file is saved. Complete is safe to call more than once.
+A completed response also includes `x-venice-audio-format`, `x-venice-audio-duration` (seconds), `x-venice-inference-time` (seconds), `x-venice-model-id`, and `x-venice-model-name`. The output is always MP3, 128 kbps, mono, 44.1 kHz, regardless of the source container. `x-venice-audio-duration` should match the source length to within a few milliseconds; if it does not, the provider did not preserve timing and you should check the result before using it.
+
+### When the job fails
+
+If the provider accepts the job and then fails it, retrieve returns an error status with a JSON body containing `error` and `credits_refunded`. `credits_refunded: true` means the charge was reversed. `false` with a message ending in `please contact support` means the refund itself failed and the next poll will retry it. The verdict is stored, so polling again replays the same response.
+
+If the job never reached the provider at all (the queue request was accepted but the dispatch failed), retrieve keeps returning `PROCESSING` for up to 10 minutes, then returns `504` with `The conversion was never accepted by the provider and can no longer complete.` and refunds the charge. Do not give up on a `PROCESSING` job before that window closes.
+
+The full set of terminal outcomes is on the [Retrieve Voice Changer API](/api-reference/endpoint/audio/voice-changer/retrieve) page.
+
+### Clean up
+
+Set `delete_media_on_completion` to `true` on retrieve to delete stored media in the same call that returns the audio. Any later retrieve for that `queue_id` returns `404` with `Media could not be found. Request may be invalid, expired, or deleted.` Otherwise call [`POST /audio/voice-changer/complete`](/api-reference/endpoint/audio/voice-changer/complete) after the file is saved. Complete returns `{"success": true}` and is safe to call more than once; a second call on an already-deleted job also returns `{"success": true}`.
+
+A `queue_id` is retrievable for 24 hours from when it was queued. After that, retrieve and complete both return `400` with `Request ID is invalid.`, the same response as for an id that never existed or belongs to another account.
 
 ## Complete example
 
-This example quotes a one-minute stand-in, uploads a file, polls until the audio arrives or five minutes pass, and saves an MP3. The five-minute deadline is only for the example. A job can be polled for 24 hours with the saved `queue_id`.
+This example checks the voice exists, quotes the expected length, uploads a file, polls until the audio arrives or 12 minutes pass, and saves an MP3. The deadline is longer than the 10-minute orphan window so a dispatch failure is reported as a refund rather than as a timeout. A job can be polled for 24 hours with the saved `queue_id`, so if you do hit the deadline, keep the id.
 
 ```python
 import os
@@ -200,10 +238,18 @@ import requests
 BASE_URL = "https://api.venice.ai/api/v1"
 HEADERS = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
 MODEL = "elevenlabs-voice-changer"
-# Length you expect to send. The charge uses the length Venice measures.
+VOICE = "George"
+# Length you expect to send, in whole seconds. The charge uses the length Venice measures.
 EXPECTED_DURATION_SECONDS = 60
 
 source = Path("source-recording.mp3")
+
+# Voice names are not validated at queue time, so check before paying for a round trip.
+models = requests.get(f"{BASE_URL}/models", params={"type": "music"}, headers=HEADERS)
+models.raise_for_status()
+spec = next(m["model_spec"] for m in models.json()["data"] if m["id"] == MODEL)
+if VOICE not in spec["voices"] and not spec.get("supports_custom_voice_id"):
+    raise SystemExit(f"{VOICE!r} is not a voice on {MODEL}: {spec['voices']}")
 
 quote = requests.post(
     f"{BASE_URL}/audio/voice-changer/quote",
@@ -216,50 +262,53 @@ with source.open("rb") as audio:
     queued = requests.post(
         f"{BASE_URL}/audio/voice-changer/queue",
         headers=HEADERS,
-        data={"model": MODEL, "voice": "Aria"},
+        data={"model": MODEL, "voice": VOICE},
         files={"file": audio},
     )
 queued.raise_for_status()
 job = queued.json()
-print(f"Queued {job['queue_id']} ({job['duration_seconds']}s billed)")
+print(f"Queued {job['queue_id']} ({job['duration_seconds']:.1f}s billed)")
 
-deadline = time.monotonic() + 5 * 60
+deadline = time.monotonic() + 12 * 60
 while time.monotonic() < deadline:
     result = requests.post(
         f"{BASE_URL}/audio/voice-changer/retrieve",
         headers=HEADERS,
-        json={"model": job["model"], "queue_id": job["queue_id"]},
+        json={
+            "model": job["model"],
+            "queue_id": job["queue_id"],
+            "delete_media_on_completion": True,
+        },
     )
-    if not result.ok:
-        body = result.json()
-        print(body.get("error"))
-        if "credits_refunded" in body:
-            print(f"credits_refunded: {body['credits_refunded']}")
-        raise SystemExit(1)
 
     content_type = result.headers.get("Content-Type", "").split(";")[0].strip()
     if content_type == "audio/mpeg":
         output = Path("converted-audio.mp3")
         output.write_bytes(result.content)
-        print(f"Saved {output}")
+        print(f"Saved {output} ({result.headers.get('x-venice-audio-duration')}s)")
         break
 
-    status = result.json()
-    if status.get("status") != "PROCESSING":
-        print(status)
+    body = result.json()
+    if not result.ok:
+        # Terminal failure. credits_refunded tells you whether the charge came back.
+        print(f"{result.status_code}: {body.get('error')}")
+        print(f"credits_refunded: {body.get('credits_refunded')}")
         raise SystemExit(1)
 
-    remaining_ms = status["average_execution_time"] - status["execution_duration"]
-    time.sleep(min(max(remaining_ms / 1000, 1), 15))
-else:
-    raise SystemExit("Still processing. Poll retrieve again with the saved queue_id.")
+    if body.get("status") != "PROCESSING":
+        print(body)
+        raise SystemExit(1)
 
-requests.post(
-    f"{BASE_URL}/audio/voice-changer/complete",
-    headers=HEADERS,
-    json={"model": job["model"], "queue_id": job["queue_id"]},
-).raise_for_status()
+    # The average is a hint. On long inputs execution_duration overtakes it; fall back to a fixed interval.
+    remaining_ms = body["average_execution_time"] - body["execution_duration"]
+    time.sleep(5 if remaining_ms <= 0 else min(remaining_ms / 1000, 15))
+else:
+    raise SystemExit(
+        f"Still processing after 12 minutes. Poll retrieve again with queue_id={job['queue_id']}."
+    )
 ```
+
+Because the retrieve call sets `delete_media_on_completion`, there is no separate complete call. Drop that field and call `/audio/voice-changer/complete` instead if you want to download the file more than once before deleting it.
 
 ## API parameters
 
@@ -286,23 +335,33 @@ requests.post(
 
 Terminal retrieve outcomes, including `credits_refunded`, are documented on the [Retrieve Voice Changer API](/api-reference/endpoint/audio/voice-changer/retrieve).
 
-| Status | Cause | Fix |
-|---|---|---|
-| `400` | Unsupported field, unknown voice, unaccepted container, unreadable audio, a video track, or an unknown, foreign, or expired `queue_id` | Check the model metadata, send one source, and poll with the `queue_id` returned for your account. |
-| `401` | Invalid API key, or a model limited to Pro users | Check the key at [venice.ai/settings/api](https://venice.ai/settings/api). |
-| `402` with `"error": "Authentication required"` | No API key sent | Send `Authorization: Bearer $VENICE_API_KEY`. |
-| `402` | Insufficient balance | Top up your Venice balance. |
-| `413` | File larger than 25 MB | Use a smaller file. Rejected before any charge. |
-| `422` | Longer than `max_source_audio_duration_seconds` | Shorten the recording. The body reports the maximum. Rejected before any charge. |
-| `429` | Rate limit exceeded | Retry after the rate limit window resets. |
-| `503` | Model at capacity | Try again later. |
+| Status | Endpoint | Body | Fix |
+|---|---|---|---|
+| `400` | queue | ``Provide exactly one source recording: the multipart `file` field or `audio_url`.`` | Send `file` or `audio_url`, not both and not neither. |
+| `400` | queue | `Source audio must be one of: MP3, WAV, OGG, MP4, AAC.` | The bytes are not a supported container. Renaming the file does not help. |
+| `400` | queue | `Upstream returned 404 Not Found` | The `audio_url` host returned an error. Check the URL is public and does not need headers. |
+| `400` | retrieve | `The requested voice is not available. Check the Voice ID and try again.` with `credits_refunded: true` | The `voice` you queued does not exist. Charge is refunded. Check `voices` before queueing. |
+| `400` | retrieve, complete | `Request ID is invalid.` | Unknown, malformed, foreign, or older than 24 hours. Use the `queue_id` from your own queue response. |
+| `401` | all | Invalid API key | Check the key at [venice.ai/settings/api](https://venice.ai/settings/api). |
+| `402` | queue, retrieve, complete | `Authentication required` plus an x402 payment offer | No `Authorization` header was sent. |
+| `402` | queue | Insufficient balance | Top up your Venice balance. |
+| `404` | queue, quote | `Specified model not found: ...` | The model id is wrong. The body suggests close matches. |
+| `404` | retrieve | `Media could not be found. Request may be invalid, expired, or deleted.` | The media was already deleted by complete or by `delete_media_on_completion`. Nothing to refund. |
+| `413` | queue | File larger than 25 MB | Use a smaller file. Rejected before any charge. |
+| `422` | queue | `Source audio must be at most N seconds.` | Shorten the recording. Rejected before any charge. |
+| `429` | all | Rate limit exceeded | Queue allows 40/min, retrieve 120/min. Back off and retry. |
+| `503` | queue | Model at capacity | Try again later. |
+| `504` | retrieve | `The conversion was never accepted by the provider and can no longer complete.` with `credits_refunded` | The job was orphaned at dispatch. Charge is refunded. Queue again. |
 
 ## Production tips
 
 - Write `queue_id` down before you parse the rest of the queue response.
-- Compare the measured `duration_seconds` with the quote before you treat the estimate as the charge.
+- Validate `voice` against `voices` before queueing. The API does not, and a bad voice costs a full round trip even though the charge is refunded.
+- Compare the measured `duration_seconds` with the quote before you treat the estimate as the charge. Billing is per whole minute, so `60.5` seconds is billed as two minutes.
+- Batch short clips. Five 10-second clips queued separately cost five times what one 50-second clip costs.
 - Upload the file, or pass a public URL that does not need request headers.
-- Call complete after the MP3 is on disk. `delete_media_on_completion: true` on retrieve does that cleanup in the download call.
+- Do not abandon a `PROCESSING` job before 10 minutes. That is how long Venice waits before declaring a dispatch orphaned and refunding it.
+- Use `delete_media_on_completion: true` on retrieve if you only need the file once. Otherwise call complete after the MP3 is on disk.
 
 ## Related resources
 
