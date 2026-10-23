@@ -89,7 +89,7 @@ catalog moves; the capability flags on each model are the authoritative answer.
 | Blockchain RPC | `GET /crypto/rpc/networks`, `POST /crypto/rpc/{network}` |
 | Models | `GET /models`, `/models/traits`, `/models/compatibility_mapping` |
 | Characters | `GET /characters`, `/characters/{slug}`, `/characters/{slug}/reviews` |
-| Account | `GET /billing/balance`, `/billing/usage-history`, `/billing/usage-analytics`, `/api_keys/*`, `/api_keys/rate_limits` |
+| Account | `GET /billing/balance`, `/billing/usage-history`, `/billing/usage-analytics` (Admin key), `/api_keys/*`, `/api_keys/rate_limits` |
 | x402 wallet | `GET /x402/balance/{wallet}`, `POST /x402/top-up`, `GET /x402/transactions/{wallet}` |
 
 For bounded judgments your code acts on directly (yes/no, pick one label,

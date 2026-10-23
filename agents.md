@@ -23,7 +23,7 @@ curl https://api.venice.ai/api/v1/chat/completions \
   -H "Authorization: Bearer $VENICE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "venice-uncensored",
+    "model": "venice-uncensored-1-2",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
@@ -44,7 +44,7 @@ Python (OpenAI SDK): `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=os
 | Blockchain RPC | `POST /crypto/rpc/{network}` — JSON-RPC to Ethereum, Base, Arbitrum, Optimism, Polygon, Solana, Starknet, and more (one key, batch up to 100); `GET /crypto/rpc/networks` for the live slug list |
 | Models | `GET /models`, `/models/traits`, `/models/compatibility_mapping` |
 | TEE verification | `GET /tee/attestation`, `GET /tee/signature` |
-| Account | `GET /billing/balance`, `/billing/usage-history`, `/billing/usage-analytics` (`/billing/usage` is removed and returns `410`), `/api_keys/*`, `/api_keys/rate_limits` |
+| Account | `GET /billing/balance`, `/billing/usage-history`, `/billing/usage-analytics` (Admin key; `/billing/usage` is removed and returns `410`), `/api_keys/*`, `/api_keys/rate_limits` |
 | Characters | `GET /characters`, `/characters/{slug}`, `/characters/{slug}/reviews` |
 | x402 wallet | `GET /x402/balance/{wallet}`, `POST /x402/top-up`, `GET /x402/transactions/{wallet}` |
 
@@ -94,3 +94,4 @@ When editing English `.mdx` pages that have locale copies under `ar/`, `de/`, `e
 - Edit the English source only unless you are deliberately updating every locale by hand.
 - Do not add new localized nav entries in `docs.json` for pages you have not translated — add the English path only; Mintlify regenerates locale files and nav after merge to `main`.
 - Do not commit plan or design scratch files (`docs/plans/`, `docs/superpowers/`).
+- Never link to or leak information from internal documents, such as work tickets or product design documents. This applies to docs pages, code comments, commit messages, and pull request descriptions. Do not include URLs to internal documents, and do not quote, paraphrase, or summarize their contents. Only publish information that is already public or has been explicitly approved for publication.
