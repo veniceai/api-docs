@@ -5,10 +5,10 @@
 ## TL;DR
 
 - **Base URL:** `https://api.venice.ai/api/v1`
-- **Auth:** `Authorization: Bearer <VENICE_API_KEY>` — or **x402 wallet auth** (USDC on Base or Solana, no API key or account needed)
+- **Auth:** `Authorization: Bearer $VENICE_API_KEY`, using the key's value, not the variable name — or **x402 wallet auth** (USDC on Base or Solana, no API key or account needed)
 - **OpenAI-compatible:** Use any OpenAI SDK; only change `base_url` and the model ID
-- **Discover models at runtime:** `GET /models` (text), `GET /models?type=image|video|audio|tts|embedding` — never hardcode model lists; they change frequently
-- **Default text model trait:** `GET /models/traits` maps traits like `text:default`, `text:uncensored`, `image:fast` to current model IDs
+- **Discover models at runtime:** `GET /models` (text), `GET /models?type=image|video|tts|asr|music|embedding` (or `?type=all`) — never hardcode model lists; they change frequently
+- **Model traits:** `GET /models/traits?type=text` maps trait names such as `default`, `default_code`, and `most_uncensored` to current model IDs; `?type=image` returns traits such as `default`, `fastest`, and `highest_quality`
 - **OpenAPI spec:** https://docs.venice.ai/swagger.yaml
 - **Full docs index:** https://docs.venice.ai/llms.txt (one-line-per-page) and https://docs.venice.ai/llms-full.txt (entire docs in one file)
 - **Markdown pages:** append `.md` to any docs URL for the raw Markdown version, e.g. `https://docs.venice.ai/getting-started/quick-start.md`
@@ -23,28 +23,30 @@ curl https://api.venice.ai/api/v1/chat/completions \
   -H "Authorization: Bearer $VENICE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "venice-uncensored",
+    "model": "venice-uncensored-1-2",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
 
-Python (OpenAI SDK): `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=VENICE_API_KEY)`
+Python (OpenAI SDK): `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=os.environ["VENICE_API_KEY"])`
 
 ## Endpoints overview
 
 | Surface | Endpoints |
 | --- | --- |
-| Chat / text | `POST /chat/completions` (streaming, vision, audio/video input, tool calling), `POST /responses` (alpha) |
+| Chat / text | `POST /chat/completions` (streaming, vision, audio/video input, tool calling), `POST /responses` (beta) |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`, OpenAI-style `POST /images/generations` |
-| Video | `POST /video/queue` → `GET /video/retrieve?id=`, or `POST /video/complete` (one call); `POST /video/quote` for pricing |
-| Audio | `POST /audio/speech` (TTS), `POST /audio/transcriptions` (STT); music via `/audio/queue`, `/audio/retrieve`, `/audio/quote`, `/audio/complete` |
+| Video | `POST /video/queue` → `POST /video/retrieve` with `{model, queue_id}`, or `POST /video/complete` (one call); `POST /video/quote` for pricing |
+| Audio | `POST /audio/speech` (TTS), `POST /audio/voices` (voice cloning), `POST /audio/transcriptions` (STT); music via `/audio/queue`, `/audio/retrieve`, `/audio/quote`, `/audio/complete`; voice changer via `/audio/voice-changer/quote`, `/audio/voice-changer/queue`, `/audio/voice-changer/retrieve`, `/audio/voice-changer/complete` |
 | Embeddings | `POST /embeddings` |
+| Decisions (beta) | `POST /decisions` (alias `POST /systemone`) |
 | Tools | `POST /augment/search` (web search), `/augment/scrape` (URL → markdown), `/augment/text-parser` (PDF/DOCX/XLSX → text) |
 | Blockchain RPC | `POST /crypto/rpc/{network}` — JSON-RPC to Ethereum, Base, Arbitrum, Optimism, Polygon, Solana, Starknet, and more (one key, batch up to 100); `GET /crypto/rpc/networks` for the live slug list |
 | Models | `GET /models`, `/models/traits`, `/models/compatibility_mapping` |
-| Account | `GET /billing/balance`, `/billing/usage-history` (`/billing/usage` is deprecated), `/api_keys/*`, `/api_keys/rate_limits` |
-| Characters | `GET /characters`, `/characters/{slug}` |
-| x402 wallet | `GET /x402/balance`, `POST /x402/top-up`, `GET /x402/transactions` |
+| TEE verification | `GET /tee/attestation`, `GET /tee/signature` |
+| Account | `GET /billing/balance`, `/billing/usage-history`, `/billing/usage-analytics` (Admin key; `/billing/usage` is removed and returns `410`), `/api_keys/*`, `/api_keys/rate_limits` |
+| Characters | `GET /characters`, `/characters/{slug}`, `/characters/{slug}/reviews` |
+| x402 wallet | `GET /x402/balance/{wallet}`, `POST /x402/top-up`, `GET /x402/transactions/{wallet}` |
 
 ## Venice-specific parameters
 
@@ -59,12 +61,12 @@ Pass `venice_parameters` (object) in `/chat/completions`:
 - `strip_thinking_response` / `disable_thinking`: control `<think>` blocks on reasoning models
 - `enable_e2ee`: toggle end-to-end encryption on E2EE-capable models
 
-Feature suffixes also work on model IDs, e.g. `venice-uncensored:web` enables web search.
+Feature suffixes also work on model IDs as `key=value` pairs, e.g. `venice-uncensored-1-2:enable_web_search=on` enables web search.
 
 ## Rules for agents
 
 1. **Discover, don't hardcode.** Query `GET /models` and `GET /models/traits` at runtime to pick models. Model IDs are deprecated and replaced regularly (see https://docs.venice.ai/overview/deprecations).
-2. **Quote before generating media.** Video and music can be expensive — use `/video/quote` and `/audio/quote` first.
+2. **Quote before generating media.** Video, music, and voice changer can be expensive — use `/video/quote`, `/audio/quote`, and `/audio/voice-changer/quote` first.
 3. **Respect rate limits.** Check `x-ratelimit-*` response headers; details at https://docs.venice.ai/api-reference/rate-limiting.
 4. **Handle errors by code.** Error reference: https://docs.venice.ai/api-reference/error-codes.
 5. **No content filtering.** Venice models are uncensored by default; do not add unnecessary refusal layers on top.
@@ -79,6 +81,7 @@ Feature suffixes also work on model IDs, e.g. `venice-uncensored:web` enables we
 - Crypto RPC for agents: https://docs.venice.ai/guides/integrations/crypto-rpc-agents.md
 - Venice MCP server: https://docs.venice.ai/guides/integrations/venice-mcp.md
 - Venice Agent Skills: https://docs.venice.ai/guides/integrations/venice-skills.md
+- Responses API (beta; native for OpenAI models): https://docs.venice.ai/guides/features/responses-api.md
 - Structured responses (JSON schema): https://docs.venice.ai/guides/features/structured-responses.md
 - Reasoning models: https://docs.venice.ai/guides/features/reasoning-models.md
 - File inputs (PDF/Office/code in chat): https://docs.venice.ai/guides/features/file-inputs.md
@@ -91,3 +94,4 @@ When editing English `.mdx` pages that have locale copies under `ar/`, `de/`, `e
 - Edit the English source only unless you are deliberately updating every locale by hand.
 - Do not add new localized nav entries in `docs.json` for pages you have not translated — add the English path only; Mintlify regenerates locale files and nav after merge to `main`.
 - Do not commit plan or design scratch files (`docs/plans/`, `docs/superpowers/`).
+- Never link to or leak information from internal documents, such as work tickets or product design documents. This applies to docs pages, code comments, commit messages, and pull request descriptions. Do not include URLs to internal documents, and do not quote, paraphrase, or summarize their contents. Only publish information that is already public or has been explicitly approved for publication.

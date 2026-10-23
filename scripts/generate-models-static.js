@@ -9,6 +9,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  isDeprecatedModel,
+  isListedModel,
+  getVideoType,
+  sortResolutions,
+  getQualityGrid
+} = require('./model-helpers');
 
 const ROOT = path.join(__dirname, '..');
 const SNAPSHOT_PATH = path.join(ROOT, 'data', 'static-models.json');
@@ -29,10 +36,17 @@ function readModels() {
   return models;
 }
 
+// Show the exact price (up to 8 decimals, at least 2) so sub-cent list prices like $0.125 aren't rounded up.
 function formatPrice(price) {
   if (price === null || price === undefined) return '—';
-  if (price < 0.01 && price > 0) return '$' + price.toFixed(4);
-  return '$' + price.toFixed(2);
+  const [whole, fraction = ''] = price.toFixed(8).replace(/0+$/, '').split('.');
+  return '$' + whole + '.' + fraction.padEnd(2, '0');
+}
+
+function formatDecisionTokenPrice(price) {
+  if (price === null || price === undefined) return '—';
+  if (price === 0) return '$0.00';
+  return price < 1 ? '$' + price.toFixed(4) : '$' + price.toFixed(2);
 }
 
 function inlineCode(value) {
@@ -41,11 +55,6 @@ function inlineCode(value) {
 
 function tableCell(value) {
   return String(value ?? '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
-}
-
-function isDeprecatedModel(model) {
-  const dep = model.model_spec?.deprecation;
-  return dep != null && (dep.date != null || dep.removesAt != null);
 }
 
 function isBetaModel(model) {
@@ -78,13 +87,19 @@ function getPrivacyLabel(model) {
 
 function getModelName(model) {
   const name = model.model_spec?.name || model.id;
-  return isBetaModel(model) ? `${name} (Beta)` : name;
+  const tags = [];
+  if (isBetaModel(model)) tags.push('(Beta)');
+  if (isDeprecatedModel(model)) tags.push('(Retiring)');
+  return [name, ...tags].join(' ');
+}
+
+function formatTokenCount(tokens) {
+  if (!tokens) return '—';
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}K` : String(tokens);
 }
 
 function formatContext(model) {
-  const tokens = model.model_spec?.availableContextTokens;
-  if (!tokens) return '—';
-  return tokens >= 1000 ? `${Math.round(tokens / 1000)}K` : String(tokens);
+  return formatTokenCount(model.model_spec?.availableContextTokens);
 }
 
 function getCapabilityLabels(model) {
@@ -107,7 +122,7 @@ function sortByName(models) {
 }
 
 function liveModels(models, predicate) {
-  return sortByName(models.filter(predicate).filter(m => !isDeprecatedModel(m)));
+  return sortByName(models.filter(predicate).filter(m => isListedModel(m)));
 }
 
 function markdownTable(headers, rows) {
@@ -137,34 +152,48 @@ function formatImagePrice(model) {
     if (upscale['4x']?.usd != null) parts.push(`4x ${formatPrice(upscale['4x'].usd)}`);
     return parts.join(', ') || formatPrice(pricing.generation?.usd);
   }
+  const tiers = formatResolutionPrices(pricing.resolutions);
   if (model.type === 'inpaint' || pricing.inpaint) {
     const extra = pricing.inputImages?.additional?.usd;
-    const base = formatPrice(pricing.inpaint?.usd);
+    const base = tiers || formatPrice(pricing.inpaint?.usd);
     return extra != null ? `${base} / extra image ${formatPrice(extra)}` : base;
   }
-  if (pricing.resolutions) {
-    return Object.keys(pricing.resolutions)
-      .map(res => `${res}: ${formatPrice(pricing.resolutions[res]?.usd)}`)
-      .join(', ');
-  }
+  if (tiers) return tiers;
   if (pricing.generation?.usd != null) return formatPrice(pricing.generation.usd);
   return '—';
 }
 
+function formatResolutionPrices(resolutions) {
+  if (!resolutions || Object.keys(resolutions).length === 0) return null;
+  return sortResolutions(Object.keys(resolutions))
+    .map(res => `${res}: ${formatPrice(resolutions[res]?.usd)}`)
+    .join(', ');
+}
+
+function renderQualityTable(group) {
+  const priced = group
+    .map(model => ({ model, grid: getQualityGrid(model.model_spec?.pricing) }))
+    .filter(({ grid }) => grid);
+  if (priced.length === 0) return null;
+
+  const resolutions = sortResolutions([...new Set(priced.flatMap(({ grid }) => grid.resolutions))]);
+  const rows = priced.flatMap(({ model, grid }) => grid.qualities.map(quality => row(model, [
+    quality,
+    ...resolutions.map(res => formatPrice(grid.price(quality, res)))
+  ])));
+  return markdownTable(['Model', 'ID', 'Quality', ...resolutions], rows);
+}
+
 function formatMusicPrice(model) {
   const pricing = model.model_spec?.pricing || {};
+  if (pricing.durations && model.model_spec?.voice_changer) return 'Duration-tiered — use Voice Changer Quote API';
   if (pricing.durations) return 'Duration-tiered — use Audio Quote API';
   if (pricing.generation?.usd != null) return `${formatPrice(pricing.generation.usd)} / generation`;
   if (pricing.per_second?.usd != null) return `${formatPrice(pricing.per_second.usd)} / second`;
+  if (pricing.per_thousand_characters?.usd != null) {
+    return `${formatPrice(pricing.per_thousand_characters.usd)} / 1,000 characters`;
+  }
   return 'See Audio Quote API';
-}
-
-function getVideoType(modelId) {
-  if (modelId.includes('image-to-video')) return 'Image to Video';
-  if (modelId.includes('text-to-video')) return 'Text to Video';
-  if (modelId.includes('-i2v') || modelId.endsWith('-itv')) return 'Image to Video';
-  if (modelId.includes('upscale') || modelId.includes('topaz')) return 'Video Upscale';
-  return 'Text to Video';
 }
 
 function renderCatalogIntro(count) {
@@ -201,13 +230,17 @@ function renderImageTables(models) {
       ['Model', 'ID', 'Price', 'Privacy'],
       group.map(model => row(model, [tableCell(formatImagePrice(model)), getPrivacyLabel(model)]))
     );
-    return `#### ${heading}\n\n${table}`;
+    const qualityTable = renderQualityTable(group);
+    const qualitySection = qualityTable
+      ? `\n\n${heading} price by quality and resolution:\n\n${qualityTable}`
+      : '';
+    return `#### ${heading}\n\n${table}${qualitySection}`;
   }).join('\n\n');
 }
 
 function renderVideoTable(models) {
   const rows = liveModels(models, m => m.type === 'video').map(model => row(model, [
-    getVideoType(model.id),
+    getVideoType(model) || '—',
     'Variable — use Video Quote API',
     getPrivacyLabel(model)
   ]));
@@ -265,9 +298,27 @@ function renderEmbeddingTable(models) {
   return markdownTable(['Model', 'ID', 'Input (per 1M tokens)', 'Privacy'], rows);
 }
 
+function renderDecisionTable(models) {
+  const rows = liveModels(models, m => m.type === 'decision').map(model => {
+    const spec = model.model_spec || {};
+    return row(model, [
+      formatDecisionTokenPrice(spec.pricing?.input?.usd),
+      formatDecisionTokenPrice(spec.pricing?.output?.usd),
+      formatTokenCount(spec.maxStateTokens),
+      formatTokenCount(spec.maxTotalTokens),
+      getPrivacyLabel(model)
+    ]);
+  });
+  return markdownTable(
+    ['Model', 'ID', 'Input', 'Output', 'State + longest question', 'Total request', 'Privacy'],
+    rows
+  );
+}
+
 function renderOverviewTables(models) {
   const groups = [
     ['Text', m => m.type === 'text', renderTextTable],
+    ['Decisions', m => m.type === 'decision', renderDecisionTable],
     ['Image', m => m.type === 'image' || m.type === 'upscale' || m.type === 'inpaint', renderImageTables],
     ['Video', m => m.type === 'video', renderVideoTable],
     ['Text-to-Speech', m => m.type === 'tts', renderTtsTable],
@@ -276,7 +327,7 @@ function renderOverviewTables(models) {
     ['Embeddings', m => m.type === 'embedding', renderEmbeddingTable]
   ];
 
-  const live = models.filter(m => !isDeprecatedModel(m));
+  const live = models.filter(m => isListedModel(m));
   const sections = groups.map(([heading, predicate, render]) => {
     const count = live.filter(predicate).length;
     return `### ${heading} (${count})\n\n${render(models)}`;
@@ -339,7 +390,7 @@ function withIntro(count, table) {
 
 function main() {
   const models = readModels();
-  const live = models.filter(m => !isDeprecatedModel(m));
+  const live = models.filter(m => isListedModel(m));
 
   updatePage(
     'models/overview.mdx',

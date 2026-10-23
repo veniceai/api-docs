@@ -1,6 +1,6 @@
 ---
 title: X402
-description: "无需 API 密钥即可访问 Venice API —— 通过 x402 协议按请求付费，并使用 Base 上的加密钱包进行身份验证。"
+description: "无需密钥即可访问 Venice API：通过 x402 和加密钱包按请求付费。"
 "og:title": X402
 "og:description": Access Venice without an API key using wallet authentication.
 ---
@@ -9,7 +9,7 @@ X402 让您通过钱包认证并维护预付的 USDC 余额来使用 Venice 的�
 
 <CardGroup cols={3}>
   <Card title="钱包认证" icon="wallet">
-    在 `X-Sign-In-With-X` 头中使用已签名的 Sign-In-With-X 负载进行身份验证。
+    在 `SIGN-IN-WITH-X` 头中使用已签名的 Sign-In-With-X 负载进行身份验证。
   </Card>
 
   <Card title="使用 USDC 付款" icon="coins">
@@ -56,7 +56,7 @@ const response = await venice.chat({
 })
 ```
 
-客户端为每个请求生成新的 `X-Sign-In-With-X` 头，并自动从 `X-Balance-Remaining` 响应头跟踪余额。
+客户端为每个请求生成新的 Sign-In-With-X 头，并自动从 `X-Balance-Remaining` 响应头跟踪余额。
 
 ### 与 OpenAI 兼容工具配合使用
 
@@ -89,9 +89,11 @@ SDK 包括最常见 Venice x402 路由的一流辅助函数。对于未覆盖的
 
 如果您不使用 SDK 或需要了解底层协议，下面是逐步流程。对于新钱包，假设您需要先充值，除非它已经有可消费的 DIEM 余额。
 
-### 步骤 1：创建 X-Sign-In-With-X 头
+### 步骤 1：创建 SIGN-IN-WITH-X 头
 
-Venice 期望一个 Base64 编码的 JSON 负载，包含已签名的 Sign-In-With-X 消息。EVM 钱包在 Base 上签署 EIP-4361 SIWE 消息。Solana 钱包使用 Ed25519 签署 Solana SIWX 消息。为每个请求流程生成新的 nonce 和时间戳。
+Venice 期望在 `SIGN-IN-WITH-X` 头中收到一个 Base64 编码的 JSON 负载，其中包含已签名的 Sign-In-With-X 消息。EVM 钱包在 Base 上签署 EIP-4361 SIWE 消息。Solana 钱包使用 Ed25519 签署 Solana SIWX 消息。旧版 `X-Sign-In-With-X` 头名称仍然可用。
+
+每条已签名消息只能使用一次。请为每个请求使用新的 nonce 签署一条新消息，并在其 `Issued At` 时间后 5 分钟内发送。重复使用消息会返回 `401`（nonce 已被使用），签发时间超过 5 分钟的消息也会返回 `401`。
 
 对于 Solana，将 `chainId` 设置为 `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`，在编码的 JSON 负载中包含 `type: "ed25519"`，并以 base58 或 base64 提供 Ed25519 签名。已签名消息以 `<domain> wants you to sign in with your Solana account:` 开头，后跟钱包地址和标准 `URI`、`Version`、`Chain ID`、`Nonce`、`Issued At` 和可选的 `Expiration Time` 字段。
 
@@ -100,37 +102,51 @@ import { Wallet } from 'ethers'
 import { SiweMessage, generateNonce } from 'siwe'
 
 const wallet = new Wallet(process.env.EVM_PRIVATE_KEY)
-const now = new Date()
-const resourceUrl = 'https://api.venice.ai/api/v1/chat/completions'
 
-const siwe = new SiweMessage({
-  domain: 'api.venice.ai',
-  address: wallet.address,
-  statement: 'Sign in to Venice AI',
-  uri: resourceUrl,
-  version: '1',
-  chainId: 8453,
-  nonce: generateNonce(),
-  issuedAt: now.toISOString(),
-  expirationTime: new Date(now.getTime() + 5 * 60 * 1000).toISOString(),
-})
+async function createSiwxHeader(resourceUrl: string): Promise<string> {
+  const now = new Date()
 
-const message = siwe.prepareMessage()
-const signature = await wallet.signMessage(message)
-
-const xSignInWithX = Buffer.from(
-  JSON.stringify({
+  const siwe = new SiweMessage({
+    domain: 'api.venice.ai',
     address: wallet.address,
-    message,
-    signature,
-    timestamp: now.getTime(),
+    statement: 'Sign in to Venice AI',
+    uri: resourceUrl,
+    version: '1',
     chainId: 8453,
-  }),
-  'utf8',
-).toString('base64')
+    nonce: generateNonce(),
+    issuedAt: now.toISOString(),
+    expirationTime: new Date(now.getTime() + 5 * 60 * 1000).toISOString(),
+  })
 
-console.log(xSignInWithX)
+  const message = siwe.prepareMessage()
+  const signature = await wallet.signMessage(message)
+
+  return Buffer.from(
+    JSON.stringify({
+      address: wallet.address,
+      message,
+      signature,
+      timestamp: now.getTime(),
+      chainId: 8453,
+    }),
+    'utf8',
+  ).toString('base64')
+}
+
+const response = await fetch('https://api.venice.ai/api/v1/chat/completions', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'SIGN-IN-WITH-X': await createSiwxHeader('https://api.venice.ai/api/v1/chat/completions'),
+  },
+  body: JSON.stringify({
+    model: 'kimi-k2-5',
+    messages: [{ role: 'user', content: 'Hello!' }],
+  }),
+})
 ```
+
+请在每个请求之前立即调用 `createSiwxHeader()`。在下方的 `curl` 示例中，每次调用的 `X402_AUTH` 都必须是新签署的头。
 
 ### 步骤 2：检查余额
 
@@ -142,7 +158,7 @@ export X402_AUTH=YOUR_BASE64_SIWX_HEADER
 
 curl --request GET \
   --url "https://api.venice.ai/api/v1/x402/balance/$WALLET_ADDRESS" \
-  --header "X-Sign-In-With-X: $X402_AUTH"
+  --header "SIGN-IN-WITH-X: $X402_AUTH"
 ```
 
 响应包括：
@@ -163,9 +179,9 @@ curl --request POST \
   --url https://api.venice.ai/api/v1/x402/top-up
 ```
 
-首次调用返回 `402 Payment Required`，带有包含 `accepts` 数组的 `PAYMENT-REQUIRED` 头。每个条目描述一个接受的支付选项，包括 `network`、`asset`、`payTo` 和 `amount`。选择您要支付的 Base 或 Solana 选项，使用这些精确详情构建 `X-402-Payment` 头，并重试相同的路由。
+首次调用返回 `402 Payment Required`，带有包含 `accepts` 数组的 `PAYMENT-REQUIRED` 头。每个条目描述一个接受的支付选项，包括 `network`、`asset`、`payTo` 和 `amount`。选择您要支付的 Base 或 Solana 选项，使用这些精确详情构建 `PAYMENT-SIGNATURE` 头，并重试相同的路由。旧版 `X-402-Payment` 和 `X-PAYMENT` 头名称仍然可用。
 
-#### 为 Base 构建 X-402-Payment 头
+#### 为 Base 构建 PAYMENT-SIGNATURE 头
 
 以下脚本在 Base 上创建已签名的 x402 支付并发送充值请求。需要 `x402` 和 `viem` npm 包。
 
@@ -201,7 +217,7 @@ EOF
 )"
 
 curl -X POST "https://api.venice.ai/api/v1/x402/top-up" \
-  -H "X-402-Payment: $X402_PAYMENT"
+  -H "PAYMENT-SIGNATURE: $X402_PAYMENT"
 ```
 
 <Note>
@@ -210,7 +226,7 @@ curl -X POST "https://api.venice.ai/api/v1/x402/top-up" \
 
 ### 步骤 4：发出请求
 
-一旦钱包有可消费余额，使用 `X-Sign-In-With-X` 头调用任何支持的端点：
+一旦钱包有可消费余额，使用新签署的 `SIGN-IN-WITH-X` 头调用任何支持的端点：
 
 ```bash
 export X402_AUTH=YOUR_BASE64_SIWX_HEADER
@@ -218,7 +234,7 @@ export X402_AUTH=YOUR_BASE64_SIWX_HEADER
 curl --request POST \
   --url https://api.venice.ai/api/v1/chat/completions \
   --header "Content-Type: application/json" \
-  --header "X-Sign-In-With-X: $X402_AUTH" \
+  --header "SIGN-IN-WITH-X: $X402_AUTH" \
   --data '{
     "model": "kimi-k2-5",
     "messages": [
@@ -242,7 +258,7 @@ export X402_AUTH=YOUR_BASE64_SIWX_HEADER
 
 curl --request GET \
   --url "https://api.venice.ai/api/v1/x402/transactions/$WALLET_ADDRESS?limit=10&offset=0" \
-  --header "X-Sign-In-With-X: $X402_AUTH"
+  --header "SIGN-IN-WITH-X: $X402_AUTH"
 ```
 
 账本包括 `TOP_UP`、`CHARGE` 和 `REFUND` 等条目。
@@ -262,18 +278,21 @@ curl --request GET \
 | Chat | `POST /api/v1/chat/completions`、`POST /api/v1/responses` |
 | Image | `POST /api/v1/image/generate`、`POST /api/v1/images/generations`、`POST /api/v1/image/upscale`、`POST /api/v1/image/edit`、`POST /api/v1/image/multi-edit`、`POST /api/v1/image/background-remove` |
 | Embeddings | `POST /api/v1/embeddings` |
-| Audio | `POST /api/v1/audio/speech`、`POST /api/v1/audio/transcriptions`、`POST /api/v1/audio/complete`、`POST /api/v1/audio/queue`、`POST /api/v1/audio/retrieve` |
+| Audio | `POST /api/v1/audio/speech`、`POST /api/v1/audio/transcriptions`、`POST /api/v1/audio/voices`、`POST /api/v1/audio/complete`、`POST /api/v1/audio/queue`、`POST /api/v1/audio/retrieve`、`POST /api/v1/audio/voice-changer/queue`、`POST /api/v1/audio/voice-changer/retrieve`、`POST /api/v1/audio/voice-changer/complete` |
 | Video | `POST /api/v1/video/complete`、`POST /api/v1/video/queue`、`POST /api/v1/video/retrieve` |
+| Decisions | `POST /api/v1/decisions`、`POST /api/v1/systemone` |
+| Tools | `POST /api/v1/augment/search`、`POST /api/v1/augment/scrape`、`POST /api/v1/augment/text-parser` |
+| Blockchain RPC | `POST /api/v1/crypto/rpc/{network}` |
 
 ### 充值路由
 
 | 端点 | 认证 | 用途 |
 | --- | --- | --- |
-| `POST /api/v1/x402/top-up` | 首次请求：无。重试：`X-402-Payment` | 使用接受的 Base 或 Solana 支付选项向钱包的可消费余额添加 USDC credit |
+| `POST /api/v1/x402/top-up` | 首次请求：无。重试：`PAYMENT-SIGNATURE` | 使用接受的 Base 或 Solana 支付选项向钱包的可消费余额添加 USDC credit |
 
 ### 仅钱包路由
 
-这些路由使用 `X-Sign-In-With-X` 进行身份识别，但不收取余额。
+这些路由使用 `SIGN-IN-WITH-X` 进行身份识别，但不收取余额。
 
 | 端点 | 用途 |
 | --- | --- |
@@ -286,9 +305,10 @@ curl --request GET \
 
 | 状态 | 可能原因 | 应对方式 |
 | --- | --- | --- |
-| `401` | Sign-In-With-X 负载格式错误或已过期 | 使用新的 nonce 和时间戳重建 `X-Sign-In-With-X` |
+| `401` | Sign-In-With-X 负载格式错误、已过期或已被使用 | 为本次请求使用新的 nonce 签署一条新的 `SIGN-IN-WITH-X` 消息 |
+| `402` 且 `"error": "Authentication required"` | 未发送 `SIGN-IN-WITH-X` 请求头或 API 密钥 | 添加 Sign-In-With-X 请求头。响应的 `extensions` 字段包含一个可供签名的新 nonce。 |
 | 付费路由上 `402` | 可消费余额不足 | 充值并重试 |
-| `/x402/top-up` 上 `402` | 预期。这是支付发起流程。 | 使用返回的支付详情构建 `X-402-Payment` 并重试 |
+| `/x402/top-up` 上 `402` | 预期。这是支付发起流程。 | 使用返回的支付详情构建 `PAYMENT-SIGNATURE` 并重试 |
 | 余额或交易上 `403` | 钱包不匹配 | 确保已认证钱包与 `walletAddress` 路径参数匹配 |
 | 充值上 `400` | 支付头格式错误 | 从最新的 `402` 响应重建 |
 
@@ -296,26 +316,26 @@ curl --request GET \
 
 ## 对于 agent
 
-流程相同。将私钥存储在环境变量或机密管理器中，并在请求之前检查余额，以避免不必要的 `402` 往返。
+流程相同。将私钥存储在环境变量或机密管理器中，为每个请求签署一条新的 Sign-In-With-X 消息，并在请求之前检查余额，以避免不必要的 `402` 往返。
 
 ---
 
 ## 相关资源
 
 <CardGroup cols={2}>
-  <Card title="x402 客户端 SDK" icon="npm" href="https://github.com/veniceai/x402-client">
+  <Card title="x402 客户端 SDK" icon="brand-npm" href="https://github.com/veniceai/x402-client">
     官方 Venice x402 Node.js/TypeScript 客户端。
   </Card>
 
-  <Card title="API 定价" icon="coins" href="/overview/pricing">
+  <Card title="API 定价" icon="coins" href="/zh/overview/pricing">
     查看模型定价以及 Venice 如何收取使用费用。
   </Card>
 
-  <Card title="Chat Completions" icon="message" href="/api-reference/endpoint/chat/completions">
+  <Card title="Chat Completions" icon="message" href="/zh/api-reference/endpoint/chat/completions">
     用于基于钱包访问的常见付费路由。
   </Card>
 
-  <Card title="API 规范" icon="code" href="/api-reference/api-spec">
+  <Card title="API 规范" icon="code" href="/zh/api-reference/api-spec">
     参考文档和原始规范访问。
   </Card>
 </CardGroup>

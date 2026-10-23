@@ -256,7 +256,7 @@
 
   // Configuration
   const API_BASE = 'https://api.venice.ai/api/v1/models';
-  const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'music', ...(ENABLE_VIDEO ? ['video'] : [])];
+  const MODEL_TYPES = ['text', 'decision', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'music', ...(ENABLE_VIDEO ? ['video'] : [])];
   const CACHE_KEY = 'venice-models-cache';
   const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
@@ -318,46 +318,6 @@
   // Privacy types that are always private (no API privacy field needed)
   const PRIVATE_TYPES = new Set(['upscale']);
 
-  // Rate limit tiers - default limits by model size category
-  // Models not listed default to their type's standard tier
-  const RATE_LIMIT_TIERS = {
-    xsmall: { rpm: 500, tpm: 1000000, label: 'XS', tooltip: 'Rate Limit: 500 RPM · 1M TPM' },
-    small:  { rpm: 75,  tpm: 750000,  label: 'S',  tooltip: 'Rate Limit: 75 RPM · 750K TPM' },
-    medium: { rpm: 50,  tpm: 750000,  label: 'M',  tooltip: 'Rate Limit: 50 RPM · 750K TPM' },
-    large:  { rpm: 20,  tpm: 500000,  label: 'L',  tooltip: 'Rate Limit: 20 RPM · 500K TPM' }
-  };
-
-  // Model to rate limit tier mapping (text/embedding models only)
-  const MODEL_RATE_LIMIT_TIER = {
-    // XSmall - fastest/smallest models
-    'qwen3-4b': 'xsmall',
-    'llama-3.2-3b': 'xsmall',
-    'text-embedding-bge-m3': 'xsmall',
-    // Small - efficient mid-size models
-    'mistral-31-24b': 'small',
-    'venice-uncensored': 'small',
-    // Medium - capable models
-    'llama-3.3-70b': 'medium',
-    'qwen3-next-80b': 'medium',
-    'google-gemma-3-27b-it': 'medium',
-    // Large - flagship models (default for unknown text models)
-    'qwen3-235b': 'large',
-    'qwen3-235b-a22b-instruct-2507': 'large',
-    'qwen3-235b-a22b-thinking-2507': 'large',
-    'grok-41-fast': 'large',
-    'kimi-k2-thinking': 'large',
-    'gemini-3-pro-preview': 'large',
-    'hermes-3-llama-3.1-405b': 'large',
-    'qwen3-coder-480b-a35b-instruct': 'large',
-    'zai-org-glm-4.7': 'large',
-    'openai-gpt-oss-120b': 'large'
-  };
-
-  function getModelRateLimitTier(modelId, modelType) {
-    if (modelType !== 'text' && modelType !== 'embedding') return null;
-    return MODEL_RATE_LIMIT_TIER[modelId] || 'large'; // Default to large for unknown text models
-  }
-
   // Video model display configuration (can't be detected from API)
   // - audioPricing: show audio toggle (price differs with audio on/off)
   // - resPricing: false = hide resolution dropdown (price same at all resolutions)
@@ -368,16 +328,8 @@
     'veo3.1-full-text-to-video': { audioPricing: true, resPricing: false },
     'veo3.1-fast-image-to-video': { resPricing: false },
     'veo3.1-full-image-to-video': { resPricing: false },
-    // Veo 3 - no audio toggle, resolution doesn't affect price
-    'veo3-fast-text-to-video': { resPricing: false },
-    'veo3-full-text-to-video': { resPricing: false },
-    'veo3-fast-image-to-video': { resPricing: false },
-    'veo3-full-image-to-video': { resPricing: false },
     // Kling 2.6 Pro - audio toggle available
     'kling-2.6-pro-text-to-video': { audioPricing: true },
-    // Sora 2 (non-Pro) - only has 720p, resolution doesn't matter
-    'sora-2-text-to-video': { resPricing: false },
-    'sora-2-image-to-video': { resPricing: false },
   };
   
   function getVideoModelConfig(modelId) {
@@ -453,6 +405,7 @@
   const MODEL_ICON_BASE_PATH = '/images/icons/models/';
   const MODEL_TYPE_ICON_BY_TYPE = {
     asr: 'text.svg',
+    decision: 'text.svg',
     embedding: 'text.svg',
     image: 'image.svg',
     inpaint: 'image.svg',
@@ -622,6 +575,7 @@
       options: [
         { value: 'all', label: 'All types' },
         { value: 'text', label: 'Text' },
+        { value: 'decision', label: 'Decision' },
         { value: 'image', label: 'Image' },
         ...(ENABLE_VIDEO ? [{ value: 'video', label: 'Video' }] : []),
         { value: 'audio', label: 'Audio' },
@@ -642,6 +596,7 @@
       options: [
         { value: 'text-to-video', label: 'Text to Video' },
         { value: 'image-to-video', label: 'Image to Video' },
+        { value: 'video-to-video', label: 'Video to Video' },
       ],
     },
     capability: {
@@ -737,9 +692,7 @@
   // Models subject to upstream provider content moderation that still bills on blocked requests
   const CONTENT_MODERATED_MODELS = new Set([
     'grok-imagine',
-    'grok-imagine-edit',
-    'grok-imagine-text-to-video',
-    'grok-imagine-image-to-video'
+    'grok-imagine-edit'
   ]);
 
   function hasContentModeration(modelId) {
@@ -772,10 +725,17 @@
     return { dateStr, isNew };
   }
 
+  // Show the exact price (up to 8 decimals, at least 2) so sub-cent list prices like $0.125 aren't rounded up.
   function formatPrice(price) {
     if (price === null || price === undefined) return '-';
-    if (price < 0.01 && price > 0) return '$' + price.toFixed(4);
-    return '$' + price.toFixed(2);
+    const [whole, fraction = ''] = price.toFixed(8).replace(/0+$/, '').split('.');
+    return '$' + whole + '.' + fraction.padEnd(2, '0');
+  }
+
+  function formatDecisionTokenPrice(price) {
+    if (price === null || price === undefined) return '-';
+    if (price === 0) return '$0.00';
+    return price < 1 ? '$' + price.toFixed(4) : '$' + price.toFixed(2);
   }
 
   function formatVideoPricing(modelId, model) {
@@ -1272,6 +1232,77 @@
     return dep.removesAt || dep.date || null;
   }
 
+  // Deprecated models stay in the price tables (tagged Retiring) until removal.
+  function isRemovedModel(model) {
+    const removalDate = getModelRemovalDate(model);
+    if (!removalDate) return false;
+    const removal = new Date(removalDate);
+    return !Number.isNaN(removal.getTime()) && removal <= new Date();
+  }
+
+  function isListedModel(model) {
+    return !isRemovedModel(model);
+  }
+
+  function retiringTag(model) {
+    if (!isDeprecatedModel(model)) return '';
+    return `<span class="vpt-badge vpt-retiring vpt-tooltip" data-tooltip="Scheduled for removal on ${formatDeprecationDate(getModelRemovalDate(model))}. See the deprecations page for details.">Retiring</span>`;
+  }
+
+  // 'text-to-video' | 'image-to-video' | 'video-to-video', or null when unknown.
+  function getVideoKind(model) {
+    const constraints = model.model_spec?.constraints || {};
+    if (constraints.video_input === true || constraints.model_type === 'video') return 'video-to-video';
+    if (constraints.model_type === 'image-to-video') return 'image-to-video';
+    if (constraints.model_type === 'text-to-video') return 'text-to-video';
+    return null;
+  }
+
+  const VIDEO_KIND_LABELS = {
+    'text-to-video': 'Text to Video',
+    'image-to-video': 'Image to Video',
+    'video-to-video': 'Video to Video'
+  };
+
+  const QUALITY_ORDER = ['low', 'medium', 'high'];
+
+  function sortResolutions(keys) {
+    return [...keys].sort((a, b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b));
+  }
+
+  // pricing.quality is keyed by resolution, then quality level.
+  function getQualityGrid(pricing) {
+    const quality = pricing?.quality;
+    if (!quality || typeof quality !== 'object') return null;
+    const resolutions = sortResolutions(Object.keys(quality));
+    const rank = q => (QUALITY_ORDER.includes(q) ? QUALITY_ORDER.indexOf(q) : QUALITY_ORDER.length);
+    const qualities = [...new Set(resolutions.flatMap(res => Object.keys(quality[res] || {})))]
+      .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    if (resolutions.length === 0 || qualities.length === 0) return null;
+    return { resolutions, qualities, price: (q, res) => quality[res]?.[q]?.usd };
+  }
+
+  function getImageTierPrice(model, resolution, quality) {
+    const pricing = model.model_spec?.pricing || {};
+    const qualityPrice = quality ? pricing.quality?.[resolution]?.[quality]?.usd : undefined;
+    return qualityPrice ?? pricing.resolutions?.[resolution]?.usd;
+  }
+
+  function renderQualityGrid(model) {
+    if (isFreeModel(model)) return '';
+    const grid = getQualityGrid(model.model_spec?.pricing);
+    if (!grid) return '';
+    const head = grid.resolutions.map(res => `<th class="vpt-price">${escapeHtml(res)}</th>`).join('');
+    const body = grid.qualities.map(q => `<tr><td>${escapeHtml(q)}</td>${grid.resolutions.map(res => `<td class="vpt-price">${formatPrice(grid.price(q, res))}</td>`).join('')}</tr>`).join('');
+    return `<table class="vpt-table vpt-quality-table"><thead><tr><th>Quality</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  function resolutionPriceItems(resolutions) {
+    return sortResolutions(Object.keys(resolutions)).map(res =>
+      `<span class="vpt-price-item"><span class="vpt-price-label">${escapeHtml(res)}</span><span class="vpt-price-value">${formatPrice(resolutions[res]?.usd)}</span></span>`
+    ).join('');
+  }
+
   // Models that have been superseded by a newer version
   const UPGRADED_MODELS = new Set([]);
 
@@ -1350,7 +1381,7 @@
   function renderPricingChatTable(models) {
     const chatModels = models
       .filter(m => m.type === 'text')
-      .filter(m => !isDeprecatedModel(m));
+      .filter(isListedModel);
 
     if (chatModels.length === 0) return '<p>No models available.</p>';
 
@@ -1402,7 +1433,7 @@
       return `<div class="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}${isUpgradedModel(model) ? ' vpt-upgraded-row' : ''}">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>${betaTag}${upgradedTag}
+            <span class="vpt-model-name">${name}</span>${betaTag}${upgradedTag}${retiringTag(model)}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${moderationTag}${privacyTag}${capTags}</div>
@@ -1419,7 +1450,7 @@
   }
 
   function renderPricingEmbeddingTable(models) {
-    const embModels = models.filter(m => m.type === 'embedding').filter(m => !isDeprecatedModel(m));
+    const embModels = models.filter(m => m.type === 'embedding').filter(isListedModel);
     if (embModels.length === 0) return '<p>No models available.</p>';
 
     const rows = embModels.map(model => {
@@ -1432,7 +1463,7 @@
       return `<div class="vpt-row">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>
+            <span class="vpt-model-name">${name}</span>${retiringTag(model)}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${privacyTag}</div>
@@ -1458,7 +1489,7 @@
   }
 
   function renderPricingImageTable(models) {
-    const imageModels = models.filter(m => m.type === 'image').filter(m => !isDeprecatedModel(m))
+    const imageModels = models.filter(m => m.type === 'image').filter(isListedModel)
       .sort((a, b) => {
         const aBeta = isBetaModel(a) ? 1 : 0;
         const bBeta = isBetaModel(b) ? 1 : 0;
@@ -1483,11 +1514,7 @@
       if (isFreeModel(model)) {
         priceItems = freePriceItem();
       } else if (resPricing) {
-        // Show each resolution price separately
-        const resKeys = Object.keys(resPricing);
-        priceItems = resKeys.map(res => 
-          `<span class="vpt-price-item"><span class="vpt-price-label">${res}</span><span class="vpt-price-value">${formatPrice(resPricing[res]?.usd)}</span></span>`
-        ).join('');
+        priceItems = resolutionPriceItems(resPricing);
       } else {
         priceItems = `<span class="vpt-price-item"><span class="vpt-price-label">Per Image</span><span class="vpt-price-value">${formatPrice(spec.pricing?.generation?.usd)}</span></span>`;
       }
@@ -1495,7 +1522,7 @@
       return `<div class="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>${betaTag}
+            <span class="vpt-model-name">${name}</span>${betaTag}${retiringTag(model)}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${moderationTag}${privacyTag}</div>
@@ -1503,6 +1530,7 @@
         <div class="vpt-row-bottom">
           ${priceItems}
         </div>
+        ${renderQualityGrid(model)}
       </div>`;
     }).join('');
 
@@ -1510,49 +1538,54 @@
   }
 
   function renderPricingUpscaleTable(models) {
-    const upscaleModels = models.filter(m => m.type === 'upscale').filter(m => !isDeprecatedModel(m));
-    if (upscaleModels.length === 0) return '<p>No models available.</p>';
+    const rows = models.filter(m => m.type === 'upscale').filter(isListedModel).map(model => {
+      const spec = model.model_spec || {};
+      const pricing = spec.pricing || {};
+      const upscalePricing = pricing.upscale || pricing;
+      const modelId = escapeHtml(model.id);
+      const items = [];
+      if (upscalePricing['2x']?.usd != null) items.push(`<span class="vpt-price-item"><span class="vpt-price-label">2x Upscale</span><span class="vpt-price-value">${formatModelPrice(model, upscalePricing['2x'].usd)}</span></span>`);
+      if (upscalePricing['4x']?.usd != null) items.push(`<span class="vpt-price-item"><span class="vpt-price-label">4x Upscale</span><span class="vpt-price-value">${formatModelPrice(model, upscalePricing['4x'].usd)}</span></span>`);
+      if (items.length === 0) return '';
 
-    const pricing = upscaleModels[0]?.model_spec?.pricing || {};
-    const upscalePricing = pricing.upscale || pricing;
-    const items = [];
-    if (upscalePricing['2x']?.usd) items.push(`<span class="vpt-price-item"><span class="vpt-price-label">2x Upscale</span><span class="vpt-price-value">${formatPrice(upscalePricing['2x'].usd)}</span></span>`);
-    if (upscalePricing['4x']?.usd) items.push(`<span class="vpt-price-item"><span class="vpt-price-label">4x Upscale</span><span class="vpt-price-value">${formatPrice(upscalePricing['4x'].usd)}</span></span>`);
-    if (items.length === 0) return '<p>Upscaling pricing varies.</p>';
-
-    return `<div class="vpt-list">
-      <div class="vpt-row">
+      return `<div class="vpt-row">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">Image Upscaler</span>
-            <code class="vpt-model-id">upscaler</code>${pricingCopyBtn('upscaler')}
+            <span class="vpt-model-name">${escapeHtml(spec.name || model.id)}</span>${retiringTag(model)}
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
         </div>
         <div class="vpt-row-bottom">${items.join('')}</div>
-      </div>
-    </div>`;
+      </div>`;
+    }).filter(Boolean);
+    if (rows.length === 0) return '<p>No models available.</p>';
+
+    return `<div class="vpt-list">${rows.join('')}</div>`;
   }
 
   function renderPricingEditTable(models) {
-    const editModels = models.filter(m => m.id === 'qwen-image' || m.type === 'inpaint').filter(m => !isDeprecatedModel(m));
+    const editModels = models.filter(m => m.type === 'inpaint').filter(isListedModel);
     if (editModels.length === 0) return '<p>No models available.</p>';
 
     const rows = editModels.map(model => {
       const spec = model.model_spec || {};
       const modelId = escapeHtml(model.id);
       const name = escapeHtml(spec.name || model.id);
-      const editPrice = spec.pricing?.inpaint?.usd ?? spec.pricing?.generation?.usd ?? 0.04;
+      const resPricing = spec.pricing?.resolutions;
       const extraInputUsd = spec.pricing?.inputImages?.additional?.usd;
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
+      const editItems = resPricing
+        ? resolutionPriceItems(resPricing)
+        : `<span class="vpt-price-item"><span class="vpt-price-label">Per Edit</span><span class="vpt-price-value">${formatPrice(spec.pricing?.inpaint?.usd)}</span></span>`;
       const priceItems = isFreeModel(model)
         ? freePriceItem()
-        : `<span class="vpt-price-item"><span class="vpt-price-label">Per Edit</span><span class="vpt-price-value">${formatPrice(editPrice)}</span></span>
+        : `${editItems}
           ${extraInputUsd ? `<span class="vpt-price-item vpt-tooltip" data-tooltip="Charged per input image beyond the first, added on top of the per-edit price."><span class="vpt-price-label">Extra Input Image</span><span class="vpt-price-value">${formatPrice(extraInputUsd)}</span></span>` : ''}`;
 
       return `<div class="vpt-row">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>
+            <span class="vpt-model-name">${name}</span>${retiringTag(model)}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${moderationTag}</div>
@@ -1560,6 +1593,7 @@
         <div class="vpt-row-bottom">
           ${priceItems}
         </div>
+        ${renderQualityGrid(model)}
       </div>`;
     }).join('');
 
@@ -1567,7 +1601,7 @@
   }
 
   function renderPricingTTSTable(models) {
-    const ttsModels = models.filter(m => m.type === 'tts').filter(m => !isDeprecatedModel(m));
+    const ttsModels = models.filter(m => m.type === 'tts').filter(isListedModel);
     if (ttsModels.length === 0) return '<p>No models available.</p>';
 
     const rows = ttsModels.map(model => {
@@ -1579,7 +1613,7 @@
       return `<div class="vpt-row">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>
+            <span class="vpt-model-name">${name}</span>${retiringTag(model)}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${privacyTag}</div>
@@ -1594,7 +1628,7 @@
   }
 
   function renderPricingASRTable(models) {
-    const asrModels = models.filter(m => m.type === 'asr').filter(m => !isDeprecatedModel(m));
+    const asrModels = models.filter(m => m.type === 'asr').filter(isListedModel);
     if (asrModels.length === 0) return '';
 
     const rows = asrModels.map(model => {
@@ -1611,7 +1645,7 @@
       return `<div class="vpt-row">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>
+            <span class="vpt-model-name">${name}</span>${retiringTag(model)}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${privacyTag}</div>
@@ -1628,7 +1662,7 @@
   function getPricingMusicModels(models, pricingKey) {
     return models
       .filter(m => m.type === 'music')
-      .filter(m => !isDeprecatedModel(m))
+      .filter(isListedModel)
       .filter(m => m.model_spec?.pricing?.[pricingKey])
       .sort((a, b) => (a.model_spec?.name || a.id).localeCompare(b.model_spec?.name || b.id));
   }
@@ -1654,7 +1688,7 @@
       return `<div class="vpt-row">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>
+            <span class="vpt-model-name">${name}</span>${retiringTag(model)}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${privacyTag}</div>
@@ -1681,7 +1715,7 @@
       return `<div class="vpt-row">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>
+            <span class="vpt-model-name">${name}</span>${retiringTag(model)}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${privacyTag}</div>
@@ -1708,7 +1742,7 @@
       return `<div class="vpt-row">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>
+            <span class="vpt-model-name">${name}</span>${retiringTag(model)}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${privacyTag}</div>
@@ -1722,13 +1756,41 @@
     return `<div class="vpt-list">${rows}</div>`;
   }
 
+  function renderPricingMusicPerThousandCharsTable(models) {
+    const musicModels = getPricingMusicModels(models, 'per_thousand_characters');
+    if (musicModels.length === 0) return '';
+
+    const rows = musicModels.map(model => {
+      const spec = model.model_spec || {};
+      const modelId = escapeHtml(model.id);
+      const name = escapeHtml(spec.name || model.id);
+      const privacyTag = getPrivacyTag(model, 'vpt');
+
+      return `<div class="vpt-row">
+        <div class="vpt-row-top">
+          <div class="vpt-row-left">
+            <span class="vpt-model-name">${name}</span>${retiringTag(model)}
+            <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
+          </div>
+          <div class="vpt-row-right">${privacyTag}</div>
+        </div>
+        <div class="vpt-row-bottom">
+          ${isFreeModel(model) ? freePriceItem() : `<span class="vpt-price-item"><span class="vpt-price-label">Per 1,000 Characters</span><span class="vpt-price-value">${formatPrice(spec.pricing?.per_thousand_characters?.usd)}</span></span>`}
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<div class="vpt-list">${rows}</div>`;
+  }
+
   function renderPricingWebSearchTable() {
+    const webSearchConfig = escapeHtml('enable_web_search: "on"');
     return `<div class="vpt-list">
       <div class="vpt-row">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
             <span class="vpt-model-name">Web Search</span>
-            <code class="vpt-model-id">enable_web_search: true</code>${pricingCopyBtn('enable_web_search: true')}
+            <code class="vpt-model-id">${webSearchConfig}</code>${pricingCopyBtn(webSearchConfig)}
           </div>
         </div>
         <div class="vpt-row-bottom">
@@ -1761,7 +1823,7 @@
   }
 
   function renderPricingVideoTable(models) {
-    const videoModels = models.filter(m => m.type === 'video').filter(m => !isDeprecatedModel(m))
+    const videoModels = models.filter(m => m.type === 'video').filter(isListedModel)
       .sort((a, b) => {
         const aName = a.model_spec?.name || a.id;
         const bName = b.model_spec?.name || b.id;
@@ -1777,15 +1839,15 @@
       const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
       const privacyTag = getPrivacyTag(model, 'vpt');
-      const videoType = constraints.model_type === 'image-to-video' ? 'Image to Video' : 'Text to Video';
-      const videoTypeBadge = `<span class="vpt-cap-tag">${videoType}</span>`;
+      const videoKind = getVideoKind(model);
+      const videoTypeBadge = videoKind ? `<span class="vpt-cap-tag">${VIDEO_KIND_LABELS[videoKind]}</span>` : '';
       const durations = constraints.durations || [];
       const resolutions = constraints.resolutions || [];
 
       return `<div class="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}" data-video-model="${modelId}">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>${betaTag}
+            <span class="vpt-model-name">${name}</span>${betaTag}${retiringTag(model)}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${moderationTag}${privacyTag}${videoTypeBadge}</div>
@@ -1802,7 +1864,7 @@
   }
 
   async function updateVideoPricesForPricingPage(models) {
-    const videoModels = models.filter(m => m.type === 'video').filter(m => !isDeprecatedModel(m));
+    const videoModels = models.filter(m => m.type === 'video').filter(isListedModel);
     for (const model of videoModels) {
       const constraints = model.model_spec?.constraints || {};
       // Skip if no constraints (static data doesn't have them)
@@ -1878,7 +1940,7 @@
   function renderCachePricingTable(models) {
     const cacheModels = models
       .filter(m => m.type === 'text' && m.model_spec?.pricing?.cache_input)
-      .filter(m => !isDeprecatedModel(m))
+      .filter(isListedModel)
       .sort((a, b) => {
         const pA = a.model_spec?.pricing?.input?.usd ?? 999;
         const pB = b.model_spec?.pricing?.input?.usd ?? 999;
@@ -1897,7 +1959,7 @@
       const discount = input && cacheRead ? Math.round((1 - cacheRead / input) * 100) : null;
 
       return `<tr>
-        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}</td>
+        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}${retiringTag(model)}</td>
         <td class="vpt-price">${formatModelPrice(model, input)}</td>
         <td class="vpt-price">${formatModelPrice(model, cacheRead)}</td>
         <td class="vpt-price">${cacheWrite != null ? formatModelPrice(model, cacheWrite) : '—'}</td>
@@ -1912,10 +1974,10 @@
   }
 
   function renderCachePricingContent(models) {
-    return `
-      <p>Prices per 1M tokens. Models without cache pricing listed still benefit from caching at the provider level, they just aren't billed separately.</p>
+    return `<div class="vpt-cache-pricing">
+      <p>Prices per 1M tokens. A dash means that cache read or write isn't billed separately from input.</p>
       ${renderCachePricingTable(models)}
-    `;
+    </div>`;
   }
 
   async function initCachePricing() {
@@ -1928,11 +1990,13 @@
       ? cachedModels
       : await ensureStaticModels();
     el.innerHTML = renderCachePricingContent(initialModels);
+    ensurePlaceholderVisible(el);
 
     // Fetch fresh data in background and update
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0) {
         el.innerHTML = renderCachePricingContent(freshModels);
+        ensurePlaceholderVisible(el);
       }
     }).catch(() => {});
   }
@@ -1943,20 +2007,40 @@
     el.style.overflow = 'visible';
   }
 
+  // /models drops a model on its removal date; this snapshot keeps it listed
+  // for the 30-day window after removal.
+  const REMOVED_DEPRECATIONS_URL = '/data/removed-deprecations.json';
+  let removedDeprecationsPromise = null;
+
+  function ensureRemovedDeprecations() {
+    if (removedDeprecationsPromise) return removedDeprecationsPromise;
+    removedDeprecationsPromise = fetch(REMOVED_DEPRECATIONS_URL)
+      .then(r => (r.ok ? r.json() : []))
+      .then(models => (Array.isArray(models) ? models : []))
+      .catch(() => []);
+    return removedDeprecationsPromise;
+  }
+
+  function withRemovedDeprecations(models, removed) {
+    const liveIds = new Set(models.map(m => m.id));
+    return [...models, ...removed.filter(m => !liveIds.has(m.id))];
+  }
+
   async function initDeprecations() {
     const el = document.getElementById('deprecation-tracker-placeholder');
     if (!el) return;
 
     const cachedModels = getCachedModels();
-    const initialModels = cachedModels && cachedModels.length > 0
-      ? cachedModels
-      : await ensureStaticModels();
-    el.innerHTML = renderDeprecationTable(initialModels);
+    const [initialModels, removed] = await Promise.all([
+      cachedModels && cachedModels.length > 0 ? cachedModels : ensureStaticModels(),
+      ensureRemovedDeprecations()
+    ]);
+    el.innerHTML = renderDeprecationTable(withRemovedDeprecations(initialModels, removed));
     ensurePlaceholderVisible(el);
 
     fetchModelsFromAPI().then(freshModels => {
       if (freshModels.length > 0 && document.body.contains(el)) {
-        el.innerHTML = renderDeprecationTable(freshModels);
+        el.innerHTML = renderDeprecationTable(withRemovedDeprecations(freshModels, removed));
         ensurePlaceholderVisible(el);
       }
     }).catch(() => {});
@@ -2422,11 +2506,13 @@
       const durationHtml = renderPricingMusicDurationTable(models);
       const generationHtml = renderPricingMusicGenerationTable(models);
       const perSecondHtml = renderPricingMusicPerSecondTable(models);
+      const perThousandCharsHtml = renderPricingMusicPerThousandCharsTable(models);
       const musicSections = [];
 
       if (durationHtml) musicSections.push(`<h4>Song Generation (Duration-Based)</h4>${durationHtml}`);
       if (generationHtml) musicSections.push(`<h4>Song Generation (Per-Generation)</h4>${generationHtml}`);
       if (perSecondHtml) musicSections.push(`<h4>Sound Effects (Per-Second)</h4>${perSecondHtml}`);
+      if (perThousandCharsHtml) musicSections.push(`<h4>Speech (Per 1,000 Characters)</h4>${perThousandCharsHtml}`);
 
       musicEl.innerHTML = musicSections.length > 0 ? musicSections.join('') : '<p>No music models available.</p>';
     }
@@ -2784,6 +2870,7 @@
     function matchesCategory(model) {
       if (activeFilter === 'all') return true;
       if (activeFilter === 'text') return model.type === 'text';
+      if (activeFilter === 'decision') return model.type === 'decision';
       if (activeFilter === 'image') return model.type === 'image' || model.type === 'upscale' || model.type === 'inpaint';
       if (activeFilter === 'video') return model.type === 'video';
       if (activeFilter === 'audio') return model.type === 'tts' || model.type === 'asr';
@@ -2811,17 +2898,15 @@
 
     function matchesVideoType(model) {
       if (!activeVideoType) return true;
-      const constraints = model.model_spec?.constraints || {};
-      return constraints.model_type === activeVideoType;
+      return getVideoKind(model) === activeVideoType;
     }
 
     function matchesImageType(model) {
       if (!activeImageType) return true;
-      const modelId = model.id.toLowerCase();
       
-      if (activeImageType === 'image-gen') return model.type === 'image' && !modelId.includes('qwen');
+      if (activeImageType === 'image-gen') return model.type === 'image';
       if (activeImageType === 'image-upscale') return model.type === 'upscale';
-      if (activeImageType === 'image-edit') return model.type === 'inpaint' || modelId.includes('qwen-image');
+      if (activeImageType === 'image-edit') return model.type === 'inpaint';
       if (activeImageType === 'image-uncensored') return isUncensoredModel(model);
       return true;
     }
@@ -2938,7 +3023,9 @@
         let contextStr = '';
         if (spec.availableContextTokens) {
           contextStr = `${formatContext(spec.availableContextTokens)} context`;
-      } else if (model.type === 'video') {
+        } else if (model.type === 'decision') {
+          contextStr = `${formatContext(spec.maxStateTokens)} state · ${formatContext(spec.maxTotalTokens)} total`;
+        } else if (model.type === 'video') {
           // Video models - store config for info row
           const config = getVideoModelConfig(model.id);
           const resolutions = constraints.resolutions || [];
@@ -2982,18 +3069,32 @@
             videoControlsHtml += `<span class="vmb-audio-toggle" data-model="${model.id}" data-audio="true">♪ Audio</span>`;
           }
           videoControlsHtml += `<span class="vmb-video-price" data-model="${model.id}">Variable</span>`;
-        } else if (model.type === 'image' && pricing.resolutions) {
-          // Image models with resolution-based pricing
-          const resolutions = constraints.resolutions || Object.keys(pricing.resolutions);
-          const defaultRes = constraints.defaultResolution || resolutions[0];
-          const defaultPrice = pricing.resolutions[defaultRes]?.usd;
+        } else if ((model.type === 'image' || model.type === 'inpaint') && pricing.resolutions) {
+          // Image and edit models with resolution (and optionally quality) pricing
+          const resolutions = sortResolutions(Object.keys(pricing.resolutions));
+          const defaultRes = resolutions.includes(constraints.defaultResolution) ? constraints.defaultResolution : resolutions[0];
+          const grid = getQualityGrid(pricing);
+          const defaultQuality = grid && (grid.qualities.includes(constraints.defaultQuality) ? constraints.defaultQuality : grid.qualities[grid.qualities.length - 1]);
+          const defaultPrice = getImageTierPrice(model, defaultRes, defaultQuality);
+          const selects = [];
           if (resolutions.length > 1) {
             const resOptions = resolutions.map(r => 
               `<option value="${r}"${r === defaultRes ? ' selected' : ''}>${r}</option>`
             ).join('');
-            contextStr = `<select class="vmb-res-select vmb-img-res" data-model="${model.id}">${resOptions}</select>`;
+            selects.push(`<select class="vmb-res-select vmb-img-res" data-model="${model.id}">${resOptions}</select>`);
           }
-          priceStr = `<span class="vmb-img-price-val" data-model="${model.id}">${formatPrice(defaultPrice)}</span>/image`;
+          if (grid && grid.qualities.length > 1) {
+            const qualityOptions = grid.qualities.map(q =>
+              `<option value="${escapeHtml(q)}"${q === defaultQuality ? ' selected' : ''}>${escapeHtml(q)}</option>`
+            ).join('');
+            selects.push(`<select class="vmb-res-select vmb-img-res vmb-img-quality" data-model="${model.id}" aria-label="Quality">${qualityOptions}</select>`);
+          }
+          if (selects.length > 0) contextStr = selects.join(' ');
+          const unit = model.type === 'inpaint' ? '/edit' : '/image';
+          priceStr = `<span class="vmb-img-price-val" data-model="${model.id}">${formatPrice(defaultPrice)}</span>${unit}`;
+          if (model.type === 'inpaint' && pricing.inputImages?.additional?.usd) {
+            priceStr += ` <span class="vmb-pipe">|</span> ${formatPrice(pricing.inputImages.additional.usd)}/extra image`;
+          }
         } else if (model.type === 'image' && pricing.generation) {
           priceStr = `${formatPrice(pricing.generation.usd)}/image`;
         } else if (model.type === 'inpaint' && pricing.inpaint) {
@@ -3001,6 +3102,8 @@
           if (pricing.inputImages?.additional?.usd) {
             priceStr += ` <span class="vmb-pipe">|</span> ${formatPrice(pricing.inputImages.additional.usd)}/extra image`;
           }
+        } else if (model.type === 'decision' && pricing.input) {
+          priceStr = `${formatDecisionTokenPrice(pricing.input.usd)}/M input <span class="vmb-pipe">|</span> ${formatDecisionTokenPrice(pricing.output?.usd)}/M output`;
         } else if (model.type === 'embedding' && pricing.input) {
           priceStr = `${formatPrice(pricing.input.usd)}/M tokens`;
         } else if (pricing.input && pricing.output) {
@@ -3038,6 +3141,8 @@
           }
         } else if (model.type === 'music' && pricing.per_second) {
           priceStr = `${formatPrice(pricing.per_second.usd)}/sec`;
+        } else if (model.type === 'music' && pricing.per_thousand_characters) {
+          priceStr = `${formatPrice(pricing.per_thousand_characters.usd)}/1K chars`;
         } else if (model.type === 'music' && pricing.generation) {
           priceStr = `${formatPrice(pricing.generation.usd)}/audio`;
         } else if (pricing.generation) {
@@ -3067,8 +3172,10 @@
         ? `<span class="vmb-type-badge">${escapeHtml(model.type)}</span>` 
         : '';
       
-      const videoTypeBadge = model.type === 'video' && constraints.model_type
-        ? `<span class="vmb-video-type-badge ${constraints.model_type === 'text-to-video' ? 'ttv' : 'itv'}">${constraints.model_type === 'text-to-video' ? 'TEXT TO VIDEO' : 'IMAGE TO VIDEO'}</span>`
+      const videoKind = model.type === 'video' ? getVideoKind(model) : null;
+      const videoKindClass = { 'text-to-video': 'ttv', 'image-to-video': 'itv', 'video-to-video': 'vtv' };
+      const videoTypeBadge = videoKind
+        ? `<span class="vmb-video-type-badge ${videoKindClass[videoKind]}">${VIDEO_KIND_LABELS[videoKind].toUpperCase()}</span>`
         : '';
       
       const privacyBadge = getPrivacyTag(model, 'vmb');
@@ -3096,13 +3203,6 @@
       const newBadge = dateInfo?.isNew
         ? '<span class="vmb-new-badge">NEW</span>'
         : '';
-      
-      // Rate limit tier badge (text/embedding only)
-      const rateTier = getModelRateLimitTier(model.id, model.type);
-      const rateLimitBadge = rateTier
-        ? `<span class="vmb-ratelimit-badge vmb-tooltip tier-${rateTier}" data-tooltip="${RATE_LIMIT_TIERS[rateTier].tooltip}">${RATE_LIMIT_TIERS[rateTier].label}</span>`
-        : '';
-
       // Copy button SVGs
         const copyIcon = `<svg class="copy-icon" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
         const checkIcon = `<svg class="check-icon" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>`;
@@ -3161,7 +3261,7 @@
               </div>
               <div class="vmb-model-right">
                 ${contextStr ? `<span class="vmb-context vmb-context-desktop">${contextStr}</span>` : ''}
-                ${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${moderationBadge}${rateLimitBadge}
+                ${typeBadge}${videoTypeBadge}${privacyBadge}${betaBadge}${deprecatedBadge}${upgradedBadge}${uncensoredBadge}${moderationBadge}
               </div>
             </div>
             <div class="vmb-model-info">
@@ -3230,11 +3330,15 @@
       const model = allModels.find(m => m.id === modelId);
       if (!model) return;
       
-      // Handle image resolution pricing
+      // Handle image resolution and quality pricing
       if (isImgRes) {
-        const resolution = target.value;
-        const price = model.model_spec?.pricing?.resolutions?.[resolution]?.usd;
-        const priceEl = target.closest('.vmb-model')?.querySelector('.vmb-img-price-val');
+        const card = target.closest('.vmb-model');
+        const resolution = card?.querySelector('.vmb-img-res:not(.vmb-img-quality)')?.value
+          || model.model_spec?.constraints?.defaultResolution
+          || sortResolutions(Object.keys(model.model_spec?.pricing?.resolutions || {}))[0];
+        const quality = card?.querySelector('.vmb-img-quality')?.value;
+        const price = getImageTierPrice(model, resolution, quality);
+        const priceEl = card?.querySelector('.vmb-img-price-val');
         if (priceEl && price !== undefined) {
           priceEl.textContent = formatPrice(price);
         }
@@ -3418,7 +3522,7 @@
     pathMatch: 'prompt-caching',
     elementId: 'cache-pricing-placeholder',
     initFn: initCachePricing,
-    resetCheck: el => el.textContent.includes('Loading')
+    resetCheck: el => !el.querySelector('.vpt-cache-pricing')
   });
 
   const tryInitReasoningModels = createPageInitializer({

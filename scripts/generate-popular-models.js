@@ -18,6 +18,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { isDeprecatedModel: isDeprecated } = require('./model-helpers');
 
 const SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-models.json');
 const PAGE_PATH = path.join(__dirname, '..', 'overview', 'about-venice.mdx');
@@ -84,10 +85,6 @@ function escapeJsxText(value) {
     .replace(/>/g, '&gt;')
     .replace(/\{/g, '&#123;')
     .replace(/\}/g, '&#125;');
-}
-
-function isDeprecated(model) {
-  return model.model_spec?.deprecation?.date != null;
 }
 
 // Privacy tier logic mirrors generate-pricing-static.js so the landing page and

@@ -17,7 +17,7 @@ parsing, and blockchain RPC. Zero data retention.
 ## TL;DR
 
 - **Base URL:** `https://api.venice.ai/api/v1`
-- **Auth:** `Authorization: Bearer <VENICE_API_KEY>`, or an x402 wallet (USDC on
+- **Auth:** `Authorization: Bearer $VENICE_API_KEY` (the key's value, not the variable name), or an x402 wallet (USDC on
   Base or Solana) with no key and no account
 - **OpenAI-compatible:** use any OpenAI SDK and change only `base_url` and the model ID
 - **Never hardcode model IDs.** Resolve them at runtime from `GET /models` and
@@ -38,7 +38,7 @@ curl https://api.venice.ai/api/v1/chat/completions \
   }'
 ```
 
-Python: `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=VENICE_API_KEY)`
+Python: `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=os.environ["VENICE_API_KEY"])`
 
 ## Picking a model
 
@@ -53,7 +53,7 @@ The response maps trait names to whichever model currently fills that role. Text
 traits are `default`, `most_intelligent`, `most_uncensored`, `default_reasoning`,
 `default_vision`, `default_code`, and `function_calling_default`; image traits
 include `default`, `fastest`, `highest_quality`, and `most_uncensored`.
-Filter the full catalog with `GET /models?type=image|video|audio|tts|embedding`.
+Filter the full catalog with `GET /models?type=image|video|tts|asr|music|embedding`, or `?type=all`.
 Before relying on a feature, check that model's `model_spec.capabilities` flags
 (`supportsWebSearch`, `supportsReasoning`, `supportsE2EE`, `supportsFunctionCalling`,
 `supportsVision`, and similar). Per-model pricing is on `model_spec.pricing`.
@@ -77,18 +77,29 @@ catalog moves; the capability flags on each model are the authoritative answer.
 
 | Surface | Endpoints |
 | --- | --- |
-| Chat / text | `POST /chat/completions`; `POST /responses` (alpha) |
+| Chat / text | `POST /chat/completions`; `POST /responses` (beta, see https://docs.venice.ai/guides/features/responses-api) |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`; OpenAI-style `POST /images/generations` |
-| Video (async) | `POST /video/quote`, `/video/queue`, `GET /video/retrieve?id=`, `POST /video/complete` |
+| Video (async) | `POST /video/quote`, `/video/queue`, `/video/retrieve` (JSON body `{model, queue_id}`), `/video/complete` |
 | Audio | `POST /audio/speech` (TTS), `POST /audio/voices` (voice cloning), `POST /audio/transcriptions` (STT) |
 | Music (async) | `POST /audio/quote`, `/audio/queue`, `/audio/retrieve`, `/audio/complete` |
+| Voice Changer (async) | `POST /audio/voice-changer/quote`, `/audio/voice-changer/queue`, `/audio/voice-changer/retrieve`, `/audio/voice-changer/complete` |
 | Embeddings | `POST /embeddings` |
+| Decisions (beta) | `POST /decisions` (alias `POST /systemone`) |
 | Tools | `POST /augment/search`, `/augment/scrape`, `/augment/text-parser` |
 | Blockchain RPC | `GET /crypto/rpc/networks`, `POST /crypto/rpc/{network}` |
 | Models | `GET /models`, `/models/traits`, `/models/compatibility_mapping` |
-| Characters | `GET /characters`, `/characters/{slug}` |
-| Account | `GET /billing/balance`, `/billing/usage-history`, `/api_keys/*`, `/api_keys/rate_limits` |
+| Characters | `GET /characters`, `/characters/{slug}`, `/characters/{slug}/reviews` |
+| Account | `GET /billing/balance`, `/billing/usage-history`, `/billing/usage-analytics` (Admin key), `/api_keys/*`, `/api_keys/rate_limits` |
 | x402 wallet | `GET /x402/balance/{wallet}`, `POST /x402/top-up`, `GET /x402/transactions/{wallet}` |
+
+For bounded judgments your code acts on directly (yes/no, pick one label,
+score on a rubric), use `POST /decisions` with `jev-latest` or `clef-api` instead of asking a
+chat model for JSON. Send a `state` and a `questions` map with at least one
+entry, plus an optional `images` array (up to 4 PNG/JPEG `data:` URIs or
+`{content_type, base64}` objects; remote URLs are not fetched); each question has a `type` of `noul`, `choice`, or `score`, and each
+answer comes back typed with probabilities. Use `/chat/completions` when you
+need prose, multi-turn conversation, or tool calling. The Decisions API is in
+beta. See https://docs.venice.ai/guides/features/decisions.
 
 ## venice_parameters
 
@@ -103,8 +114,8 @@ Venice-only features ride in a `venice_parameters` object on `/chat/completions`
 - `strip_thinking_response` / `disable_thinking`: control `<think>` blocks
 - `enable_e2ee`: end-to-end encryption on E2EE-capable models
 
-Feature suffixes on the model ID do the same thing, for example
-`kimi-k3:web` or `kimi-k3:enable_web_search=on`.
+Feature suffixes on the model ID do the same thing as `key=value` pairs, for
+example `kimi-k3:enable_web_search=on`. A suffix without `=` is ignored.
 
 `POST /responses` accepts a narrower set: `character_slug`, `enable_e2ee`,
 `enable_web_search`, `enable_web_scraping`, `enable_web_citations`,
@@ -112,11 +123,16 @@ Feature suffixes on the model ID do the same thing, for example
 Anything else is dropped without an error, so use `/chat/completions` when you
 need `enable_x_search` or the thinking controls.
 
+OpenAI models run natively on `/responses` (instructions, structured outputs,
+custom and Codex tools, encrypted reasoning replay). Other models are
+translated through Chat Completions, which ignores `text.format` and hosted
+tools. Guide: https://docs.venice.ai/guides/features/responses-api
+
 ## Authentication
 
 | Mode | Header | Use for |
 | --- | --- | --- |
-| API key | `Authorization: Bearer <VENICE_API_KEY>` | server apps, usage analytics, bundled credits |
+| API key | `Authorization: Bearer $VENICE_API_KEY` | server apps, usage analytics, bundled credits |
 | x402 wallet | `SIGN-IN-WITH-X: <base64 SIWX JSON>` | agents and serverless, no account, pay per request |
 
 x402 settles in USDC on Base or Solana. A `402` response carries a
@@ -153,7 +169,7 @@ VVV on Base, with no human in the loop.
 - `POST /responses` silently drops `n`, `stop`, `seed`, and `prompt_cache_key`.
   They are accepted and ignored rather than rejected. E2EE models are not
   supported there either.
-- `GET /billing/usage` is deprecated. Use `GET /billing/usage-history`, which is
+- `GET /billing/usage` is removed and returns `410`. Use `GET /billing/usage-history`, which is
   keyset-paginated and takes `startTimestamp` / `endTimestamp` rather than the
   old parameter names.
 - Crypto RPC is per-network: `POST /crypto/rpc/{network}`, with the live slug
@@ -182,7 +198,7 @@ ln -s ~/src/venice-skills/skills ~/.claude/skills/venice
 | `venice-image-generate`, `venice-image-edit` | generation, edit, upscale |
 | `venice-video` | video generation, editing, upscaling, and async job lifecycle |
 | `venice-audio-speech`, `venice-audio-music`, `venice-audio-transcription` | TTS, voice cloning, music, STT |
-| `venice-embeddings`, `venice-characters`, `venice-responses` | embeddings, personas, the alpha Responses API |
+| `venice-embeddings`, `venice-characters`, `venice-responses` | embeddings, personas, the beta Responses API |
 | `venice-augment` | document parsing and web search |
 | `venice-x402`, `venice-crypto-rpc` | wallet credits, JSON-RPC proxy |
 | `venice-billing`, `venice-api-keys` | balance, usage history, key management |

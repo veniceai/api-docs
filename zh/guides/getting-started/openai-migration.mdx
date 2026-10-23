@@ -1,6 +1,6 @@
 ---
 title: "从 OpenAI 迁移"
-description: "将 base URL 换成 api.venice.ai 并更换 API 密钥，即可用同一套 SDK 把 OpenAI 兼容应用迁移到 Venice，获得私有、无审查推理。"
+description: "将 base URL 换成 api.venice.ai 并更换 API 密钥，即可用同一套 SDK 把 OpenAI 应用迁移到 Venice。"
 "og:title": "Migrate from OpenAI | Venice API Docs"
 "og:description": "Drop-in replacement for OpenAI with privacy, no censorship, and competitive pricing"
 ---
@@ -65,7 +65,7 @@ OPENAI_BASE_URL=https://api.venice.ai/api/v1
 
 ## 模型
 
-你可以传入 Venice 的模型 ID、诸如 `default` 或 `most_uncensored` 等 trait，或熟悉的 OpenAI 风格模型名称。Venice 会通过 [兼容性映射](/api-reference/endpoint/models/compatibility_mapping) 转换 OpenAI 名称。Trait 始终会解析为该角色当前对应的模型 —— 详见 [模型 traits](/api-reference/endpoint/models/traits)。
+你可以传入 Venice 的模型 ID、诸如 `default` 或 `most_uncensored` 等 trait；对于聊天和嵌入模型，也可以使用熟悉的 OpenAI 风格模型名称。Venice 会通过 [兼容性映射](/api-reference/endpoint/models/compatibility_mapping) 转换 OpenAI 的聊天和嵌入模型名称；其他端点（包括音频）需要使用 Venice 模型 ID。Trait 始终会解析为该角色当前对应的模型，详见 [模型 traits](/api-reference/endpoint/models/traits)。
 
 在 [文本模型](/models/text) 和 [定价](/overview/pricing) 页面查看实时目录。若需完整的首次请求演示，请参阅 [快速开始](/getting-started/quick-start)。
 
@@ -73,21 +73,35 @@ OPENAI_BASE_URL=https://api.venice.ai/api/v1
 
 | 特性 | OpenAI | Venice | 说明 |
 |---------|--------|--------|-------|
-| Chat Completions | ✅ | ✅ | 完全兼容 |
-| Streaming | ✅ | ✅ | SSE 格式相同 |
+| Chat Completions | ✅ | ✅ | 兼容。未知的顶层字段（包括 `logit_bias` 和 `service_tier` 等 OpenAI 专有字段）会返回 HTTP 400 |
+| Streaming | ✅ | ✅ | SSE 格式相同，另外会附加一个最终的用量数据块，参见[流式格式](#流式格式) |
 | Function Calling | ✅ | ✅ | 相同的 `tools` 参数 |
 | Structured Output | ✅ | ✅ | 相同的 `response_format` |
 | Vision | ✅ | ✅ | 相同的 content 数组格式 |
 | Embeddings | ✅ | ✅ | 仅支持文本；token 数组会返回 HTTP 400 |
 | Image Generation | ✅ | ✅ | 通过 `/images/generations` 兼容 OpenAI |
-| TTS | ✅ | ✅ | 兼容 |
-| STT | ✅ | ✅ | 兼容 |
-| Responses API | ✅ | ✅ | Alpha |
+| Image Edits | ✅ | ❌ | 没有 `/images/edits` 端点。请使用原生 [`/image/edit`](/zh/guides/media/image-editing) 端点 |
+| TTS | ✅ | ✅ | 请求结构兼容；请使用 Venice 模型 ID（使用 OpenAI 音频模型名称会返回 HTTP 400） |
+| STT | ✅ | ✅ | 请求结构兼容；请使用 Venice 模型 ID。`response_format` 仅支持 `json` 或 `text`。不支持 `/audio/translations` |
+| Responses API | ✅ | ✅ | Beta。OpenAI 模型原生支持，其他模型经过转换，参见[限制](/zh/guides/features/responses-api#限制) |
 | Assistants API | ✅ | ❌ | 改用 [Characters](/guides/features/characters) 或 [function calling](/guides/features/function-calling) |
 | Batch API | ✅ | ❌ | 暂不可用 |
 | Fine-tuning | ✅ | ❌ | 不可用 |
 
 如需使用兼容 OpenAI 端点之外的原生图像选项，请参阅 [图像生成](/guides/media/image-generation)。
+
+### 流式格式
+
+Chat Completions 流使用 OpenAI 的数据块格式，并以 `data: [DONE]` 结束。有两处细节不同：
+
+- **用量数据块。** 每个流都会在 `[DONE]` 之前以一个用量数据块结束，即使 `stream_options.include_usage` 为 false 也是如此。该数据块的 `choices` 数组为空，并携带 `usage` 和一个 `cost` 对象。在每个数据块上读取 `choices[0]` 的客户端应跳过没有 choices 的数据块。
+- **流开始后的错误。** 此时 HTTP 状态已经是 200，因此错误会以带有 `error` 对象（`message`、`type`、`code`）的 `data:` 事件返回，随后是 `data: [DONE]`。当模型过载时，该对象还会包含以秒为单位的 `retry_after`。
+
+```
+data: {"error":{"message":"...","type":"server_error","code":"...","param":null}}
+
+data: [DONE]
+```
 
 ## Venice 独有功能
 
@@ -104,6 +118,8 @@ response = client.chat.completions.create(
     },
 )
 ```
+
+`venice_parameters` 中的未知键会被忽略而不是被拒绝，因此请对照 [API 参考](/zh/api-reference/endpoint/chat/completions) 检查每个键的拼写。
 
 同样的模式也适用于网页抓取、引用与 [Characters](/guides/features/characters)。如果客户端无法修改请求体，可以附加一个 [模型特性后缀](/api-reference/endpoint/chat/model_feature_suffix)，例如 `default:enable_web_search=auto`。
 

@@ -1,16 +1,16 @@
 ---
 title: "Rate limit"
-description: "Rate limit dell'API Venice: quote per tier, limiti per modello, header sulla capacità residua e gestione corretta delle risposte 429."
+description: "Rate limit dell'API Venice per tier, gli header che espongono la capacità e la gestione delle risposte 429."
 "og:title": "Rate Limits | Venice API Docs"
 ---
 
 I rate limit variano in base al modello e al tier. I limiti predefiniti qui sotto sono un riferimento utile, ma l'endpoint API `/api_keys/rate_limits` è il modo canonico per ottenere i tuoi limiti correnti. Puoi controllare i tuoi limiti esatti in qualsiasi momento:
 
 <CardGroup cols={2}>
-  <Card title="Visualizza i tuoi limiti" icon="gauge-high" href="/api-reference/endpoint/api_keys/rate_limits?playground=open">
+  <Card title="Visualizza i tuoi limiti" icon="gauge" href="/it/api-reference/endpoint/api_keys/rate_limits?playground=open">
     Playground interattivo
   </Card>
-  <Card title="Log dei rate limit" icon="clock-rotate-left" href="/api-reference/endpoint/api_keys/rate_limit_logs?playground=open">
+  <Card title="Log dei rate limit" icon="history" href="/it/api-reference/endpoint/api_keys/rate_limit_logs?playground=open">
     Scopri quali richieste hanno raggiunto i limiti
   </Card>
 </CardGroup>
@@ -22,84 +22,87 @@ curl https://api.venice.ai/api/v1/api_keys/rate_limits \
 
 ## Limiti predefiniti
 
-### Modelli di testo
+### Modelli di testo ed embedding
 
-I modelli di testo sono raggruppati in tier in base alle dimensioni. Ogni card di modello sulla [pagina Modelli](/models/text) mostra il badge del proprio tier.
+I modelli di testo ed embedding sono raggruppati in quattro dimensioni. Tutti i modelli di embedding sono XS.
 
-| Tier | Richieste/min | Token/min |
-|:-----|-------------:|-----------:|
-| XS | 500 | 1.000.000 |
-| S | 75 | 750.000 |
-| M | 50 | 750.000 |
-| L | 20 | 500.000 |
+| Dimensione | Richieste/min | Token/min | Richieste/min partner | Token/min partner |
+|:-----|-------------:|-----------:|---------------------:|-------------------:|
+| XS | 500 | 5.000.000 | 500 | 10.000.000 |
+| S | 150 | 3.000.000 | 300 | 6.000.000 |
+| M | 100 | 2.000.000 | 200 | 4.000.000 |
+| L | 100 | 2.000.000 | 150 | 3.000.000 |
 
-<Accordion title="Quali modelli sono in ciascun tier?">
+<Note>
+  Alcuni modelli funzionano su infrastruttura dedicata o di terze parti e hanno limiti che non corrispondono a queste quattro dimensioni. Chiama [`GET /api_keys/rate_limits`](/it/api-reference/endpoint/api_keys/rate_limits) per i limiti autorevoli per modello sulla tua chiave.
+</Note>
 
-**XS** `qwen3-4b` `llama-3.2-3b`
+### Modelli di immagini e audio
 
-**S** `mistral-31-24b` `venice-uncensored`
+| Tipo | Richieste/min | Richieste/min partner |
+|:-----|-------------:|---------------------:|
+| Immagini, upscale, inpaint | 20 | 60 |
+| Voce e trascrizione | 60 | 120 |
 
-**M** `zai-org-glm-5` `qwen3-next-80b` `google-gemma-3-27b-it`
+### Modelli video e musicali
 
-**L** `qwen3-235b-a22b-instruct-2507` `qwen3-235b-a22b-thinking-2507` `deepseek-ai-DeepSeek-R1` `grok-41-fast` `kimi-k2-thinking` `gemini-3-pro-preview` `hermes-3-llama-3.1-405b` `qwen3-coder-480b-a35b-instruct` `zai-org-glm-4.7` `openai-gpt-oss-120b`
-
-</Accordion>
-
-### Altri modelli
-
-| Tipo | Richieste/min |
-|:-----|-------------:|
-| Image | 20 |
-| Audio | 60 |
-| Embedding | 500 |
-| Video (queue) | 40 |
-| Video (retrieve) | 120 |
+Le richieste di accodamento e recupero per video, musica e voice-changer sono soggette a limiti di richieste per account. Gestisci le risposte `429` con backoff e interroga gli endpoint di recupero a intervalli moderati invece che in un ciclo serrato. I job vengono fatturati per generazione sul tuo saldo di crediti, quindi stima prima il prezzo di un job con [`POST /video/quote`](/it/api-reference/endpoint/video/quote), [`POST /audio/quote`](/it/api-reference/endpoint/audio/quote) o [`POST /audio/voice-changer/quote`](/it/api-reference/endpoint/audio/voice-changer/quote).
 
 ## Gestione degli errori
 
 Le richieste fallite (500, 503, 429) dovrebbero essere ritentate con backoff esponenziale.
 
-Per gli errori 429 specificamente, controlla l'header `x-ratelimit-reset-requests` per il timestamp Unix esatto in cui puoi riprovare. La maggior parte delle librerie HTTP dispone di meccanismi di retry integrati che gestiscono questo automaticamente.
+Per gli errori 429 sugli endpoint di inferenza, l'header `x-ratelimit-reset-requests` indica il momento più tardivo, come timestamp Unix in millisecondi, entro cui la finestra delle richieste si è completamente liberata. Attendere fino a quel momento è sempre sicuro; anche riprovare prima può avere successo.
 
-### Protezione anti-abuso
+```javascript
+const reset = Number(response.headers.get('x-ratelimit-reset-requests'));
+const waitMs = Math.max(0, reset - Date.now());
+await new Promise((resolve) => setTimeout(resolve, waitMs));
+```
 
-Se generi più di 20 richieste fallite in 30 secondi, l'API bloccherà ulteriori richieste per 30 secondi:
+### Budget di errore
+
+Due ulteriori limiti proteggono l'API dai client che continuano a ritentare contro un muro. Entrambi vengono conteggiati per modello e per chiave API, ed entrambi restituiscono `429`. Le richieste fallite vengono conteggiate in finestre fisse di 30 secondi:
+
+| Budget | Soglia | Si applica a |
+|:-------|----------:|:-----------|
+| Richieste fallite | 50 ogni 30 s | Tutti gli endpoint |
+| Richieste di funzionalità non supportate | 200 ogni 30 s | `/chat/completions`, `/responses` |
+
+Il secondo budget conteggia le richieste che chiedono a un modello una funzionalità che non supporta, ad esempio richiedere visione o tool calling a un modello privo di tale capacità. Il superamento di uno dei due budget appare nei [log dei rate limit](/it/api-reference/endpoint/api_keys/rate_limit_logs) come `FAILED_REQUESTS` o `UNSUPPORTED_FEATURE_REQUESTS`.
+
+Il campo `error` del corpo della risposta indica la soglia superata. Per il budget delle richieste fallite riporta:
 
 ```
-Too many failed attempts (> 20) resulting in a non-success status code. Please wait 30s and try again.
+Too many failed attempts (> 50) resulting in a non-success status code. Please wait 30 seconds and try again. See https://docs.venice.ai/api-reference/rate-limiting for more information.
 ```
 
 ## Response headers
 
-Ogni risposta include questi header:
+Le risposte di inferenza (chat completions, responses, immagini, audio ed embeddings) includono questi header. Non vengono inviati sulle route dei modelli, delle chiavi API, della fatturazione o x402, e lo stesso vale per gli header `x-venice-balance-*`.
 
 | Header | Descrizione |
 |:-------|:------------|
 | `x-ratelimit-limit-requests` | Numero massimo di richieste consentite nella finestra corrente |
 | `x-ratelimit-remaining-requests` | Richieste rimanenti nella finestra corrente |
-| `x-ratelimit-reset-requests` | Timestamp Unix quando la finestra si resetta |
+| `x-ratelimit-reset-requests` | Timestamp Unix in millisecondi entro cui la finestra corrente si è completamente liberata (orario della richiesta più l'intera durata della finestra, indipendentemente dall'utilizzo) |
 | `x-ratelimit-limit-tokens` | Numero massimo di token consentiti al minuto |
 | `x-ratelimit-remaining-tokens` | Token rimanenti nel minuto corrente |
-| `x-ratelimit-reset-tokens` | Secondi al reset del limite di token |
+| `x-ratelimit-reset-tokens` | Timestamp Unix in millisecondi in cui il limite di token si resetta |
+
+Il budget delle richieste fallite ha i propri header, inviati su ogni risposta a una richiesta effettuata con una chiave API, incluse le risposte `401`:
+
+| Header | Descrizione |
+|:-------|:------------|
+| `x-ratelimit-remaining` | Richieste fallite rimanenti nella finestra corrente di 30 secondi |
+| `x-ratelimit-resets` | Timestamp Unix in millisecondi in cui la finestra corrente di 30 secondi si resetta |
+
+L'endpoint `/crypto/rpc/{network}` usa limiti propri e i propri header `X-RateLimit-Limit`, `X-RateLimit-Remaining` e `X-RateLimit-Reset`, che vengono impostati solo sulle risposte 429. A differenza degli header in millisecondi descritti sopra, `X-RateLimit-Reset` è un timestamp Unix in secondi. Vedi [Crypto RPC](/it/api-reference/endpoint/crypto/rpc) per i dettagli.
 
 ## Tier Partner
 
-I partner ottengono rate limit significativamente più alti:
+I limiti partner sono elencati accanto ai limiti predefiniti nelle tabelle qui sopra.
 
-| Tier | Richieste/min | Token/min |
-|:-----|-------------:|-----------:|
-| XS | 500 | 2.000.000 |
-| S | 150 | 1.500.000 |
-| M | 100 | 1.500.000 |
-| L | 60 | 1.000.000 |
-
-| Tipo | Richieste/min |
-|:-----|-------------:|
-| Image | 60 |
-| Audio | 120 |
-| Embedding | 500 |
-
-Se raggiungi costantemente i tuoi rate limit e i tuoi pattern di utilizzo mostrano una **domanda sostenuta nel tempo**, contattaci per discutere l'accesso partner: [api@venice.ai](mailto:api@venice.ai).
+Se raggiungi costantemente i tuoi rate limit e i tuoi pattern di utilizzo mostrano una **domanda sostenuta nel tempo**, contattaci per discutere l'accesso partner: [support@venice.ai](mailto:support@venice.ai).
 
 I limiti del tier partner possono essere regolati in base alle tue esigenze specifiche.
-
