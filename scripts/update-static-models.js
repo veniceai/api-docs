@@ -8,11 +8,14 @@
 
 const fs = require('fs');
 const path = require('path');
+const { getRemovalDate } = require('./model-helpers');
 
 const API_BASE = 'https://api.venice.ai/api/v1/models';
-const MODEL_TYPES = ['text', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video', 'music'];
+const MODEL_TYPES = ['text', 'decision', 'image', 'tts', 'embedding', 'upscale', 'inpaint', 'asr', 'video', 'music'];
 const SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-models.json');
 const TRAITS_SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-traits.json');
+const REMOVED_DEPRECATIONS_PATH = path.join(__dirname, '..', 'data', 'removed-deprecations.json');
+const REMOVED_RETENTION_DAYS = 30;
 
 async function fetchAllModels() {
   const results = await Promise.all(MODEL_TYPES.map(async type => {
@@ -74,17 +77,24 @@ function cleanModel(m) {
   if (spec.uncensored) clean.model_spec.uncensored = true;
   if (spec.privacy) clean.model_spec.privacy = spec.privacy;
   if (spec.availableContextTokens) clean.model_spec.availableContextTokens = spec.availableContextTokens;
+  if (spec.maxStateTokens) clean.model_spec.maxStateTokens = spec.maxStateTokens;
+  if (spec.maxTotalTokens) clean.model_spec.maxTotalTokens = spec.maxTotalTokens;
+  if (spec.maxCompletionTokens) clean.model_spec.maxCompletionTokens = spec.maxCompletionTokens;
   if (spec.pricing) clean.model_spec.pricing = spec.pricing;
   clean.model_spec.traits = spec.traits || [];
   if (spec.name) clean.model_spec.name = spec.name;
   if (spec.capabilities) clean.model_spec.capabilities = spec.capabilities;
+  if (spec.constraints) clean.model_spec.constraints = spec.constraints;
+  if (spec.model_sets) clean.model_spec.model_sets = spec.model_sets;
+  if (typeof spec.offline === 'boolean') clean.model_spec.offline = spec.offline;
   if (spec.deprecation) clean.model_spec.deprecation = spec.deprecation;
   if (spec.voices) clean.model_spec.voices = spec.voices;
+  if (spec.voice_changer) clean.model_spec.voice_changer = true;
   return clean;
 }
 
 function sortModels(models) {
-  const typeOrder = ['inpaint', 'tts', 'embedding', 'music', 'video', 'text', 'asr', 'upscale', 'image'];
+  const typeOrder = ['decision', 'inpaint', 'tts', 'embedding', 'music', 'video', 'text', 'asr', 'upscale', 'image'];
   return models.sort((a, b) => {
     const ta = typeOrder.indexOf(a.type);
     const tb = typeOrder.indexOf(b.type);
@@ -93,6 +103,39 @@ function sortModels(models) {
     const nameB = b.model_spec?.name || b.id;
     return nameA.localeCompare(nameB);
   });
+}
+
+function readJsonArray(filePath) {
+  if (!fs.existsSync(filePath)) return [];
+  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+// /models drops a model on its removal date, so the deprecations page would
+// lose it immediately. Keep removed models here until the retention window ends.
+function updateRemovedDeprecations(previousModels, liveModels, now = new Date()) {
+  const liveIds = new Set(liveModels.map(m => m.id));
+  const byId = new Map(readJsonArray(REMOVED_DEPRECATIONS_PATH).map(m => [m.id, m]));
+
+  for (const model of previousModels) {
+    if (liveIds.has(model.id) || !getRemovalDate(model)) continue;
+    byId.set(model.id, {
+      id: model.id,
+      type: model.type,
+      model_spec: {
+        name: model.model_spec?.name,
+        deprecation: model.model_spec.deprecation
+      }
+    });
+  }
+
+  const cutoff = new Date(now);
+  cutoff.setUTCDate(cutoff.getUTCDate() - REMOVED_RETENTION_DAYS);
+
+  return [...byId.values()]
+    .filter(m => !liveIds.has(m.id))
+    .filter(m => new Date(getRemovalDate(m)) >= cutoff)
+    .sort((a, b) => new Date(getRemovalDate(a)) - new Date(getRemovalDate(b)) || a.id.localeCompare(b.id));
 }
 
 async function main() {
@@ -107,17 +150,22 @@ async function main() {
   const cleaned = sortModels(models.map(cleanModel));
   const modelsJson = JSON.stringify(cleaned);
   const traitsJson = JSON.stringify(traits);
+  const removed = updateRemovedDeprecations(readJsonArray(SNAPSHOT_PATH), cleaned);
+  const removedJson = JSON.stringify(removed, null, 2) + '\n';
 
   fs.mkdirSync(path.dirname(SNAPSHOT_PATH), { recursive: true });
   writeIfChanged(SNAPSHOT_PATH, modelsJson, 'data/static-models.json');
   writeIfChanged(TRAITS_SNAPSHOT_PATH, traitsJson, 'data/static-traits.json');
+  writeIfChanged(REMOVED_DEPRECATIONS_PATH, removedJson, 'data/removed-deprecations.json');
 
-  // Pricing is last because its generator exits the process when unchanged.
   console.log('Regenerating Popular models cards...');
   require('./generate-popular-models.js');
 
   console.log('Regenerating traits and deprecations...');
   require('./generate-deprecations-static.js');
+
+  console.log('Regenerating static model catalogs...');
+  require('./generate-models-static.js');
 
   console.log('Regenerating pricing.mdx...');
   require('./generate-pricing-static.js');

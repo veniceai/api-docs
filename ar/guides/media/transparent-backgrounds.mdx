@@ -1,0 +1,197 @@
+---
+title: "صور بخلفية شفافة"
+description: "ولّد صور PNG أو WebP بقناة شفافية (alpha) حقيقية وحرّرها باستخدام transparent_background على /image/generate و/image/edit و/image/multi-edit، أو background: transparent على نقطة النهاية المتوافقة مع OpenAI."
+'og:title': "صور بخلفية شفافة | Venice API Docs"
+'og:description': "أنشئ الملصقات والشعارات وقصاصات المنتجات وأصول واجهات المستخدم بشفافية alpha أصلية من واجهة برمجة الصور في Venice. تعرّف على النماذج التي تدعمها، والصيغ التي تعمل معها، ومعنى أخطاء 400."
+---
+
+يمكن لواجهة برمجة الصور في Venice أن تُعيد صورًا بقناة شفافية (alpha) حقيقية بدلًا من خلفية بيضاء أو نقش شطرنجي مرسوم. يركّب النموذج الموضوع مع الشفافية منذ البداية، لذا تحمل الحواف والظلال والمناطق شبه الشفافة (الزجاج والشعر والدخان) قيمة alpha لكل بكسل بدلًا من قناع حاد.
+
+يختلف هذا عن `/image/background-remove`، الذي يأخذ صورة معتمة مكتملة ويفصل المقدمة بعد ذلك. استخدم الشفافية الأصلية عندما تكون ستولّد الأصل أو تحرّره على أي حال؛ واستخدم إزالة الخلفية عندما لا تملك إلا الصورة المعتمة.
+
+<Frame as="div" caption="الموجّه والبذرة نفسهما على gpt-image-2-5-flare. يسارًا: المخرجات الافتراضية. يمينًا: transparent_background: true معروضة فوق نقش شطرنجي. يبقى الظل الساقط على هيئة شفافية جزئية.">
+  <img src="/images/guides/transparent-backgrounds/before-after.webp" alt="جنبًا إلى جنب: كأس من الشاي المثلّج على خلفية استوديو معتمة مقابل الكأس نفسها على خلفية شفافة معروضة فوق نقش شطرنجي" />
+</Frame>
+
+## ما تحتاج إليه
+
+| المتطلب | التفاصيل |
+|---|---|
+| النموذج | نموذج يحمل `supportsTransparentBackground: true` ضمن قيود `GET /models`. حاليًا `gpt-image-1-5` و`gpt-image-2-5-flare` و`gpt-image-2-5-sunburst` (إضافة إلى متغيراتها `-edit` لنقاط نهاية التحرير) |
+| صيغة الإخراج | `png` أو `webp`. لا تحتوي JPEG على قناة alpha، لذا تُرفض `jpeg` |
+| المعامل | `transparent_background: true` على `/image/generate` و`/image/edit` و`/image/multi-edit`. و`background: "transparent"` على `/images/generations` |
+
+أي شيء آخر يُعيد `400` قبل تشغيل الاستدلال، لذا لا تُحاسَب على الطلب المرفوض.
+
+## الخطوة 1: توليد صورة شفافة
+
+`/image/generate` هي نقطة النهاية الأصلية. اضبط `format` على `png` أو `webp` و`transparent_background` على `true`.
+
+```bash
+curl https://api.venice.ai/api/v1/image/generate \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -o sticker.png \
+  -d '{
+    "model": "gpt-image-2-5-flare",
+    "prompt": "A die-cut sticker of a cartoon rocket ship, bold outlines, flat colors, no background",
+    "format": "png",
+    "transparent_background": true,
+    "quality": "low",
+    "return_binary": true
+  }'
+```
+
+تكون الاستجابة `content-type: image/png` بتخطيط بكسلات RGBA. ومن دون `return_binary` تحصل على غلاف JSON المعتاد مع سلسلة base64 في `images[0]`.
+
+القيمة الافتراضية لـ `format` هي `webp`، وهي تدعم alpha أيضًا، لذا يعمل الطلب عند حذف `format`. فقط القيمة الصريحة `"format": "jpeg"` هي التي تفشل.
+
+<Tip>
+اكتب "no background" أو "isolated on transparent background" في الموجّه إلى جانب ضبط العلامة. تضمن العلامة وجود قناة alpha؛ أما الموجّه فيُبعد النموذج عن رسم أرضية أو طاولة أو خلفية قد ينتهي بها الأمر معتمة داخل المربع المحيط بالموضوع.
+</Tip>
+
+## الخطوة 2: التحقق من قناة alpha
+
+لا تثق بامتداد الملف. افحص وضع البكسلات وانظر إلى توزيع قيم alpha للتأكد من أن الخلفية شفافة فعلًا وليست تعبئة بيضاء مسطّحة.
+
+```python
+from PIL import Image
+
+im = Image.open("sticker.png")
+print(im.format, im.mode, im.size)  # PNG RGBA (1024, 1024)
+
+alpha = im.getchannel("A")
+hist = alpha.histogram()
+total = sum(hist)
+print(f"fully transparent: {100 * hist[0] / total:.1f}%")
+print(f"partially transparent: {100 * sum(hist[1:255]) / total:.1f}%")
+print("subject bbox:", alpha.getbbox())
+```
+
+تحتوي النتيجة الصحيحة على نسبة كبيرة من البكسلات عند alpha `0` (الخلفية)، وشريط من القيم الجزئية على طول الحواف (تنعيم الحواف والظلال الناعمة)، ومربع محيط بالموضوع أصغر من اللوحة. إذا كان `im.mode` هو `RGB` أو كانت نسبة الشفافية `0%`، فقد فُقدت قناة alpha في مكان ما من مسار المعالجة لديك، وعادةً ما يكون ذلك بسبب خطوة تغيير حجم أو إعادة ترميز أسقطتها.
+
+<Frame as="div" caption="قناة alpha للصورة أعلاه معزولة. يتلاشى الظل أسفل الكأس عبر عشرات من درجات الرمادي بدلًا من القفز من الأبيض إلى الأسود، وهذا ما تريده للتركيب فوق خلفيات عشوائية.">
+  <img src="/images/guides/transparent-backgrounds/alpha-channel.webp" alt="ثلاث لوحات: الصورة الشفافة فوق نقش شطرنجي، وقناة alpha الخاصة بها كقناع بتدرج الرمادي، وقصاصة مكبّرة لحافة الظل تُظهر تدرجًا ناعمًا" />
+</Frame>
+
+<Note>
+تُعيد نماذج GPT Image حاليًا المنطقة المعتمة بقيمة alpha بين `252` و`254` بدلًا من `255`. لا يمكن تمييز ذلك بصريًا، لكن إذا استخدمت العتبة `== 255` لإيجاد الموضوع، فستحصل على قناع فارغ. استخدم العتبة `> 0` أو `>= 250` بدلًا من ذلك.
+</Note>
+
+## الخطوة 3: استخدام نقطة النهاية المتوافقة مع OpenAI
+
+إذا كنت تستخدم OpenAI SDK بالفعل، فإن `/images/generations` تقبل المعامل `background` نفسه الذي تستخدمه OpenAI. اضبطه على `"transparent"` واختر `png` أو `webp` كقيمة لـ `output_format`.
+
+```python
+import base64
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+)
+
+result = client.images.generate(
+    model="gpt-image-2-5-flare",
+    prompt="A flat vector icon of a paper airplane, isolated, no background",
+    output_format="webp",
+    background="transparent",
+)
+
+with open("icon.webp", "wb") as f:
+    f.write(base64.b64decode(result.data[0].b64_json))
+```
+
+يقبل `background` القيم `transparent` أو `opaque` أو `auto`. تحافظ `opaque` و`auto` و`null` جميعها على السلوك الافتراضي للنموذج، لذا فالقيمة الوحيدة التي تُحدث تغييرًا هي `transparent`. القيمة الافتراضية لـ `output_format` على نقطة النهاية هذه هي `png`، لذا يمكنك حذفه.
+
+<Note>
+تقبل `/images/generations` الحقول `quality` و`style` و`output_compression` و`size` للتوافق مع OpenAI لكنها تتجاهلها. في نماذج GPT Image التي تغطيها هذه الصفحة، لا يكون لـ `size` أي تأثير، إذ يبقى الناتج بنسبة العرض إلى الارتفاع والدقة الافتراضيتين للنموذج. إلى جانب `model` و`prompt`، الحقول التي تؤثر في الصورة هي `background` و`output_format` و`moderation`؛ أما `response_format` فيختار فقط بين base64 وعنوان data URL. ليس `resolution` و`aspect_ratio` حقلين، والمخطط صارم، لذا فإن إرسال أيٍّ منهما يُرجع `400`. احذف `quality` هنا؛ واستخدم نقطة النهاية الأصلية `/image/generate` عندما تحتاج إلى التحكم في المستوى (راجع التسعير أدناه).
+</Note>
+
+## الخطوة 4: التحرير مع الشفافية
+
+تقبل كل من `/image/edit` و`/image/multi-edit` المعامل `transparent_background` أيضًا. لا يلزم أن تكون الصورة المصدر شفافة؛ إذ يمكنك تمرير صورة معتمة ومطالبة النموذج بعزل الموضوع أثناء تحريره.
+
+```bash
+curl https://api.venice.ai/api/v1/image/edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "model=gpt-image-2-5-flare-edit" \
+  -F "prompt=Make the apple green and remove the background" \
+  -F "image=@apple.jpg" \
+  -F "transparent_background=true" \
+  -o apple-green.png
+```
+
+على نقاط نهاية التحرير، يُستنتج `output_format` عند حذفه: عادةً PNG لتحريرات 1K وJPEG لـ 2K/4K، لكن عندما تكون قيمة `transparent_background` هي `true` يتحوّل الاستنتاج إلى PNG في جميع الدقّات. لذا لا تحتاج إلى إرسال `output_format` صراحةً إلا إذا أردت WebP.
+
+يأخذ `/image/multi-edit` الحقول نفسها مع اختلافين: أرسل كل صورة إدخال كجزء `images` مكرّر، وحدّد النموذج عبر `modelId` بدلًا من `model`. وهو الخيار الطبيعي لتركيب لقطة منتج على مشهد جديد والحصول على النتيجة المركّبة كقصاصة يمكنك وضعها في تخطيطك الخاص.
+
+```bash
+curl https://api.venice.ai/api/v1/image/multi-edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "modelId=gpt-image-2-5-flare-edit" \
+  -F "prompt=Put the sunglasses from the second image on the person in the first, and remove the background" \
+  -F "images=@person.jpg" \
+  -F "images=@sunglasses.jpg" \
+  -F "transparent_background=true" \
+  -o person-sunglasses.png
+```
+
+## التسعير
+
+لا تضيف الشفافية أي رسوم إضافية. تدفع السعر العادي للصورة الخاص بالنموذج.
+
+يختلف أسلوب الفوترة بين المسارين:
+
+| نقطة النهاية | التحكم في المستوى | ما يُحتسب عليك |
+|---|---|---|
+| `POST /image/generate` (أصلية) | `resolution` و`quality` في `gpt-image-2-5-*`؛ أما `gpt-image-1-5` فله سعر ثابت واحد بلا مستويات | المستوى المحدد. يُعد توليد `1K` بمستوى `low` على `gpt-image-2-5-flare` أرخص طريقة للتجربة على ملصق أو أيقونة قبل الدفع مقابل `high` أو `4K` |
+| `POST /images/generations` (متوافقة مع OpenAI) | لا يوجد. يتم تجاهل `quality` ولا يوجد حقل `resolution` | المستوى الافتراضي للنموذج. في `gpt-image-2-5-*` يكون `1K` بمستوى `high`، وهو أغلى مستويات الجودة، لذا لا يخفض `quality: "low"` ولا `size` السعر |
+
+إذا كنت تحتاج إلى التحكم في التكلفة لكل صورة، فاستخدم نقطة النهاية الأصلية. راجع [نماذج الصور](/ar/models/image) للاطلاع على جدول الأسعار المحدّث.
+
+## الأخطاء
+
+يجري التحقق قبل استدعاء النموذج. وتذكر كلتا الرسالتين طريقة الإصلاح.
+
+| الطلب | الحالة | جسم الاستجابة |
+|---|---|---|
+| `transparent_background: true` مع `format` / `output_format` بقيمة `jpeg` | `400` | `Transparent background requires png or webp output format.` |
+| `transparent_background: true` على نموذج لا يحمل العلامة | `400` | `Transparent background is not supported by model 'flux-2-pro'. Use a model with "supportsTransparentBackground": true in its constraints (see GET /api/v1/models).` |
+| `background: "transparent"` مع `output_format: "jpeg"` على `/images/generations` | `400` | `Transparent background requires png or webp output format.` |
+
+استخدام `transparent_background: false` مع `jpeg` لا مشكلة فيه، ويُعيد صورة JPEG معتمة عادية.
+
+## اكتشاف النماذج المدعومة أثناء التشغيل
+
+تتغيّر معرّفات النماذج باستمرار. بدلًا من تثبيت القائمة أعلاه في الشيفرة، رشّح `GET /models` حسب علامة القيد. لا يظهر المفتاح، بقيمة `true`، إلا على النماذج التي تدعمه.
+
+```bash
+curl -s "https://api.venice.ai/api/v1/models?type=image" \
+  | jq -r '.data[] | select(.model_spec.constraints.supportsTransparentBackground == true) | .id'
+```
+
+استخدم `type=inpaint` لنقاط نهاية التحرير، والتي تُعيد معرّفات النماذج `-edit`.
+
+## متى تستخدم هذا مقابل `/image/background-remove`
+
+| | `transparent_background` | `/image/background-remove` |
+|---|---|---|
+| المُدخل | موجّه (واختياريًا صورة مصدر لتحريرها) | صورة معتمة موجودة |
+| كيفية إنتاج alpha | يركّب النموذج الصورة مع الشفافية منذ البداية | يحجب نموذج تجزئة المقدمة بعد ذلك |
+| الظلال والانعكاسات | تُحفظ بشفافية جزئية، لأن النموذج رسمها كجزء من الموضوع | تُزال مع الخلفية، لأنها ليست جزءًا من المقدمة |
+| اختيار النموذج | GPT Image 1.5 / 2.5 فقط | نموذج داخلي ثابت، دون حقل `model` |
+| التكلفة | السعر العادي للتوليد أو التحرير الخاص بالنموذج | سعر ثابت لإزالة الخلفية |
+
+إذا كنت ستولّد الأصل على أي حال، فاطلب الشفافية مسبقًا واستغنِ عن الاستدعاء الثاني. والجأ إلى `/image/background-remove` عندما تكون الصورة المعتمة موجودة بالفعل ولا تريد إعادة توليدها.
+
+<Frame as="div" caption="ملصق شفاف واحد من طلب الخطوة 1، موضوع فوق ثلاث خلفيات دون أي معالجة إضافية.">
+  <img src="/images/guides/transparent-backgrounds/backgrounds.webp" alt="ملصق الصاروخ الكرتوني نفسه مركّبًا فوق لون داكن مصمت، وتدرّج دافئ، ونقش شطرنجي" />
+</Frame>
+
+## ذات صلة
+
+- [توليد الصور](/ar/guides/media/image-generation) لمعرفة الأحجام وفئات الجودة والقائمة الكاملة لمعاملات `/image/generate`
+- [تحرير الصور](/ar/guides/media/image-editing) لـ `/image/edit` و`/image/multi-edit` و`/image/background-remove`
+- [نماذج الصور](/ar/models/image) للاطلاع على الأسعار والقيود الحالية

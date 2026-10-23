@@ -1,16 +1,16 @@
 ---
 title: "Rate Limits"
-description: "Venice API-Rate-Limits: Request- und Token-Kontingente pro Stufe, modellspezifische Limits, Header zur Restkapazität und Umgang mit 429-Antworten."
+description: "Venice API-Rate-Limits pro Stufe, die Header zur verfügbaren Kapazität und der Umgang mit 429-Antworten."
 "og:title": "Rate Limits | Venice API Docs"
 ---
 
 Rate-Limits variieren je nach Modell und Stufe. Die folgenden Standardlimits sind eine hilfreiche Referenz, aber der API-Endpoint `/api_keys/rate_limits` ist die maßgebliche Quelle, um Ihre aktuellen Limits abzurufen. Sie können Ihre genauen Limits jederzeit prüfen:
 
 <CardGroup cols={2}>
-  <Card title="Ihre Limits ansehen" icon="gauge-high" href="/api-reference/endpoint/api_keys/rate_limits?playground=open">
+  <Card title="Ihre Limits ansehen" icon="gauge" href="/de/api-reference/endpoint/api_keys/rate_limits?playground=open">
     Interaktiver Playground
   </Card>
-  <Card title="Rate-Limit-Logs" icon="clock-rotate-left" href="/api-reference/endpoint/api_keys/rate_limit_logs?playground=open">
+  <Card title="Rate-Limit-Logs" icon="history" href="/de/api-reference/endpoint/api_keys/rate_limit_logs?playground=open">
     Sehen Sie, welche Anfragen Limits erreicht haben
   </Card>
 </CardGroup>
@@ -22,83 +22,87 @@ curl https://api.venice.ai/api/v1/api_keys/rate_limits \
 
 ## Standardlimits
 
-### Textmodelle
+### Text- und Embedding-Modelle
 
-Textmodelle sind in Stufen nach Größe gruppiert. Jede Modellkarte auf der [Models-Seite](/models/text) zeigt ihr Stufen-Badge an.
+Text- und Embedding-Modelle sind in vier Größen gruppiert. Alle Embedding-Modelle sind XS.
 
-| Stufe | Requests/min | Tokens/min |
-|:-----|-------------:|-----------:|
-| XS | 500 | 1.000.000 |
-| S | 75 | 750.000 |
-| M | 50 | 750.000 |
-| L | 20 | 500.000 |
+| Größe | Requests/min | Tokens/min | Partner-Requests/min | Partner-Tokens/min |
+|:-----|-------------:|-----------:|---------------------:|-------------------:|
+| XS | 500 | 5.000.000 | 500 | 10.000.000 |
+| S | 150 | 3.000.000 | 300 | 6.000.000 |
+| M | 100 | 2.000.000 | 200 | 4.000.000 |
+| L | 100 | 2.000.000 | 150 | 3.000.000 |
 
-<Accordion title="Welche Modelle sind in jeder Stufe?">
+<Note>
+  Einige Modelle laufen auf dedizierter oder Drittanbieter-Infrastruktur und haben Limits, die sich nicht auf diese vier Größen abbilden lassen. Rufen Sie [`GET /api_keys/rate_limits`](/de/api-reference/endpoint/api_keys/rate_limits) auf, um die verbindlichen Limits pro Modell für Ihren Key zu erhalten.
+</Note>
 
-**XS** `qwen3-4b` `llama-3.2-3b`
+### Bild- und Audio-Modelle
 
-**S** `mistral-31-24b` `venice-uncensored`
+| Typ | Requests/min | Partner-Requests/min |
+|:-----|-------------:|---------------------:|
+| Bild, Upscale, Inpaint | 20 | 60 |
+| Sprache und Transkription | 60 | 120 |
 
-**M** `zai-org-glm-5` `qwen3-next-80b` `google-gemma-3-27b-it`
+### Video- und Musik-Modelle
 
-**L** `qwen3-235b-a22b-instruct-2507` `qwen3-235b-a22b-thinking-2507` `deepseek-ai-DeepSeek-R1` `grok-41-fast` `kimi-k2-thinking` `gemini-3-pro-preview` `hermes-3-llama-3.1-405b` `qwen3-coder-480b-a35b-instruct` `zai-org-glm-4.7` `openai-gpt-oss-120b`
-
-</Accordion>
-
-### Andere Modelle
-
-| Typ | Requests/min |
-|:-----|-------------:|
-| Image | 20 |
-| Audio | 60 |
-| Embedding | 500 |
-| Video (queue) | 40 |
-| Video (retrieve) | 120 |
+Queue- und Retrieve-Anfragen für Video, Musik und Voice-Changer unterliegen Anfragelimits pro Konto. Behandeln Sie `429`-Antworten mit Backoff und fragen Sie Retrieve-Endpoints in einem moderaten Intervall ab statt in einer engen Schleife. Jobs werden pro Generierung über Ihr Guthaben abgerechnet, kalkulieren Sie einen Auftrag daher zuerst mit [`POST /video/quote`](/de/api-reference/endpoint/video/quote), [`POST /audio/quote`](/de/api-reference/endpoint/audio/quote) oder [`POST /audio/voice-changer/quote`](/de/api-reference/endpoint/audio/voice-changer/quote).
 
 ## Fehlerbehandlung
 
 Fehlgeschlagene Anfragen (500, 503, 429) sollten mit exponentiellem Backoff wiederholt werden.
 
-Speziell bei 429-Fehlern prüfen Sie den Header `x-ratelimit-reset-requests` für den genauen Unix-Zeitstempel, ab dem Sie es erneut versuchen können. Die meisten HTTP-Bibliotheken verfügen über integrierte Retry-Mechanismen, die dies automatisch übernehmen.
+Bei 429-Fehlern auf Inferenz-Endpoints gibt der Header `x-ratelimit-reset-requests` als Unix-Zeitstempel in Millisekunden den spätesten Zeitpunkt an, bis zu dem das Request-Fenster vollständig geleert ist. Bis dahin zu warten ist immer sicher; ein früherer erneuter Versuch kann ebenfalls erfolgreich sein.
 
-### Missbrauchsschutz
+```javascript
+const reset = Number(response.headers.get('x-ratelimit-reset-requests'));
+const waitMs = Math.max(0, reset - Date.now());
+await new Promise((resolve) => setTimeout(resolve, waitMs));
+```
 
-Wenn Sie mehr als 20 fehlgeschlagene Anfragen in 30 Sekunden erzeugen, blockiert die API weitere Anfragen für 30 Sekunden:
+### Fehlerbudgets
+
+Zwei weitere Limits schützen die API vor Clients, die wiederholt gegen eine Wand laufen. Beide werden pro Modell und API-Key gezählt, und beide geben `429` zurück. Fehlgeschlagene Anfragen werden in festen 30-Sekunden-Fenstern gezählt:
+
+| Budget | Schwellenwert | Gilt für |
+|:-------|----------:|:-----------|
+| Fehlgeschlagene Anfragen | 50 pro 30 s | Alle Endpoints |
+| Anfragen nach nicht unterstützten Features | 200 pro 30 s | `/chat/completions`, `/responses` |
+
+Das zweite Budget zählt Anfragen, die von einem Modell ein Feature verlangen, das es nicht unterstützt. Ein Beispiel ist die Anforderung von Vision oder Tool Calling bei einem Modell ohne diese Fähigkeit. Die Überschreitung eines der beiden Budgets erscheint in den [Rate-Limit-Logs](/de/api-reference/endpoint/api_keys/rate_limit_logs) als `FAILED_REQUESTS` oder `UNSUPPORTED_FEATURE_REQUESTS`.
+
+Das Feld `error` im Response-Body benennt den ausgelösten Schwellenwert. Für das Budget für fehlgeschlagene Anfragen lautet es:
 
 ```
-Too many failed attempts (> 20) resulting in a non-success status code. Please wait 30s and try again.
+Too many failed attempts (> 50) resulting in a non-success status code. Please wait 30 seconds and try again. See https://docs.venice.ai/api-reference/rate-limiting for more information.
 ```
 
 ## Response-Header
 
-Jede Antwort enthält diese Header:
+Inferenz-Antworten (Chat Completions, Responses, Bild, Audio und Embeddings) enthalten diese Header. Sie werden nicht auf Models-, API-Key-, Billing- oder x402-Routen gesendet; dasselbe gilt für die `x-venice-balance-*`-Header.
 
 | Header | Beschreibung |
 |:-------|:------------|
 | `x-ratelimit-limit-requests` | Max. Anfragen, die im aktuellen Fenster erlaubt sind |
 | `x-ratelimit-remaining-requests` | Verbleibende Anfragen im aktuellen Fenster |
-| `x-ratelimit-reset-requests` | Unix-Zeitstempel, wann das Fenster zurückgesetzt wird |
+| `x-ratelimit-reset-requests` | Unix-Zeitstempel in Millisekunden, bis zu dem das aktuelle Fenster vollständig geleert ist (Anfragezeitpunkt plus volle Fensterlänge, unabhängig von der Nutzung) |
 | `x-ratelimit-limit-tokens` | Max. erlaubte Tokens pro Minute |
 | `x-ratelimit-remaining-tokens` | Verbleibende Tokens in der aktuellen Minute |
-| `x-ratelimit-reset-tokens` | Sekunden bis zum Zurücksetzen des Token-Limits |
+| `x-ratelimit-reset-tokens` | Unix-Zeitstempel in Millisekunden, wann das Token-Limit zurückgesetzt wird |
+
+Das Budget für fehlgeschlagene Anfragen hat eigene Header, die bei jeder Antwort auf eine Anfrage mit einem API-Key gesendet werden, einschließlich `401`-Antworten:
+
+| Header | Beschreibung |
+|:-------|:------------|
+| `x-ratelimit-remaining` | Verbleibende fehlgeschlagene Anfragen im aktuellen 30-Sekunden-Fenster |
+| `x-ratelimit-resets` | Unix-Zeitstempel in Millisekunden, wann das aktuelle 30-Sekunden-Fenster zurückgesetzt wird |
+
+Der Endpoint `/crypto/rpc/{network}` verwendet eigene Limits und eigene Header (`X-RateLimit-Limit`, `X-RateLimit-Remaining` und `X-RateLimit-Reset`), die nur bei 429-Antworten gesetzt werden. Anders als bei den oben genannten Millisekunden-Headern ist `X-RateLimit-Reset` ein Unix-Zeitstempel in Sekunden. Details finden Sie unter [Crypto RPC](/de/api-reference/endpoint/crypto/rpc).
 
 ## Partner-Stufe
 
-Partner erhalten deutlich höhere Rate-Limits:
+Partner-Limits sind in den Tabellen oben neben den Standardlimits aufgeführt.
 
-| Stufe | Requests/min | Tokens/min |
-|:-----|-------------:|-----------:|
-| XS | 500 | 2.000.000 |
-| S | 150 | 1.500.000 |
-| M | 100 | 1.500.000 |
-| L | 60 | 1.000.000 |
-
-| Typ | Requests/min |
-|:-----|-------------:|
-| Image | 60 |
-| Audio | 120 |
-| Embedding | 500 |
-
-Wenn Sie konstant Ihre Rate-Limits erreichen und Ihre Nutzungsmuster eine **anhaltende Nachfrage über die Zeit** zeigen, kontaktieren Sie uns, um über Partner-Zugang zu sprechen: [api@venice.ai](mailto:api@venice.ai).
+Wenn Sie konstant Ihre Rate-Limits erreichen und Ihre Nutzungsmuster eine **anhaltende Nachfrage über die Zeit** zeigen, kontaktieren Sie uns, um über Partner-Zugang zu sprechen: [support@venice.ai](mailto:support@venice.ai).
 
 Partner-Tier-Limits können an Ihre spezifischen Anforderungen angepasst werden.

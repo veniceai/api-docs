@@ -1,11 +1,11 @@
 ---
 title: "Image editing"
-description: "Modifica, fai inpainting, componi input a strati e rimuovi sfondi dalle immagini usando le API sincrone di Venice image edit, multi-edit e background-remove."
+description: "Modifica, fai inpainting e componi immagini con gli endpoint /image/edit e /image/multi-edit di Venice, o rimuovi gli sfondi per ritagli PNG trasparenti."
 'og:title': "Image Editing | Venice API Docs"
 'og:description': "Scopri come modificare le immagini con Venice usando inpainting basato su prompt, input multi-edit a strati e rimozione dello sfondo."
 ---
 
-L'editing di immagini su Venice è sincrono. Invia la tua immagine sorgente a `/image/edit` o `/image/multi-edit` e il risultato modificato torna nella stessa risposta come file PNG. Per i ritagli, `/image/background-remove` restituisce un PNG trasparente.
+L'editing di immagini su Venice è sincrono. Invia la tua immagine sorgente a `/image/edit` o `/image/multi-edit` e il risultato modificato torna nella stessa risposta come file immagine. Per i ritagli, `/image/background-remove` restituisce un PNG trasparente.
 
 <Warning>
 Gli endpoint di image edit sono sperimentali e il comportamento specifico dei modelli può cambiare nel tempo.
@@ -16,13 +16,13 @@ Gli endpoint di image edit sono sperimentali e il comportamento specifico dei mo
 | Endpoint | Scopo | Ideale per |
 |---|---|---|
 | `POST /image/edit` | Modifica una singola immagine con un prompt | Modifiche generali e inpainting guidato da prompt |
-| `POST /image/multi-edit` | Modifica usando 1-3 immagini a strati | Modifiche più controllate con maschere o overlay |
+| `POST /image/multi-edit` | Modifica usando più immagini di riferimento (il limite varia in base al modello) | Compositing e modifiche multi-riferimento |
 | `POST /image/background-remove` | Rimuove lo sfondo da un'immagine | Ritagli trasparenti per prodotti, ritratti e asset |
 
 ## Quando usare quale endpoint
 
 - Usa `/image/edit` quando hai una sola immagine sorgente e vuoi cambiarne, rimuoverne o ridisegnarne una parte con un prompt.
-- Usa `/image/multi-edit` quando hai bisogno di un controllo aggiuntivo tramite maschere, overlay o layer di riferimento.
+- Usa `/image/multi-edit` quando hai bisogno di condizionare l'edit con immagini di riferimento aggiuntive.
 - Usa `/image/background-remove` quando vuoi solo un soggetto in primo piano pulito con trasparenza.
 
 <Note>
@@ -30,7 +30,7 @@ Per l'inpainting, usa `/image/edit` o `/image/multi-edit`. Il vecchio parametro 
 </Note>
 
 <Tip>
-Imposta `enhance_prompt: true` su entrambi gli endpoint di edit per fare in modo che un enhancer vision-aware analizzi l'immagine o le immagini di input e riscriva la tua istruzione prima di eseguire la modifica. Vedi [Prompt Enhancement](/guides/media/prompt-enhancement) per comportamento, prezzi e dettagli sugli header di risposta.
+Imposta `enhance_prompt: true` su entrambi gli endpoint di edit per fare in modo che un enhancer vision-aware analizzi l'immagine o le immagini di input e riscriva la tua istruzione prima di eseguire la modifica. Vedi [Prompt Enhancement](/it/guides/media/prompt-enhancement) per comportamento, prezzi e dettagli sugli header di risposta.
 </Tip>
 
 ## Passo 1: Modifica una singola immagine
@@ -44,14 +44,14 @@ Authorization: Bearer $VENICE_API_KEY
 Content-Type: application/json
 
 {
-  "model": "qwen-edit",
+  "model": "firered-image-edit",
   "prompt": "Replace the cloudy sky with a warm sunrise while preserving the buildings and canal",
   "image": "https://example.com/venice-canal.jpg"
 }
 ```
 
 **Risposta (200):**
-Il corpo della risposta è dato binario raw `image/png`. Salvalo direttamente in un file.
+Il corpo della risposta è dato binario raw dell'immagine. Salvalo direttamente in un file. Il formato è PNG per gli edit a 1K e JPEG per gli edit a 2K e 4K, oppure PNG a qualsiasi risoluzione quando `transparent_background` è `true`. Imposta `output_format` su `jpeg`, `png` o `webp` per sceglierlo esplicitamente.
 
 <CodeGroup>
 ```python Python
@@ -69,7 +69,7 @@ response = requests.post(
         "Content-Type": "application/json",
     },
     json={
-        "model": "qwen-edit",
+        "model": "firered-image-edit",
         "prompt": "Remove the tourist crowd from the square and keep the architecture intact",
         "image": image_base64,
     },
@@ -91,7 +91,7 @@ const response = await fetch("https://api.venice.ai/api/v1/image/edit", {
     "Content-Type": "application/json",
   },
   body: JSON.stringify({
-    model: "qwen-edit",
+    model: "firered-image-edit",
     prompt: "Remove the tourist crowd from the square and keep the architecture intact",
     image: imageBase64,
   }),
@@ -107,31 +107,37 @@ curl https://api.venice.ai/api/v1/image/edit \
   -H "Content-Type: application/json" \
   -o edited.png \
   -d '{
-    "model": "qwen-edit",
+    "model": "firered-image-edit",
     "prompt": "Colorize this black and white portrait naturally",
     "image": "https://example.com/portrait-bw.jpg"
   }'
 ```
 </CodeGroup>
 
-## Passo 2: Usa multi-edit per maschere o inpainting a strati
+## Passo 2: Usa multi-edit con immagini di riferimento
 
-`/image/multi-edit` accetta fino a tre immagini. La prima immagine è quella di base. Le immagini rimanenti sono trattate come layer di edit o maschere, il che ti dà più controllo rispetto all'editing solo con prompt.
+`/image/multi-edit` accetta più immagini, e il limite è specifico per modello. Leggi `model_spec.constraints.maxInputImages` da `GET /models?type=inpaint` per ottenere il limite di un dato modello. Quando il campo è assente, il limite è 3, oppure 1 quando `combineImages` è `false`.
+
+La prima immagine è quella di base. Le immagini rimanenti sono riferimenti aggiuntivi che condizionano l'edit.
+
+<Note>
+L'endpoint pubblico non ha un canale per le maschere. Le immagini aggiuntive agiscono come riferimenti sull'intera immagine, non come mappe di regioni. Non esiste un parametro `mask`, e inviarne uno restituisce un `400`. Scrivi prompt precisi per delimitare dove ricade l'edit.
+</Note>
 
 Questa è la scelta migliore quando vuoi:
 
-- mirare a una regione specifica con una maschera
-- combinare una composizione esistente con un overlay
+- combinare una composizione esistente con un'immagine di riferimento aggiuntiva
+- fornire al modello esempi dello stile, dell'oggetto o della texture da applicare
 - vincolare l'edit in modo più stretto di quanto possa fare un prompt su una singola immagine
 
 **Richiesta JSON:**
 ```json
 {
-  "modelId": "qwen-edit",
+  "modelId": "firered-image-edit",
   "prompt": "Replace the blank billboard area with a glowing Venice film festival poster while preserving lighting and perspective",
   "images": [
     "https://example.com/street-scene.png",
-    "https://example.com/billboard-mask.png"
+    "https://example.com/billboard-reference.png"
   ]
 }
 ```
@@ -140,14 +146,14 @@ Questa è la scelta migliore quando vuoi:
 ```bash
 curl https://api.venice.ai/api/v1/image/multi-edit \
   -H "Authorization: Bearer $VENICE_API_KEY" \
-  -F "modelId=qwen-edit" \
+  -F "modelId=firered-image-edit" \
   -F "prompt=Replace the blank billboard area with a glowing Venice film festival poster while preserving lighting and perspective" \
   -F "images=@street-scene.png" \
-  -F "images=@billboard-mask.png" \
+  -F "images=@billboard-reference.png" \
   -o multi-edited.png
 ```
 
-Come per `/image/edit`, il corpo della risposta è dato raw `image/png`.
+Come per `/image/edit`, il corpo della risposta è dato raw dell'immagine e il formato di output segue le stesse regole.
 
 <Note>
 `/image/multi-edit` attualmente usa il campo `modelId` invece di `model` nello schema della richiesta.
@@ -170,7 +176,7 @@ Per cambiamenti di scena più ampi, descrivi cosa deve restare invariato:
 Replace the background with a modern photo studio backdrop while preserving the subject pose, facial features, and clothing.
 ```
 
-Se l'edit continua a interessare l'area sbagliata, passa da `/image/edit` a `/image/multi-edit` e fornisci una maschera o un layer di overlay.
+Se l'edit continua a interessare l'area sbagliata, passa da `/image/edit` a `/image/multi-edit` e fornisci un'immagine di riferimento aggiuntiva che mostri il risultato desiderato, poi descrivi con precisione la modifica prevista nel prompt.
 
 ---
 
@@ -203,6 +209,8 @@ Usa la rimozione dello sfondo per:
 - foto profilo e ritratti
 - asset che intendi posizionare su un nuovo sfondo
 
+Se stai comunque generando o modificando l'immagine, puoi saltare questa seconda chiamata: `/image/generate`, `/image/edit` e `/image/multi-edit` accettano `transparent_background: true` sui modelli supportati e restituiscono direttamente il canale alfa. Consulta [Immagini con sfondo trasparente](/it/guides/media/transparent-backgrounds) per il confronto.
+
 ---
 
 ## Parametri della richiesta
@@ -213,21 +221,30 @@ Usa la rimozione dello sfondo per:
 |---|---|---|---|---|
 | `image` | file, stringa base64 o URL | Sì | - | Immagine sorgente da modificare |
 | `prompt` | string | Sì | - | Istruzioni testuali per l'edit |
-| `model` | string | No | `qwen-edit` | ID del modello di edit |
+| `model` | string | No | `firered-image-edit` | ID del modello di edit |
 | `aspect_ratio` | string | No | default del modello | Rapporto d'aspetto di output per i modelli che lo supportano |
+| `resolution` | string | No | `1K` | Livello di risoluzione dell'immagine di output, come `1K`, `2K` o `4K`. I valori supportati variano in base al modello |
+| `output_format` | string | No | dedotto | `jpeg`, `png` o `webp`. Se omesso, PNG per gli edit a 1K e JPEG per gli edit a 2K e 4K, oppure PNG a qualsiasi risoluzione quando `transparent_background` è `true` |
 | `enhance_prompt` | boolean | No | `false` | Analizza l'immagine di input e riscrive l'istruzione di edit prima dell'inferenza |
-| `safe_mode` | boolean | No | `true` | Sfoca il contenuto per adulti nel risultato modificato. Imposta su false per disattivare la sfocatura. |
+| `disable_prompt_optimization_thinking` | boolean | No | default del modello | Salta il passaggio di thinking per l'ottimizzazione del prompt del modello per una generazione più rapida. Supportato solo dai modelli con `supportsOptimizePromptThinking`; ignorato dagli altri |
+| `safe_mode` | boolean | No | `true` | Sfoca il contenuto per adulti nel risultato modificato. Imposta su `false` per disattivare la sfocatura. |
+| `transparent_background` | boolean | No | `false` | Restituisce l'edit con un vero canale alfa. Richiede un modello con `supportsTransparentBackground: true` e `output_format` `png` o `webp` (dedotto come PNG se omesso). Consulta [Immagini con sfondo trasparente](/it/guides/media/transparent-backgrounds) |
 | `modelId` | string | Deprecato | - | Alias deprecato per `model` |
 
 ### `/image/multi-edit`
 
 | Parametro | Tipo | Obbligatorio | Default | Descrizione |
 |---|---|---|---|---|
-| `images` | array di 1-3 file, stringhe base64 o URL | Sì | - | La prima immagine è quella di base; le altre sono layer di edit o maschere |
-| `prompt` | string | Sì | - | Istruzioni testuali su come combinare o modificare i layer |
-| `modelId` | string | No | `qwen-edit` | ID del modello di edit |
+| `images` | array di file, stringhe base64 o URL | Sì | - | La prima immagine è quella di base; le altre sono riferimenti aggiuntivi. Il massimo è specifico per modello — vedi `model_spec.constraints.maxInputImages` |
+| `prompt` | string | Sì | - | Istruzioni testuali su come combinare o modificare le immagini |
+| `modelId` | string | No | `firered-image-edit` | ID del modello di edit |
+| `resolution` | string | No | `1K` | Livello di risoluzione dell'immagine di output, come `1K`, `2K` o `4K`. I valori supportati variano in base al modello |
+| `quality` | string | No | default del modello | `low`, `medium` o `high` sui modelli che elencano `qualities` in `model_spec.constraints`. Valori più alti possono aumentare il costo della richiesta |
+| `output_format` | string | No | dedotto | `jpeg`, `png` o `webp`. Stesse regole di deduzione di `/image/edit` |
 | `enhance_prompt` | boolean | No | `false` | Analizza le immagini di input e riscrive l'istruzione di edit prima dell'inferenza |
-| `safe_mode` | boolean | No | `true` | Sfoca il contenuto per adulti nel risultato modificato. Imposta su false per disattivare la sfocatura. |
+| `disable_prompt_optimization_thinking` | boolean | No | default del modello | Salta il passaggio di thinking per l'ottimizzazione del prompt del modello per una generazione più rapida. Supportato solo dai modelli con `supportsOptimizePromptThinking`; ignorato dagli altri |
+| `safe_mode` | boolean | No | `true` | Sfoca il contenuto per adulti nel risultato modificato. Imposta su `false` per disattivare la sfocatura. |
+| `transparent_background` | boolean | No | `false` | Restituisce il risultato composto con un vero canale alfa. Stesse regole su modello e formato di `/image/edit` |
 
 ### `/image/background-remove`
 
@@ -237,12 +254,12 @@ Usa la rimozione dello sfondo per:
 | `image_url` | string | Uno tra `image` o `image_url` | URL pubblico dell'immagine da ritagliare |
 
 <Note>
-`/image/background-remove` usa un modello interno fisso. Non accetta un campo `model`. Inviarne uno (per esempio `"model": "bria-bg-remover"`) restituisce `400 invalid model id`.
+`/image/background-remove` usa un modello interno fisso. Non accetta un campo `model`. Inviarne uno (per esempio `"model": "bria-bg-remover"`) restituisce `400` perché `model` non è un campo riconosciuto.
 </Note>
 
 ### Contenuti per adulti e safe mode
 
-Sia `/image/edit` che `/image/multi-edit` accettano `safe_mode` (default: `true`). Quando è abilitato, i contenuti per adulti nell'output modificato vengono sfocati. Imposta `safe_mode: false` per ricevere l'output senza sfocatura:
+Sia `/image/edit` che `/image/multi-edit` accettano `safe_mode` (default: `true`). Quando è abilitato, i contenuti per adulti nell'output modificato vengono sfocati, quindi invia `safe_mode: false` per ricevere l'output senza sfocatura:
 
 ```json
 {
@@ -253,7 +270,9 @@ Sia `/image/edit` che `/image/multi-edit` accettano `safe_mode` (default: `true`
 }
 ```
 
-Il modello di default `qwen-edit` blocca comunque le immagini sessuali esplicite e la violenza nel mondo reale indipendentemente da `safe_mode`. Per l'editing non censurato, usa `qwen-edit-uncensored`.
+L'output per adulti (NSFW) non sfocato è disponibile per tutti gli utenti dell'API. Non ti serve un abbonamento Pro, e l'impostazione del filtro per contenuti maturi nell'app Venice non influisce sulle richieste di immagini effettuate tramite l'API.
+
+Le policy di contenuto variano in base al modello di edit e si applicano indipendentemente da `safe_mode`. Per l'editing non censurato, usa `qwen-edit-uncensored`.
 
 La differenza nel nome del parametro di moderazione tra gli endpoint spesso trae in inganno:
 
@@ -271,22 +290,22 @@ Passare `safe_mode` a `/images/generations` restituisce `400` con `Unrecognized 
 
 | Endpoint | Input JSON | Input multipart | Output |
 |---|---|---|---|
-| `/image/edit` | Stringa base64 o URL | Upload di file | `image/png` |
-| `/image/multi-edit` | Stringhe base64 o URL | Upload di file | `image/png` |
+| `/image/edit` | Stringa base64 o URL | Upload di file | `image/png`, `image/jpeg` o `image/webp` |
+| `/image/multi-edit` | Stringhe base64 o URL | Upload di file | `image/png`, `image/jpeg` o `image/webp` |
 | `/image/background-remove` | Stringa base64 o URL | Upload di file | `image/png` |
 
-Per gli endpoint di edit, le dimensioni dell'immagine devono essere almeno `65536` pixel e non più di `33177600` pixel. I file caricati devono essere inferiori a `25MB`.
+Per gli endpoint di edit, le immagini devono essere almeno di 256×256 pixel e il numero totale di pixel non deve superare 33.177.600 (risoluzione 8K). I file caricati devono essere inferiori a `25MB`.
 
 ---
 
 ## Modelli e prezzi
 
-Il modello di edit di default è `qwen-edit`, con un prezzo di **$0,04 per edit**. Altri modelli con capacità di edit possono avere prezzi e vincoli diversi. Il prompt enhancement aggiunge **$0,04 per riscrittura applicata** al prezzo dell'edit.
+Il modello di edit di default è `firered-image-edit`, con un prezzo di **$0,04 per edit**. Altri modelli con capacità di edit possono avere prezzi e vincoli diversi. Il prompt enhancement aggiunge **$0,04 per riscrittura applicata** al prezzo dell'edit.
 
 Vedi:
 
-- [Prezzi delle immagini](/overview/pricing)
-- [Models API](/api-reference/endpoint/models/list) con `type=inpaint`
+- [Prezzi delle immagini](/it/overview/pricing)
+- [Models API](/it/api-reference/endpoint/models/list) con `type=inpaint`
 
 ---
 
@@ -296,21 +315,23 @@ Vedi:
 |---|---|---|
 | `400` | Parametri di richiesta non validi | Controlla numero di immagini, nomi dei campi e formato di input |
 | `401` | Autenticazione fallita | Controlla la tua API key |
-| `402` | Saldo insufficiente | Aggiungi crediti su [venice.ai/settings/api](https://venice.ai/settings/api) |
-| `415` | Content type non valido | Usa correttamente JSON o multipart form-data |
+| `402` | Saldo insufficiente | Aggiungi crediti su [venice.ai/settings/api](https://venice.ai/settings/api?utm_source=venice-api-documentation) |
+| `413` | File troppo grande | Mantieni i file caricati sotto i 25 MB |
+| `415` | Content type non valido (solo `/image/multi-edit`; gli altri endpoint restituiscono `400`) | Usa correttamente JSON o multipart form-data |
+| `422` | Violazione della policy sui contenuti o immagine di input troppo grande | Modifica il prompt o riduci le dimensioni dell'immagine |
 | `429` | Rate limit superato o modello sovraccarico | Riprova con backoff; controlla l'header `Retry-After` |
 | `500` | Elaborazione dell'inferenza fallita | Riprova la richiesta |
 | `503` | Modello al massimo della capacità | Riprova dopo un breve ritardo |
 
 <Note>
-Alcuni modelli di edit hanno policy sui contenuti più rigide rispetto ai modelli di generazione di immagini. Per esempio, `qwen-edit` blocca richieste che riguardano contenuti sessualmente espliciti, minori sessualizzati o violenza nel mondo reale.
+Alcuni modelli di edit hanno policy sui contenuti più rigide rispetto ai modelli di generazione di immagini. Le richieste che violano la policy del modello selezionato vengono rifiutate con `422`.
 </Note>
 
 ---
 
 ## Workflow correlati
 
-- Usa [Generazione di immagini](/guides/media/image-generation) quando parti dal testo invece che da un'immagine esistente.
-- Usa [Prompt Enhancement](/guides/media/prompt-enhancement) per capire come funziona la riscrittura degli edit basata sulla vision.
-- Usa [Modelli di immagini](/models/image) per confrontare famiglie di modelli di generazione, edit e miglioramento.
-- Usa [Image Edit API](/api-reference/endpoint/image/edit), [Multi-Edit API](/api-reference/endpoint/image/multi-edit) e [Background Remove API](/api-reference/endpoint/image/background-remove) per i dettagli completi dello schema.
+- Usa [Generazione di immagini](/it/guides/media/image-generation) quando parti dal testo invece che da un'immagine esistente.
+- Usa [Prompt Enhancement](/it/guides/media/prompt-enhancement) per capire come funziona la riscrittura degli edit basata sulla vision.
+- Usa [Modelli di immagini](/it/models/image) per confrontare famiglie di modelli di generazione, edit e miglioramento.
+- Usa [Image Edit API](/it/api-reference/endpoint/image/edit), [Multi-Edit API](/it/api-reference/endpoint/image/multi-edit) e [Background Remove API](/it/api-reference/endpoint/image/background-remove) per i dettagli completi dello schema.

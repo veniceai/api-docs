@@ -1,6 +1,6 @@
 ---
 title: 自主代理 API 密钥创建
-description: "通过在 Base 上质押 VVV 并用钱包签署 Venice 颁发的验证 token，让链上 AI agent 自主铸造 Venice API 密钥。"
+description: "通过在 Base 上质押 VVV，让链上 agent 铸造 Venice API 密钥。"
 'og:title': "Autonomous Agent API Key | Venice API Docs"
 'og:description': How an autonomous AI agent can mint its own Venice API key by signing a Venice-issued token with a wallet that holds staked VVV on Base.
 ---
@@ -13,7 +13,7 @@ description: "通过在 Base 上质押 VVV 并用钱包签署 Venice 颁发的�
 
 * agent 控制的 Base 上的 EVM 钱包（私钥保存在环境变量或密钥管理器中）。
 * Base 上少量 ETH 用于 gas（质押需要两笔交易：`approve` 然后 `stake`）。
-* 任意非零数量的 VVV 用于质押。铸造端点仅要求钱包具备非零 sVVV 余额，因此 1 VVV 足以铸造密钥。请参阅[为推理付费](#paying-for-inference)了解实际调用付费端点需要什么。
+* 任意非零数量的 VVV 用于质押。铸造端点仅要求钱包具备非零 sVVV 余额，因此 1 VVV 足以铸造密钥。请参阅[为推理付费](#为推理付费)了解实际调用付费端点需要什么。
 
 <Tip>
   使用专用的 agent 钱包，而不是金库钱包。该钱包的私钥会签署每个 Venice token 请求，因此其影响范围应保持最小。
@@ -74,7 +74,17 @@ description: "通过在 Base 上质押 VVV 并用钱包签署 Venice 颁发的�
 
     必填字段：`address`、`signature`、`token`、`apiKeyType`（`INFERENCE` 或 `ADMIN`）。
 
-    可选字段：`description`、`expiresAt`、`consumptionLimit`（限制此密钥的总支出，以 `usd`、`vcu` 或 `diem` 计）。
+    可选字段：
+
+    - `description`、`expiresAt`
+    - `consumptionLimit` — 此密钥的支出上限，以 `usd` 或 `diem` 计（`vcu` 已弃用，请改用 `diem`）
+    - `limitPeriod` — 上限的计量周期：`EPOCH`（每个 UTC 日重置）、`MONTH`（每个 UTC 月的 1 日重置）或 `LIFETIME`（永不重置，上限即为永久上限）
+    - `modelPrivacy` — 该密钥可调用哪些模型，按隐私层级划分：`ALL`、`PRIVATE_TEXT` 或 `PRIVATE_ONLY`
+    - `ipAllowlist` — 允许使用该密钥的 IPv4 或 IPv6 地址及 CIDR 子网（最多 100 个条目）；空列表表示允许任何 IP 地址
+
+    <Warning>
+    `limitPeriod` 省略时默认为 `EPOCH`，这意味着上限会**每天重置**，而不是终身总额。使用 `consumptionLimit: {"usd": 50}` 且未设置 `limitPeriod` 创建的密钥每天可以花费 $50。对于无人值守的代理密钥，请显式设置 `limitPeriod: "LIFETIME"`，使该限制成为永久上限。
+    </Warning>
 
     成功时响应包含铸造的 `apiKey` 字符串。将其存储在 agent 的密钥存储中，并作为正常的 Bearer token（`Authorization: Bearer <key>`）使用。
   </Step>
@@ -82,7 +92,7 @@ description: "通过在 Base 上质押 VVV 并用钱包签署 Venice 颁发的�
 
 ## 端到端示例
 
-下面的示例使用来自环境变量的真实钱包，而不是随机生成的钱包。随机钱包没有质押的 VVV，铸造将被 `Wallet has no staked VVV on Base` 错误拒绝。
+下面的示例使用来自环境变量的真实钱包，而不是随机生成的钱包。随机钱包没有质押的 VVV，铸造将被 `Wallet 0x… has no staked VVV on Base` 错误拒绝。
 
 ```typescript
 import { ethers } from "ethers"
@@ -104,6 +114,9 @@ const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate
     token,
     apiKeyType: "INFERENCE",
     description: "Agent key",
+    // 永久的 $50 上限。如果没有 limitPeriod，此上限将每天重置。
+    consumptionLimit: { usd: 50 },
+    limitPeriod: "LIFETIME",
   }),
 })
 
@@ -128,13 +141,13 @@ console.log("Minted key:", result.data.apiKey)
 | `400` | `JWT is malformed` | 提交的 `token` 不是 JWT。 | 确保发送 `GET` 端点返回的确切 `token` 字符串。 |
 | `400` | `Wallet signature does not match` | 给定 `token` 的 `signature` 与 `address` 不匹配。 | 用拥有 `address` 的钱包签署原始 token 字节。 |
 | `400` | `Could not verify wallet signature` | 验证签名的 RPC 调用失败（瞬态）。 | 退避后重试。 |
-| `400` | `Wallet has no staked VVV on Base` | 钱包的 sVVV 余额为零。 | 先质押 VVV，然后重试。 |
+| `400` | `has no staked VVV` | 钱包的 sVVV 余额为零。完整消息为 `Wallet 0x… has no staked VVV on Base`，其中 `0x…` 会替换为您的钱包地址，后面还附有一个链接，因此请匹配 `has no staked VVV`，而不是完整文本。 | 先质押 VVV，然后重试。 |
 
 ## 为推理付费
 
 铸造密钥与能够用它调用付费端点是两回事。新铸造的密钥可以正确认证，但在钱包的账户具有可花费余额之前，无法调用付费端点（如 `/chat/completions`）。
 
-铸造的密钥按以下优先顺序从用户账户花费：DIEM，然后是捆绑额度，然后是 USD。
+铸造的密钥可以按以下优先顺序从用户账户花费：DIEM，然后是赚取的额度，然后是捆绑额度，然后是 USD。
 
 | 资金来源 | 自主？ | 方法 |
 | --- | --- | --- |
@@ -146,24 +159,24 @@ console.log("Minted key:", result.data.apiKey)
 如果 agent 需要完全 crypto 原生、无头的资金路径，最干净的选项是：
 
 1. **质押更多 VVV**，使每日 DIEM 分配覆盖 agent 的支出。铸造的密钥会自动接入。
-2. **使用 [x402 钱包流程](/guides/integrations/x402-venice-api) 代替 API 密钥。** 通过 x402，agent 每个请求签署一个 Sign-In-With-X 消息，通过 `POST /api/v1/x402/top-up` 在 Base 或 Solana 上直接用 USDC 充值，并按请求付费。x402 USDC 余额绑定到钱包，而非用户，因此它不会以余额形式出现在铸造的 Bearer 密钥下，但它确实让同一钱包以编程方式为推理付费。
+2. **使用 [x402 钱包流程](/zh/guides/integrations/x402-venice-api) 代替 API 密钥。** 通过 x402，agent 每个请求签署一个 Sign-In-With-X 消息，通过 `POST /api/v1/x402/top-up` 在 Base 或 Solana 上直接用 USDC 充值，并按请求付费。x402 USDC 余额绑定到钱包，而非用户，因此它不会以余额形式出现在铸造的 Bearer 密钥下，但它确实让同一钱包以编程方式为推理付费。
 
 ## 相关资源
 
 <CardGroup cols={2}>
-  <Card title="Crypto 与 Agents" icon="link" href="/guides/integrations/crypto-rpc-agents">
+  <Card title="Crypto 与 Agents" icon="link" href="/zh/guides/integrations/crypto-rpc-agents">
     将 Venice 同时用作自主 agent 的模型提供商和区块链 RPC 层。
   </Card>
 
-  <Card title="x402 钱包身份验证" icon="wallet" href="/guides/integrations/x402-venice-api">
+  <Card title="x402 钱包身份验证" icon="wallet" href="/zh/guides/integrations/x402-venice-api">
     在 Base 或 Solana 上用 USDC 按请求付费，无需 API 密钥。
   </Card>
 
-  <Card title="生成 Web3 API 密钥端点" icon="code" href="/api-reference/endpoint/api_keys/generate_web3_key/post">
+  <Card title="生成 Web3 API 密钥端点" icon="code" href="/zh/api-reference/endpoint/api_keys/generate_web3_key/post">
     铸造端点的端点参考。
   </Card>
 
-  <Card title="标准 API 密钥指南" icon="key" href="/guides/getting-started/generating-api-key">
+  <Card title="标准 API 密钥指南" icon="key" href="/zh/guides/getting-started/generating-api-key">
     适用于希望通过仪表板铸造密钥的用户。
   </Card>
 </CardGroup>

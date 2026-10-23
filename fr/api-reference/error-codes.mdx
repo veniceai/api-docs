@@ -1,6 +1,6 @@
 ---
 title: Codes d'erreur
-description: "Codes d'erreur de l'API Venice : statuts HTTP, format de réponse, statut de remboursement, conseils de relance et détails de validation."
+description: "Codes d'erreur de l'API Venice : statuts HTTP, format de réponse, détails de validation, remboursement des crédits, limites de débit et relances."
 ---
 
 Lorsqu'une erreur survient, l'API Venice renvoie un code d'état HTTP et un message descriptif. Certaines erreurs incluent également des champs supplémentaires, tels que le statut de remboursement, les modèles de relance suggérés, les détails de validation ou les identifiants de requête.
@@ -52,6 +52,51 @@ Certains endpoints compatibles OpenAI peuvent renvoyer des objets d'erreur de st
 }
 ```
 
+## Identifiants manquants
+
+Une requête sans identifiants renvoie `402 Payment Required`, et non `401`. Chaque route payante accepte également l'[authentification par portefeuille x402](/fr/guides/integrations/x402-venice-api), la réponse est donc une demande de paiement : elle inclut un en-tête `PAYMENT-REQUIRED` et un corps décrivant les deux façons de s'authentifier.
+
+```json
+{
+  "x402Version": 2,
+  "error": "Authentication required",
+  "accepts": [ ... ],
+  "authOptions": {
+    "apiKey": {
+      "header": "Authorization: Bearer YOUR_API_KEY",
+      "getKey": "https://venice.ai/settings/api"
+    },
+    "x402Wallet": {
+      "header": "SIGN-IN-WITH-X",
+      "topUp": "POST /api/v1/x402/top-up"
+    }
+  }
+}
+```
+
+Si vous vouliez utiliser une clé API, vérifiez que l'en-tête `Authorization: Bearer` est défini. Une clé présente mais invalide renvoie `401`.
+
+## Erreurs de format de requête
+
+Ces erreurs proviennent de la lecture du corps de la requête, avant toute validation propre à l'endpoint.
+
+| Statut HTTP | Message | Cause |
+| --- | --- | --- |
+| 400 | `'Content-Type' must be 'application/json'` | Un corps `POST`, `PUT` ou `PATCH` envoyé sans `Content-Type: application/json`. Les endpoints qui acceptent des envois de fichiers acceptent aussi `multipart/form-data` |
+| 400 | `Invalid JSON request` | Le corps n'est pas du JSON valide |
+| 400 | `Invalid multipart request: malformed part header` | Un corps `multipart/form-data` qui ne peut pas être analysé |
+| 413 | `Request body exceeds the maximum allowed size.` | Le corps de la requête est trop volumineux |
+| 415 | `Request encoding is not supported` | Un `Content-Encoding` ou un jeu de caractères que l'API ne peut pas décoder |
+
+Un mauvais `Content-Type` renvoie `400`, et non `415`. Les réponses `413` liées à la limite de taille incluent aussi un champ `code` :
+
+```json
+{
+  "code": "PAYLOAD_TOO_LARGE",
+  "error": "Request body exceeds the maximum allowed size."
+}
+```
+
 ## Codes d'erreur
 
 | Code d'erreur | Statut HTTP | Message | Niveau de log |
@@ -78,7 +123,7 @@ Certains endpoints compatibles OpenAI peuvent renvoyer des objets d'erreur de st
 | `MODEL_NOT_FOUND` | 404 | Specified model not found | - |
 | `MEDIA_NOT_FOUND` | 404 | Media could not be found. Request may be invalid, expired, or deleted. | - |
 | `PAYLOAD_TOO_LARGE` | 413 | The request payload is too large. Please reduce the size of your request. | - |
-| `INVALID_CONTENT_TYPE` | 415 | Invalid request content-type | - |
+| `INVALID_CONTENT_TYPE` | 415 | Invalid request content-type. Renvoyé uniquement par `/image/multi-edit` | - |
 | `VIDEO_DURATION_TOO_LONG` | 422 | Video duration exceeds the maximum allowed. | - |
 | `VIDEO_DURATION_TOO_SHORT` | 422 | Video duration is too short. | - |
 | `IMAGE_TOO_LARGE` | 422 | Image dimensions exceed the maximum allowed. | - |
@@ -95,4 +140,23 @@ Certains endpoints compatibles OpenAI peuvent renvoyer des objets d'erreur de st
 | `ASR_UPSTREAM_FAILED` | 502 | Audio transcription failed due to a temporary upstream error. Please retry. | warn |
 | `MODEL_OFFLINE` | 503 | The model is temporarily offline. Please try again later. | - |
 | `MODEL_AT_CAPACITY` | 503 | The model is at capacity. Please try again later. | - |
-| `REQUEST_TIMEOUT` | 504 | The request took too long to complete and was timed-out. For long-running inference requests, use the streaming API by setting `stream=true` in your request. | - |
+| `REQUEST_TIMEOUT` | 504 | The request took too long to complete and was timed-out. For non-streaming requests, use the streaming API by setting `stream=true`. A streaming chat completion that times out before the model's first chunk reports the failure as an in-band SSE error frame instead. | - |
+
+## Autres erreurs
+
+Le tableau ci-dessus n'est pas exhaustif. Certaines erreurs sont renvoyées sans code répertorié, et les messages peuvent varier selon le modèle et l'endpoint : basez donc votre logique sur le statut HTTP plutôt que sur le texte du message. Erreurs que vous pouvez rencontrer et qui ne figurent pas dans le tableau :
+
+| Statut HTTP | Quand elle se produit |
+| --- | --- |
+| 400 | Une image en entrée dans une requête de chat ou Responses est dans un format non pris en charge |
+| 400 | La voix demandée n'est pas disponible pour le modèle de synthèse vocale |
+| 403 | La requête provient d'une adresse IP qui ne figure pas dans la liste d'autorisation de la clé API |
+| 403 | Le modèle demandé n'est pas autorisé par le paramètre de confidentialité de la clé API |
+| 403 | L'accès au modèle demandé est restreint. Contactez support@venice.ai |
+| 409 | Un résultat de vidéo, de musique ou de changement de voix est encore en cours d'envoi lorsque vous le récupérez. Réessayez sous peu |
+| 410 | L'endpoint a été retiré |
+| 422 | L'audio est trop long ou trop court (clonage de voix, changement de voix et tâches audio) |
+| 422 | L'image en entrée d'une requête vidéo a un rapport largeur/hauteur hors de la plage acceptée par le modèle |
+| 422 | L'entrée d'une requête vidéo a été bloquée par la modération de contenu |
+| 500 | La génération de vidéo ou de changement de voix a échoué |
+| 502 | La synthèse vocale a échoué en amont, ou une vidéo générée n'a pas pu être récupérée. Réessayez la requête |

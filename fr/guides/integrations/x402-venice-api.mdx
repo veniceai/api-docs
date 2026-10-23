@@ -1,6 +1,6 @@
 ---
 title: X402
-description: "Accédez à l'API Venice sans clé d'API en payant par requête avec le protocole x402 et en vous authentifiant avec un wallet crypto sur Base."
+description: "Accédez à l'API Venice sans clé en payant par requête avec x402 et un wallet crypto."
 "og:title": X402
 "og:description": Accédez à Venice sans clé API en utilisant l'authentification par wallet.
 ---
@@ -9,7 +9,7 @@ X402 vous permet d'utiliser les routes API payantes de Venice en vous authentifi
 
 <CardGroup cols={3}>
   <Card title="Auth par wallet" icon="wallet">
-    Authentifiez-vous avec un payload Sign-In-With-X signé dans l'en-tête `X-Sign-In-With-X`.
+    Authentifiez-vous avec un payload Sign-In-With-X signé dans l'en-tête `SIGN-IN-WITH-X`.
   </Card>
 
   <Card title="Payer en USDC" icon="coins">
@@ -56,7 +56,7 @@ const response = await venice.chat({
 })
 ```
 
-Le client génère un en-tête `X-Sign-In-With-X` frais pour chaque requête et suit automatiquement le solde via les en-têtes de réponse `X-Balance-Remaining`.
+Le client génère un en-tête Sign-In-With-X frais pour chaque requête et suit automatiquement le solde via les en-têtes de réponse `X-Balance-Remaining`.
 
 ### Avec des outils compatibles OpenAI
 
@@ -78,7 +78,7 @@ Le SDK inclut des helpers de première classe pour les routes Venice x402 les pl
 | Responses | `responses.create()`, `responses.stream()` |
 | Images | `images.generate()`, `images.generations()`, `images.upscale()`, `images.edit()`, `images.multiEdit()`, `images.backgroundRemove()` |
 | Audio | `audio.speech()`, `audio.transcribe()`, `audio.queue()`, `audio.retrieve()`, `audio.complete()` |
-| Vidéo | `video.queue()`, `video.retrieve()`, `video.generate()`, `video.complete()`, `video.transcribe()` |
+| Vidéo | `video.queue()`, `video.retrieve()`, `video.generate()`, `video.complete()` |
 | Embeddings | `embeddings()` |
 | Modèles | `models()` |
 | Wallet | `getBalance()`, `getTransactions()`, `topUp()` |
@@ -89,9 +89,11 @@ Le SDK inclut des helpers de première classe pour les routes Venice x402 les pl
 
 Si vous n'utilisez pas le SDK ou si vous avez besoin de comprendre le protocole sous-jacent, voici le flux étape par étape. Pour un nouveau wallet, partez du principe que vous devez d'abord recharger, sauf s'il dispose déjà d'un solde DIEM dépensable.
 
-### Étape 1 : Créer l'en-tête X-Sign-In-With-X
+### Étape 1 : Créer l'en-tête SIGN-IN-WITH-X
 
-Venice attend un payload JSON encodé en Base64 contenant un message Sign-In-With-X signé. Les wallets EVM signent un message SIWE EIP-4361 sur Base. Les wallets Solana signent le message SIWX Solana avec Ed25519. Générez un nonce et un timestamp frais pour chaque flux de requête.
+Venice attend un payload JSON encodé en Base64 contenant un message Sign-In-With-X signé dans l'en-tête `SIGN-IN-WITH-X`. Les wallets EVM signent un message SIWE EIP-4361 sur Base. Les wallets Solana signent le message SIWX Solana avec Ed25519. L'ancien nom d'en-tête `X-Sign-In-With-X` est toujours accepté.
+
+Chaque message signé ne peut être utilisé qu'une seule fois. Signez un nouveau message avec un nonce frais pour chaque requête, et envoyez-le dans les 5 minutes suivant son heure `Issued At`. Réutiliser un message renvoie `401` (nonce déjà utilisé), tout comme un message émis il y a plus de 5 minutes.
 
 Pour Solana, définissez `chainId` à `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`, incluez `type: "ed25519"` dans le payload JSON encodé et fournissez la signature Ed25519 en base58 ou base64. Le message signé commence par `<domain> wants you to sign in with your Solana account:`, suivi de l'adresse du wallet et des champs standards `URI`, `Version`, `Chain ID`, `Nonce`, `Issued At` et `Expiration Time` (optionnel).
 
@@ -100,37 +102,51 @@ import { Wallet } from 'ethers'
 import { SiweMessage, generateNonce } from 'siwe'
 
 const wallet = new Wallet(process.env.EVM_PRIVATE_KEY)
-const now = new Date()
-const resourceUrl = 'https://api.venice.ai/api/v1/chat/completions'
 
-const siwe = new SiweMessage({
-  domain: 'api.venice.ai',
-  address: wallet.address,
-  statement: 'Sign in to Venice AI',
-  uri: resourceUrl,
-  version: '1',
-  chainId: 8453,
-  nonce: generateNonce(),
-  issuedAt: now.toISOString(),
-  expirationTime: new Date(now.getTime() + 5 * 60 * 1000).toISOString(),
-})
+async function createSiwxHeader(resourceUrl: string): Promise<string> {
+  const now = new Date()
 
-const message = siwe.prepareMessage()
-const signature = await wallet.signMessage(message)
-
-const xSignInWithX = Buffer.from(
-  JSON.stringify({
+  const siwe = new SiweMessage({
+    domain: 'api.venice.ai',
     address: wallet.address,
-    message,
-    signature,
-    timestamp: now.getTime(),
+    statement: 'Sign in to Venice AI',
+    uri: resourceUrl,
+    version: '1',
     chainId: 8453,
-  }),
-  'utf8',
-).toString('base64')
+    nonce: generateNonce(),
+    issuedAt: now.toISOString(),
+    expirationTime: new Date(now.getTime() + 5 * 60 * 1000).toISOString(),
+  })
 
-console.log(xSignInWithX)
+  const message = siwe.prepareMessage()
+  const signature = await wallet.signMessage(message)
+
+  return Buffer.from(
+    JSON.stringify({
+      address: wallet.address,
+      message,
+      signature,
+      timestamp: now.getTime(),
+      chainId: 8453,
+    }),
+    'utf8',
+  ).toString('base64')
+}
+
+const response = await fetch('https://api.venice.ai/api/v1/chat/completions', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'SIGN-IN-WITH-X': await createSiwxHeader('https://api.venice.ai/api/v1/chat/completions'),
+  },
+  body: JSON.stringify({
+    model: 'kimi-k2-5',
+    messages: [{ role: 'user', content: 'Hello!' }],
+  }),
+})
 ```
+
+Appelez `createSiwxHeader()` immédiatement avant chaque requête. Dans les exemples `curl` ci-dessous, `X402_AUTH` doit être un en-tête nouvellement signé pour chaque appel.
 
 ### Étape 2 : Vérifier le solde
 
@@ -142,7 +158,7 @@ export X402_AUTH=YOUR_BASE64_SIWX_HEADER
 
 curl --request GET \
   --url "https://api.venice.ai/api/v1/x402/balance/$WALLET_ADDRESS" \
-  --header "X-Sign-In-With-X: $X402_AUTH"
+  --header "SIGN-IN-WITH-X: $X402_AUTH"
 ```
 
 La réponse inclut :
@@ -163,9 +179,9 @@ curl --request POST \
   --url https://api.venice.ai/api/v1/x402/top-up
 ```
 
-Le premier appel renvoie `402 Payment Required` avec un en-tête `PAYMENT-REQUIRED` contenant un tableau `accepts`. Chaque entrée décrit une option de paiement acceptée, notamment `network`, `asset`, `payTo` et `amount`. Choisissez l'option Base ou Solana avec laquelle vous voulez payer, utilisez ces détails exacts pour construire un en-tête `X-402-Payment` et réessayez la même route.
+Le premier appel renvoie `402 Payment Required` avec un en-tête `PAYMENT-REQUIRED` contenant un tableau `accepts`. Chaque entrée décrit une option de paiement acceptée, notamment `network`, `asset`, `payTo` et `amount`. Choisissez l'option Base ou Solana avec laquelle vous voulez payer, utilisez ces détails exacts pour construire un en-tête `PAYMENT-SIGNATURE` et réessayez la même route. Les anciens noms d'en-tête `X-402-Payment` et `X-PAYMENT` sont toujours acceptés.
 
-#### Construction de l'en-tête X-402-Payment pour Base
+#### Construction de l'en-tête PAYMENT-SIGNATURE pour Base
 
 Le script suivant crée un paiement x402 signé sur Base et envoie la requête de recharge. Nécessite les paquets npm `x402` et `viem`.
 
@@ -201,7 +217,7 @@ EOF
 )"
 
 curl -X POST "https://api.venice.ai/api/v1/x402/top-up" \
-  -H "X-402-Payment: $X402_PAYMENT"
+  -H "PAYMENT-SIGNATURE: $X402_PAYMENT"
 ```
 
 <Note>
@@ -210,7 +226,7 @@ curl -X POST "https://api.venice.ai/api/v1/x402/top-up" \
 
 ### Étape 4 : Faire une requête
 
-Une fois que le wallet dispose d'un solde dépensable, appelez n'importe quel endpoint pris en charge avec l'en-tête `X-Sign-In-With-X` :
+Une fois que le wallet dispose d'un solde dépensable, appelez n'importe quel endpoint pris en charge avec un en-tête `SIGN-IN-WITH-X` nouvellement signé :
 
 ```bash
 export X402_AUTH=YOUR_BASE64_SIWX_HEADER
@@ -218,7 +234,7 @@ export X402_AUTH=YOUR_BASE64_SIWX_HEADER
 curl --request POST \
   --url https://api.venice.ai/api/v1/chat/completions \
   --header "Content-Type: application/json" \
-  --header "X-Sign-In-With-X: $X402_AUTH" \
+  --header "SIGN-IN-WITH-X: $X402_AUTH" \
   --data '{
     "model": "kimi-k2-5",
     "messages": [
@@ -242,7 +258,7 @@ export X402_AUTH=YOUR_BASE64_SIWX_HEADER
 
 curl --request GET \
   --url "https://api.venice.ai/api/v1/x402/transactions/$WALLET_ADDRESS?limit=10&offset=0" \
-  --header "X-Sign-In-With-X: $X402_AUTH"
+  --header "SIGN-IN-WITH-X: $X402_AUTH"
 ```
 
 Le grand livre inclut des entrées telles que `TOP_UP`, `CHARGE` et `REFUND`.
@@ -262,18 +278,21 @@ Les routes Venice publiques payantes suivantes prennent actuellement en charge l
 | Chat | `POST /api/v1/chat/completions`, `POST /api/v1/responses` |
 | Image | `POST /api/v1/image/generate`, `POST /api/v1/images/generations`, `POST /api/v1/image/upscale`, `POST /api/v1/image/edit`, `POST /api/v1/image/multi-edit`, `POST /api/v1/image/background-remove` |
 | Embeddings | `POST /api/v1/embeddings` |
-| Audio | `POST /api/v1/audio/speech`, `POST /api/v1/audio/transcriptions`, `POST /api/v1/audio/complete`, `POST /api/v1/audio/queue`, `POST /api/v1/audio/retrieve` |
-| Vidéo | `POST /api/v1/video/complete`, `POST /api/v1/video/queue`, `POST /api/v1/video/retrieve`, `POST /api/v1/video/transcriptions` |
+| Audio | `POST /api/v1/audio/speech`, `POST /api/v1/audio/transcriptions`, `POST /api/v1/audio/voices`, `POST /api/v1/audio/complete`, `POST /api/v1/audio/queue`, `POST /api/v1/audio/retrieve`, `POST /api/v1/audio/voice-changer/queue`, `POST /api/v1/audio/voice-changer/retrieve`, `POST /api/v1/audio/voice-changer/complete` |
+| Vidéo | `POST /api/v1/video/complete`, `POST /api/v1/video/queue`, `POST /api/v1/video/retrieve` |
+| Décisions | `POST /api/v1/decisions`, `POST /api/v1/systemone` |
+| Outils | `POST /api/v1/augment/search`, `POST /api/v1/augment/scrape`, `POST /api/v1/augment/text-parser` |
+| RPC blockchain | `POST /api/v1/crypto/rpc/{network}` |
 
 ### Route de recharge
 
 | Endpoint | Auth | Objectif |
 | --- | --- | --- |
-| `POST /api/v1/x402/top-up` | Requête initiale : aucune. Réessai : `X-402-Payment` | Ajouter des crédits USDC au solde dépensable du wallet via une option de paiement Base ou Solana acceptée |
+| `POST /api/v1/x402/top-up` | Requête initiale : aucune. Réessai : `PAYMENT-SIGNATURE` | Ajouter des crédits USDC au solde dépensable du wallet via une option de paiement Base ou Solana acceptée |
 
 ### Routes wallet uniquement
 
-Ces routes utilisent `X-Sign-In-With-X` pour l'identité mais ne facturent pas le solde.
+Ces routes utilisent `SIGN-IN-WITH-X` pour l'identité mais ne facturent pas le solde.
 
 | Endpoint | Objectif |
 | --- | --- |
@@ -286,9 +305,10 @@ Ces routes utilisent `X-Sign-In-With-X` pour l'identité mais ne facturent pas l
 
 | Statut | Cause probable | Que faire |
 | --- | --- | --- |
-| `401` | Payload Sign-In-With-X malformé ou expiré | Reconstruire `X-Sign-In-With-X` avec un nonce et un timestamp frais |
+| `401` | Payload Sign-In-With-X malformé, expiré ou déjà utilisé | Signez un nouveau message `SIGN-IN-WITH-X` avec un nonce frais pour cette requête |
+| `402` avec `"error": "Authentication required"` | Aucun en-tête `SIGN-IN-WITH-X` ni clé API n'a été envoyé | Ajoutez l'en-tête Sign-In-With-X. Le champ `extensions` de la réponse contient un nouveau nonce à signer. |
 | `402` sur une route payante | Solde dépensable insuffisant | Rechargez et réessayez |
-| `402` sur `/x402/top-up` | Attendu. C'est le flux d'initiation de paiement. | Utilisez les détails de paiement renvoyés pour construire `X-402-Payment` et réessayez |
+| `402` sur `/x402/top-up` | Attendu. C'est le flux d'initiation de paiement. | Utilisez les détails de paiement renvoyés pour construire `PAYMENT-SIGNATURE` et réessayez |
 | `403` sur balance ou transactions | Wallet incohérent | Assurez-vous que le wallet authentifié correspond au paramètre de chemin `walletAddress` |
 | `400` sur la recharge | En-tête de paiement malformé | Reconstruisez à partir de la dernière réponse `402` |
 
@@ -296,26 +316,26 @@ Ces routes utilisent `X-Sign-In-With-X` pour l'identité mais ne facturent pas l
 
 ## Pour les agents
 
-Le flux est identique. Stockez les clés privées dans des variables d'environnement ou un gestionnaire de secrets, et vérifiez le solde avant les requêtes pour éviter des allers-retours `402` inutiles.
+Le flux est identique. Stockez les clés privées dans des variables d'environnement ou un gestionnaire de secrets, signez un nouveau message Sign-In-With-X pour chaque requête, et vérifiez le solde avant les requêtes pour éviter des allers-retours `402` inutiles.
 
 ---
 
 ## Ressources connexes
 
 <CardGroup cols={2}>
-  <Card title="SDK client x402" icon="npm" href="https://github.com/veniceai/x402-client">
+  <Card title="SDK client x402" icon="brand-npm" href="https://github.com/veniceai/x402-client">
     Client x402 officiel Venice pour Node.js/TypeScript.
   </Card>
 
-  <Card title="Tarification API" icon="coins" href="/overview/pricing">
+  <Card title="Tarification API" icon="coins" href="/fr/overview/pricing">
     Consultez la tarification des modèles et la manière dont Venice facture l'usage.
   </Card>
 
-  <Card title="Chat Completions" icon="message" href="/api-reference/endpoint/chat/completions">
+  <Card title="Chat Completions" icon="message" href="/fr/api-reference/endpoint/chat/completions">
     Une route payante courante pour l'accès basé sur wallet.
   </Card>
 
-  <Card title="Spécification API" icon="code" href="/api-reference/api-spec">
+  <Card title="Spécification API" icon="code" href="/fr/api-reference/api-spec">
     Documentation de référence et accès au spec brut.
   </Card>
 </CardGroup>

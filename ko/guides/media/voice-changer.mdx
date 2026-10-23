@@ -1,0 +1,297 @@
+---
+title: "보이스 체인저"
+description: "Venice의 비동기 speech-to-speech API로 원본 녹음을 다른 음성으로 변환하세요."
+"og:title": "Voice Changer | Venice API Docs"
+"og:description": "Venice API로 원본 녹음을 다른 음성으로 변환하는 방법을 알아보세요."
+---
+
+보이스 체인저는 speech-to-speech입니다. 녹음을 전달하고 음성을 지정하면, 같은 연기를 그 음성으로 돌려받습니다. 단어, 쉼, 강세, 길이가 모두 그대로입니다. 이미 살리고 싶은 테이크가 있을 때 사용하는 기능입니다. 텍스트만 있다면 [text-to-speech](/ko/guides/media/text-to-speech)를 사용하고, 자신의 목소리를 대상 음성으로 쓰고 싶다면 [보이스 클로닝](/ko/guides/media/voice-cloning)을 참고하세요.
+
+다음은 `/audio/speech`로 만든 7초 클립과 이를 George 음성으로 변환한 결과입니다. 두 파형은 같은 시간축 위에 있으며, 구절 사이의 공백이 같은 위치에 놓입니다.
+
+<Frame as="div">
+  <img src="/images/guides/voice-changer/waveforms.webp" alt="같은 시간축에 위아래로 놓인 두 파형: 파란색은 원본 녹음, 주황색은 변환된 녹음이며 무음 구간이 일치함" />
+</Frame>
+
+<audio controls src="/images/guides/voice-changer/source.mp3">원본 (Kokoro TTS)</audio>
+<audio controls src="/images/guides/voice-changer/converted-george.mp3">변환본 (George)</audio>
+
+변환은 `/audio/voice-changer/` 아래의 네 엔드포인트를 통해 비동기로 실행됩니다. [quote](/ko/api-reference/endpoint/audio/voice-changer/quote)는 길이에 대한 가격을 산정하고, [queue](/ko/api-reference/endpoint/audio/voice-changer/queue)는 녹음을 제출하고 요금을 청구하며, [retrieve](/ko/api-reference/endpoint/audio/voice-changer/retrieve)는 MP3가 준비될 때까지 폴링하고, [complete](/ko/api-reference/endpoint/audio/voice-changer/complete)는 결과를 받은 뒤 저장된 미디어를 삭제합니다. 구조는 음악 엔드포인트와 같지만 경로가 다르며, 서로의 모델을 허용하지 않습니다.
+
+예제는 `VENICE_API_KEY`가 설정되어 있다고 가정합니다:
+
+```bash
+export VENICE_API_KEY="your-api-key"
+```
+
+## 모델 선택
+
+보이스 체인저 모델은 `GET /models?type=music` 아래에 있으며 `model_spec.voice_changer`가 `true`로 설정되어 있습니다. 전용 타입 필터는 없습니다. 현재는 `elevenlabs-voice-changer` 하나뿐입니다. 이 모델은 최대 300초 길이의 `mp3`, `wav`, `ogg`, `mp4`, `aac` 원본을 받으며, `Aria`를 기본값으로 하는 20개의 이름 있는 음성을 제공하고, 이름 대신 ElevenLabs Voice ID를 그대로 받을 수 있으며, `remove_background_noise`와 `seed`를 지원합니다. 이러한 세부 사항은 바뀔 수 있으므로 API에서 읽어 오세요. 다음 쿼리는 이 가이드의 나머지 부분에 필요한 모든 정보를 반환합니다:
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=music" \
+  -H "Authorization: Bearer $VENICE_API_KEY" |
+  jq '.data[] | select(.model_spec.voice_changer == true) | {
+    id,
+    voices: .model_spec.voices,
+    default_voice: .model_spec.default_voice,
+    supports_custom_voice_id: .model_spec.supports_custom_voice_id,
+    accepted_audio_formats: .model_spec.accepted_audio_formats,
+    max_source_audio_duration_seconds: .model_spec.max_source_audio_duration_seconds,
+    supports_background_noise_removal: .model_spec.supports_background_noise_removal,
+    supports_seed: .model_spec.supports_seed,
+    durations: .model_spec.pricing.durations
+  }'
+```
+
+모델이 지원하지 않는 필드를 보내면 `400`이 반환됩니다. `max_source_audio_duration_seconds`보다 긴 녹음은 요금이 청구되기 전에 `422`를 반환하며, 메시지에 최대값이 표시됩니다.
+
+API가 큐 등록 시점에 확인하지 않는 것이 하나 있는데, 바로 음성 이름입니다. 모델에 없는 `voice`로 큐에 등록해도 `200`과 `queue_id`를 받습니다. 거부는 첫 번째 retrieve에서 도착하며 요금은 환불됩니다. 돈은 돌려받지만 왕복 시간은 낭비되므로, 큐에 등록하기 전에 `voices`를 확인하세요.
+
+## 1. 가격 견적 받기
+
+요금은 원본 녹음의 길이를 다음 정수 분으로 올림해 청구됩니다. `elevenlabs-voice-changer`의 경우 60초까지는 $0.35, 120초까지는 $0.69, 180초까지는 $1.04, 240초까지는 $1.38, 300초까지는 $1.73입니다. 7초 클립은 60초 클립과 같은 비용이 들고, 60.5초는 2분으로 청구됩니다. 짧은 세그먼트가 많다면 각각 따로 큐에 등록하지 말고, 분 경계를 넘지 않는 하나의 파일로 합치세요. 가격 등급은 `/models`의 `pricing.durations`에서 가져옵니다.
+
+quote는 정수 초 단위 값을 받으며 API 키가 필요하지 않습니다:
+
+```bash
+curl https://api.venice.ai/api/v1/audio/voice-changer/quote \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "duration_seconds": 60
+  }'
+```
+
+```json
+{
+  "quote": 0.35,
+  "duration_seconds": 60
+}
+```
+
+이 값은 추정치입니다. 실제 청구 금액은 녹음이 큐에 등록될 때 Venice가 측정하는 길이로 계산됩니다.
+
+## 2. 변환 큐에 넣기
+
+녹음은 multipart `file` 업로드 또는 JSON 본문의 `audio_url` 중 하나로 보내세요. 둘 다 보낼 수는 없습니다. URL은 헤더나 쿠키 없이 공개적으로 접근 가능해야 합니다. Venice가 바이트를 직접 가져오며, URL을 공급자에게 절대 전달하지 않습니다. Venice는 확장자가 아니라 바이트를 검사하므로, 파일은 실제로 허용되는 컨테이너 중 하나여야 하며 비디오 트랙이 포함된 파일은 거부됩니다.
+
+`curl -F`를 사용할 때는 curl이 multipart boundary를 설정할 수 있도록 `Content-Type`을 직접 지정하지 말고, `remove_background_noise`는 `true`/`false`로, `seed`는 숫자로 보내세요.
+
+<CodeGroup>
+```bash File upload
+curl https://api.venice.ai/api/v1/audio/voice-changer/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "model=elevenlabs-voice-changer" \
+  -F "voice=George" \
+  -F "file=@./source-recording.mp3"
+```
+
+```bash Audio URL
+curl https://api.venice.ai/api/v1/audio/voice-changer/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "voice": "George",
+    "audio_url": "https://example.com/source-recording.mp3",
+    "remove_background_noise": true,
+    "seed": 42
+  }'
+```
+</CodeGroup>
+
+위의 multipart 요청이 페이지 상단의 George 클립을 만든 요청입니다. `voice`를 생략하면 `default_voice`가 사용됩니다. `supports_custom_voice_id`가 true이면 `voice`에 공급자 Voice ID도 사용할 수 있습니다. `elevenlabs-voice-changer`의 경우 Venice의 `voices` 목록에 없는 라이브러리 음성을 포함해, 접근 권한이 있는 모든 ElevenLabs 음성을 의미합니다. `remove_background_noise`와 `seed`는 모델이 지원한다고 표시하는 경우에만 허용됩니다.
+
+응답에는 이후 모든 단계에 필요한 핸들이 포함됩니다:
+
+```json
+{
+  "duration_seconds": 7.008,
+  "model": "elevenlabs-voice-changer",
+  "queue_id": "01a164db-8652-7fa9-94d6-25754090bd64",
+  "status": "QUEUED"
+}
+```
+
+`duration_seconds`는 Venice가 측정한 길이이며, 청구의 기준이 된 등급입니다. 60으로 견적을 받았는데 여기에 61.2가 표시된다면 2분 요금을 지불한 것입니다. `model`과 `queue_id`를 보관하세요. retrieve와 complete 모두에 필요하며, ID는 24시간 동안 유효합니다.
+
+요금은 오디오가 돌아올 때가 아니라 이 시점에 청구되므로, 큐 요청을 재시도하지 마세요. `queue_id`가 있다면 그 값으로 폴링하세요. 응답을 받지 못했는데 녹음을 다시 보내면 요금이 두 번 청구될 수 있습니다. queue는 분당 40회, retrieve는 분당 120회로 제한되며, 둘 다 `x-ratelimit-remaining-requests`를 반환합니다.
+
+## 3. 폴링 및 다운로드
+
+큐 응답에서 받은 값으로 retrieve를 호출하세요:
+
+```bash
+curl https://api.venice.ai/api/v1/audio/voice-changer/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "queue_id": "0190f2c4-9c1e-7a3b-8f42-2c9d5e7a1b34"
+  }' \
+  --output response.bin
+```
+
+응답은 둘 중 하나입니다. 작업이 실행 중인 동안에는 JSON을 받습니다:
+
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 10000,
+  "execution_duration": 4200
+}
+```
+
+작업이 끝나면 `audio/mpeg`를 받으며, 본문이 MP3입니다. `Content-Type`에 따라 분기하세요.
+
+두 숫자는 밀리초 단위로, 각각 이 모델의 작업이 보통 걸리는 시간과 내 작업이 실행된 시간입니다. 두 값의 차이는 첫 대기 시간으로 적당하지만, 평균은 참고용일 뿐입니다. 148초짜리 원본은 평균 7초에 대해 24초가 걸렸으므로, 긴 입력에서는 `execution_duration`이 `average_execution_time`을 넘어서게 됩니다. 그런 경우 몇 초 간격의 고정 주기로 전환해 계속 폴링하세요. 짧은 클립은 반대입니다. 7초 예제는 첫 번째 폴링에서 바로 결과가 돌아왔습니다.
+
+완료된 응답에는 `x-venice-audio-duration`(초), `x-venice-inference-time`, `x-venice-audio-format`, `x-venice-model-id`, `x-venice-model-name`이 포함됩니다. 출력은 입력과 관계없이 항상 44.1 kHz, 128 kbps 모노 MP3입니다. 오디오 길이는 원본과 몇 밀리초 이내로 일치해야 합니다. 그보다 많이 차이 난다면 배포하기 전에 직접 들어 보세요.
+
+### 실패한 경우
+
+공급자가 수락한 뒤 실패한 작업은 본문에 `error`와 `credits_refunded`가 포함된 오류 상태로 돌아옵니다. `true`는 요금이 환불되었다는 뜻입니다. `false`이면서 메시지가 "please contact support"로 끝난다면 환불 자체가 실패한 것이며, 다음 폴링에서 다시 시도합니다. 결과는 저장되므로 다시 폴링하면 같은 결과가 반복됩니다.
+
+공급자에 도달하지 못한 작업은 다르게 보입니다. retrieve가 최대 10분 동안 계속 `PROCESSING`을 반환한 뒤 `504`를 반환하고 환불하므로, `PROCESSING` 상태의 작업은 최소 그 정도 기다린 후에 멈춘 것으로 판단하세요. 전체 최종 결과 목록은 [retrieve 레퍼런스](/ko/api-reference/endpoint/audio/voice-changer/retrieve)에 있습니다.
+
+### 정리
+
+retrieve에 `delete_media_on_completion: true`를 전달하면 오디오를 반환하는 같은 호출에서 저장된 미디어가 삭제됩니다. 이후 해당 ID로 retrieve를 호출하면 `404`가 반환됩니다. 여러 번 다운로드하려면 이 옵션을 빼고, 작업이 끝났을 때 [complete](/ko/api-reference/endpoint/audio/voice-changer/complete)를 호출하세요. complete는 `{"success": true}`를 반환하며 여러 번 호출해도 안전합니다.
+
+## 전체 예시
+
+위의 모든 과정을 처음부터 끝까지 수행합니다. 음성이 존재하는지 확인하고, 견적을 받고, 업로드하고, 오디오가 도착할 때까지 폴링한 다음 저장합니다. 제한 시간을 12분으로 둔 이유는 디스패치 실패가 타임아웃이 아니라 환불로 나타나게 하기 위해서입니다.
+
+```python
+import os
+import time
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+MODEL = "elevenlabs-voice-changer"
+VOICE = "George"
+# Length you expect to send, in whole seconds. The charge uses the length Venice measures.
+EXPECTED_DURATION_SECONDS = 60
+
+source = Path("source-recording.mp3")
+
+# Voice names are not validated at queue time, so check before paying for a round trip.
+models = requests.get(f"{BASE_URL}/models", params={"type": "music"}, headers=HEADERS)
+models.raise_for_status()
+spec = next(m["model_spec"] for m in models.json()["data"] if m["id"] == MODEL)
+if VOICE not in spec["voices"] and not spec.get("supports_custom_voice_id"):
+    raise SystemExit(f"{VOICE!r} is not a voice on {MODEL}: {spec['voices']}")
+
+quote = requests.post(
+    f"{BASE_URL}/audio/voice-changer/quote",
+    json={"model": MODEL, "duration_seconds": EXPECTED_DURATION_SECONDS},
+)
+quote.raise_for_status()
+print(f"Estimated cost: ${quote.json()['quote']:.2f}")
+
+with source.open("rb") as audio:
+    queued = requests.post(
+        f"{BASE_URL}/audio/voice-changer/queue",
+        headers=HEADERS,
+        data={"model": MODEL, "voice": VOICE},
+        files={"file": audio},
+    )
+queued.raise_for_status()
+job = queued.json()
+print(f"Queued {job['queue_id']} ({job['duration_seconds']:.1f}s billed)")
+
+deadline = time.monotonic() + 12 * 60
+while time.monotonic() < deadline:
+    result = requests.post(
+        f"{BASE_URL}/audio/voice-changer/retrieve",
+        headers=HEADERS,
+        json={
+            "model": job["model"],
+            "queue_id": job["queue_id"],
+            "delete_media_on_completion": True,
+        },
+    )
+
+    content_type = result.headers.get("Content-Type", "").split(";")[0].strip()
+    if content_type == "audio/mpeg":
+        output = Path("converted-audio.mp3")
+        output.write_bytes(result.content)
+        print(f"Saved {output} ({result.headers.get('x-venice-audio-duration')}s)")
+        break
+
+    body = result.json()
+    if not result.ok:
+        # Terminal failure. credits_refunded tells you whether the charge came back.
+        print(f"{result.status_code}: {body.get('error')}")
+        print(f"credits_refunded: {body.get('credits_refunded')}")
+        raise SystemExit(1)
+
+    if body.get("status") != "PROCESSING":
+        print(body)
+        raise SystemExit(1)
+
+    # The average is a hint. On long inputs execution_duration overtakes it; fall back to a fixed interval.
+    remaining_ms = body["average_execution_time"] - body["execution_duration"]
+    time.sleep(5 if remaining_ms <= 0 else min(remaining_ms / 1000, 15))
+else:
+    raise SystemExit(
+        f"Still processing after 12 minutes. Poll retrieve again with queue_id={job['queue_id']}."
+    )
+```
+
+retrieve가 결과를 반환하면서 미디어를 삭제하므로 complete 호출은 없습니다. 파일이 두 번 이상 필요하다면 `delete_media_on_completion`을 빼고 complete를 직접 호출하세요.
+
+## API 파라미터
+
+### Queue
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| `model` | string | 예 | 보이스 체인저 모델 ID. |
+| `file` | file | `file` 또는 `audio_url` 중 하나 | 원본 녹음의 multipart 업로드. `audio_url`과 함께 사용할 수 없습니다. |
+| `audio_url` | string | `file` 또는 `audio_url` 중 하나 | JSON 본문에 포함하는 원본 녹음의 공개 `http` 또는 `https` URL. `file`과 함께 사용할 수 없습니다. |
+| `voice` | string | 아니요 | `voices`에 있는 이름, 또는 `supports_custom_voice_id`가 true인 경우 공급자 Voice ID. 기본값은 `default_voice`입니다. |
+| `remove_background_noise` | boolean | 아니요 | 변환 전에 배경 잡음을 제거합니다. 모델이 지원한다고 표시하는 경우에만 보내세요. multipart에서는 `true` 또는 `false`를 허용합니다. |
+| `seed` | integer | 아니요 | 재현 가능한 결과를 위한 0 이상의 정수. 모델이 지원한다고 표시하는 경우에만 보내세요. |
+
+### Retrieve 및 complete
+
+| 필드 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---|---|---|
+| `model` | string | 예 | - | 큐 응답의 `model`. |
+| `queue_id` | string | 예 | - | 큐 응답의 `queue_id`. |
+| `delete_media_on_completion` | boolean | 아니요 | `false` | retrieve에서, 이 호출이 오디오를 반환할 때 저장된 미디어를 삭제합니다. |
+
+## 오류
+
+| 상태 | 엔드포인트 | 본문 | 해결 방법 |
+|---|---|---|---|
+| `400` | queue | ``Provide exactly one source recording: the multipart `file` field or `audio_url`.`` | `file` 또는 `audio_url` 중 정확히 하나를 보내세요. 둘 다 보내거나 둘 다 생략하면 안 됩니다. |
+| `400` | queue | `Source audio must be one of: MP3, WAV, OGG, MP4, AAC.` | 바이트가 지원되는 컨테이너가 아닙니다. 파일 이름을 바꿔도 해결되지 않습니다. |
+| `400` | queue | `Upstream returned 404 Not Found` | `audio_url` 호스트가 오류를 반환했습니다. URL이 공개되어 있고 헤더가 필요 없는지 확인하세요. |
+| `400` | retrieve | `The requested voice is not available. Check the Voice ID and try again.`와 `credits_refunded: true` | 큐에 등록한 `voice`가 존재하지 않습니다. 요금은 환불됩니다. 큐에 등록하기 전에 `voices`를 확인하세요. |
+| `400` | retrieve, complete | `Request ID is invalid.` | 알 수 없거나, 형식이 잘못되었거나, 다른 계정의 것이거나, 24시간이 지난 ID입니다. 내 큐 응답에서 받은 `queue_id`를 사용하세요. |
+| `401` | 전체 | 유효하지 않은 API 키 | [venice.ai/settings/api](https://venice.ai/settings/api)에서 키를 확인하세요. |
+| `402` | queue, retrieve, complete | `Authentication required`와 x402 결제 제안 | `Authorization` 헤더가 전송되지 않았습니다. |
+| `402` | queue | 잔액 부족 | Venice 잔액을 충전하세요. |
+| `404` | queue, quote | `Specified model not found: ...` | 모델 ID가 잘못되었습니다. 본문에 유사한 항목이 제안됩니다. |
+| `404` | retrieve | `Media could not be found. Request may be invalid, expired, or deleted.` | 미디어가 complete 또는 `delete_media_on_completion`에 의해 이미 삭제되었습니다. 환불할 금액은 없습니다. |
+| `413` | queue | 25 MB보다 큰 파일 | 더 작은 파일을 사용하세요. 요금이 청구되기 전에 거부됩니다. |
+| `422` | queue | `Source audio must be at most N seconds.` | 녹음을 줄이세요. 요금이 청구되기 전에 거부됩니다. |
+| `429` | 전체 | 속도 제한 초과 | queue는 분당 40회, retrieve는 분당 120회까지 허용됩니다. 잠시 기다린 후 다시 시도하세요. |
+| `503` | queue | 모델 용량 초과 | 나중에 다시 시도하세요. |
+| `504` | retrieve | `The conversion was never accepted by the provider and can no longer complete.`와 `credits_refunded` | 디스패치 단계에서 작업이 유실되었습니다. 요금은 환불됩니다. 다시 큐에 등록하세요. |
+
+## 관련 리소스
+
+- [보이스 체인저 견적 API](/ko/api-reference/endpoint/audio/voice-changer/quote)
+- [보이스 체인저 큐 API](/ko/api-reference/endpoint/audio/voice-changer/queue)
+- [보이스 체인저 검색 API](/ko/api-reference/endpoint/audio/voice-changer/retrieve)
+- [보이스 체인저 완료 API](/ko/api-reference/endpoint/audio/voice-changer/complete)
+- [음악 & 사운드 이펙트 모델](/ko/models/music)
+- [보이스 클로닝](/ko/guides/media/voice-cloning)
+- [Text to Speech](/ko/guides/media/text-to-speech)

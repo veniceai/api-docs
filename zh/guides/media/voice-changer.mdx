@@ -1,0 +1,297 @@
+---
+title: "语音转换"
+description: "使用 Venice 的异步语音到语音（speech-to-speech）API 将源录音转换为另一种声音。"
+"og:title": "语音转换 | Venice API 文档"
+"og:description": "了解如何使用 Venice API 将源录音转换为另一种声音。"
+---
+
+语音转换（Voice Changer）属于语音到语音（speech-to-speech）。您提供一段录音并指定一个声音，就能得到用该声音重新演绎的同一段表演：相同的字词、相同的停顿、相同的重音、相同的时长。它适用于您已经有一条想要保留的录音的情况。如果您只有文本，请使用[文本转语音](/zh/guides/media/text-to-speech)；如果您希望将自己的声音用作目标声音，请参阅[语音克隆](/zh/guides/media/voice-cloning)。
+
+下面是一段由 `/audio/speech` 生成的 7 秒片段，以及将其转换为 George 声音后的结果。两条波形位于同一时间轴上，短语之间的间隙出现在相同的位置。
+
+<Frame as="div">
+  <img src="/images/guides/voice-changer/waveforms.webp" alt="两条波形在同一时间轴上上下排列：蓝色为源录音，橙色为转换后的录音，静音段彼此对齐" />
+</Frame>
+
+<audio controls src="/images/guides/voice-changer/source.mp3">源音频（Kokoro TTS）</audio>
+<audio controls src="/images/guides/voice-changer/converted-george.mp3">转换后（George）</audio>
+
+转换通过 `/audio/voice-changer/` 下的四个端点异步执行：[quote](/zh/api-reference/endpoint/audio/voice-changer/quote) 对指定时长进行报价，[queue](/zh/api-reference/endpoint/audio/voice-changer/queue) 提交录音并扣费，[retrieve](/zh/api-reference/endpoint/audio/voice-changer/retrieve) 轮询直到 MP3 就绪，[complete](/zh/api-reference/endpoint/audio/voice-changer/complete) 在您拿到文件后删除存储的媒体。其流程与音乐端点相同，但路径不同，且两者互不接受对方的模型。
+
+示例假定已设置 `VENICE_API_KEY`：
+
+```bash
+export VENICE_API_KEY="your-api-key"
+```
+
+## 选择模型
+
+语音转换模型位于 `GET /models?type=music` 之下，其 `model_spec.voice_changer` 为 `true`；目前没有专门的类型过滤器。现在只有一个模型 `elevenlabs-voice-changer`：它接受 `mp3`、`wav`、`ogg`、`mp4` 或 `aac` 格式、最长 300 秒的源音频，提供 20 个具名声音（默认为 `Aria`），可以用原始的 ElevenLabs Voice ID 代替声音名称，并支持 `remove_background_noise` 和 `seed`。这些细节可能会变化，因此请从 API 读取。以下查询会返回本指南后续内容所依赖的全部信息：
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=music" \
+  -H "Authorization: Bearer $VENICE_API_KEY" |
+  jq '.data[] | select(.model_spec.voice_changer == true) | {
+    id,
+    voices: .model_spec.voices,
+    default_voice: .model_spec.default_voice,
+    supports_custom_voice_id: .model_spec.supports_custom_voice_id,
+    accepted_audio_formats: .model_spec.accepted_audio_formats,
+    max_source_audio_duration_seconds: .model_spec.max_source_audio_duration_seconds,
+    supports_background_noise_removal: .model_spec.supports_background_noise_removal,
+    supports_seed: .model_spec.supports_seed,
+    durations: .model_spec.pricing.durations
+  }'
+```
+
+发送模型不支持的字段会返回 `400`。长于 `max_source_audio_duration_seconds` 的录音会在扣费前返回 `422`，消息中会给出该上限。
+
+有一项内容 API 在入队时不会检查，那就是声音名称。如果您入队了模型没有的 `voice`，仍会得到 `200` 和一个 `queue_id`；拒绝会在第一次 retrieve 时返回，并退还费用。钱虽然退回来了，但白白浪费了一次往返，所以请在入队前先检查 `voices`。
+
+## 1. 获取价格报价
+
+计费依据源录音的时长，向上取整到下一个整分钟。对于 `elevenlabs-voice-changer`，60 秒以内为 $0.35，120 秒以内为 $0.69，180 秒以内为 $1.04，240 秒以内为 $1.38，300 秒以内为 $1.73。7 秒的片段与 60 秒的片段价格相同，而 60.5 秒会按两分钟计费。如果您有许多短片段，请将它们合并成一个不跨越分钟边界的文件，而不是逐个入队。价格等级来自 `/models` 中的 `pricing.durations`。
+
+quote 接受整数秒数，且无需 API 密钥：
+
+```bash
+curl https://api.venice.ai/api/v1/audio/voice-changer/quote \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "duration_seconds": 60
+  }'
+```
+
+```json
+{
+  "quote": 0.35,
+  "duration_seconds": 60
+}
+```
+
+这只是估算值。实际扣费将根据 Venice 在录音入队时测得的时长计算。
+
+## 2. 将转换任务加入队列
+
+您可以以 multipart `file` 上传的方式发送录音，也可以在 JSON 请求体中传入 `audio_url`，但不能同时使用两者。URL 必须无需请求头或 cookie 即可公开访问；Venice 会自行获取字节内容，绝不会把 URL 传给供应商。Venice 检查的是字节内容而非扩展名，因此文件必须确实是受支持的容器格式之一，且包含视频轨道的文件会被拒绝。
+
+使用 `curl -F` 时，请不要手动设置 `Content-Type`，以便 curl 设置 multipart 边界；`remove_background_noise` 请以 `true`/`false` 发送，`seed` 请以数字发送。
+
+<CodeGroup>
+```bash File upload
+curl https://api.venice.ai/api/v1/audio/voice-changer/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "model=elevenlabs-voice-changer" \
+  -F "voice=George" \
+  -F "file=@./source-recording.mp3"
+```
+
+```bash Audio URL
+curl https://api.venice.ai/api/v1/audio/voice-changer/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "voice": "George",
+    "audio_url": "https://example.com/source-recording.mp3",
+    "remove_background_noise": true,
+    "seed": 42
+  }'
+```
+</CodeGroup>
+
+本页顶部的 George 片段正是由上面的 multipart 请求生成的。省略 `voice` 即使用 `default_voice`。当 `supports_custom_voice_id` 为 true 时，`voice` 也可以是供应商的 Voice ID；对于 `elevenlabs-voice-changer`，这意味着您可以使用任何您有权访问的 ElevenLabs 声音，包括不在 Venice `voices` 列表中的声音库声音。只有当模型报告支持时，才会接受 `remove_background_noise` 和 `seed`。
+
+响应会提供后续所有操作所需的句柄：
+
+```json
+{
+  "duration_seconds": 7.008,
+  "model": "elevenlabs-voice-changer",
+  "queue_id": "01a164db-8652-7fa9-94d6-25754090bd64",
+  "status": "QUEUED"
+}
+```
+
+`duration_seconds` 是 Venice 测得的时长，也是您被计费所依据的等级。如果您报价时用的是 60，而这里显示 61.2，那么您支付的是两分钟的费用。请保存 `model` 和 `queue_id`；retrieve 和 complete 都需要它们，且该 ID 在 24 小时内有效。
+
+扣费发生在此时，而不是在音频返回时，所以不要重试 queue 请求。如果您拿到了 `queue_id`，请用它轮询。如果响应始终没有返回，再次发送录音可能会导致重复扣费。queue 的限制为每分钟 40 次请求，retrieve 为每分钟 120 次；两者都会返回 `x-ratelimit-remaining-requests`。
+
+## 3. 轮询并下载
+
+使用 queue 响应中的值调用 retrieve：
+
+```bash
+curl https://api.venice.ai/api/v1/audio/voice-changer/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "elevenlabs-voice-changer",
+    "queue_id": "0190f2c4-9c1e-7a3b-8f42-2c9d5e7a1b34"
+  }' \
+  --output response.bin
+```
+
+响应有两种情况。任务运行期间，您会得到 JSON：
+
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 10000,
+  "execution_duration": 4200
+}
+```
+
+任务完成后，您会得到 `audio/mpeg`，响应体即为 MP3。请根据 `Content-Type` 进行分支处理。
+
+这两个数字的单位都是毫秒：分别表示该模型上任务通常所需的时间，以及您的任务已运行的时间。两者之差可以作为第一次等待的合理时长，但平均值只是参考。一段 148 秒的源音频耗时 24 秒，而平均值只有 7 秒，因此对于较长的输入，`execution_duration` 会超过 `average_execution_time`。出现这种情况时，请改用几秒钟的固定间隔继续轮询。短片段则相反：7 秒的示例在第一次轮询时就返回了。
+
+完成的响应会携带 `x-venice-audio-duration`（秒）、`x-venice-inference-time`、`x-venice-audio-format`、`x-venice-model-id` 和 `x-venice-model-name`。无论输入是什么，输出始终是 128 kbps、44.1 kHz 的单声道 MP3。音频时长应与源音频相差不超过几毫秒；如果偏差更大，请在发布前先试听。
+
+### 如果失败
+
+供应商已接受但随后失败的任务，会返回错误状态，响应体中包含 `error` 和 `credits_refunded`。`true` 表示费用已退还。`false` 且消息以 "please contact support" 结尾，表示退款本身失败，下一次轮询会再次尝试。结果会被保存，因此再次轮询会重放该结果。
+
+从未送达供应商的任务表现不同。retrieve 会持续返回 `PROCESSING` 长达 10 分钟，然后返回 `504` 并为您退款，因此在将 `PROCESSING` 任务视为卡住之前，请至少等待这么长时间。完整的终态结果列表请参阅 [retrieve 参考文档](/zh/api-reference/endpoint/audio/voice-changer/retrieve)。
+
+### 清理
+
+在 retrieve 中传入 `delete_media_on_completion: true`，存储的媒体会在向您返回音频的同一次调用中被删除。之后针对该 ID 的任何 retrieve 都会返回 `404`。如果您想多次下载，请不要设置该参数，并在完成后调用 [complete](/zh/api-reference/endpoint/audio/voice-changer/complete)。complete 返回 `{"success": true}`，可以安全地重复调用。
+
+## 完整示例
+
+以上所有步骤的端到端示例：检查声音是否存在、报价、上传、轮询直到音频返回、保存文件。截止时间设为 12 分钟，这样分派失败会表现为退款而不是超时。
+
+```python
+import os
+import time
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+MODEL = "elevenlabs-voice-changer"
+VOICE = "George"
+# Length you expect to send, in whole seconds. The charge uses the length Venice measures.
+EXPECTED_DURATION_SECONDS = 60
+
+source = Path("source-recording.mp3")
+
+# Voice names are not validated at queue time, so check before paying for a round trip.
+models = requests.get(f"{BASE_URL}/models", params={"type": "music"}, headers=HEADERS)
+models.raise_for_status()
+spec = next(m["model_spec"] for m in models.json()["data"] if m["id"] == MODEL)
+if VOICE not in spec["voices"] and not spec.get("supports_custom_voice_id"):
+    raise SystemExit(f"{VOICE!r} is not a voice on {MODEL}: {spec['voices']}")
+
+quote = requests.post(
+    f"{BASE_URL}/audio/voice-changer/quote",
+    json={"model": MODEL, "duration_seconds": EXPECTED_DURATION_SECONDS},
+)
+quote.raise_for_status()
+print(f"Estimated cost: ${quote.json()['quote']:.2f}")
+
+with source.open("rb") as audio:
+    queued = requests.post(
+        f"{BASE_URL}/audio/voice-changer/queue",
+        headers=HEADERS,
+        data={"model": MODEL, "voice": VOICE},
+        files={"file": audio},
+    )
+queued.raise_for_status()
+job = queued.json()
+print(f"Queued {job['queue_id']} ({job['duration_seconds']:.1f}s billed)")
+
+deadline = time.monotonic() + 12 * 60
+while time.monotonic() < deadline:
+    result = requests.post(
+        f"{BASE_URL}/audio/voice-changer/retrieve",
+        headers=HEADERS,
+        json={
+            "model": job["model"],
+            "queue_id": job["queue_id"],
+            "delete_media_on_completion": True,
+        },
+    )
+
+    content_type = result.headers.get("Content-Type", "").split(";")[0].strip()
+    if content_type == "audio/mpeg":
+        output = Path("converted-audio.mp3")
+        output.write_bytes(result.content)
+        print(f"Saved {output} ({result.headers.get('x-venice-audio-duration')}s)")
+        break
+
+    body = result.json()
+    if not result.ok:
+        # Terminal failure. credits_refunded tells you whether the charge came back.
+        print(f"{result.status_code}: {body.get('error')}")
+        print(f"credits_refunded: {body.get('credits_refunded')}")
+        raise SystemExit(1)
+
+    if body.get("status") != "PROCESSING":
+        print(body)
+        raise SystemExit(1)
+
+    # The average is a hint. On long inputs execution_duration overtakes it; fall back to a fixed interval.
+    remaining_ms = body["average_execution_time"] - body["execution_duration"]
+    time.sleep(5 if remaining_ms <= 0 else min(remaining_ms / 1000, 15))
+else:
+    raise SystemExit(
+        f"Still processing after 12 minutes. Poll retrieve again with queue_id={job['queue_id']}."
+    )
+```
+
+这里没有调用 complete，因为 retrieve 在返回时就删除了媒体。如果您需要多次获取文件，请去掉 `delete_media_on_completion` 并自行调用 complete。
+
+## API 参数
+
+### Queue
+
+| 字段 | 类型 | 必填 | 描述 |
+|---|---|---|---|
+| `model` | string | 是 | 语音转换模型 ID。 |
+| `file` | file | `file` 或 `audio_url` 二选一 | 以 multipart 上传的源录音。与 `audio_url` 互斥。 |
+| `audio_url` | string | `file` 或 `audio_url` 二选一 | 源录音的公开 `http` 或 `https` URL，放在 JSON 请求体中。与 `file` 互斥。 |
+| `voice` | string | 否 | `voices` 中的名称；当 `supports_custom_voice_id` 为 true 时，也可以是供应商的 Voice ID。默认为 `default_voice`。 |
+| `remove_background_noise` | boolean | 否 | 在转换前去除背景噪声。仅在模型报告支持时发送。multipart 接受 `true` 或 `false`。 |
+| `seed` | integer | 否 | ≥ 0 的整数，用于获得可复现的结果。仅在模型报告支持时发送。 |
+
+### Retrieve 和 complete
+
+| 字段 | 类型 | 必填 | 默认值 | 描述 |
+|---|---|---|---|---|
+| `model` | string | 是 | - | queue 响应中的 `model`。 |
+| `queue_id` | string | 是 | - | queue 响应中的 `queue_id`。 |
+| `delete_media_on_completion` | boolean | 否 | `false` | 在 retrieve 中，当本次调用返回音频时删除存储的媒体。 |
+
+## 错误
+
+| 状态码 | 端点 | 响应体 | 解决方法 |
+|---|---|---|---|
+| `400` | queue | ``Provide exactly one source recording: the multipart `file` field or `audio_url`.`` | 发送 `file` 或 `audio_url` 之一，不能两者都发，也不能都不发。 |
+| `400` | queue | `Source audio must be one of: MP3, WAV, OGG, MP4, AAC.` | 字节内容不是受支持的容器格式。重命名文件无济于事。 |
+| `400` | queue | `Upstream returned 404 Not Found` | `audio_url` 所在主机返回了错误。请检查该 URL 是否公开且无需请求头。 |
+| `400` | retrieve | `The requested voice is not available. Check the Voice ID and try again.` 且 `credits_refunded: true` | 您入队的 `voice` 不存在。费用已退还。请在入队前检查 `voices`。 |
+| `400` | retrieve、complete | `Request ID is invalid.` | ID 未知、格式错误、属于其他账户或已超过 24 小时。请使用您自己的 queue 响应中的 `queue_id`。 |
+| `401` | 全部 | API 密钥无效 | 在 [venice.ai/settings/api](https://venice.ai/settings/api) 检查密钥。 |
+| `402` | queue、retrieve、complete | `Authentication required` 以及 x402 付款报价 | 未发送 `Authorization` 请求头。 |
+| `402` | queue | 余额不足 | 为您的 Venice 账户充值。 |
+| `404` | queue、quote | `Specified model not found: ...` | 模型 ID 错误。响应体会给出相近的匹配项。 |
+| `404` | retrieve | `Media could not be found. Request may be invalid, expired, or deleted.` | 媒体已被 complete 或 `delete_media_on_completion` 删除。无需退款。 |
+| `413` | queue | 文件大于 25 MB | 使用更小的文件。该请求会在扣费前被拒绝。 |
+| `422` | queue | `Source audio must be at most N seconds.` | 缩短录音。该请求会在扣费前被拒绝。 |
+| `429` | 全部 | 超出速率限制 | queue 允许每分钟 40 次，retrieve 允许每分钟 120 次。请退避后重试。 |
+| `503` | queue | 模型容量已满 | 稍后重试。 |
+| `504` | retrieve | `The conversion was never accepted by the provider and can no longer complete.` 且带有 `credits_refunded` | 任务在分派时成为孤立任务。费用已退还。请重新入队。 |
+
+## 相关资源
+
+- [Quote Voice Changer API](/zh/api-reference/endpoint/audio/voice-changer/quote)
+- [Queue Voice Changer API](/zh/api-reference/endpoint/audio/voice-changer/queue)
+- [Retrieve Voice Changer API](/zh/api-reference/endpoint/audio/voice-changer/retrieve)
+- [Complete Voice Changer API](/zh/api-reference/endpoint/audio/voice-changer/complete)
+- [音乐与音效模型](/zh/models/music)
+- [语音克隆](/zh/guides/media/voice-cloning)
+- [文本转语音](/zh/guides/media/text-to-speech)

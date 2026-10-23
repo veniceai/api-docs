@@ -1,6 +1,6 @@
 ---
 title: Generación de vídeo
-description: "Genera vídeos a partir de texto o imágenes con la cola asíncrona de Venice: envía la tarea, consulta su estado y descarga el resultado."
+description: "Genera vídeos desde texto o imágenes con la cola asíncrona de Venice: cotiza el precio, envía a /video/queue y consulta /video/retrieve para el MP4."
 "og:title": "Video Generation | Venice API Docs"
 "og:description": "Aprende a generar vídeos a partir de prompts de texto o imágenes usando la API de generación de vídeo asíncrona de Venice."
 ---
@@ -15,6 +15,8 @@ La generación de vídeo es asíncrona. Envía un trabajo, guarda `queue_id` y h
 | `POST /video/queue` | Envía la solicitud de generación | Sí |
 | `POST /video/retrieve` | Consulta estado o descarga el vídeo | Sí |
 | `POST /video/complete` | Elimina el vídeo del almacenamiento | No |
+
+La API no ofrece un endpoint para listar trabajos de vídeo anteriores. `/video/retrieve` consulta un trabajo a la vez por `queue_id`. Guarda cada `queue_id` (y el `download_url`, si se devuelve) en tu propia base de datos al encolar un trabajo. Para revisar cuánto gastaste en generaciones anteriores, usa el [historial de uso de facturación](/es/api-reference/endpoint/billing/usage-history).
 
 ## Paso 1: encola la generación
 
@@ -41,7 +43,7 @@ Content-Type: application/json
 }
 ```
 
-Para los modelos Grok Imagine Private, la respuesta de la cola incluye un campo extra `download_url`:
+Para algunos modelos, la respuesta de la cola incluye un campo extra `download_url`:
 
 ```json
 {
@@ -51,12 +53,7 @@ Para los modelos Grok Imagine Private, la respuesta de la cola incluye un campo 
 }
 ```
 
-`download_url` es una URL pre-firmada que usas para descargar el vídeo terminado en lugar de leerlo desde la respuesta de retrieve. Solo se devuelve una vez en la respuesta de la cola, así que persístela junto con `queue_id`. Esto se aplica a las cuatro variantes Grok Imagine Private:
-
-- `grok-imagine-text-to-video-private`
-- `grok-imagine-image-to-video-private`
-- `grok-imagine-reference-to-video-private`
-- `grok-imagine-video-to-video-private`
+`download_url` es una URL pre-firmada que usas para descargar el vídeo terminado en lugar de leerlo desde la respuesta de retrieve. Solo se devuelve una vez en la respuesta de la cola, así que persístela junto con `queue_id`. Los modelos que lo devuelven pueden cambiar, así que no decidas por el nombre del modelo: comprueba si `download_url` está presente en la respuesta de la cola. Si no aparece, obtén el vídeo desde `/video/retrieve`.
 
 A diferencia de las variantes públicas `grok-imagine-*-video`, los modelos Grok Imagine Private no se facturan por rechazos de moderación de contenido, por lo que solo pagas por generaciones exitosas.
 
@@ -64,7 +61,7 @@ Guarda `model`, `queue_id` y `download_url` (si está presente) para todas las l
 
 ### Enlaces de descarga privados
 
-Para los modelos privados, `download_url` es la forma de obtener el archivo terminado una vez completado el trabajo. El enlace es **de corta duración y de un solo propósito**: está ahí para entregarte el MP4, no para servir como URL de larga duración o ampliamente compartida.
+Cuando la respuesta de la cola incluye `download_url`, esa URL es la forma de obtener el archivo terminado una vez completado el trabajo. El enlace es **de corta duración y de un solo propósito**: está ahí para entregarte el MP4, no para servir como URL de larga duración o ampliamente compartida.
 
 Si una descarga se interrumpe, puedes **reintentar el mismo `GET` unas cuantas veces** desde el mismo entorno hasta que el archivo termine. Esos reintentos son para recuperarse de cortes de red — no para hacer polling indefinido del mismo enlace, compartirlo entre muchos clientes o incrustarlo como una URL de medios permanente. Patrones así suelen aparecer como **`429`** o **`410`**, lo que puede ser sorprendente si esperabas que el enlace se comportara como hosting de archivos normal.
 
@@ -123,7 +120,7 @@ Los tiempos están en milisegundos. Usa `average_execution_time` para estimar la
 El cuerpo de la respuesta son datos binarios en bruto del vídeo. Guárdalo en un archivo.
 
 **Respuesta completada (200, application/json con `"COMPLETED"`):**
-Para los modelos que devolvieron un `download_url` en la cola, retrieve siempre devuelve JSON. Obtén el vídeo con `GET download_url` (sin cabecera de auth). Consulta [Enlaces de descarga privados](#private-download-links) para saber cómo funcionan estas URLs, los reintentos y el `DELETE` opcional.
+Para los modelos que devolvieron un `download_url` en la cola, retrieve siempre devuelve JSON. Obtén el vídeo con `GET download_url` (sin cabecera de auth). Consulta [Enlaces de descarga privados](#enlaces-de-descarga-privados) para saber cómo funcionan estas URLs, los reintentos y el `DELETE` opcional.
 
 ## Paso 3: limpieza (opcional)
 
@@ -254,12 +251,13 @@ await fetch(`${BASE_URL}/video/complete`, {
 | Parámetro | Tipo | Obligatorio | Predeterminado | Descripción |
 |-----------|------|----------|---------|-------------|
 | `model` | string | Sí | - | ID del modelo. Usa `wan-2.5-preview-text-to-video` para text-to-video, `wan-2.5-preview-image-to-video` para image-to-video |
-| `prompt` | string | Sí | - | Qué generar. Máx. 2500 caracteres |
+| `prompt` | string | Sí | - | Qué generar. La longitud máxima es específica de cada modelo y varía mucho: desde unos cientos de caracteres hasta 20,000. Los modelos que no declaran su propio límite usan 2,500 por defecto. Lee `model_spec.constraints.prompt_character_limit` en `GET /models?type=video` en lugar de asumir un único límite |
 | `negative_prompt` | string | No | `"low resolution, error, worst quality, low quality, defects"` | Qué evitar |
-| `duration` | string | Sí | - | `"5s"` o `"10s"` |
-| `resolution` | string | No | `"720p"` | `"480p"`, `"720p"` o `"1080p"` |
+| `duration` | string | Sí | - | Específico del modelo. Por ejemplo, los modelos `wan-2.5-preview` aceptan `"5s"` o `"10s"`. Lee `model_spec.constraints.durations` en `GET /models?type=video` |
+| `resolution` | string | No | `"720p"` | Específico del modelo. Por ejemplo, los modelos `wan-2.5-preview` aceptan `"480p"`, `"720p"` o `"1080p"`. Lee `model_spec.constraints.resolutions` en `GET /models?type=video` |
 | `aspect_ratio` | string | Condicional | - | Depende del modelo. Obligatorio para modelos que exponen opciones de aspect ratio; omítelo para modelos que no admiten selección de aspect ratio |
 | `audio` | boolean | Condicional | `true` (cuando se admite) | Solo válido para modelos con `supportsAudioConfig: true`; omítelo para modelos sin soporte de configuración de audio |
+| `bitrate_mode` | string | No | `"standard"` | Solo Seedance 2.0 / 2.5. `"standard"` o `"high"`. `high` solicita una codificación de mayor calidad y archivos más grandes. No cambia el precio. Omítelo para otras familias |
 | `image_url` | string | Solo para image-to-video | - | URL o data URL en base64 de la imagen fuente |
 | `audio_url` | string | Condicional | - | URL o data URL en base64 del audio de referencia para modelos que admiten entrada de audio |
 
@@ -270,8 +268,8 @@ La validación de la cola es específica del modelo. Comprueba `/models?type=vid
 | Parámetro | Tipo | Obligatorio | Predeterminado | Descripción |
 |-----------|------|----------|---------|-------------|
 | `model` | string | Sí | - | ID del modelo para cotizar |
-| `duration` | string | Sí | - | `"5s"` o `"10s"` |
-| `resolution` | string | No | `"720p"` | `"480p"`, `"720p"` o `"1080p"` |
+| `duration` | string | Sí | - | Específico del modelo. Por ejemplo, los modelos `wan-2.5-preview` aceptan `"5s"` o `"10s"`. Lee `model_spec.constraints.durations` en `GET /models?type=video` |
+| `resolution` | string | No | `"720p"` | Específico del modelo. Por ejemplo, los modelos `wan-2.5-preview` aceptan `"480p"`, `"720p"` o `"1080p"`. Lee `model_spec.constraints.resolutions` en `GET /models?type=video` |
 | `aspect_ratio` | string | Condicional | - | Inclúyelo cuando el modelo seleccionado admita o requiera selección de aspect ratio |
 | `audio` | boolean | Condicional | `true` (cuando se admite) | Solo válido para modelos con `supportsAudioConfig: true` |
 
@@ -340,14 +338,14 @@ Obtén el coste exacto antes de generar. Envía solo entradas de precio (`model`
 La cotización es en USD.
 
 <Info>
-**Los parámetros de cotización son solo entradas de precio.** Los campos que envías a `/video/quote` —incluyendo `aspect_ratio`, `audio` y `reference_video_total_duration`— se usan únicamente para calcular el precio. **No** se reenvían a `/video/queue` y no afectan al vídeo generado. Enviar `aspect_ratio` a quote se acepta incluso para modelos (como `seedance-2-0-image-to-video`) que rechazan `aspect_ratio` en el momento de la generación, ya que los modelos image-to-video derivan la relación de aspecto de salida a partir de la imagen de entrada.
+**Los parámetros de cotización son solo entradas de precio.** Los campos que envías a `/video/quote` —incluyendo `aspect_ratio`, `audio` y `reference_video_total_duration`— se usan únicamente para calcular el precio. **No** se reenvían a `/video/queue` y no afectan al vídeo generado. Enviar `aspect_ratio` a quote se acepta incluso para modelos (como `seedance-2-0-image-to-video-basic`) que rechazan `aspect_ratio` en el momento de la generación, ya que los modelos image-to-video derivan la relación de aspecto de salida a partir de la imagen de entrada.
 </Info>
 
 ### Precios de reference-to-video
 
 Para los modelos R2V (p. ej., Seedance 2.0 R2V), pasa `reference_video_total_duration` —la duración agregada en segundos de todos los clips de referencia que planeas incluir— para que la cotización refleje el nivel de tarifa "input with video" y la fórmula de tokens `(input + output) × pixels`. Omítelo y la cotización devolverá la línea base sin referencia.
 
-`reference_video_total_duration` solo es reconocido por `/video/quote`. No tiene efecto en `/video/queue` y omitirlo no provocará un error de generación.
+`reference_video_total_duration` es un campo exclusivo de quote. No lo envíes a `/video/queue`: la cola rechaza los campos desconocidos, así que incluirlo devuelve `400`.
 
 ### Mostrar precios estables
 
@@ -362,13 +360,17 @@ Las cotizaciones son puntuales en el tiempo y los precios pueden cambiar. Si qui
 | 400 | `queue`, `quote`, `retrieve`, `complete` | Parámetros no válidos | Verifica el cuerpo de la solicitud contra el schema |
 | 401 | `queue`, `retrieve`, `complete` | Auth fallida | Comprueba la API key |
 | 402 | `queue` | Saldo insuficiente | Añade fondos |
-| 404 | `retrieve`, `download_url` | Media no encontrado (no válido, expirado o eliminado) | Verifica `model`/`queue_id` o vuelve a encolar |
+| 400 | `retrieve` | `queue_id` desconocido o perteneciente a otra cuenta | Verifica `model`/`queue_id` |
+| 404 | `retrieve`, `download_url` | Media expirado o eliminado | Vuelve a encolar |
+| 404 | `queue` | Modelo desconocido | Comprueba el ID del modelo con `GET /models?type=video` |
 | 410 | `download_url` | URL pre-firmada expirada, totalmente usada o revocada (por ejemplo, tras `DELETE`) | Inicia una nueva generación si necesitas otro archivo; cada enlace es intencionadamente de corta duración |
 | 429 | `download_url` | Rate-limited — a menudo por muchos reintentos o descargas repetidas del mismo enlace | Termina la descarga (algunos reintentos están bien si la conexión cae), guarda una copia local y usa `DELETE` si quieres limpiar el enlace; mantén el acceso continuado en tu propio almacenamiento |
+| 429 | `queue`, `retrieve`, `quote` (modelos de upscale) | Rate-limited. Los límites se aplican por cuenta, no por API key, así que todas tus keys los comparten. `queue` también puede devolver `429` cuando un modelo está sobrecargado | Reintenta con backoff exponencial; consulta los [headers de rate limit](/es/api-reference/rate-limiting) estándar para saber cuándo reintentar y evita hacer polling más rápido de lo necesario |
 | 413 | `queue` | Payload demasiado grande | Reduce el tamaño de imagen/audio |
 | 422 | `queue`, `retrieve` | Infracción de contenido | Modifica el prompt |
 | 500 | `queue`, `retrieve`, `complete` | Inferencia/procesamiento fallido | Reintenta con backoff; contacta con soporte si persiste |
 | 503 | `retrieve` | Modelo a capacidad máxima | Reintenta con backoff |
+| 503 | `queue` | Modelo fuera de línea | Reintenta más tarde o elige otro modelo |
 
 ---
 
@@ -377,9 +379,9 @@ Las cotizaciones son puntuales en el tiempo y los precios pueden cambiar. Si qui
 1. Haz polling de `/video/retrieve` a intervalos (por ejemplo, cada 5 segundos)
 2. Si `Content-Type` es `application/json` y `status` es `"PROCESSING"`, espera y vuelve a hacer polling. Usa `average_execution_time` y `execution_duration` (milisegundos) para estimar el tiempo restante
 3. Si `Content-Type` es `video/mp4`, guarda el cuerpo de la respuesta como tu archivo de salida
-4. Si `Content-Type` es `application/json` y `status` es `"COMPLETED"`, haz `GET` del `download_url` de la respuesta de la cola para obtener el vídeo (consulta [Enlaces de descarga privados](#private-download-links))
+4. Si `Content-Type` es `application/json` y `status` es `"COMPLETED"`, haz `GET` del `download_url` de la respuesta de la cola para obtener el vídeo (consulta [Enlaces de descarga privados](#enlaces-de-descarga-privados))
 5. Si usaste `download_url`, considera hacer `DELETE` en esa URL cuando termines para reducir cuánto existe la URL pre-firmada; después, opcionalmente, establece `delete_media_on_completion: true` en retrieve o llama a `/video/complete` para limpieza basada en cola
-6. Gestiona `404` como media no válido, expirado o eliminado; gestiona `500/503` con reintentos/backoff
+6. Gestiona `400` como un `queue_id` desconocido y `404` como media expirado o eliminado; gestiona `429/500/503` con reintentos/backoff
 
 ---
 

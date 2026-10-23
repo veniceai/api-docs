@@ -13,7 +13,7 @@ Ce guide parcourt l'ensemble du flux de bout en bout et couvre les options de fi
 
 * Un portefeuille EVM sur Base contrôlé par l'agent (clé privée dans une variable d'environnement ou un gestionnaire de secrets).
 * Une petite quantité d'ETH sur Base pour les frais de gas (le staking est constitué de deux transactions : `approve` puis `stake`).
-* Une quantité non nulle de VVV à staker. L'endpoint de création requiert seulement que le portefeuille ait un solde sVVV non nul, donc 1 VVV suffit pour générer une clé. Voir [Payer pour l'inférence](#paying-for-inference) pour ce dont vous avez réellement besoin pour appeler les endpoints payants.
+* Une quantité non nulle de VVV à staker. L'endpoint de création requiert seulement que le portefeuille ait un solde sVVV non nul, donc 1 VVV suffit pour générer une clé. Voir [Payer pour l'inférence](#payer-pour-linférence) pour ce dont vous avez réellement besoin pour appeler les endpoints payants.
 
 <Tip>
   Utilisez un portefeuille agent dédié plutôt qu'un portefeuille de trésorerie. La clé privée du portefeuille signe chaque demande de token Venice, son rayon d'impact doit donc être limité.
@@ -74,7 +74,17 @@ Ce guide parcourt l'ensemble du flux de bout en bout et couvre les options de fi
 
     Champs requis : `address`, `signature`, `token`, `apiKeyType` (`INFERENCE` ou `ADMIN`).
 
-    Champs optionnels : `description`, `expiresAt`, `consumptionLimit` (plafonne la dépense totale sur cette clé, libellée en `usd`, `vcu` ou `diem`).
+    Champs optionnels :
+
+    - `description`, `expiresAt`
+    - `consumptionLimit` — le plafond de dépense pour cette clé, libellé en `usd` ou `diem` (`vcu` est obsolète ; utilisez `diem` à la place)
+    - `limitPeriod` — la fenêtre sur laquelle le plafond est mesuré : `EPOCH` (réinitialisé chaque jour UTC), `MONTH` (réinitialisé le 1er de chaque mois UTC) ou `LIFETIME` (jamais réinitialisé, le plafond est donc permanent)
+    - `modelPrivacy` — les modèles que la clé peut appeler, par niveau de confidentialité : `ALL`, `PRIVATE_TEXT` ou `PRIVATE_ONLY`
+    - `ipAllowlist` — les adresses IPv4 ou IPv6 et les sous-réseaux CIDR autorisés à utiliser la clé (jusqu'à 100 entrées) ; une liste vide autorise toute adresse IP
+
+    <Warning>
+    `limitPeriod` vaut `EPOCH` par défaut lorsqu'il est omis, ce qui signifie que le plafond **se réinitialise chaque jour** au lieu d'être un total à vie. Une clé créée avec `consumptionLimit: {"usd": 50}` et sans `limitPeriod` peut dépenser 50 $ par jour. Pour une clé d'agent sans surveillance, définissez explicitement `limitPeriod: "LIFETIME"` afin que la limite soit un plafond permanent.
+    </Warning>
 
     En cas de succès, la réponse contient la chaîne `apiKey` créée. Stockez-la dans le secret store de l'agent et utilisez-la comme un token Bearer normal (`Authorization: Bearer <key>`).
   </Step>
@@ -82,7 +92,7 @@ Ce guide parcourt l'ensemble du flux de bout en bout et couvre les options de fi
 
 ## Exemple de bout en bout
 
-L'exemple ci-dessous utilise un vrai portefeuille depuis une variable d'environnement plutôt qu'un portefeuille généré aléatoirement. Un portefeuille aléatoire n'a pas de VVV staké et la création sera rejetée avec l'erreur `Wallet has no staked VVV on Base`.
+L'exemple ci-dessous utilise un vrai portefeuille depuis une variable d'environnement plutôt qu'un portefeuille généré aléatoirement. Un portefeuille aléatoire n'a pas de VVV staké et la création sera rejetée avec une erreur `Wallet 0x… has no staked VVV on Base`.
 
 ```typescript
 import { ethers } from "ethers"
@@ -104,6 +114,9 @@ const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate
     token,
     apiKeyType: "INFERENCE",
     description: "Agent key",
+    // Un plafond permanent de 50 $. Sans limitPeriod, il se réinitialiserait chaque jour.
+    consumptionLimit: { usd: 50 },
+    limitPeriod: "LIFETIME",
   }),
 })
 
@@ -128,13 +141,13 @@ L'endpoint renvoie des messages d'erreur spécifiques et exploitables. Mappez-le
 | `400` | `JWT is malformed` | Le `token` soumis n'est pas un JWT. | Assurez-vous d'envoyer exactement la chaîne `token` renvoyée par l'endpoint `GET`. |
 | `400` | `Wallet signature does not match` | La `signature` ne correspond pas à l'`address` pour le `token` donné. | Signez les octets bruts du token avec le portefeuille qui possède `address`. |
 | `400` | `Could not verify wallet signature` | L'appel RPC pour vérifier la signature a échoué (transitoire). | Réessayez avec backoff. |
-| `400` | `Wallet has no staked VVV on Base` | Le portefeuille a un solde sVVV nul. | Stakez d'abord du VVV, puis réessayez. |
+| `400` | `has no staked VVV` | Le portefeuille a un solde sVVV nul. Le message complet est `Wallet 0x… has no staked VVV on Base`, avec l'adresse de votre portefeuille à la place de `0x…`, suivi d'un lien ; faites donc la correspondance sur `has no staked VVV` plutôt que sur le texte complet. | Stakez d'abord du VVV, puis réessayez. |
 
 ## Payer pour l'inférence
 
 Générer une clé et pouvoir appeler des endpoints payants avec elle sont deux choses distinctes. Une clé fraîchement créée s'authentifie correctement mais ne peut pas appeler les endpoints payants (comme `/chat/completions`) tant que le compte du portefeuille n'a pas un solde dépensable.
 
-La clé créée peut dépenser depuis le compte utilisateur dans cet ordre de priorité : DIEM, puis crédits groupés, puis USD.
+La clé créée peut dépenser depuis le compte utilisateur dans cet ordre de priorité : DIEM, puis crédits gagnés, puis crédits groupés, puis USD.
 
 | Source de financement | Autonome ? | Comment |
 | --- | --- | --- |
@@ -146,24 +159,24 @@ La clé créée peut dépenser depuis le compte utilisateur dans cet ordre de pr
 Si l'agent a besoin d'un chemin de financement entièrement crypto-natif et headless, les options les plus propres sont :
 
 1. **Staker plus de VVV** pour que l'allocation quotidienne de DIEM couvre la dépense de l'agent. La clé créée le récupère automatiquement.
-2. **Utiliser le [flux portefeuille x402](/guides/integrations/x402-venice-api) au lieu de la clé API.** Avec x402, l'agent signe un message Sign-In-With-X par requête, recharge directement avec de l'USDC sur Base ou Solana via `POST /api/v1/x402/top-up`, et paie par requête. Le solde USDC x402 est lié au portefeuille, pas à l'utilisateur, donc il n'apparaît pas comme solde pour la clé Bearer créée, mais cela permet au même portefeuille de payer l'inférence de manière programmatique.
+2. **Utiliser le [flux portefeuille x402](/fr/guides/integrations/x402-venice-api) au lieu de la clé API.** Avec x402, l'agent signe un message Sign-In-With-X par requête, recharge directement avec de l'USDC sur Base ou Solana via `POST /api/v1/x402/top-up`, et paie par requête. Le solde USDC x402 est lié au portefeuille, pas à l'utilisateur, donc il n'apparaît pas comme solde pour la clé Bearer créée, mais cela permet au même portefeuille de payer l'inférence de manière programmatique.
 
 ## Ressources connexes
 
 <CardGroup cols={2}>
-  <Card title="Crypto et agents" icon="link" href="/guides/integrations/crypto-rpc-agents">
+  <Card title="Crypto et agents" icon="link" href="/fr/guides/integrations/crypto-rpc-agents">
     Utilisez Venice à la fois comme fournisseur de modèle et comme couche RPC blockchain pour les agents autonomes.
   </Card>
 
-  <Card title="Authentification par portefeuille x402" icon="wallet" href="/guides/integrations/x402-venice-api">
+  <Card title="Authentification par portefeuille x402" icon="wallet" href="/fr/guides/integrations/x402-venice-api">
     Payez par requête avec de l'USDC sur Base ou Solana, sans clé API requise.
   </Card>
 
-  <Card title="Endpoint de génération de clé API Web3" icon="code" href="/api-reference/endpoint/api_keys/generate_web3_key/post">
+  <Card title="Endpoint de génération de clé API Web3" icon="code" href="/fr/api-reference/endpoint/api_keys/generate_web3_key/post">
     Référence de l'endpoint pour l'endpoint de création.
   </Card>
 
-  <Card title="Guide de clé API standard" icon="key" href="/guides/getting-started/generating-api-key">
+  <Card title="Guide de clé API standard" icon="key" href="/fr/guides/getting-started/generating-api-key">
     Pour les utilisateurs qui préfèrent générer une clé depuis le tableau de bord.
   </Card>
 </CardGroup>

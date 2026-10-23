@@ -7,10 +7,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const { getRemovalDate: getModelRemovalDate } = require('./model-helpers');
 
 const ROOT = path.join(__dirname, '..');
 const MODELS_PATH = path.join(ROOT, 'data', 'static-models.json');
 const TRAITS_PATH = path.join(ROOT, 'data', 'static-traits.json');
+const REMOVED_DEPRECATIONS_PATH = path.join(ROOT, 'data', 'removed-deprecations.json');
 const DEPRECATIONS_PAGE_PATH = path.join(ROOT, 'overview', 'deprecations.mdx');
 const TRAITS_PAGE_PATH = path.join(ROOT, 'api-reference', 'endpoint', 'models', 'traits.mdx');
 
@@ -58,10 +60,6 @@ function tableCell(value) {
   return String(value).replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function renderTraitsList(traits) {
   const entries = sortTraits(traits);
   if (entries.length === 0) return 'No text model traits are currently available.';
@@ -69,11 +67,6 @@ function renderTraitsList(traits) {
   return entries
     .map(([trait, modelId]) => `- ${inlineCode(trait)} → currently routes to ${inlineCode(modelId)}`)
     .join('\n');
-}
-
-function getModelRemovalDate(model) {
-  const deprecation = model.model_spec?.deprecation;
-  return deprecation?.removesAt || deprecation?.date || null;
 }
 
 function getDeprecationStatus(removalDate, now) {
@@ -167,29 +160,13 @@ function updateDeprecationsPage(page, traits, models) {
 }
 
 function updateTraitsApiPage(page, traits) {
-  const section = [
+  return replacePlaceholder(
+    page,
+    'traits-list-placeholder',
     API_TRAITS_START,
-    '## Current text trait mappings',
-    '',
-    'These mappings are refreshed automatically from the public API.',
-    '',
-    renderTraitsList(traits),
-    API_TRAITS_END
-  ].join('\n');
-
-  const legacyStart = '<!-- AUTO-GENERATED:API-TRAITS:START -->';
-  const legacyEnd = '<!-- AUTO-GENERATED:API-TRAITS:END -->';
-  const existingPattern = new RegExp([
-    `${escapeRegExp(API_TRAITS_START)}[\\s\\S]*?${escapeRegExp(API_TRAITS_END)}`,
-    `${escapeRegExp(legacyStart)}[\\s\\S]*?${escapeRegExp(legacyEnd)}`
-  ].join('|'));
-  if (existingPattern.test(page)) return page.replace(existingPattern, section);
-
-  const separator = '-------';
-  if (!page.includes(separator)) {
-    throw new Error('Missing OpenAPI separator in traits endpoint page');
-  }
-  return page.replace(separator, `${section}\n\n${separator}`);
+    API_TRAITS_END,
+    renderTraitsList(traits)
+  );
 }
 
 function writeIfChanged(filePath, content) {
@@ -209,10 +186,14 @@ function main() {
   if (!traits || typeof traits !== 'object' || Array.isArray(traits)) {
     throw new Error('Trait snapshot must be an object');
   }
+  const removed = fs.existsSync(REMOVED_DEPRECATIONS_PATH) ? readJson(REMOVED_DEPRECATIONS_PATH) : [];
+  if (!Array.isArray(removed)) throw new Error('Removed deprecations must be an array');
+  const liveIds = new Set(models.map(m => m.id));
+  const trackedModels = [...models, ...removed.filter(m => !liveIds.has(m.id))];
 
   const deprecationsPage = fs.readFileSync(DEPRECATIONS_PAGE_PATH, 'utf-8');
   const traitsPage = fs.readFileSync(TRAITS_PAGE_PATH, 'utf-8');
-  const updatedDeprecationsPage = updateDeprecationsPage(deprecationsPage, traits, models);
+  const updatedDeprecationsPage = updateDeprecationsPage(deprecationsPage, traits, trackedModels);
   const updatedTraitsPage = updateTraitsApiPage(traitsPage, traits);
 
   writeIfChanged(DEPRECATIONS_PAGE_PATH, updatedDeprecationsPage);

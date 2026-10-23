@@ -1,6 +1,6 @@
 ---
 title: 视频生成
-description: "在 Venice 的异步队列 API 上从文本 prompt 或起始图像生成视频 —— 提交任务、轮询状态并下载最终视频。"
+description: "在 Venice 异步队列 API 上从文本或图像生成视频：获取报价、提交至 /video/queue，并轮询 /video/retrieve 下载 MP4。"
 "og:title": "Video Generation | Venice API Docs"
 "og:description": "Learn how to generate videos from text prompts or images using Venice's async video generation API."
 ---
@@ -15,6 +15,8 @@ description: "在 Venice 的异步队列 API 上从文本 prompt 或起始图像
 | `POST /video/queue` | 提交生成请求 | 是 |
 | `POST /video/retrieve` | 轮询状态或下载视频 | 是 |
 | `POST /video/complete` | 从存储中删除视频 | 否 |
+
+API 不提供列出过往视频作业的端点。`/video/retrieve` 每次通过 `queue_id` 查询一个作业。在将作业加入队列时，请将每个 `queue_id`（以及返回的 `download_url`，如有）存储到您自己的数据库中。要查看过往生成的花费，请使用[账单使用历史](/zh/api-reference/endpoint/billing/usage-history)。
 
 ## 步骤 1：排队生成
 
@@ -41,7 +43,7 @@ Content-Type: application/json
 }
 ```
 
-对于 Grok Imagine Private 模型，队列响应包括一个额外的 `download_url` 字段：
+对于部分模型，队列响应包括一个额外的 `download_url` 字段：
 
 ```json
 {
@@ -51,12 +53,7 @@ Content-Type: application/json
 }
 ```
 
-`download_url` 是一个预签名的 URL，用于下载完成的视频，而非从 retrieve 响应中读取它。它仅在队列响应中返回一次，因此请将其与 `queue_id` 一起持久化。这适用于所有四个 Grok Imagine Private 变体：
-
-- `grok-imagine-text-to-video-private`
-- `grok-imagine-image-to-video-private`
-- `grok-imagine-reference-to-video-private`
-- `grok-imagine-video-to-video-private`
+`download_url` 是一个预签名的 URL，用于下载完成的视频，而非从 retrieve 响应中读取它。它仅在队列响应中返回一次，因此请将其与 `queue_id` 一起持久化。返回该字段的模型可能会变化，因此不要根据模型名称来判断：请检查队列响应中是否包含 `download_url`。如果没有，请通过 `/video/retrieve` 获取视频。
 
 与公共 `grok-imagine-*-video` 变体不同，Grok Imagine Private 模型不会因内容审核拒绝而被计费，因此您只为成功生成付费。
 
@@ -64,7 +61,7 @@ Content-Type: application/json
 
 ### 私有下载链接
 
-对于 private 模型，`download_url` 是您在作业完成后获取已完成文件的方式。该链接是**短暂的且单用途的**：它的作用是向您交付 MP4，而不是作为长期或广泛共享的 URL。
+当队列响应包含 `download_url` 时，该 URL 就是您在作业完成后获取已完成文件的方式。该链接是**短暂的且单用途的**：它的作用是向您交付 MP4，而不是作为长期或广泛共享的 URL。
 
 如果下载中断，您可以从同一环境**重试相同的 `GET` 几次**，直到文件完成。这些重试用于从网络抖动中恢复——而非用于无限期地轮询同一链接、跨多个客户端共享它，或像永久媒体 URL 那样嵌入它。这些模式通常会显示为 **`429`** 或 **`410`**，如果您期望链接像常规文件托管一样运行，这可能会令人惊讶。
 
@@ -123,7 +120,7 @@ Content-Type: application/json
 响应体是原始二进制视频数据。保存到文件。
 
 **完成响应（200, 带 `"COMPLETED"` 的 application/json）：**
-对于在排队时返回 `download_url` 的模型，retrieve 始终返回 JSON。使用 `GET download_url`（无 auth 头）获取视频。请参阅[私有下载链接](#private-download-links)了解这些 URL 的工作方式、重试和可选的 `DELETE`。
+对于在排队时返回 `download_url` 的模型，retrieve 始终返回 JSON。使用 `GET download_url`（无 auth 头）获取视频。请参阅[私有下载链接](#私有下载链接)了解这些 URL 的工作方式、重试和可选的 `DELETE`。
 
 ## 步骤 3：清理（可选）
 
@@ -254,12 +251,13 @@ await fetch(`${BASE_URL}/video/complete`, {
 | 参数 | 类型 | 必需 | 默认 | 说明 |
 |-----------|------|----------|---------|-------------|
 | `model` | string | 是 | - | 模型 ID。text-to-video 使用 `wan-2.5-preview-text-to-video`，image-to-video 使用 `wan-2.5-preview-image-to-video` |
-| `prompt` | string | 是 | - | 要生成的内容。最多 2500 字符 |
+| `prompt` | string | 是 | - | 要生成的内容。最大长度因模型而异，差别很大——从几百个字符到 20,000 个字符不等。未声明自身限制的模型默认为 2,500。请从 `GET /models?type=video` 读取 `model_spec.constraints.prompt_character_limit`，而不要假设单一限制 |
 | `negative_prompt` | string | 否 | `"low resolution, error, worst quality, low quality, defects"` | 要避免的内容 |
-| `duration` | string | 是 | - | `"5s"` 或 `"10s"` |
-| `resolution` | string | 否 | `"720p"` | `"480p"`、`"720p"` 或 `"1080p"` |
+| `duration` | string | 是 | - | 因模型而异。例如，`wan-2.5-preview` 模型接受 `"5s"` 或 `"10s"`。请从 `GET /models?type=video` 中读取 `model_spec.constraints.durations` |
+| `resolution` | string | 否 | `"720p"` | 因模型而异。例如，`wan-2.5-preview` 模型接受 `"480p"`、`"720p"` 或 `"1080p"`。请从 `GET /models?type=video` 中读取 `model_spec.constraints.resolutions` |
 | `aspect_ratio` | string | 条件性 | - | 取决于模型。需要为暴露宽高比选项的模型提供；对于不支持宽高比选择的模型则省略 |
 | `audio` | boolean | 条件性 | `true`（支持时） | 仅对 `supportsAudioConfig: true` 的模型有效；对于无音频配置支持的模型则省略 |
+| `bitrate_mode` | string | 否 | `"standard"` | 仅限 Seedance 2.0 / 2.5。`"standard"` 或 `"high"`。`high` 请求更高质量、文件更大的编码。不改变价格。其他家族请省略 |
 | `image_url` | string | 仅 image-to-video | - | 源图像的 URL 或 base64 data URL |
 | `audio_url` | string | 条件性 | - | 支持音频输入的模型的参考音频 URL 或 base64 data URL |
 
@@ -270,8 +268,8 @@ await fetch(`${BASE_URL}/video/complete`, {
 | 参数 | 类型 | 必需 | 默认 | 说明 |
 |-----------|------|----------|---------|-------------|
 | `model` | string | 是 | - | 要定价的模型 ID |
-| `duration` | string | 是 | - | `"5s"` 或 `"10s"` |
-| `resolution` | string | 否 | `"720p"` | `"480p"`、`"720p"` 或 `"1080p"` |
+| `duration` | string | 是 | - | 因模型而异。例如，`wan-2.5-preview` 模型接受 `"5s"` 或 `"10s"`。请从 `GET /models?type=video` 中读取 `model_spec.constraints.durations` |
+| `resolution` | string | 否 | `"720p"` | 因模型而异。例如，`wan-2.5-preview` 模型接受 `"480p"`、`"720p"` 或 `"1080p"`。请从 `GET /models?type=video` 中读取 `model_spec.constraints.resolutions` |
 | `aspect_ratio` | string | 条件性 | - | 当所选模型支持或需要宽高比选择时包含 |
 | `audio` | boolean | 条件性 | `true`（支持时） | 仅对 `supportsAudioConfig: true` 的模型有效 |
 
@@ -340,14 +338,14 @@ await fetch(`${BASE_URL}/video/complete`, {
 报价以美元为单位。
 
 <Info>
-**报价参数仅用作定价输入。** 您发送到 `/video/quote` 的字段——包括 `aspect_ratio`、`audio` 和 `reference_video_total_duration`——仅用于计算价格。它们**不会**被转发到 `/video/queue`，也不会影响生成的视频。即使某些模型（例如 `seedance-2-0-image-to-video`）在生成时会拒绝 `aspect_ratio`，向 quote 发送 `aspect_ratio` 也是可接受的，因为 image-to-video 模型会从输入图像推导出输出宽高比。
+**报价参数仅用作定价输入。** 您发送到 `/video/quote` 的字段——包括 `aspect_ratio`、`audio` 和 `reference_video_total_duration`——仅用于计算价格。它们**不会**被转发到 `/video/queue`，也不会影响生成的视频。即使某些模型（例如 `seedance-2-0-image-to-video-basic`）在生成时会拒绝 `aspect_ratio`，向 quote 发送 `aspect_ratio` 也是可接受的，因为 image-to-video 模型会从输入图像推导出输出宽高比。
 </Info>
 
 ### 参考视频到视频的定价
 
 对于 R2V 模型（例如 Seedance 2.0 R2V），请传递 `reference_video_total_duration`——即您计划包含的所有参考剪辑的总时长（以秒为单位）——以便报价反映"带视频输入"的费率层级以及 `(输入 + 输出) × 像素` 的 token 公式。如果省略它，报价将改为返回无参考的基线值。
 
-`reference_video_total_duration` 仅被 `/video/quote` 识别。它对 `/video/queue` 没有影响，省略它也不会导致生成错误。
+`reference_video_total_duration` 是仅用于报价的字段。请勿将其发送到 `/video/queue`：queue 会拒绝未知字段，因此包含它会返回 `400`。
 
 ### 显示稳定价格
 
@@ -362,13 +360,17 @@ await fetch(`${BASE_URL}/video/complete`, {
 | 400 | `queue`、`quote`、`retrieve`、`complete` | 无效参数 | 根据 schema 检查请求体 |
 | 401 | `queue`、`retrieve`、`complete` | 认证失败 | 检查 API 密钥 |
 | 402 | `queue` | 余额不足 | 添加资金 |
-| 404 | `retrieve`、`download_url` | 找不到媒体（无效、过期或已删除） | 验证 `model`/`queue_id` 或重新排队 |
+| 400 | `retrieve` | 未知的 `queue_id`，或属于其他账户的 `queue_id` | 验证 `model`/`queue_id` |
+| 404 | `retrieve`、`download_url` | 媒体已过期或已删除 | 重新排队 |
+| 404 | `queue` | 未知模型 | 根据 `GET /models?type=video` 检查模型 ID |
 | 410 | `download_url` | 预签名 URL 已过期、完全使用或已撤销（例如在 `DELETE` 之后） | 如果需要另一个文件，启动新的生成；每个链接故意是短暂的 |
 | 429 | `download_url` | 速率限制——通常来自同一链接的多次重试或反复获取 | 完成下载（连接中断时几次重试是可以的），保存本地副本，如果您希望清除链接则使用 `DELETE`；将持续访问保留在您自己的存储中 |
+| 429 | `queue`、`retrieve`、`quote`（upscale 模型） | 速率限制。限制按账户而非按 API 密钥计算，因此您的所有密钥共享这些限制。模型过载时，`queue` 也可能返回 `429` | 使用指数退避重试；查看标准的[速率限制响应头](/zh/api-reference/rate-limiting)以确定何时重试，并避免不必要的高频轮询 |
 | 413 | `queue` | 负载过大 | 减小图像/音频大小 |
 | 422 | `queue`、`retrieve` | 内容违规 | 修改 prompt |
 | 500 | `queue`、`retrieve`、`complete` | 推理/处理失败 | 使用退避重试；如果持续，联系支持 |
 | 503 | `retrieve` | 模型容量已满 | 使用退避重试 |
+| 503 | `queue` | 模型离线 | 稍后重试或选择其他模型 |
 
 ---
 
@@ -377,9 +379,9 @@ await fetch(`${BASE_URL}/video/complete`, {
 1. 以一定间隔（例如每 5 秒）轮询 `/video/retrieve`
 2. 如果 `Content-Type` 为 `application/json` 且 `status` 为 `"PROCESSING"`，等待并再次轮询。使用 `average_execution_time` 和 `execution_duration`（毫秒）估算剩余时间
 3. 如果 `Content-Type` 为 `video/mp4`，将响应体保存为输出文件
-4. 如果 `Content-Type` 为 `application/json` 且 `status` 为 `"COMPLETED"`，从队列响应中 `GET` `download_url` 以获取视频（请参阅[私有下载链接](#private-download-links)）
+4. 如果 `Content-Type` 为 `application/json` 且 `status` 为 `"COMPLETED"`，从队列响应中 `GET` `download_url` 以获取视频（请参阅[私有下载链接](#私有下载链接)）
 5. 如果使用了 `download_url`，请在完成后考虑对该 URL 调用 `DELETE` 以缩短预签名 URL 的存在时间；然后可选地在 retrieve 上设置 `delete_media_on_completion: true` 或调用 `/video/complete` 进行基于队列的清理
-6. 将 `404` 视为无效、过期或已删除的媒体；用重试/退避处理 `500/503`
+6. 将 `400` 视为未知的 `queue_id`，将 `404` 视为已过期或已删除的媒体；用重试/退避处理 `429/500/503`
 
 ---
 

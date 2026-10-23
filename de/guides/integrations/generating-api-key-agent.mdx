@@ -1,6 +1,6 @@
 ---
 title: Autonome Agenten-API-Schlüssel-Erstellung
-description: "Ein On-Chain-KI-Agent prägt autonom einen Venice-API-Schlüssel — durch VVV-Staking auf Base und Wallet-Signatur eines Venice-Validierungstokens."
+description: "Einen Venice-API-Schlüssel von einem On-Chain-Agenten durch VVV-Staking auf Base erstellen."
 'og:title': "Autonomous Agent API Key | Venice API Docs"
 'og:description': Wie ein autonomer KI-Agent seinen eigenen Venice-API-Schlüssel erstellen kann, indem er ein von Venice ausgestelltes Token mit einer Wallet signiert, die gestaktes VVV auf Base hält.
 ---
@@ -13,7 +13,7 @@ Dieser Leitfaden führt Sie End-to-End durch den gesamten Ablauf und behandelt d
 
 * Eine EVM-Wallet auf Base, die vom Agenten kontrolliert wird (Private Key in einer Umgebungsvariablen oder einem Secret Manager).
 * Ein kleiner Betrag ETH auf Base für Gas (Staking sind zwei Transaktionen: `approve` und dann `stake`).
-* Ein beliebiger Nicht-Null-Betrag VVV zum Staken. Der Mint-Endpoint erfordert lediglich, dass die Wallet ein Nicht-Null-sVVV-Guthaben hat, sodass 1 VVV ausreicht, um einen Schlüssel zu erstellen. Siehe [Bezahlung für Inferenz](#paying-for-inference) für die Voraussetzungen, um bezahlte Endpoints tatsächlich aufzurufen.
+* Ein beliebiger Nicht-Null-Betrag VVV zum Staken. Der Mint-Endpoint erfordert lediglich, dass die Wallet ein Nicht-Null-sVVV-Guthaben hat, sodass 1 VVV ausreicht, um einen Schlüssel zu erstellen. Siehe [Bezahlung für Inferenz](#bezahlung-für-inferenz) für die Voraussetzungen, um bezahlte Endpoints tatsächlich aufzurufen.
 
 <Tip>
   Verwenden Sie eine dedizierte Agenten-Wallet statt einer Treasury-Wallet. Der Private Key der Wallet signiert jede Venice-Token-Anfrage, daher sollte der Schaden im Falle einer Kompromittierung möglichst gering sein.
@@ -74,7 +74,17 @@ Dieser Leitfaden führt Sie End-to-End durch den gesamten Ablauf und behandelt d
 
     Erforderliche Felder: `address`, `signature`, `token`, `apiKeyType` (`INFERENCE` oder `ADMIN`).
 
-    Optionale Felder: `description`, `expiresAt`, `consumptionLimit` (begrenzt die Gesamtausgaben dieses Schlüssels, denominiert in `usd`, `vcu` oder `diem`).
+    Optionale Felder:
+
+    - `description`, `expiresAt`
+    - `consumptionLimit` — die Ausgabenobergrenze für diesen Schlüssel, denominiert in `usd` oder `diem` (`vcu` ist veraltet; verwenden Sie stattdessen `diem`)
+    - `limitPeriod` — das Zeitfenster, über das die Obergrenze gemessen wird: `EPOCH` (wird jeden UTC-Tag zurückgesetzt), `MONTH` (wird am 1. jedes UTC-Monats zurückgesetzt) oder `LIFETIME` (wird nie zurückgesetzt, die Obergrenze ist also permanent)
+    - `modelPrivacy` — welche Modelle der Schlüssel aufrufen darf, nach Privacy-Stufe: `ALL`, `PRIVATE_TEXT` oder `PRIVATE_ONLY`
+    - `ipAllowlist` — IPv4- oder IPv6-Adressen und CIDR-Subnetze, die den Schlüssel verwenden dürfen (bis zu 100 Einträge); eine leere Liste erlaubt jede IP-Adresse
+
+    <Warning>
+    `limitPeriod` hat den Standardwert `EPOCH`, wenn es weggelassen wird — das heißt, die Obergrenze **wird jeden Tag zurückgesetzt**, statt eine Lebenszeit-Gesamtsumme zu sein. Ein Schlüssel, der mit `consumptionLimit: {"usd": 50}` und ohne `limitPeriod` erstellt wurde, kann $50 pro Tag ausgeben. Setzen Sie für einen unbeaufsichtigten Agenten-Schlüssel explizit `limitPeriod: "LIFETIME"`, damit das Limit eine permanente Obergrenze ist.
+    </Warning>
 
     Bei Erfolg enthält die Antwort den erstellten `apiKey`-String. Speichern Sie ihn im Secret-Store des Agenten und verwenden Sie ihn als normales Bearer-Token (`Authorization: Bearer <key>`).
   </Step>
@@ -82,7 +92,7 @@ Dieser Leitfaden führt Sie End-to-End durch den gesamten Ablauf und behandelt d
 
 ## End-to-End-Beispiel
 
-Das folgende Beispiel verwendet eine echte Wallet aus einer Umgebungsvariablen statt einer zufällig generierten. Eine zufällige Wallet hat kein gestaktes VVV, und der Mint wird mit dem Fehler `Wallet has no staked VVV on Base` abgelehnt.
+Das folgende Beispiel verwendet eine echte Wallet aus einer Umgebungsvariablen statt einer zufällig generierten. Eine zufällige Wallet hat kein gestaktes VVV, und der Mint wird mit dem Fehler `Wallet 0x… has no staked VVV on Base` abgelehnt.
 
 ```typescript
 import { ethers } from "ethers"
@@ -104,6 +114,9 @@ const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate
     token,
     apiKeyType: "INFERENCE",
     description: "Agent key",
+    // A permanent $50 ceiling. Without limitPeriod this would reset daily.
+    consumptionLimit: { usd: 50 },
+    limitPeriod: "LIFETIME",
   }),
 })
 
@@ -128,13 +141,13 @@ Der Endpoint gibt spezifische, umsetzbare Fehlermeldungen zurück. Mappen Sie di
 | `400` | `JWT is malformed` | Das eingereichte `token` ist kein JWT. | Stellen Sie sicher, dass Sie den exakten `token`-String aus dem `GET`-Endpoint senden. |
 | `400` | `Wallet signature does not match` | Die `signature` passt nicht zur `address` für das angegebene `token`. | Signieren Sie die rohen Token-Bytes mit der Wallet, die `address` besitzt. |
 | `400` | `Could not verify wallet signature` | Der RPC-Aufruf zur Verifizierung der Signatur ist fehlgeschlagen (transient). | Mit Backoff erneut versuchen. |
-| `400` | `Wallet has no staked VVV on Base` | Die Wallet hat ein sVVV-Guthaben von Null. | Zuerst VVV staken, dann erneut versuchen. |
+| `400` | `has no staked VVV` | Die Wallet hat ein sVVV-Guthaben von Null. Die vollständige Meldung lautet `Wallet 0x… has no staked VVV on Base`, wobei Ihre Wallet-Adresse anstelle von `0x…` steht, gefolgt von einem Link. Prüfen Sie daher auf `has no staked VVV` statt auf den vollständigen Text. | Zuerst VVV staken, dann erneut versuchen. |
 
 ## Bezahlung für Inferenz
 
 Einen Schlüssel zu erstellen und damit bezahlte Endpoints aufrufen zu können sind zwei verschiedene Dinge. Ein frisch erstellter Schlüssel authentifiziert sich korrekt, kann aber keine bezahlten Endpoints (z. B. `/chat/completions`) aufrufen, bis das Konto der Wallet ein verfügbares Guthaben hat.
 
-Der erstellte Schlüssel kann vom Benutzerkonto in dieser Prioritätsreihenfolge ausgeben: DIEM, dann gebündelte Credits, dann USD.
+Der erstellte Schlüssel kann vom Benutzerkonto in dieser Prioritätsreihenfolge ausgeben: DIEM, dann verdiente Credits, dann gebündelte Credits, dann USD.
 
 | Finanzierungsquelle | Autonom? | Wie |
 | --- | --- | --- |
@@ -146,24 +159,24 @@ Der erstellte Schlüssel kann vom Benutzerkonto in dieser Prioritätsreihenfolge
 Wenn der Agent einen vollständig krypto-nativen, headless Finanzierungspfad benötigt, sind die saubersten Optionen:
 
 1. **Mehr VVV staken**, sodass die tägliche DIEM-Zuteilung die Ausgaben des Agenten abdeckt. Der erstellte Schlüssel verwendet dies automatisch.
-2. **Verwenden Sie den [x402-Wallet-Flow](/guides/integrations/x402-venice-api) anstelle des API-Schlüssels.** Bei x402 signiert der Agent pro Anfrage eine Sign-In-With-X-Nachricht, lädt direkt mit USDC auf Base oder Solana über `POST /api/v1/x402/top-up` auf und bezahlt pro Anfrage. Das x402-USDC-Guthaben ist wallet-gebunden, nicht benutzerbezogen, sodass es nicht als Guthaben für den erstellten Bearer-Schlüssel angezeigt wird, aber es ermöglicht es derselben Wallet, programmatisch für Inferenz zu bezahlen.
+2. **Verwenden Sie den [x402-Wallet-Flow](/de/guides/integrations/x402-venice-api) anstelle des API-Schlüssels.** Bei x402 signiert der Agent pro Anfrage eine Sign-In-With-X-Nachricht, lädt direkt mit USDC auf Base oder Solana über `POST /api/v1/x402/top-up` auf und bezahlt pro Anfrage. Das x402-USDC-Guthaben ist wallet-gebunden, nicht benutzerbezogen, sodass es nicht als Guthaben für den erstellten Bearer-Schlüssel angezeigt wird, aber es ermöglicht es derselben Wallet, programmatisch für Inferenz zu bezahlen.
 
 ## Verwandte Ressourcen
 
 <CardGroup cols={2}>
-  <Card title="Krypto und Agenten" icon="link" href="/guides/integrations/crypto-rpc-agents">
+  <Card title="Krypto und Agenten" icon="link" href="/de/guides/integrations/crypto-rpc-agents">
     Verwenden Sie Venice sowohl als Modellanbieter als auch als Blockchain-RPC-Schicht für autonome Agenten.
   </Card>
 
-  <Card title="x402-Wallet-Authentifizierung" icon="wallet" href="/guides/integrations/x402-venice-api">
+  <Card title="x402-Wallet-Authentifizierung" icon="wallet" href="/de/guides/integrations/x402-venice-api">
     Bezahlen Sie pro Anfrage mit USDC auf Base oder Solana, ohne API-Schlüssel.
   </Card>
 
-  <Card title="Web3 API Key Endpoint generieren" icon="code" href="/api-reference/endpoint/api_keys/generate_web3_key/post">
+  <Card title="Web3 API Key Endpoint generieren" icon="code" href="/de/api-reference/endpoint/api_keys/generate_web3_key/post">
     Endpoint-Referenz für den Mint-Endpoint.
   </Card>
 
-  <Card title="Standard-API-Schlüssel-Leitfaden" icon="key" href="/guides/getting-started/generating-api-key">
+  <Card title="Standard-API-Schlüssel-Leitfaden" icon="key" href="/de/guides/getting-started/generating-api-key">
     Für Nutzer, die einen Schlüssel über das Dashboard erstellen möchten.
   </Card>
 </CardGroup>

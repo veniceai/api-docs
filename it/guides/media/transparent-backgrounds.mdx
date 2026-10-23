@@ -1,0 +1,197 @@
+---
+title: "Immagini con sfondo trasparente"
+description: "Genera e modifica immagini PNG o WebP con un vero canale alfa usando transparent_background su /image/generate, /image/edit e /image/multi-edit, oppure background: transparent sull'endpoint compatibile con OpenAI."
+'og:title': "Immagini con sfondo trasparente | Venice API Docs"
+'og:description': "Crea sticker, loghi, ritagli di prodotto e asset UI con trasparenza alfa nativa tramite l'API di immagini di Venice. Quali modelli la supportano, quali formati funzionano e cosa significano gli errori 400."
+---
+
+L'API di immagini di Venice può restituire immagini con un vero canale alfa invece di uno sfondo bianco o a scacchiera dipinto. Il modello compone il soggetto con la trasparenza fin dall'inizio, quindi bordi, ombre e regioni semitrasparenti (vetro, capelli, fumo) hanno un valore alfa per pixel anziché una maschera netta.
+
+Questo è diverso da `/image/background-remove`, che prende un'immagine opaca già finita e segmenta il primo piano a posteriori. Usa la trasparenza nativa quando stai comunque generando o modificando l'asset; usa la rimozione dello sfondo quando hai solo l'immagine opaca.
+
+<Frame as="div" caption="Stesso prompt e stesso seed su gpt-image-2-5-flare. A sinistra: output di default. A destra: transparent_background: true, mostrato sopra una scacchiera. L'ombra proiettata sopravvive come alfa parziale.">
+  <img src="/images/guides/transparent-backgrounds/before-after.webp" alt="Confronto affiancato: un bicchiere di tè freddo renderizzato su uno sfondo da studio opaco e lo stesso bicchiere su sfondo trasparente mostrato sopra una scacchiera" />
+</Frame>
+
+## Cosa ti serve
+
+| Requisito | Dettaglio |
+|---|---|
+| Modello | Uno contrassegnato con `supportsTransparentBackground: true` nei constraints di `GET /models`. Attualmente `gpt-image-1-5`, `gpt-image-2-5-flare` e `gpt-image-2-5-sunburst` (più le rispettive varianti `-edit` per gli endpoint di edit) |
+| Formato di output | `png` o `webp`. JPEG non ha canale alfa, quindi `jpeg` viene rifiutato |
+| Parametro | `transparent_background: true` su `/image/generate`, `/image/edit`, `/image/multi-edit`. `background: "transparent"` su `/images/generations` |
+
+Qualsiasi altra combinazione restituisce `400` prima che venga eseguita l'inferenza, quindi non ti viene addebitato nulla per una richiesta rifiutata.
+
+## Passo 1: Genera un'immagine trasparente
+
+`/image/generate` è l'endpoint nativo. Imposta `format` su `png` o `webp` e `transparent_background` su `true`.
+
+```bash
+curl https://api.venice.ai/api/v1/image/generate \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -o sticker.png \
+  -d '{
+    "model": "gpt-image-2-5-flare",
+    "prompt": "A die-cut sticker of a cartoon rocket ship, bold outlines, flat colors, no background",
+    "format": "png",
+    "transparent_background": true,
+    "quality": "low",
+    "return_binary": true
+  }'
+```
+
+La risposta è `content-type: image/png` con un layout di pixel RGBA. Senza `return_binary` ottieni il consueto envelope JSON con una stringa base64 in `images[0]`.
+
+Il default di `format` è `webp`, che supporta anch'esso l'alfa, quindi omettere `format` funziona. Fallisce solo un `"format": "jpeg"` esplicito.
+
+<Tip>
+Oltre a impostare il flag, scrivi "no background" o "isolated on transparent background" anche nel prompt. Il flag garantisce un canale alfa; il prompt evita che il modello disegni un pavimento, un tavolo o uno sfondo che risulterebbero opachi all'interno del riquadro di delimitazione del soggetto.
+</Tip>
+
+## Passo 2: Verifica il canale alfa
+
+Non fidarti dell'estensione del file. Controlla la modalità dei pixel e osserva la distribuzione dell'alfa per confermare che lo sfondo sia davvero trasparente e non un riempimento bianco appiattito.
+
+```python
+from PIL import Image
+
+im = Image.open("sticker.png")
+print(im.format, im.mode, im.size)  # PNG RGBA (1024, 1024)
+
+alpha = im.getchannel("A")
+hist = alpha.histogram()
+total = sum(hist)
+print(f"fully transparent: {100 * hist[0] / total:.1f}%")
+print(f"partially transparent: {100 * sum(hist[1:255]) / total:.1f}%")
+print("subject bbox:", alpha.getbbox())
+```
+
+Un risultato corretto ha un'ampia quota di pixel con alfa `0` (lo sfondo), una fascia di valori parziali lungo i bordi (anti-aliasing e ombre morbide) e un riquadro di delimitazione del soggetto più piccolo del canvas. Se `im.mode` è `RGB` o la quota trasparente è `0%`, il canale alfa è andato perso da qualche parte nella tua pipeline, di solito in un passaggio di ridimensionamento o ricodifica che lo ha scartato.
+
+<Frame as="div" caption="Il canale alfa dell'immagine sopra, isolato. L'ombra sotto il bicchiere sfuma attraverso decine di livelli di grigio invece di passare di colpo dal bianco al nero, ed è proprio ciò che serve per comporre l'immagine su sfondi arbitrari.">
+  <img src="/images/guides/transparent-backgrounds/alpha-channel.webp" alt="Tre pannelli: l'immagine trasparente sopra una scacchiera, il suo canale alfa come maschera in scala di grigi e un ritaglio ingrandito del bordo dell'ombra che mostra un gradiente morbido" />
+</Frame>
+
+<Note>
+I modelli GPT Image attualmente restituiscono la regione opaca con alfa `252`–`254` anziché `255`. Visivamente è indistinguibile, ma se applichi una soglia `== 255` per trovare il soggetto otterrai una maschera vuota. Usa invece una soglia `> 0` o `>= 250`.
+</Note>
+
+## Passo 3: Usa l'endpoint compatibile con OpenAI
+
+Se usi già l'SDK di OpenAI, `/images/generations` accetta lo stesso parametro `background` usato da OpenAI. Impostalo su `"transparent"` e scegli `png` o `webp` come `output_format`.
+
+```python
+import base64
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+)
+
+result = client.images.generate(
+    model="gpt-image-2-5-flare",
+    prompt="A flat vector icon of a paper airplane, isolated, no background",
+    output_format="webp",
+    background="transparent",
+)
+
+with open("icon.webp", "wb") as f:
+    f.write(base64.b64decode(result.data[0].b64_json))
+```
+
+`background` accetta `transparent`, `opaque` o `auto`. `opaque`, `auto` e `null` mantengono tutti il comportamento di default del modello, quindi l'unico valore che cambia qualcosa è `transparent`. Su questo endpoint il default di `output_format` è `png`, quindi puoi ometterlo.
+
+<Note>
+`/images/generations` accetta `quality`, `style`, `output_compression` e `size` per compatibilità con OpenAI, ma li ignora. Sui modelli GPT Image trattati in questa pagina, `size` non ha effetto: l'output resta all'aspect ratio e alla risoluzione di default del modello. Oltre a `model` e `prompt`, i campi che influiscono sull'immagine sono `background`, `output_format` e `moderation`; `response_format` sceglie solo tra base64 e una data URL. `resolution` e `aspect_ratio` non sono campi e lo schema è strict, quindi inviare uno dei due restituisce `400`. Ometti `quality` qui; usa l'endpoint nativo `/image/generate` quando ti serve controllare il livello (vedi Prezzi più sotto).
+</Note>
+
+## Passo 4: Modifica con trasparenza
+
+Anche `/image/edit` e `/image/multi-edit` accettano `transparent_background`. L'immagine sorgente non deve essere trasparente: puoi passare una foto opaca e chiedere al modello di isolare il soggetto mentre lo modifica.
+
+```bash
+curl https://api.venice.ai/api/v1/image/edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "model=gpt-image-2-5-flare-edit" \
+  -F "prompt=Make the apple green and remove the background" \
+  -F "image=@apple.jpg" \
+  -F "transparent_background=true" \
+  -o apple-green.png
+```
+
+Sugli endpoint di edit, `output_format` viene dedotto quando è omesso: normalmente PNG per gli edit a 1K e JPEG per 2K/4K, ma quando `transparent_background` è `true` la deduzione passa a PNG a ogni risoluzione. Quindi devi inviare `output_format` esplicitamente solo se vuoi WebP.
+
+`/image/multi-edit` accetta gli stessi campi con due differenze: invia ogni immagine di input come parte `images` ripetuta e indica il modello con `modelId` al posto di `model`. È la scelta naturale per comporre una foto prodotto su una nuova scena e ottenere il risultato composto come ritaglio da posizionare nel tuo layout.
+
+```bash
+curl https://api.venice.ai/api/v1/image/multi-edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "modelId=gpt-image-2-5-flare-edit" \
+  -F "prompt=Put the sunglasses from the second image on the person in the first, and remove the background" \
+  -F "images=@person.jpg" \
+  -F "images=@sunglasses.jpg" \
+  -F "transparent_background=true" \
+  -o person-sunglasses.png
+```
+
+## Prezzi
+
+La trasparenza non comporta alcun sovrapprezzo. Paghi il normale prezzo per immagine del modello.
+
+Le due route fatturano in modo diverso:
+
+| Endpoint | Controllo del livello | Cosa ti viene addebitato |
+|---|---|---|
+| `POST /image/generate` (nativo) | `resolution` e `quality` su `gpt-image-2-5-*`; `gpt-image-1-5` ha un unico prezzo fisso senza livelli | Il livello selezionato. Una generazione `1K` `low` su `gpt-image-2-5-flare` è il modo più economico per iterare su uno sticker o un'icona prima di pagare per `high` o `4K` |
+| `POST /images/generations` (compatibile con OpenAI) | Nessuno. `quality` viene ignorato e non esiste il campo `resolution` | Il livello di default del modello. Su `gpt-image-2-5-*` è `1K` con `high`, il livello di qualità più costoso, quindi né `quality: "low"` né `size` riducono il prezzo |
+
+Se devi controllare il costo per immagine, usa l'endpoint nativo. Consulta [Modelli di immagini](/it/models/image) per la tabella prezzi aggiornata.
+
+## Errori
+
+La validazione viene eseguita prima che il modello venga chiamato. Entrambi i messaggi indicano come risolvere.
+
+| Richiesta | Stato | Body |
+|---|---|---|
+| `transparent_background: true` con `format` / `output_format` `jpeg` | `400` | `Transparent background requires png or webp output format.` |
+| `transparent_background: true` su un modello senza il flag | `400` | `Transparent background is not supported by model 'flux-2-pro'. Use a model with "supportsTransparentBackground": true in its constraints (see GET /api/v1/models).` |
+| `background: "transparent"` con `output_format: "jpeg"` su `/images/generations` | `400` | `Transparent background requires png or webp output format.` |
+
+`transparent_background: false` con `jpeg` va bene e restituisce un normale JPEG opaco.
+
+## Scopri i modelli supportati a runtime
+
+Gli ID dei modelli cambiano nel tempo. Invece di inserire nel codice la lista qui sopra, filtra `GET /models` in base al flag dei constraints. La chiave è presente, con valore `true`, solo sui modelli che la supportano.
+
+```bash
+curl -s "https://api.venice.ai/api/v1/models?type=image" \
+  | jq -r '.data[] | select(.model_spec.constraints.supportsTransparentBackground == true) | .id'
+```
+
+Usa `type=inpaint` per gli endpoint di edit, che restituiscono gli ID dei modelli `-edit`.
+
+## Quando usare questo rispetto a `/image/background-remove`
+
+| | `transparent_background` | `/image/background-remove` |
+|---|---|---|
+| Input | Un prompt (e facoltativamente un'immagine sorgente da modificare) | Un'immagine opaca esistente |
+| Come viene prodotto l'alfa | Il modello compone con la trasparenza fin dall'inizio | Un modello di segmentazione maschera il primo piano a posteriori |
+| Ombre e riflessi | Mantenuti, con alfa parziale, perché il modello li ha renderizzati come parte del soggetto | Rimossi insieme allo sfondo, poiché non fanno parte del primo piano |
+| Scelta del modello | Solo GPT Image 1.5 / 2.5 | Modello interno fisso, nessun campo `model` |
+| Costo | Normale prezzo di generazione o edit del modello | Prezzo fisso di background-remove |
+
+Se stai comunque generando l'asset, richiedi la trasparenza fin da subito e salta la seconda chiamata. Ricorri a `/image/background-remove` quando l'immagine opaca esiste già e non vuoi rigenerarla.
+
+<Frame as="div" caption="Un unico sticker trasparente ottenuto dalla richiesta del Passo 1, posizionato su tre sfondi senza ulteriori elaborazioni.">
+  <img src="/images/guides/transparent-backgrounds/backgrounds.webp" alt="Lo stesso sticker del razzo cartoon composto su un colore pieno scuro, un gradiente caldo e una scacchiera" />
+</Frame>
+
+## Correlati
+
+- [Generazione di immagini](/it/guides/media/image-generation) per dimensionamento, livelli di qualità e l'elenco completo dei parametri di `/image/generate`
+- [Image Editing](/it/guides/media/image-editing) per `/image/edit`, `/image/multi-edit` e `/image/background-remove`
+- [Modelli di immagini](/it/models/image) per prezzi e constraints aggiornati
