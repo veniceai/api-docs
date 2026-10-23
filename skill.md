@@ -93,9 +93,10 @@ catalog moves; the capability flags on each model are the authoritative answer.
 | x402 wallet | `GET /x402/balance/{wallet}`, `POST /x402/top-up`, `GET /x402/transactions/{wallet}` |
 
 For bounded judgments your code acts on directly (yes/no, pick one label,
-score on a rubric), use `POST /decisions` with `jev-latest` instead of asking a
+score on a rubric), use `POST /decisions` with `jev-latest` or `clef-api` instead of asking a
 chat model for JSON. Send a `state` and a `questions` map with at least one
-entry; each question has a `type` of `noul`, `choice`, or `score`, and each
+entry, plus an optional `images` array (up to 4 PNG/JPEG `data:` URIs or
+`{content_type, base64}` objects; remote URLs are not fetched); each question has a `type` of `noul`, `choice`, or `score`, and each
 answer comes back typed with probabilities. Use `/chat/completions` when you
 need prose, multi-turn conversation, or tool calling. The Decisions API is in
 beta. See https://docs.venice.ai/guides/features/decisions.
