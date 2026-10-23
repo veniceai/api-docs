@@ -167,7 +167,7 @@ async function main() {
   console.log('Regenerating static model catalogs...');
   require('./generate-models-static.js');
 
-  console.log('Regenerating pricing.mdx and prompt caching prices...');
+  console.log('Regenerating pricing.mdx...');
   require('./generate-pricing-static.js');
 }
 

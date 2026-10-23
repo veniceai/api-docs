@@ -9,8 +9,7 @@
  * page and replace static content with live API data at runtime.
  * 
  * Usage: node scripts/generate-pricing-static.js
- * Output: Writes overview/pricing.mdx and the cache pricing table in
- * guides/features/prompt-caching.mdx
+ * Output: Writes overview/pricing.mdx
  */
 
 const fs = require('fs');
@@ -414,52 +413,6 @@ function renderPricingWebSearchTable() {
   return header + '\n' + rows + '\n';
 }
 
-// Render the prompt caching guide's price table
-function renderCachePricingTable(models) {
-  const cacheModels = listedModels(models, 'text')
-    .filter(m => m.model_spec?.pricing?.cache_input)
-    .sort((a, b) => {
-      const pA = a.model_spec?.pricing?.input?.usd ?? 999;
-      const pB = b.model_spec?.pricing?.input?.usd ?? 999;
-      return pB - pA;
-    });
-
-  if (cacheModels.length === 0) return 'No models with cache pricing available.';
-
-  const header = `| Model | Input | Cache Read | Cache Write | Output | Read Discount |\n|---|---|---|---|---|---|`;
-  const rows = cacheModels.map(model => {
-    const pricing = model.model_spec?.pricing || {};
-    const input = pricing.input?.usd;
-    const cacheRead = pricing.cache_input?.usd;
-    const cacheWrite = pricing.cache_write?.usd;
-    const discount = input && cacheRead ? Math.round((1 - cacheRead / input) * 100) : null;
-    const retiring = isDeprecatedModel(model) ? ' (Retiring)' : '';
-
-    return `| \`${escapeHtml(model.id)}\`${retiring} | ${formatModelPrice(model, input)} | ${formatModelPrice(model, cacheRead)} | ${cacheWrite != null ? formatModelPrice(model, cacheWrite) : '-'} | ${formatModelPrice(model, pricing.output?.usd)} | ${discount ? discount + '%' : '-'} |`;
-  }).join('\n');
-
-  return header + '\n' + rows + '\n';
-}
-
-function generateCachePricingBlock(models) {
-  return [
-    '<div id="cache-pricing-placeholder">',
-    '',
-    "Prices per 1M tokens. A dash means that cache read or write isn't billed separately from input.",
-    '',
-    renderCachePricingTable(models),
-    '</div>'
-  ].join('\n');
-}
-
-function updatePromptCachingPage(models) {
-  const pagePath = path.join(__dirname, '..', 'guides', 'features', 'prompt-caching.mdx');
-  const page = fs.readFileSync(pagePath, 'utf8');
-  const pattern = /<div id="cache-pricing-placeholder">[\s\S]*?<\/div>/;
-  if (!pattern.test(page)) throw new Error('Missing cache-pricing-placeholder in prompt-caching.mdx');
-  writeIfChanged(pagePath, page.replace(pattern, () => generateCachePricingBlock(models)));
-}
-
 function writeIfChanged(filePath, content) {
   const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null;
   const label = path.relative(path.join(__dirname, '..'), filePath);
@@ -669,7 +622,6 @@ A paid subscription does not include free or unlimited API usage.
 try {
   const models = extractStaticModels();
   writeIfChanged(path.join(__dirname, '..', 'overview', 'pricing.mdx'), generatePricingMdx(models));
-  updatePromptCachingPage(models);
 } catch (error) {
   console.error('Error generating pricing.mdx:', error.message);
   process.exit(1);
