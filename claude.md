@@ -19,7 +19,7 @@
   npx skills add docs.venice.ai
   ```
   or clone https://github.com/veniceai/skills into `.claude/skills/`
-- **Venice MCP server** (31 tools: chat, image, video, audio, music, embeddings, web augment, characters):
+- **Venice MCP server** (45 tools: chat, image, video, audio, music, embeddings, web augment, characters, crypto RPC, TEE attestation, billing, API keys):
   https://github.com/veniceai/venice-mcp-server — works with Claude Desktop and Claude Code as an MCP host
 
 ## Working rules
