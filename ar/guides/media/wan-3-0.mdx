@@ -1,0 +1,419 @@
+---
+title: "Wan 3.0"
+description: "ولّد ما يصل إلى 30 ثانية من الفيديو مع الصوت من prompt، أو من إطار أول وإطار أخير، أو من صور ومقاطع وأصوات مرجعية باستخدام Wan 3.0 على Venice API."
+"og:title": "Wan 3.0 | Venice API Docs"
+"og:description": "تعرّف على كيفية توليد الفيديو والاستناد إلى المراجع وتحرير الفيديو وتمديده باستخدام Wan 3.0 على Venice API."
+---
+
+يولّد Wan 3.0 ما يصل إلى 30 ثانية من الفيديو مع الصوت في مهمة واحدة. يعمل text-to-video انطلاقًا من prompt وحده، ويبدأ image-to-video بإطار تقدّمه ويمكن أن ينتهي بإطار آخر، بينما يأخذ reference-to-video ما يصل إلى 10 صور و5 مقاطع فيديو و5 مقاطع صوتية ويضع الأشخاص والمنتجات والحركة والأصوات الموجودة فيها داخل اللقطة. كما يحرّر reference-to-video المقاطع الموجودة لديك ويمدّدها. لمعرفة ما تشترك فيه جميع نماذج الفيديو، راجع [توليد الفيديو](/ar/guides/media/video-generation)؛ وللاطلاع على نماذج أخرى تعمل انطلاقًا من المراجع، راجع [المرجع إلى الفيديو](/ar/guides/media/reference-to-video) و[Seedance](/ar/guides/media/seedance-2-0).
+
+فيما يلي صورتان أُنشئتا باستخدام `/image/generate`، والمقطع الذي صنعه reference-to-video منهما. تحتفظ صانعة الفخار بشعرها ونمشها ومريلتها، ويحتفظ إبريق الشاي بطلائه الزجاجي ومقبضه الذهبي، وتُنطق الجملة الأخيرة أمام الكاميرا.
+
+<Frame as="div">
+  <img src="/images/guides/wan-3-0/references.webp" alt="الصورتان المرجعيتان جنبًا إلى جنب: صانعة فخار حمراء الشعر ترتدي مريلة من قماش الدنيم، وإبريق شاي أخضر مزرق منقّط بمقبض ذهبي" />
+</Frame>
+
+<video
+  controls
+  preload="metadata"
+  poster="/images/guides/wan-3-0/sample-poster.webp"
+  className="w-full aspect-video rounded-xl"
+  src="/images/guides/wan-3-0/sample.mp4"
+>
+  لا يمكن لمتصفحك تشغيل هذا الفيديو. <a href="/images/guides/wan-3-0/sample.mp4">نزّل ملف MP4</a>.
+</video>
+
+تعمل المهام بشكل غير متزامن: يسعّر [quote](/ar/api-reference/endpoint/video/quote) المهمة، ويرسلها [queue](/ar/api-reference/endpoint/video/queue) ويحتسب عليك تكلفتها، ويستعلم [retrieve](/ar/api-reference/endpoint/video/retrieve) عنها حتى يصبح ملف MP4 جاهزًا.
+
+تفترض الأمثلة أن `VENICE_API_KEY` مضبوط:
+
+```bash
+export VENICE_API_KEY="your-api-key"
+```
+
+## اختر نموذجًا
+
+لكل مستوى المتغيرات الثلاثة نفسها:
+
+| المستوى | Text-to-video | Image-to-video | Reference-to-video | الدقات |
+|---|---|---|---|---|
+| Standard | `wan-3-0-text-to-video` | `wan-3-0-image-to-video` | `wan-3-0-reference-to-video` | 480p، 720p، 1080p |
+| Prime | `wan-3-0-prime-text-to-video` | `wan-3-0-prime-image-to-video` | `wan-3-0-prime-reference-to-video` | 480p، 720p، 1080p |
+| Pro | `wan-3-0-pro-text-to-video` | `wan-3-0-pro-image-to-video` | `wan-3-0-pro-reference-to-video` | 1080p، 2K، 4K |
+| Prime Pro | `wan-3-0-prime-pro-text-to-video` | `wan-3-0-prime-pro-image-to-video` | `wan-3-0-prime-pro-reference-to-video` | 1080p، 2K، 4K |
+
+Prime هو الخيار الأسرع بسعر أعلى: استغرق مقطع الفخار 205 ثوانٍ على المستوى القياسي و131 ثانية على Prime. لكل معرّف أيضًا صيغة بالنقطة، مثل `wan-3.0-reference-to-video`.
+
+يأخذ كلٌّ من image-to-video وreference-to-video صورًا، لكن لمهام مختلفة. يبدأ image-to-video بالصورة `image_url` تمامًا كما هي، وينتهي بـ `end_image_url` إذا أرسلتها. أما reference-to-video فيعامل الصور كمراجع: ما فيها يظهر في المقطع، مؤطّرًا بالطريقة التي يحددها الـ prompt. استخدم image-to-video عندما تكون اللقطة الأولى ثابتة، وreference-to-video عندما تحتاج إلى الشخص نفسه أو المنتج نفسه عبر عدة لقطات.
+
+تأتي المدد ونسب العرض إلى الارتفاع والدقات من `/models`. يعيدها هذا الاستعلام:
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=video" |
+  jq '.data[] | select(.id | startswith("wan-3-0")) | {
+    id,
+    resolutions: .model_spec.constraints.resolutions,
+    durations: .model_spec.constraints.durations,
+    aspect_ratios: .model_spec.constraints.aspect_ratios,
+    prompt_character_limit: .model_spec.constraints.prompt_character_limit,
+    min_image_short_side: .model_spec.constraints.reference_image_min_short_side_pixels
+  }'
+```
+
+حاليًا يوفّر كل نموذج من نماذج Wan 3.0 المدد `2s` و`5s` و`10s` و`15s` و`20s` و`25s` و`30s`، ونسب العرض إلى الارتفاع `16:9` و`9:16` و`1:1` و`4:3` و`3:4`، وprompts تصل إلى 20,000 حرف. يضيف image-to-video وreference-to-video القيمة `adaptive` التي تتبع شكل مدخلاتك. قد تتغير هذه التفاصيل، لذا اقرأها من الـ API. حدود المراجع غير موجودة في `/models`؛ بل تجدها في [الخطوة 2](#2-ضع-المهمة-في-قائمة-الانتظار).
+
+## 1. احصل على عرض سعر
+
+تُحتسب التكلفة لكل ثانية من الإخراج، بمعدل يحدده المستوى والدقة. في 23 أكتوبر 2026، كانت تكلفة المستوى القياسي \$0.065 للثانية بدقة 480p، و\$0.13 بدقة 720p، و\$0.26 بدقة 1080p، وكانت تكلفة Prime \$0.088 و\$0.182 و\$0.364. وكانت تكلفة Pro \$0.237 بدقة 1080p، و\$0.272 بدقة 2K، و\$0.296 بدقة 4K، وكانت تكلفة Prime Pro \$0.331 و\$0.355 و\$0.379. تتساوى تكلفة المتغيرات الثلاثة داخل المستوى الواحد، وإيقاف `audio` لا يغيّر السعر.
+
+تُحتسب فيديوهات المرجع بشكل إضافي، بمعدل المهمة نفسه وحتى جزء الثانية، لذا يضيف مقطع مدته 4.2 ثانية 4.2 ثانية. الصور والمقاطع الصوتية المرجعية مجانية. لا يحتاج quote إلى مفتاح API؛ أضف `reference_video_total_duration` بالثواني عندما تتضمن المهمة فيديوهات مرجعية:
+
+```bash
+curl https://api.venice.ai/api/v1/video/quote \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "duration": "10s",
+    "resolution": "720p"
+  }'
+```
+
+```json
+{
+  "quote": 1.3
+}
+```
+
+تُقرَّب عروض الأسعار والرسوم إلى أقرب سنت، لذا فإن 5 ثوانٍ بدقة 480p، أي \$0.325، تُعرض وتُحتسب بقيمة \$0.33.
+
+## 2. ضع المهمة في قائمة الانتظار
+
+هذا هو الطلب الذي يقف خلف مقطع الفخار، مع توجيه الصورتين إلى النسختين الموجودتين في هذه الوثائق حتى تتمكن من تشغيله كما هو:
+
+```bash
+curl https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "prompt": "A warm, sunlit pottery studio with wooden shelves of unglazed pots. 0-4s: medium shot. The woman from @Image1 lifts the teapot from @Image2 off a shelf with both hands and turns it so the gold handle catches the window light. She is silent. 4-10s: slow push-in to a close-up. She looks into the camera, smiles, and says only: \"This one took three firings.\" Quiet room tone and birdsong from the open window, no music.",
+    "duration": "10s",
+    "resolution": "720p",
+    "aspect_ratio": "16:9",
+    "reference_image_urls": [
+      "https://docs.venice.ai/images/guides/wan-3-0/woman.webp",
+      "https://docs.venice.ai/images/guides/wan-3-0/teapot.webp"
+    ]
+  }'
+```
+
+توضع المراجع في ثلاث مصفوفات، كعناوين URL عامة أو data URLs. يجلب Venice عناوين URL بنفسه، لذا يجب أن تعمل دون ترويسات أو ملفات تعريف ارتباط. تحتاج مهمة reference-to-video إلى صورة واحدة أو فيديو واحد على الأقل؛ ويُرفض الصوت وحده.
+
+| المصفوفة | حتى | كل مقطع | جميع المقاطع |
+|---|---|---|---|
+| `reference_image_urls` | 10 صور | - | - |
+| `reference_video_urls` | 5 مقاطع | من 1 إلى 15 ثانية | 15 ثانية |
+| `reference_audio_urls` | 5 مقاطع | من 1 إلى 15 ثانية | 15 ثانية |
+
+يجب أيضًا أن تتسع فيديوهات المرجع مع `duration` معًا ضمن 30 ثانية. يمكن أن تكون الفيديوهات بصيغة MP4 أو MOV والصوت بصيغة MP3 أو WAV. الصور الأصغر من الحد الأدنى البالغ 240 بكسل على الضلع الأقصر تُكبَّر بدلًا من رفضها.
+
+في الـ prompt، يشير `@Image1` إلى العنصر الأول في `reference_image_urls`، و`@Image2` إلى الثاني، وهكذا، ويُعدّ `@Video1` و`@Audio1` بالطريقة نفسها في مصفوفتيهما. سمِّ كل مرجع ترسله، بما في ذلك الصوت: اكتب `@Audio1` في الموضع الذي ينتمي إليه الصوت أو المؤثر الصوتي.
+
+لا يستخدم Wan 3.0 الحقل `reference_document_urls`، رغم أن مرجع الـ API يدرجه. يرفضه Prime وPro وPrime Pro، أما المستوى القياسي فيقبل المستند ويتجاهله ويحتسب تكلفة المهمة كالمعتاد.
+
+تمنحك الاستجابة المعرّف الذي تحتاجه لكل ما يلي:
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "queue_id": "01a16b0b-e781-754d-8c54-8ade9c76edcd"
+}
+```
+
+احتفظ بالقيمتين؛ يحتاجهما retrieve.
+
+لقد احتُسبت التكلفة عليك في هذه المرحلة، وليس عند عودة الفيديو، لذا لا تُعِد محاولة طلب queue. إذا كان لديك `queue_id`، فاستعلم به. إذا لم تصل الاستجابة أبدًا، فقد يؤدي إرسال المهمة مرة أخرى إلى احتساب التكلفة مرتين. يقتصر queue على 40 طلبًا في الدقيقة وretrieve على 120؛ وكلاهما يُبلغ عن `x-ratelimit-remaining-requests`.
+
+تُرفض معظم الأخطاء هنا بالرمز `400` دون أي رسوم: قيمة غير موجودة في `/models`، أو حقل لا يقبله المتغير، أو عدد زائد من المراجع، أو صوت دون صورة أو فيديو، أو غياب `aspect_ratio`. يوضح الجسم المشكلة في `issues[].message`. يُتحقق من أطوال المقاطع بعد احتساب التكلفة، لذا فإن مقطعًا مرجعيًا أطول أو أقصر من اللازم يحصل على `queue_id` هنا ثم يفشل عند أول retrieve، مع استرداد الرسوم.
+
+## 3. استعلم ونزّل
+
+استدعِ retrieve بالقيم الواردة في استجابة queue:
+
+```bash
+curl https://api.venice.ai/api/v1/video/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "queue_id": "01a16b0b-e781-754d-8c54-8ade9c76edcd"
+  }' \
+  --output response.bin
+```
+
+تكون الاستجابة أحد أمرين. أثناء تشغيل المهمة تحصل على JSON:
+
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 450757,
+  "execution_duration": 6611
+}
+```
+
+عند اكتمالها تحصل على `video/mp4` ويكون الجسم هو الفيديو. اعتمد في التفرّع على `Content-Type`.
+
+الرقمان بالمللي ثانية: المدة التي تستغرقها المهام عادةً على هذا النموذج، والمدة التي تعمل فيها مهمتك حتى الآن. استقر المتوسط عند نحو 7.5 دقائق على كل نموذج جرّبناه، وانتهت كل مهمة قبله. استغرقت المهام من 1 إلى 5 دقائق: الاختبارات ذات الثانيتين بدقة 480p أكثر من دقيقة بقليل، والمهام المبنية على فيديو مرجعي مدته 5 ثوانٍ من 3 إلى 5 دقائق. استعلم كل 10 إلى 15 ثانية بدلًا من الانتظار حتى انقضاء المتوسط.
+
+ملف MP4 بترميز H.264 بمعدل 30 إطارًا في الثانية مع صوت AAC ستيريو، أو دون مسار صوتي إذا أرسلت `audio: false`. تعود دقة 720p بأبعاد 1280×720 ودقة 1080p القياسية بأبعاد 1920×1080، لكن Pro وPrime Pro أعادا 1936×1088 لدقة 1080p.
+
+### إذا فشلت المهمة
+
+تبقى المهمة الفاشلة فاشلة: يعيد الاستعلام مجددًا الحالة نفسها والجسم نفسه. المهام التي تفشل قبل بدء التوليد، مثل مقطع مرجعي خارج حدود الطول أو صورة لا يستطيع Venice فك ترميزها، تُسترد رسومها خلال ثوانٍ من وضعها في قائمة الانتظار. لا تحمل أجسامها سوى `error`؛ ويسردها [جدول الأخطاء](#الأخطاء).
+
+### التنظيف
+
+مرّر `delete_media_on_completion: true` إلى retrieve وسيُحذف الفيديو المخزّن في الاستدعاء نفسه الذي يعيده. أي retrieve لاحق لذلك المعرّف يعيد `404`. اتركه غير مفعّل إذا أردت تنزيل الفيديو أكثر من مرة.
+
+## أنماط سير العمل
+
+مقطع الفخار هو سير عمل الموضوع: صور تدخل، والأشخاص والأشياء أنفسهم يظهرون في المقطع. الطلبات أدناه هي أنماط سير العمل الأخرى كما شغّلناها، مع المدخلات على عناوين URL نائبة. تستخدم جميعها باستثناء الأخير reference-to-video، حيث يحدد الـ prompt ما يفعله النموذج بالمقطع.
+
+### الحركة من مقطع
+
+يمكن لفيديو مرجعي أن يوفّر حركة الكاميرا أو الحركة دون محتواه. هنا حدّد مدار مدته 5 ثوانٍ حول تمثال، صُنع باستخدام `wan-3-0-text-to-video`، حركة الكاميرا حول صانعة الفخار:
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "The woman from @Image1 stands beside a potter's wheel in a sunlit pottery studio. The camera moves like the camera in @Video1: one slow orbit around her from left to right, keeping her centred. Soft room tone, no music.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "reference_image_urls": ["https://example.com/woman.webp"],
+  "reference_video_urls": ["https://example.com/orbit.mp4"]
+}
+```
+
+تدور الكاميرا حولها بالطريقة التي دارت بها حول التمثال.
+
+### صوت للحوار
+
+اذكر في الـ prompt أن الجملة تُنطق بالصوت الموجود في `@Audio1`. هنا وفّرت جملة مدتها 6 ثوانٍ من `/audio/speech` الصوت:
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "Medium close-up in a sunlit pottery studio. The woman from @Image1 looks into the camera and says, in the voice from @Audio1: \"Welcome in. Mind the wet clay.\" Static camera, soft room tone, no music.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "reference_image_urls": ["https://example.com/woman.webp"],
+  "reference_audio_urls": ["https://example.com/voice.mp3"]
+}
+```
+
+تقول الجملة الجديدة أمام الكاميرا.
+
+### تحرير مقطع
+
+صف التغيير، وسمِّ ما يجب أن يبقى كما هو، واضبط `duration` على طول المقطع:
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "Edit @Video1: make it winter. Snow covers the courtyard, the plinth, and the cypress trees, and light snow is falling. Keep the bust, the camera movement, and the framing unchanged.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "adaptive",
+  "reference_video_urls": ["https://example.com/orbit.mp4"]
+}
+```
+
+غطّى الثلج الفناء والأشجار بينما بقي التمثال والمدار كما كانا. مع `adaptive`، عاد المصدر ذو الأبعاد 854×480 بأبعاد 1280×718.
+
+### تمديد مقطع
+
+تبدأ النتيجة بمقطعك بعد إعادة توليده، ثم تستمر من هناك، لذا فإن `duration` هو طول النتيجة كاملة: المقطع إضافةً إلى اللقطات الجديدة.
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "Extend @Video1 by 5 seconds: the camera finishes its orbit, then rises slowly above the courtyard to reveal terracotta rooftops at golden hour. Same lighting and style, gentle wind, no music.",
+  "duration": "10s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "reference_video_urls": ["https://example.com/orbit.mp4"]
+}
+```
+
+عاد المدار ذو الثواني الخمس بطول 10 ثوانٍ: المدار مرة أخرى، ثم 5 ثوانٍ جديدة ترتفع فوق الأسطح. أعاد الطلب نفسه مع `"duration": "5s"` المدار فقط لا أكثر. يُعاد توليد البداية بدلًا من نسخها، لذا إذا احتجت إلى إطاراتك الأصلية، فاقطع اللقطات الجديدة من النهاية واربطها بمقطعك. تُحتسب ثواني المقطع مرتين، كفيديو مرجعي وكجزء من النتيجة. ولأن المقطع و`duration` يتشاركان حد الثلاثين ثانية، يمكن لمقطع مدته 10 ثوانٍ أن يزيد بمقدار 10 ثوانٍ على الأكثر.
+
+### الإطاران الأول والأخير
+
+يستخدم هذا المثال image-to-video. أرسل الإطار الافتتاحي كـ `image_url`، والإطار الختامي كـ `end_image_url`، وصف ما يحدث بينهما. جاء الإطاران من `/image/generate`، وصُنع الثاني من الأول باستخدام `/image/edit` حتى تتطابق الغرفة:
+
+```json
+{
+  "model": "wan-3-0-image-to-video",
+  "prompt": "Time-lapse from morning to evening: daylight fades in the window, the pendant lamps switch on, and the shelves fill with teal-glazed pots. Static camera, no people.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "image_url": "https://example.com/studio-day.webp",
+  "end_image_url": "https://example.com/studio-evening.webp"
+}
+```
+
+يبدأ المقطع بإطار الصباح ويستقر على إطار المساء.
+
+## كتابة الـ prompts
+
+يتبع Wan 3.0 الـ prompt المنظّم بدقة، وقد ساعدت هذه العادات في تجاربنا:
+
+- امنح كل جزء من المقطع طابعًا زمنيًا، مثل `0-4s:` و`4-10s:`. في مقطع الفخار، يقع الرفع والاقتراب التدريجي حيث وضعهما الـ prompt.
+- ضع الحوار بين علامتي اقتباس مزدوجتين، واذكر متى يجب أن تبقى الشخصية صامتة. عندما يُترك النموذج لنفسه، يملأ اللحظات الهادئة بكلمات صغيرة: أضافت اللقطة الأولى من مقطع الفخار "Okay." قبل الجملة. أما اللقطة الثانية، مع `She is silent.` في اللقطة الأولى و`says only:` قبل الجملة، فلم تتضمن سوى "Mm." خافتة.
+- سمِّ حركات الكاميرا بوضوح: `slow push-in`، `static camera`، `one slow orbit`.
+- صف الصوت الذي تريده، بما في ذلك نغمة الغرفة والأجواء المحيطة. لا يملك Wan 3.0 prompt سلبيًا، لذا اكتب الاستثناءات مثل `no music` داخل الـ prompt نفسه.
+
+## مثال كامل
+
+صنع هذا السكربت مقطع الفخار: يحصل على عرض سعر للمهمة، ويضعها في قائمة الانتظار مع الصورتين كـ data URLs، ويستعلم حتى يصل ملف MP4، ثم يحفظه. احفظ [صانعة الفخار](/images/guides/wan-3-0/woman.webp) و[إبريق الشاي](/images/guides/wan-3-0/teapot.webp) بجانبه باسم `woman.webp` و`teapot.webp`. المهلة البالغة 20 دقيقة تعادل عدة أضعاف أطول مهمة شغّلناها.
+
+```python
+import base64
+import os
+import time
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+MIME_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+
+
+def data_url(path):
+    encoded = base64.b64encode(path.read_bytes()).decode()
+    return f"data:{MIME_TYPES[path.suffix.lower()]};base64,{encoded}"
+
+
+job_request = {
+    "model": "wan-3-0-reference-to-video",
+    "prompt": (
+        "A warm, sunlit pottery studio with wooden shelves of unglazed pots. "
+        "0-4s: medium shot. The woman from @Image1 lifts the teapot from @Image2 off a shelf with both hands "
+        "and turns it so the gold handle catches the window light. She is silent. "
+        "4-10s: slow push-in to a close-up. She looks into the camera, smiles, and says only: "
+        '"This one took three firings." '
+        "Quiet room tone and birdsong from the open window, no music."
+    ),
+    "duration": "10s",
+    "resolution": "720p",
+    "aspect_ratio": "16:9",
+    "reference_image_urls": [data_url(Path("woman.webp")), data_url(Path("teapot.webp"))],
+}
+
+quote = requests.post(
+    f"{BASE_URL}/video/quote",
+    json={key: job_request[key] for key in ("model", "duration", "resolution")},
+)
+quote.raise_for_status()
+print(f"Estimated cost: ${quote.json()['quote']:.2f}")
+
+queued = requests.post(f"{BASE_URL}/video/queue", headers=HEADERS, json=job_request)
+queued.raise_for_status()
+job = queued.json()
+print(f"Queued {job['queue_id']}")
+
+started = time.monotonic()
+deadline = started + 20 * 60
+while time.monotonic() < deadline:
+    result = requests.post(
+        f"{BASE_URL}/video/retrieve",
+        headers=HEADERS,
+        json={
+            "model": job["model"],
+            "queue_id": job["queue_id"],
+            "delete_media_on_completion": True,
+        },
+    )
+
+    content_type = result.headers.get("Content-Type", "").split(";")[0].strip()
+    if content_type == "video/mp4":
+        output = Path("pottery-studio.mp4")
+        output.write_bytes(result.content)
+        print(f"Saved {output} after {time.monotonic() - started:.0f}s")
+        break
+
+    body = result.json()
+    if not result.ok:
+        # Terminal failure. Polling again returns the same error.
+        print(f"{result.status_code}: {body.get('error')}")
+        raise SystemExit(1)
+
+    if body.get("status") != "PROCESSING":
+        print(body)
+        raise SystemExit(1)
+
+    time.sleep(15)
+else:
+    raise SystemExit(
+        f"Still processing after 20 minutes. Poll retrieve again later with queue_id={job['queue_id']}."
+    )
+```
+
+يحذف retrieve الفيديو المخزّن أثناء تسليمه، لذا احذف `delete_media_on_completion` إذا أردت تنزيله مرة أخرى.
+
+## معاملات الـ API
+
+### Queue
+
+| الحقل | النوع | مطلوب | الوصف |
+|---|---|---|---|
+| `model` | string | نعم | معرّف نموذج Wan 3.0. |
+| `prompt` | string | نعم | حتى `prompt_character_limit` حرفًا. في reference-to-video، أشر إلى المدخلات بـ `@Image1` و`@Video1` و`@Audio1`. |
+| `duration` | string | نعم | إحدى قيم `durations`. عند تمديد مقطع، تساوي المقطع إضافةً إلى اللقطات الجديدة. |
+| `aspect_ratio` | string | نعم | إحدى قيم `aspect_ratios`. |
+| `resolution` | string | لا | إحدى قيم `resolutions`. القيمة الافتراضية `1080p`. |
+| `audio` | boolean | لا | اضبطه على `false` للحصول على مقطع دون مسار صوتي. القيمة الافتراضية `true`. |
+| `image_url` | string | في image-to-video | الإطار الأول، كعنوان URL أو data URL. |
+| `end_image_url` | string | لا | الإطار الأخير، كعنوان URL أو data URL. في image-to-video فقط. |
+| `reference_image_urls` | array of strings | صورة أو فيديو، في reference-to-video | صور مرجعية، كعناوين URL أو data URLs. |
+| `reference_video_urls` | array of strings | صورة أو فيديو، في reference-to-video | فيديوهات مرجعية، كعناوين URL أو data URLs. |
+| `reference_audio_urls` | array of strings | لا | صوت مرجعي، كعناوين URL أو data URLs. في reference-to-video فقط، إلى جانب صورة أو فيديو. |
+
+### Retrieve
+
+| الحقل | النوع | مطلوب | الوصف |
+|---|---|---|---|
+| `model` | string | نعم | `model` من استجابة queue. |
+| `queue_id` | string | نعم | `queue_id` من استجابة queue. |
+| `delete_media_on_completion` | boolean | لا | احذف الفيديو المخزّن عندما يعيده هذا الاستدعاء. القيمة الافتراضية `false`. |
+
+## الأخطاء
+
+| الحالة | نقطة النهاية | الجسم | الحل |
+|---|---|---|---|
+| `400` | queue | `Invalid request parameters`، مع السبب في `issues[].message` | أصلح الحقل المذكور في `issues[].path`. يُرفض قبل احتساب أي رسوم. |
+| `400` | retrieve | `Invalid request parameters` | مجموع فيديوهات المرجع و`duration` يتجاوز 30 ثانية. تُسترد الرسوم. |
+| `400` | retrieve | `The image file is corrupted or unreadable` | تعذّر فك ترميز صورة. تُسترد الرسوم. |
+| `400` | retrieve | `Request ID is invalid.` | `queue_id` غير معروف. استخدم المعرّف الوارد في استجابة queue الخاصة بك. |
+| `401` | queue، retrieve | `Authentication failed` | تحقق من المفتاح في [venice.ai/settings/api](https://venice.ai/settings/api). |
+| `402` | queue، retrieve | `Authentication required` مع عرض دفع x402 | لم تُرسَل ترويسة `Authorization`. |
+| `404` | queue، quote | `Specified model not found: ...` | معرّف النموذج خاطئ. يقترح الجسم تطابقات قريبة. |
+| `404` | retrieve | `Upstream API error: 404` | سبق حذف الفيديو بواسطة `delete_media_on_completion`. |
+| `422` | retrieve | `Video duration exceeds the maximum allowed.` | فيديو مرجعي أطول من 15 ثانية، أو مجموع الفيديوهات يتجاوز ذلك. تُسترد الرسوم. |
+| `422` | retrieve | `Video duration is too short.` | فيديو مرجعي أقصر من ثانية واحدة. تُسترد الرسوم. |
+| `422` | retrieve | `Audio duration exceeds the maximum allowed. Maximum is 30 seconds.` | مقطع صوتي مرجعي أطول من 15 ثانية، أو مجموع المقاطع يتجاوز ذلك. الحد هو 15 ثانية بغض النظر عما تقوله الرسالة. تُسترد الرسوم. |
+| `429` | queue، retrieve | تجاوز حد المعدل | يسمح queue بـ 40 طلبًا في الدقيقة وretrieve بـ 120. تراجع ثم أعد المحاولة. |
+
+## موارد ذات صلة
+
+- [Quote Video Generation API](/ar/api-reference/endpoint/video/quote)
+- [Queue Video Generation API](/ar/api-reference/endpoint/video/queue)
+- [Retrieve Video API](/ar/api-reference/endpoint/video/retrieve)
+- [نماذج الفيديو](/ar/models/video)
+- [توليد الفيديو](/ar/guides/media/video-generation)
+- [المرجع إلى الفيديو](/ar/guides/media/reference-to-video)
+- [Seedance 2.0 و 2.5](/ar/guides/media/seedance-2-0)
