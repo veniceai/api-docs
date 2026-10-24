@@ -1,0 +1,419 @@
+---
+title: "Wan 3.0"
+description: "在 Venice API 上使用 Wan 3.0，根据提示词、首帧与末帧，或参考图像、片段和人声，生成最长 30 秒的有声视频。"
+"og:title": "Wan 3.0 | Venice API 文档"
+"og:description": "了解如何在 Venice API 上使用 Wan 3.0 生成、参考、编辑和扩展视频。"
+---
+
+Wan 3.0 在一个任务中即可生成最长 30 秒的有声视频。文生视频只需一段提示词；图生视频以你提供的画面作为开场，并可以另一帧作为结尾；参考生视频最多接受 10 张图像、5 段视频片段和 5 段音频片段，并把其中的人物、产品、动作和人声放入画面。参考生视频还可以编辑和扩展你已有的片段。所有视频模型的通用内容请参阅[视频生成](/zh/guides/media/video-generation)；其他基于参考生成的模型请参阅[参考生视频](/zh/guides/media/reference-to-video)和 [Seedance](/zh/guides/media/seedance-2-0)。
+
+下面是用 `/image/generate` 生成的两张图像，以及参考生视频根据它们生成的片段。陶艺师保留了她的发型、雀斑和围裙，茶壶保留了釉色和金色把手，结尾的台词由她对着镜头说出。
+
+<Frame as="div">
+  <img src="/images/guides/wan-3-0/references.webp" alt="两张并排的参考图像：一位系着牛仔布围裙的红发陶艺师，以及一把带金色把手的青绿色斑点茶壶" />
+</Frame>
+
+<video
+  controls
+  preload="metadata"
+  poster="/images/guides/wan-3-0/sample-poster.webp"
+  className="w-full aspect-video rounded-xl"
+  src="/images/guides/wan-3-0/sample.mp4"
+>
+  你的浏览器无法播放此视频。<a href="/images/guides/wan-3-0/sample.mp4">下载 MP4</a>。
+</video>
+
+任务以异步方式运行：[报价](/zh/api-reference/endpoint/video/quote)接口为任务定价，[队列](/zh/api-reference/endpoint/video/queue)接口提交任务并扣费，[检索](/zh/api-reference/endpoint/video/retrieve)接口则用于轮询，直到 MP4 就绪。
+
+示例假定已设置 `VENICE_API_KEY`：
+
+```bash
+export VENICE_API_KEY="your-api-key"
+```
+
+## 选择模型
+
+每个档位都有相同的三种变体：
+
+| 档位 | 文生视频 | 图生视频 | 参考生视频 | 分辨率 |
+|---|---|---|---|---|
+| 标准 | `wan-3-0-text-to-video` | `wan-3-0-image-to-video` | `wan-3-0-reference-to-video` | 480p, 720p, 1080p |
+| Prime | `wan-3-0-prime-text-to-video` | `wan-3-0-prime-image-to-video` | `wan-3-0-prime-reference-to-video` | 480p, 720p, 1080p |
+| Pro | `wan-3-0-pro-text-to-video` | `wan-3-0-pro-image-to-video` | `wan-3-0-pro-reference-to-video` | 1080p, 2K, 4K |
+| Prime Pro | `wan-3-0-prime-pro-text-to-video` | `wan-3-0-prime-pro-image-to-video` | `wan-3-0-prime-pro-reference-to-video` | 1080p, 2K, 4K |
+
+Prime 速度更快，价格也更高：陶艺片段在标准档位上耗时 205 秒，在 Prime 上耗时 131 秒。每个 ID 还有一种带点号的写法，例如 `wan-3.0-reference-to-video`。
+
+图生视频和参考生视频都接受图像，但用途不同。图生视频严格以 `image_url` 作为开场，如果你传入了 `end_image_url`，则以它作为结尾。参考生视频把图像当作参考：图像中的内容会出现在片段中，取景方式由提示词决定。当第一个镜头已经确定时，请使用图生视频；当你需要在多个镜头中保持同一个人物或产品时，请使用参考生视频。
+
+时长、宽高比和分辨率来自 `/models`。以下查询会返回这些信息：
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=video" |
+  jq '.data[] | select(.id | startswith("wan-3-0")) | {
+    id,
+    resolutions: .model_spec.constraints.resolutions,
+    durations: .model_spec.constraints.durations,
+    aspect_ratios: .model_spec.constraints.aspect_ratios,
+    prompt_character_limit: .model_spec.constraints.prompt_character_limit,
+    min_image_short_side: .model_spec.constraints.reference_image_min_short_side_pixels
+  }'
+```
+
+目前所有 Wan 3.0 模型都提供 `2s`、`5s`、`10s`、`15s`、`20s`、`25s` 和 `30s` 时长，`16:9`、`9:16`、`1:1`、`4:3` 和 `3:4` 宽高比，以及最长 20,000 个字符的提示词。图生视频和参考生视频还额外提供 `adaptive`，它会跟随输入的形状。这些细节可能会变化，因此请从 API 中读取。参考输入的限制不在 `/models` 中，而是在[第 2 步](#2-将任务加入队列)中说明。
+
+## 1. 获取报价
+
+按输出秒数计费，费率由档位和分辨率决定。截至 2026 年 10 月 23 日，标准档位在 480p 下为每秒 \$0.065，720p 为 \$0.13，1080p 为 \$0.26；Prime 分别为 \$0.088、\$0.182 和 \$0.364。Pro 在 1080p 下为 \$0.237，2K 为 \$0.272，4K 为 \$0.296；Prime Pro 分别为 \$0.331、\$0.355 和 \$0.379。同一档位的三种变体价格相同，关闭 `audio` 也不会改变价格。
+
+参考视频另外计费，按任务的费率计算并精确到秒的小数部分，因此一段 4.2 秒的片段会增加 4.2 秒的费用。参考图像和音频免费。报价接口不需要 API 密钥；当任务包含参考视频时，请添加 `reference_video_total_duration`（单位为秒）：
+
+```bash
+curl https://api.venice.ai/api/v1/video/quote \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "duration": "10s",
+    "resolution": "720p"
+  }'
+```
+
+```json
+{
+  "quote": 1.3
+}
+```
+
+报价和扣费都四舍五入到分，因此 480p 下 5 秒的费用 \$0.325 会按 \$0.33 报价和扣费。
+
+## 2. 将任务加入队列
+
+以下是生成陶艺片段的请求，其中两张图像指向本文档中的副本，你可以直接运行：
+
+```bash
+curl https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "prompt": "A warm, sunlit pottery studio with wooden shelves of unglazed pots. 0-4s: medium shot. The woman from @Image1 lifts the teapot from @Image2 off a shelf with both hands and turns it so the gold handle catches the window light. She is silent. 4-10s: slow push-in to a close-up. She looks into the camera, smiles, and says only: \"This one took three firings.\" Quiet room tone and birdsong from the open window, no music.",
+    "duration": "10s",
+    "resolution": "720p",
+    "aspect_ratio": "16:9",
+    "reference_image_urls": [
+      "https://docs.venice.ai/images/guides/wan-3-0/woman.webp",
+      "https://docs.venice.ai/images/guides/wan-3-0/teapot.webp"
+    ]
+  }'
+```
+
+参考输入放在三个数组中，可以是公开 URL 或 data URL。Venice 会自行抓取 URL，因此这些 URL 必须无需请求头或 Cookie 即可访问。参考生视频任务至少需要一张图像或一段视频；仅提供音频会被拒绝。
+
+| 数组 | 上限 | 每段片段 | 所有片段 |
+|---|---|---|---|
+| `reference_image_urls` | 10 张图像 | - | - |
+| `reference_video_urls` | 5 段片段 | 1 到 15 秒 | 15 秒 |
+| `reference_audio_urls` | 5 段片段 | 1 到 15 秒 | 15 秒 |
+
+参考视频与 `duration` 的总和也必须在 30 秒以内。视频可以是 MP4 或 MOV，音频可以是 MP3 或 WAV。短边小于 240 像素下限的图像会被放大，而不会被拒绝。
+
+在提示词中，`@Image1` 指 `reference_image_urls` 中的第一项，`@Image2` 指第二项，依此类推；`@Video1` 和 `@Audio1` 在各自的数组中以相同方式计数。请在提示词中点名你发送的每一个参考输入，包括音频：在人声或声音应出现的位置写上 `@Audio1`。
+
+尽管 API 参考中列出了 `reference_document_urls`，Wan 3.0 并不使用它。Prime、Pro 和 Prime Pro 会拒绝该字段，标准档位则会接受文档但忽略它，并照常对任务扣费。
+
+响应会返回后续所有操作所需的标识：
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "queue_id": "01a16b0b-e781-754d-8c54-8ade9c76edcd"
+}
+```
+
+请保存这两个值，检索时需要用到它们。
+
+此时你已被扣费，而不是在视频返回时才扣费，因此不要重试队列请求。如果你拿到了 `queue_id`，请用它进行轮询。如果始终没有收到响应，再次发送任务可能会导致重复扣费。队列接口限制为每分钟 40 次请求，检索接口为每分钟 120 次；两者都会返回 `x-ratelimit-remaining-requests`。
+
+大多数错误会在这一步以 `400` 被拒绝且不扣费：取值不在 `/models` 中、变体不接受的字段、参考输入过多、只有音频而没有图像或视频，或缺少 `aspect_ratio`。响应体会在 `issues[].message` 中说明问题所在。片段长度在扣费之后才会检查，因此过长或过短的参考片段会在这一步拿到 `queue_id`，然后在第一次检索时失败，费用会被退还。
+
+## 3. 轮询并下载
+
+使用队列响应中的值调用检索接口：
+
+```bash
+curl https://api.venice.ai/api/v1/video/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "queue_id": "01a16b0b-e781-754d-8c54-8ade9c76edcd"
+  }' \
+  --output response.bin
+```
+
+响应有两种可能。任务运行期间，你会收到 JSON：
+
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 450757,
+  "execution_duration": 6611
+}
+```
+
+任务完成后，你会收到 `video/mp4`，响应体就是视频本身。请根据 `Content-Type` 进行分支处理。
+
+这两个数字的单位是毫秒：分别表示该模型上任务的通常耗时，以及你的任务已运行的时长。在我们尝试的每个模型上，平均值都在 7.5 分钟左右，而每个任务都比平均值更快。任务耗时 1 到 5 分钟：480p 下 2 秒的测试略超过一分钟，基于 5 秒参考视频的任务则需要 3 到 5 分钟。请每 10 到 15 秒轮询一次，而不是一直等到平均时长。
+
+MP4 为 H.264 编码，每秒 30 帧，带立体声 AAC 音频；如果你传入了 `audio: false`，则没有音轨。720p 返回 1280×720，标准档位的 1080p 返回 1920×1080，但 Pro 和 Prime Pro 的 1080p 返回的是 1936×1088。
+
+### 如果任务失败
+
+失败的任务会保持失败状态：再次轮询会返回相同的状态和响应体。在生成开始前失败的任务，例如参考片段超出长度限制或 Venice 无法解码的图像，会在加入队列后几秒内退款。它们的响应体只包含 `error`；[错误表](#错误)列出了这些错误。
+
+### 清理
+
+在检索时传入 `delete_media_on_completion: true`，存储的视频会在返回它的同一次调用中被删除。之后对该 ID 的任何检索都会返回 `404`。如果你想多次下载视频，请不要设置此项。
+
+## 工作流
+
+陶艺片段属于主体工作流：输入图像，片段中出现同样的人物和物体。下面的请求是我们实际运行过的其他工作流，输入使用占位 URL。除最后一个外，其余都使用参考生视频，由提示词决定模型如何处理片段。
+
+### 从片段中获取运动
+
+参考视频可以只提供镜头运动或动作，而不带入其内容。这里使用 `wan-3-0-text-to-video` 生成的一段 5 秒环绕雕像的片段，来设定围绕陶艺师的镜头运动：
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "The woman from @Image1 stands beside a potter's wheel in a sunlit pottery studio. The camera moves like the camera in @Video1: one slow orbit around her from left to right, keeping her centred. Soft room tone, no music.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "reference_image_urls": ["https://example.com/woman.webp"],
+  "reference_video_urls": ["https://example.com/orbit.mp4"]
+}
+```
+
+镜头以环绕雕像的方式围绕她弧形移动。
+
+### 为对白指定人声
+
+在提示词中说明台词使用 `@Audio1` 中的人声说出。这里由 `/audio/speech` 生成的一段 6 秒台词提供人声：
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "Medium close-up in a sunlit pottery studio. The woman from @Image1 looks into the camera and says, in the voice from @Audio1: \"Welcome in. Mind the wet clay.\" Static camera, soft room tone, no music.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "reference_image_urls": ["https://example.com/woman.webp"],
+  "reference_audio_urls": ["https://example.com/voice.mp3"]
+}
+```
+
+她对着镜头说出了新的台词。
+
+### 编辑片段
+
+描述要做的修改，点明哪些内容必须保持不变，并将 `duration` 设置为片段的长度：
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "Edit @Video1: make it winter. Snow covers the courtyard, the plinth, and the cypress trees, and light snow is falling. Keep the bust, the camera movement, and the framing unchanged.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "adaptive",
+  "reference_video_urls": ["https://example.com/orbit.mp4"]
+}
+```
+
+庭院和树木被白雪覆盖，雕像和环绕运动保持原样。使用 `adaptive` 时，854×480 的源片段返回的是 1280×718。
+
+### 扩展片段
+
+结果以你的片段（重新生成）开头，并从那里继续，因此 `duration` 是整个结果的长度：原片段加上新画面。
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "Extend @Video1 by 5 seconds: the camera finishes its orbit, then rises slowly above the courtyard to reveal terracotta rooftops at golden hour. Same lighting and style, gentle wind, no music.",
+  "duration": "10s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "reference_video_urls": ["https://example.com/orbit.mp4"]
+}
+```
+
+5 秒的环绕片段返回为 10 秒：先是再次环绕，然后是 5 秒新的升镜，越过屋顶。使用 `"duration": "5s"` 的相同请求只返回了环绕部分，没有其他内容。开头部分是重新生成的而非复制的，因此如果你需要原始画面，请从结尾截取新画面并将其拼接到你的片段上。片段的秒数会被计费两次：一次作为参考视频，一次作为结果的一部分。由于片段和 `duration` 共享 30 秒上限，一段 10 秒的片段最多只能延长 10 秒。
+
+### 首帧与末帧
+
+这个工作流使用图生视频。将开场画面作为 `image_url` 发送，将结尾画面作为 `end_image_url` 发送，并描述两者之间发生的事情。两帧画面都来自 `/image/generate`，第二帧是用 `/image/edit` 基于第一帧制作的，以保证房间一致：
+
+```json
+{
+  "model": "wan-3-0-image-to-video",
+  "prompt": "Time-lapse from morning to evening: daylight fades in the window, the pendant lamps switch on, and the shelves fill with teal-glazed pots. Static camera, no people.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "image_url": "https://example.com/studio-day.webp",
+  "end_image_url": "https://example.com/studio-evening.webp"
+}
+```
+
+片段以早晨的画面开场，最终停在傍晚的画面上。
+
+## 编写提示词
+
+Wan 3.0 会紧密遵循结构化的提示词，以下习惯在我们的测试中很有帮助：
+
+- 为片段的每一段指定时间戳，例如 `0-4s:` 和 `4-10s:`。在陶艺片段中，拿起茶壶和推镜头的动作都出现在提示词指定的位置。
+- 将对白放在双引号中，并说明角色何时应保持沉默。如果不加说明，模型会用简短的词语填补安静的时刻：陶艺片段的第一次生成在台词前加了一句 "Okay."。第二次生成在第一个镜头中写了 `She is silent.`，并在台词前写了 `says only:`，结果只有一声轻轻的 "Mm."。
+- 直白地写出镜头运动：`slow push-in`、`static camera`、`one slow orbit`。
+- 描述你想要的声音，包括房间底噪和环境音。Wan 3.0 没有负面提示词，因此请把 `no music` 之类的排除项直接写进提示词中。
+
+## 完整示例
+
+这个脚本生成了陶艺片段：它为任务报价，以 data URL 形式附上两张图像将任务加入队列，轮询直到 MP4 返回，然后保存。请将[陶艺师](/images/guides/wan-3-0/woman.webp)和[茶壶](/images/guides/wan-3-0/teapot.webp)保存到脚本旁边，分别命名为 `woman.webp` 和 `teapot.webp`。20 分钟的截止时间是我们运行过的最长任务的数倍。
+
+```python
+import base64
+import os
+import time
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+MIME_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+
+
+def data_url(path):
+    encoded = base64.b64encode(path.read_bytes()).decode()
+    return f"data:{MIME_TYPES[path.suffix.lower()]};base64,{encoded}"
+
+
+job_request = {
+    "model": "wan-3-0-reference-to-video",
+    "prompt": (
+        "A warm, sunlit pottery studio with wooden shelves of unglazed pots. "
+        "0-4s: medium shot. The woman from @Image1 lifts the teapot from @Image2 off a shelf with both hands "
+        "and turns it so the gold handle catches the window light. She is silent. "
+        "4-10s: slow push-in to a close-up. She looks into the camera, smiles, and says only: "
+        '"This one took three firings." '
+        "Quiet room tone and birdsong from the open window, no music."
+    ),
+    "duration": "10s",
+    "resolution": "720p",
+    "aspect_ratio": "16:9",
+    "reference_image_urls": [data_url(Path("woman.webp")), data_url(Path("teapot.webp"))],
+}
+
+quote = requests.post(
+    f"{BASE_URL}/video/quote",
+    json={key: job_request[key] for key in ("model", "duration", "resolution")},
+)
+quote.raise_for_status()
+print(f"Estimated cost: ${quote.json()['quote']:.2f}")
+
+queued = requests.post(f"{BASE_URL}/video/queue", headers=HEADERS, json=job_request)
+queued.raise_for_status()
+job = queued.json()
+print(f"Queued {job['queue_id']}")
+
+started = time.monotonic()
+deadline = started + 20 * 60
+while time.monotonic() < deadline:
+    result = requests.post(
+        f"{BASE_URL}/video/retrieve",
+        headers=HEADERS,
+        json={
+            "model": job["model"],
+            "queue_id": job["queue_id"],
+            "delete_media_on_completion": True,
+        },
+    )
+
+    content_type = result.headers.get("Content-Type", "").split(";")[0].strip()
+    if content_type == "video/mp4":
+        output = Path("pottery-studio.mp4")
+        output.write_bytes(result.content)
+        print(f"Saved {output} after {time.monotonic() - started:.0f}s")
+        break
+
+    body = result.json()
+    if not result.ok:
+        # Terminal failure. Polling again returns the same error.
+        print(f"{result.status_code}: {body.get('error')}")
+        raise SystemExit(1)
+
+    if body.get("status") != "PROCESSING":
+        print(body)
+        raise SystemExit(1)
+
+    time.sleep(15)
+else:
+    raise SystemExit(
+        f"Still processing after 20 minutes. Poll retrieve again later with queue_id={job['queue_id']}."
+    )
+```
+
+检索接口在交付视频的同时会删除存储的视频，因此如果你想再次下载，请去掉 `delete_media_on_completion`。
+
+## API 参数
+
+### 队列
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `model` | string | 是 | Wan 3.0 模型 ID。 |
+| `prompt` | string | 是 | 最多 `prompt_character_limit` 个字符。在参考生视频中，使用 `@Image1`、`@Video1` 和 `@Audio1` 指代输入。 |
+| `duration` | string | 是 | `durations` 中的一个值。扩展片段时，为原片段加新画面的总长度。 |
+| `aspect_ratio` | string | 是 | `aspect_ratios` 中的一个值。 |
+| `resolution` | string | 否 | `resolutions` 中的一个值。默认为 `1080p`。 |
+| `audio` | boolean | 否 | 设为 `false` 可生成没有音轨的片段。默认为 `true`。 |
+| `image_url` | string | 图生视频 | 首帧，URL 或 data URL。 |
+| `end_image_url` | string | 否 | 末帧，URL 或 data URL。仅限图生视频。 |
+| `reference_image_urls` | array of strings | 参考生视频中需提供图像或视频之一 | 参考图像，URL 或 data URL。 |
+| `reference_video_urls` | array of strings | 参考生视频中需提供图像或视频之一 | 参考视频，URL 或 data URL。 |
+| `reference_audio_urls` | array of strings | 否 | 参考音频，URL 或 data URL。仅限参考生视频，且需同时提供图像或视频。 |
+
+### 检索
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `model` | string | 是 | 队列响应中的 `model`。 |
+| `queue_id` | string | 是 | 队列响应中的 `queue_id`。 |
+| `delete_media_on_completion` | boolean | 否 | 在此次调用返回视频时删除存储的视频。默认为 `false`。 |
+
+## 错误
+
+| 状态码 | 端点 | 响应体 | 解决方法 |
+|---|---|---|---|
+| `400` | queue | `Invalid request parameters`，原因见 `issues[].message` | 修正 `issues[].path` 中指出的字段。在扣费前即被拒绝。 |
+| `400` | retrieve | `Invalid request parameters` | 参考视频与 `duration` 的总和超过 30 秒。费用会被退还。 |
+| `400` | retrieve | `The image file is corrupted or unreadable` | 某张图像无法解码。费用会被退还。 |
+| `400` | retrieve | `Request ID is invalid.` | 未知的 `queue_id`。请使用你自己的队列响应中的值。 |
+| `401` | queue, retrieve | `Authentication failed` | 请在 [venice.ai/settings/api](https://venice.ai/settings/api) 检查密钥。 |
+| `402` | queue, retrieve | `Authentication required` 以及 x402 支付报价 | 未发送 `Authorization` 请求头。 |
+| `404` | queue, quote | `Specified model not found: ...` | 模型 ID 有误。响应体会给出相近的匹配项。 |
+| `404` | retrieve | `Upstream API error: 404` | 视频已被 `delete_media_on_completion` 删除。 |
+| `422` | retrieve | `Video duration exceeds the maximum allowed.` | 某段参考视频超过 15 秒，或所有视频总和超过 15 秒。费用会被退还。 |
+| `422` | retrieve | `Video duration is too short.` | 某段参考视频短于 1 秒。费用会被退还。 |
+| `422` | retrieve | `Audio duration exceeds the maximum allowed. Maximum is 30 seconds.` | 某段参考音频超过 15 秒，或所有音频总和超过 15 秒。无论消息如何表述，上限都是 15 秒。费用会被退还。 |
+| `429` | queue, retrieve | 超出速率限制 | 队列接口允许每分钟 40 次请求，检索接口允许 120 次。请退避后重试。 |
+
+## 相关资源
+
+- [视频生成报价 API](/zh/api-reference/endpoint/video/quote)
+- [视频生成队列 API](/zh/api-reference/endpoint/video/queue)
+- [检索视频 API](/zh/api-reference/endpoint/video/retrieve)
+- [视频模型](/zh/models/video)
+- [视频生成](/zh/guides/media/video-generation)
+- [参考生视频](/zh/guides/media/reference-to-video)
+- [Seedance 2.0 与 2.5](/zh/guides/media/seedance-2-0)
