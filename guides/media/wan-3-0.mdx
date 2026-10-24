@@ -1,0 +1,419 @@
+---
+title: "Wan 3.0"
+description: "Generate up to 30 seconds of video with sound from a prompt, a first and last frame, or reference images, clips, and voices with Wan 3.0 on the Venice API."
+"og:title": "Wan 3.0 | Venice API Docs"
+"og:description": "Learn how to generate, reference, edit, and extend video with Wan 3.0 on the Venice API."
+---
+
+Wan 3.0 generates up to 30 seconds of video with sound in one job. Text-to-video works from a prompt alone, image-to-video opens on a frame you supply and can close on another, and reference-to-video takes up to 10 images, 5 video clips, and 5 audio clips and puts the people, products, movement, and voices from them into the shot. Reference-to-video also edits and extends clips you already have. For what all video models share, see [video generation](/guides/media/video-generation); for other models that work from references, see [reference to video](/guides/media/reference-to-video) and [Seedance](/guides/media/seedance-2-0).
+
+Here are two images made with `/image/generate` and the clip reference-to-video made from them. The potter keeps her hair, freckles, and apron, the teapot keeps its glaze and gold handle, and the line at the end is spoken on camera.
+
+<Frame as="div">
+  <img src="/images/guides/wan-3-0/references.webp" alt="The two reference images side by side: a red-haired potter in a denim apron, and a speckled teal teapot with a gold handle" />
+</Frame>
+
+<video
+  controls
+  preload="metadata"
+  poster="/images/guides/wan-3-0/sample-poster.webp"
+  className="w-full aspect-video rounded-xl"
+  src="/images/guides/wan-3-0/sample.mp4"
+>
+  Your browser cannot play this video. <a href="/images/guides/wan-3-0/sample.mp4">Download the MP4</a>.
+</video>
+
+Jobs run asynchronously: [quote](/api-reference/endpoint/video/quote) prices a job, [queue](/api-reference/endpoint/video/queue) submits it and charges you, and [retrieve](/api-reference/endpoint/video/retrieve) polls until the MP4 is ready.
+
+The examples assume `VENICE_API_KEY` is set:
+
+```bash
+export VENICE_API_KEY="your-api-key"
+```
+
+## Choose a model
+
+Every tier has the same three variants:
+
+| Tier | Text-to-video | Image-to-video | Reference-to-video | Resolutions |
+|---|---|---|---|---|
+| Standard | `wan-3-0-text-to-video` | `wan-3-0-image-to-video` | `wan-3-0-reference-to-video` | 480p, 720p, 1080p |
+| Prime | `wan-3-0-prime-text-to-video` | `wan-3-0-prime-image-to-video` | `wan-3-0-prime-reference-to-video` | 480p, 720p, 1080p |
+| Pro | `wan-3-0-pro-text-to-video` | `wan-3-0-pro-image-to-video` | `wan-3-0-pro-reference-to-video` | 1080p, 2K, 4K |
+| Prime Pro | `wan-3-0-prime-pro-text-to-video` | `wan-3-0-prime-pro-image-to-video` | `wan-3-0-prime-pro-reference-to-video` | 1080p, 2K, 4K |
+
+Prime is the faster option at a higher price: the pottery clip took 205 seconds on standard and 131 on Prime. Each ID also has a dotted form, such as `wan-3.0-reference-to-video`.
+
+Image-to-video and reference-to-video both take images, for different jobs. Image-to-video opens on `image_url` exactly and, if you send `end_image_url`, ends on it. Reference-to-video treats images as references: what is in them appears in the clip, framed however the prompt says. Use image-to-video when the first shot is fixed, and reference-to-video when you need the same person or product across shots.
+
+Durations, aspect ratios, and resolutions come from `/models`. This query returns them:
+
+```bash
+curl "https://api.venice.ai/api/v1/models?type=video" |
+  jq '.data[] | select(.id | startswith("wan-3-0")) | {
+    id,
+    resolutions: .model_spec.constraints.resolutions,
+    durations: .model_spec.constraints.durations,
+    aspect_ratios: .model_spec.constraints.aspect_ratios,
+    prompt_character_limit: .model_spec.constraints.prompt_character_limit,
+    min_image_short_side: .model_spec.constraints.reference_image_min_short_side_pixels
+  }'
+```
+
+Right now every Wan 3.0 model offers `2s`, `5s`, `10s`, `15s`, `20s`, `25s`, and `30s`, the aspect ratios `16:9`, `9:16`, `1:1`, `4:3`, and `3:4`, and prompts up to 20,000 characters. Image-to-video and reference-to-video add `adaptive`, which follows the shape of your input. Those details can change, so read them from the API. The reference limits are not in `/models`; they are in [step 2](#2-queue-the-job).
+
+## 1. Get a price quote
+
+Billing is per second of output, at a rate set by tier and resolution. On October 23, 2026, standard cost \$0.065 per second at 480p, \$0.13 at 720p, and \$0.26 at 1080p, and Prime cost \$0.088, \$0.182, and \$0.364. Pro cost \$0.237 at 1080p, \$0.272 at 2K, and \$0.296 at 4K, and Prime Pro cost \$0.331, \$0.355, and \$0.379. The three variants in a tier cost the same, and turning `audio` off does not change the price.
+
+Reference videos are billed on top, at the job's rate and to the fraction of a second, so a 4.2-second clip adds 4.2 seconds. Reference images and audio are free. Quote needs no API key; add `reference_video_total_duration`, in seconds, when the job has reference videos:
+
+```bash
+curl https://api.venice.ai/api/v1/video/quote \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "duration": "10s",
+    "resolution": "720p"
+  }'
+```
+
+```json
+{
+  "quote": 1.3
+}
+```
+
+Quotes and charges are rounded to the cent, so 5 seconds at 480p, \$0.325, is quoted and charged as \$0.33.
+
+## 2. Queue the job
+
+This is the request behind the pottery clip, with the two images pointing at the copies in these docs so you can run it as is:
+
+```bash
+curl https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "prompt": "A warm, sunlit pottery studio with wooden shelves of unglazed pots. 0-4s: medium shot. The woman from @Image1 lifts the teapot from @Image2 off a shelf with both hands and turns it so the gold handle catches the window light. She is silent. 4-10s: slow push-in to a close-up. She looks into the camera, smiles, and says only: \"This one took three firings.\" Quiet room tone and birdsong from the open window, no music.",
+    "duration": "10s",
+    "resolution": "720p",
+    "aspect_ratio": "16:9",
+    "reference_image_urls": [
+      "https://docs.venice.ai/images/guides/wan-3-0/woman.webp",
+      "https://docs.venice.ai/images/guides/wan-3-0/teapot.webp"
+    ]
+  }'
+```
+
+References go in three arrays, as public URLs or data URLs. Venice fetches URLs itself, so they have to work without headers or cookies. A reference-to-video job needs at least one image or video; audio alone is rejected.
+
+| Array | Up to | Each clip | All clips |
+|---|---|---|---|
+| `reference_image_urls` | 10 images | - | - |
+| `reference_video_urls` | 5 clips | 1 to 15 seconds | 15 seconds |
+| `reference_audio_urls` | 5 clips | 1 to 15 seconds | 15 seconds |
+
+The reference videos and `duration` together must also fit in 30 seconds. Videos can be MP4 or MOV and audio MP3 or WAV. Images smaller than the 240-pixel minimum on the short side are scaled up rather than rejected.
+
+In the prompt, `@Image1` is the first entry in `reference_image_urls`, `@Image2` the second, and so on, and `@Video1` and `@Audio1` count the same way in their own arrays. Name every reference you send, including audio: write `@Audio1` where the voice or sound belongs.
+
+Wan 3.0 does not use `reference_document_urls`, even though the API reference lists it. Prime, Pro, and Prime Pro reject it, and the standard tier accepts the document, ignores it, and charges for the job as usual.
+
+The response gives you the handle for everything that follows:
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "queue_id": "01a16b0b-e781-754d-8c54-8ade9c76edcd"
+}
+```
+
+Keep both values; retrieve needs them.
+
+You have been charged at this point, not when the video comes back, so do not retry a queue request. If you have a `queue_id`, poll with it. If the response never arrived, sending the job again can charge you twice. Queue is limited to 40 requests per minute and retrieve to 120; both report `x-ratelimit-remaining-requests`.
+
+Most mistakes are rejected here with `400` and no charge: a value that is not in `/models`, a field the variant does not take, too many references, audio without an image or video, or a missing `aspect_ratio`. The body says what is wrong in `issues[].message`. Clip lengths are checked after the charge, so a reference clip that is too long or too short gets a `queue_id` here and fails on the first retrieve, with the charge refunded.
+
+## 3. Poll and download
+
+Call retrieve with the values from the queue response:
+
+```bash
+curl https://api.venice.ai/api/v1/video/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "wan-3-0-reference-to-video",
+    "queue_id": "01a16b0b-e781-754d-8c54-8ade9c76edcd"
+  }' \
+  --output response.bin
+```
+
+The response is one of two things. While the job is running you get JSON:
+
+```json
+{
+  "status": "PROCESSING",
+  "average_execution_time": 450757,
+  "execution_duration": 6611
+}
+```
+
+When it is done you get `video/mp4` and the body is the video. Branch on `Content-Type`.
+
+The two numbers are milliseconds: how long jobs on this model usually take, and how long yours has been running. The average sat at about 7.5 minutes on every model we tried, and every job beat it. Jobs took 1 to 5 minutes: 2-second tests at 480p a little over a minute, and jobs built on a 5-second reference video 3 to 5 minutes. Poll every 10 to 15 seconds rather than sleeping until the average.
+
+The MP4 is H.264 at 30 frames per second with stereo AAC audio, or with no audio track if you sent `audio: false`. 720p comes back at 1280×720 and standard 1080p at 1920×1080, but Pro and Prime Pro returned 1936×1088 for 1080p.
+
+### If it fails
+
+A failed job stays failed: polling again returns the same status and body. Jobs that fail before generation starts, such as a reference clip outside the length limits or an image Venice cannot decode, are refunded within seconds of being queued. Their bodies carry only `error`; the [errors table](#errors) lists them.
+
+### Clean up
+
+Pass `delete_media_on_completion: true` on retrieve and the stored video is deleted in the same call that returns it. Any later retrieve for that id returns `404`. Leave it off if you want to download the video more than once.
+
+## Workflows
+
+The pottery clip is the subject workflow: images in, the same people and objects in the clip. The requests below are the other workflows as we ran them, with the inputs at placeholder URLs. All but the last use reference-to-video, where the prompt decides what the model does with a clip.
+
+### Movement from a clip
+
+A reference video can supply camera movement or motion without its content. Here a 5-second orbit around a statue, made with `wan-3-0-text-to-video`, set the camera move around the potter:
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "The woman from @Image1 stands beside a potter's wheel in a sunlit pottery studio. The camera moves like the camera in @Video1: one slow orbit around her from left to right, keeping her centred. Soft room tone, no music.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "reference_image_urls": ["https://example.com/woman.webp"],
+  "reference_video_urls": ["https://example.com/orbit.mp4"]
+}
+```
+
+The camera arcs around her the way it circled the statue.
+
+### A voice for the dialogue
+
+Say in the prompt that the line is spoken in the voice from `@Audio1`. Here a 6-second line from `/audio/speech` supplied the voice:
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "Medium close-up in a sunlit pottery studio. The woman from @Image1 looks into the camera and says, in the voice from @Audio1: \"Welcome in. Mind the wet clay.\" Static camera, soft room tone, no music.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "reference_image_urls": ["https://example.com/woman.webp"],
+  "reference_audio_urls": ["https://example.com/voice.mp3"]
+}
+```
+
+She says the new line to camera.
+
+### Edit a clip
+
+Describe the change, name what has to stay the same, and set `duration` to the clip's length:
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "Edit @Video1: make it winter. Snow covers the courtyard, the plinth, and the cypress trees, and light snow is falling. Keep the bust, the camera movement, and the framing unchanged.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "adaptive",
+  "reference_video_urls": ["https://example.com/orbit.mp4"]
+}
+```
+
+Snow covered the courtyard and the trees while the statue and the orbit stayed as they were. With `adaptive`, the 854×480 source came back at 1280×718.
+
+### Extend a clip
+
+The result starts with your clip, regenerated, and carries on from there, so `duration` is the length of the whole result: the clip plus the new footage.
+
+```json
+{
+  "model": "wan-3-0-reference-to-video",
+  "prompt": "Extend @Video1 by 5 seconds: the camera finishes its orbit, then rises slowly above the courtyard to reveal terracotta rooftops at golden hour. Same lighting and style, gentle wind, no music.",
+  "duration": "10s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "reference_video_urls": ["https://example.com/orbit.mp4"]
+}
+```
+
+The 5-second orbit came back as 10 seconds: the orbit again, then 5 new seconds rising over the rooftops. The same request with `"duration": "5s"` returned the orbit and nothing more. The opening is regenerated rather than copied, so if you need your original frames, cut the new footage off the end and join it to your clip. The clip's seconds are billed twice, as reference video and as part of the result. Because the clip and `duration` share the 30-second limit, a 10-second clip can grow by 10 seconds at most.
+
+### First and last frames
+
+This one uses image-to-video. Send the opening frame as `image_url`, the closing frame as `end_image_url`, and describe what happens in between. Both frames came from `/image/generate`, and the second was made from the first with `/image/edit` so the room matches:
+
+```json
+{
+  "model": "wan-3-0-image-to-video",
+  "prompt": "Time-lapse from morning to evening: daylight fades in the window, the pendant lamps switch on, and the shelves fill with teal-glazed pots. Static camera, no people.",
+  "duration": "5s",
+  "resolution": "720p",
+  "aspect_ratio": "16:9",
+  "image_url": "https://example.com/studio-day.webp",
+  "end_image_url": "https://example.com/studio-evening.webp"
+}
+```
+
+The clip opens on the morning frame and settles on the evening one.
+
+## Writing prompts
+
+Wan 3.0 follows a structured prompt closely, and these habits helped in our runs:
+
+- Give each stretch of the clip a timestamp, such as `0-4s:` and `4-10s:`. In the pottery clip, the lift and the push-in land where the prompt put them.
+- Put dialogue in double quotes, and say when a character should stay quiet. Left to itself, the model filled quiet moments with small words: the first take of the pottery clip added "Okay." before the line. The second take, with `She is silent.` in the first shot and `says only:` before the line, had just a quiet "Mm."
+- Name camera moves plainly: `slow push-in`, `static camera`, `one slow orbit`.
+- Describe the sound you want, including room tone and ambience. Wan 3.0 has no negative prompt, so write exclusions such as `no music` into the prompt itself.
+
+## Complete example
+
+This script made the pottery clip: it quotes the job, queues it with the two images as data URLs, polls until the MP4 arrives, and saves it. Save [the potter](/images/guides/wan-3-0/woman.webp) and [the teapot](/images/guides/wan-3-0/teapot.webp) next to it as `woman.webp` and `teapot.webp`. The 20-minute deadline is several times the longest job we ran.
+
+```python
+import base64
+import os
+import time
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://api.venice.ai/api/v1"
+HEADERS = {"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"}
+MIME_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+
+
+def data_url(path):
+    encoded = base64.b64encode(path.read_bytes()).decode()
+    return f"data:{MIME_TYPES[path.suffix.lower()]};base64,{encoded}"
+
+
+job_request = {
+    "model": "wan-3-0-reference-to-video",
+    "prompt": (
+        "A warm, sunlit pottery studio with wooden shelves of unglazed pots. "
+        "0-4s: medium shot. The woman from @Image1 lifts the teapot from @Image2 off a shelf with both hands "
+        "and turns it so the gold handle catches the window light. She is silent. "
+        "4-10s: slow push-in to a close-up. She looks into the camera, smiles, and says only: "
+        '"This one took three firings." '
+        "Quiet room tone and birdsong from the open window, no music."
+    ),
+    "duration": "10s",
+    "resolution": "720p",
+    "aspect_ratio": "16:9",
+    "reference_image_urls": [data_url(Path("woman.webp")), data_url(Path("teapot.webp"))],
+}
+
+quote = requests.post(
+    f"{BASE_URL}/video/quote",
+    json={key: job_request[key] for key in ("model", "duration", "resolution")},
+)
+quote.raise_for_status()
+print(f"Estimated cost: ${quote.json()['quote']:.2f}")
+
+queued = requests.post(f"{BASE_URL}/video/queue", headers=HEADERS, json=job_request)
+queued.raise_for_status()
+job = queued.json()
+print(f"Queued {job['queue_id']}")
+
+started = time.monotonic()
+deadline = started + 20 * 60
+while time.monotonic() < deadline:
+    result = requests.post(
+        f"{BASE_URL}/video/retrieve",
+        headers=HEADERS,
+        json={
+            "model": job["model"],
+            "queue_id": job["queue_id"],
+            "delete_media_on_completion": True,
+        },
+    )
+
+    content_type = result.headers.get("Content-Type", "").split(";")[0].strip()
+    if content_type == "video/mp4":
+        output = Path("pottery-studio.mp4")
+        output.write_bytes(result.content)
+        print(f"Saved {output} after {time.monotonic() - started:.0f}s")
+        break
+
+    body = result.json()
+    if not result.ok:
+        # Terminal failure. Polling again returns the same error.
+        print(f"{result.status_code}: {body.get('error')}")
+        raise SystemExit(1)
+
+    if body.get("status") != "PROCESSING":
+        print(body)
+        raise SystemExit(1)
+
+    time.sleep(15)
+else:
+    raise SystemExit(
+        f"Still processing after 20 minutes. Poll retrieve again later with queue_id={job['queue_id']}."
+    )
+```
+
+Retrieve deletes the stored video as it hands it over, so drop `delete_media_on_completion` if you want to download it again.
+
+## API parameters
+
+### Queue
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `model` | string | Yes | Wan 3.0 model ID. |
+| `prompt` | string | Yes | Up to `prompt_character_limit` characters. On reference-to-video, refer to inputs as `@Image1`, `@Video1`, and `@Audio1`. |
+| `duration` | string | Yes | One of `durations`. When extending a clip, the clip plus the new footage. |
+| `aspect_ratio` | string | Yes | One of `aspect_ratios`. |
+| `resolution` | string | No | One of `resolutions`. Defaults to `1080p`. |
+| `audio` | boolean | No | Set `false` for a clip with no audio track. Defaults to `true`. |
+| `image_url` | string | Image-to-video | First frame, as a URL or data URL. |
+| `end_image_url` | string | No | Last frame, as a URL or data URL. Image-to-video only. |
+| `reference_image_urls` | array of strings | An image or a video, on reference-to-video | Reference images, as URLs or data URLs. |
+| `reference_video_urls` | array of strings | An image or a video, on reference-to-video | Reference videos, as URLs or data URLs. |
+| `reference_audio_urls` | array of strings | No | Reference audio, as URLs or data URLs. Reference-to-video only, alongside an image or video. |
+
+### Retrieve
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `model` | string | Yes | `model` from the queue response. |
+| `queue_id` | string | Yes | `queue_id` from the queue response. |
+| `delete_media_on_completion` | boolean | No | Delete the stored video when this call returns it. Defaults to `false`. |
+
+## Errors
+
+| Status | Endpoint | Body | Fix |
+|---|---|---|---|
+| `400` | queue | `Invalid request parameters`, with the reason in `issues[].message` | Fix the field named in `issues[].path`. Rejected before any charge. |
+| `400` | retrieve | `Invalid request parameters` | The reference videos and `duration` add up to more than 30 seconds. Charge is refunded. |
+| `400` | retrieve | `The image file is corrupted or unreadable` | An image could not be decoded. Charge is refunded. |
+| `400` | retrieve | `Request ID is invalid.` | Unknown `queue_id`. Use the one from your own queue response. |
+| `401` | queue, retrieve | `Authentication failed` | Check the key at [venice.ai/settings/api](https://venice.ai/settings/api). |
+| `402` | queue, retrieve | `Authentication required` plus an x402 payment offer | No `Authorization` header was sent. |
+| `404` | queue, quote | `Specified model not found: ...` | The model ID is wrong. The body suggests close matches. |
+| `404` | retrieve | `Upstream API error: 404` | The video was already deleted by `delete_media_on_completion`. |
+| `422` | retrieve | `Video duration exceeds the maximum allowed.` | A reference video is longer than 15 seconds, or the videos add up to more. Charge is refunded. |
+| `422` | retrieve | `Video duration is too short.` | A reference video is shorter than 1 second. Charge is refunded. |
+| `422` | retrieve | `Audio duration exceeds the maximum allowed. Maximum is 30 seconds.` | A reference audio clip is longer than 15 seconds, or the clips add up to more. The limit is 15 seconds whatever the message says. Charge is refunded. |
+| `429` | queue, retrieve | Rate limit exceeded | Queue allows 40 requests per minute and retrieve 120. Back off and retry. |
+
+## Related resources
+
+- [Quote Video Generation API](/api-reference/endpoint/video/quote)
+- [Queue Video Generation API](/api-reference/endpoint/video/queue)
+- [Retrieve Video API](/api-reference/endpoint/video/retrieve)
+- [Video Models](/models/video)
+- [Video Generation](/guides/media/video-generation)
+- [Reference to Video](/guides/media/reference-to-video)
+- [Seedance 2.0 & 2.5](/guides/media/seedance-2-0)
