@@ -56,7 +56,7 @@ The [Venice MCP Server](https://github.com/veniceai/venice-mcp-server) is the of
   </Step>
 
   <Step title="Restart your MCP host">
-    Your agent now has chat, image, video, music, TTS, ASR, billing, API-key, and 39 more Venice tools available.
+    Your agent now has chat, image, video, music, TTS, ASR, and 39 more Venice tools available.
   </Step>
 </Steps>
 
@@ -75,7 +75,7 @@ Every tool declares explicit `readOnlyHint`, `destructiveHint`, `idempotentHint`
 | Tool | Description |
 |---|---|
 | `venice_chat` | OpenAI-compatible chat completion against Venice's full LLM catalog, with text/image/audio/video/file blocks, structured outputs, function tools, prompt caching, and reasoning controls. Calls are plaintext and non-streaming. |
-| `venice_responses` | Alpha, stateless OpenAI-compatible Responses API with text/image input and reasoning controls. E2EE-capable models and tool fields are not supported. |
+| `venice_responses` | Beta, stateless OpenAI-compatible [Responses API](/guides/features/responses-api) with text/image input and reasoning controls. This tool doesn't expose tool-calling fields, and E2EE models aren't supported. |
 | `venice_embeddings` | Compute embeddings for text input. |
 | `venice_chat_with_character` | Chat with a Venice character by slug. |
 
@@ -96,7 +96,7 @@ Every tool declares explicit `readOnlyHint`, `destructiveHint`, `idempotentHint`
 |---|---|
 | `venice_video_generate` | Queue a video generation (Sora 2, Veo 3.1, Kling, Wan, LTX 2, Seedance, Runway Gen-4, and more) with image, video, audio, reference, and element inputs. |
 | `venice_video_status` | Check status of a queued video job (`POST /video/retrieve`). |
-| `venice_video_complete` | Mark a completed video as downloaded; deletes server-side media only when Venice confirms success. |
+| `venice_video_complete` | Mark a completed video as downloaded and delete its server-side media. Reports the deletion only when Venice confirms it. |
 | `venice_video_quote` | Get a price quote before queuing. |
 
 ### Audio (TTS / ASR)
@@ -144,7 +144,7 @@ Every tool declares explicit `readOnlyHint`, `destructiveHint`, `idempotentHint`
 | `venice_tee_signature` | Fetch the enclave signature payload for a completed TEE chat request ID. |
 
 <Warning>
-Both TEE tools return provider evidence only: they do not verify it, and they do not encrypt chat. Verify the echoed nonce, debug-mode state, and signing-key binding yourself before trusting a TEE model, and use `venice_chat` (never `venice_responses`) for TEE models. `enable_e2ee` is rejected by this server.
+Both TEE tools return provider evidence only: they do not verify it, and they do not encrypt chat. Verify the echoed nonce, debug-mode state, and signing-key binding yourself before trusting a TEE model; see [Verifying TEE attestation](/guides/features/tee-e2ee-models#verifying-tee-attestation). `enable_e2ee` is rejected by this server.
 </Warning>
 
 ### Crypto
@@ -165,7 +165,7 @@ Transaction broadcasts (`eth_sendRawTransaction`, `eth_sendUserOperation`, Solan
 | `venice_billing_usage_history` | Detailed usage with cursor pagination and JSON or CSV output. |
 
 <Note>
-The billing tools require an **ADMIN** API key. Inference keys cannot call these endpoints, and the server fails locally instead of falling back to a wallet token. The deprecated `/billing/usage` route is not wrapped.
+The billing tools require an **ADMIN** API key. Inference keys cannot call these endpoints, and the server fails locally instead of falling back to a wallet token.
 </Note>
 
 ### API keys
@@ -226,7 +226,7 @@ Only relevant in the [Streamable HTTP deployment](#self-hosting-streamable-http)
 |---|---|---|
 | `PORT` | `3333` | HTTP listener port. |
 | `VENICE_MCP_HOST` | `127.0.0.1` | Bind address. Set to `0.0.0.0` for LAN or container exposure. |
-| `VENICE_MCP_AUTH_TOKEN` | _(none)_ | Bearer token required by `/mcp` when bound outside loopback. |
+| `VENICE_MCP_AUTH_TOKEN` | _(none)_ | Bearer token for `/mcp`. Required when bound outside loopback, where it must be at least 16 characters. Once set, it's enforced on loopback too. |
 | `VENICE_MCP_ALLOW_UNAUTHENTICATED_HTTP` | `0` | Escape hatch for exposed unauthenticated HTTP. Use only behind a trusted authenticated proxy. |
 | `VENICE_MCP_MAX_SESSIONS` | `100` | Maximum active Streamable HTTP sessions. |
 | `VENICE_MCP_SESSION_TTL_MS` | `1800000` | Idle session lifetime before cleanup. |
@@ -236,7 +236,7 @@ Only relevant in the [Streamable HTTP deployment](#self-hosting-streamable-http)
 - **Completed media can be bytes or a URL.** Video and music jobs return embedded MP4/audio resources, or JSON with a `download_url` that comes back as a resource link. Download that link first, then call `venice_video_complete` or `venice_music_complete`; media cleanup is never applied to a `download_url` result because the link stops working once the file is deleted.
 - **Some models only return a URL at queue time.** For VPS and Grok Imagine Private models, capture the `download_url` returned by `venice_video_generate` and pass it into `venice_video_status`; a `COMPLETED` retrieve without an inline URL still yields a usable link.
 - **Prompt enhancement is reported back.** When `enhance_prompt` is applied, image generate, edit, and multi-edit results include the URL-decoded prompt Venice returned.
-- **ASR paging is charged once.** Transcripts with timestamps or more than 8000 characters return a `result_handle` with the first page. Request later pages with that handle. Handles live in memory per MCP session for 10 minutes, and only the 16 most recent are kept.
+- **ASR paging is charged once.** Transcripts longer than 8,000 characters, or with more timestamps than fit on one page (200 per array by default, up to 500 with `timestamp_limit`), return a `result_handle` with the first page. Request later pages with that handle. Handles live in memory per MCP session for 10 minutes, and only the 16 most recent are kept.
 - **Seedance consent is not a policy bypass.** Current public Seedance models may reject media containing detectable persons outright. Where a `needs_consent` response is returned, the three `consents.seedance` flags are legal attestations: set them to `true` only after the user explicitly confirms each statement.
 
 ## x402 wallet mode
@@ -284,7 +284,7 @@ Some endpoints accept only one auth mode:
 | `venice_x402_balance`, `venice_x402_transactions` | ✗ | ✓ |
 | `venice_x402_top_up_info` | ✓ | ✓ |
 
-When both credentials are set the API key wins on every call, so the SIWX-only helper tools (`venice_x402_balance`, `venice_x402_transactions`) only work when the wallet token is your sole credential.
+When both credentials are set, the API key is used for every authenticated call except `venice_x402_balance` and `venice_x402_transactions`, which always send the wallet token.
 
 ## Self-hosting (Streamable HTTP)
 
