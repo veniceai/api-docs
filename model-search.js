@@ -437,7 +437,6 @@
     ['kling.svg', ['kling']],
     ['vidu.svg', ['vidu']],
     ['hunyuan.svg', ['hunyuan']],
-    ['imagineart.svg', ['imagineart']],
     ['ltx.svg', ['ltx', 'lightricks']],
     ['kimi.svg', ['moonshot', 'kimi']],
     ['arcee-ai.svg', ['arcee']],
