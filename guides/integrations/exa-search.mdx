@@ -102,7 +102,7 @@ The response holds the query and a list of results, each with four fields:
     {
       "title": "Page title",
       "url": "https://example.com/article",
-      "content": "A snippet from the page",
+      "content": "Page text, up to about 10,000 characters",
       "date": "Publication date, or an empty string"
     }
   ]
@@ -129,24 +129,16 @@ MODEL = "z-ai-glm-5-3-flash"
 
 venice = OpenAI(api_key=VENICE_API_KEY, base_url=BASE_URL)
 
-SYSTEM_PROMPT = (
-    "Search the web when a question depends on recent or specific facts. "
-    "Cite the URL of every source you use."
-)
+SYSTEM_PROMPT = "Search the web for recent or specific facts. Cite the URL of each source."
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web with Exa. Returns the title, URL, snippet, and date of each result.",
+            "description": "Search the web with Exa. Describe the pages to find in natural language.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "A natural-language description of the pages to find.",
-                    }
-                },
+                "properties": {"query": {"type": "string"}},
                 "required": ["query"],
             },
         },
@@ -165,9 +157,7 @@ def exa_search(query: str, limit: int = 5) -> list[dict]:
     return response.json()["results"]
 
 
-def run_tool(call) -> str:
-    if call.function.name != "web_search":
-        return f"Error: unknown tool {call.function.name}"
+def run_search(call) -> str:
     try:
         query = json.loads(call.function.arguments)["query"]
         return json.dumps(exa_search(query[:400]))
@@ -192,7 +182,7 @@ def ask(question: str, max_rounds: int = 6) -> str:
             return message.content
         messages.append(message)
         for call in message.tool_calls:
-            messages.append({"role": "tool", "tool_call_id": call.id, "content": run_tool(call)})
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": run_search(call)})
     raise RuntimeError(f"No answer after {max_rounds} rounds")
 
 
@@ -207,23 +197,16 @@ const MODEL = "z-ai-glm-5-3-flash";
 
 const venice = new OpenAI({ apiKey: process.env.VENICE_API_KEY, baseURL: BASE_URL });
 
-const SYSTEM_PROMPT =
-  "Search the web when a question depends on recent or specific facts. " +
-  "Cite the URL of every source you use.";
+const SYSTEM_PROMPT = "Search the web for recent or specific facts. Cite the URL of each source.";
 const tools = [
   {
     type: "function",
     function: {
       name: "web_search",
-      description: "Search the web with Exa. Returns the title, URL, snippet, and date of each result.",
+      description: "Search the web with Exa. Describe the pages to find in natural language.",
       parameters: {
         type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description: "A natural-language description of the pages to find.",
-          },
-        },
+        properties: { query: { type: "string" } },
         required: ["query"],
       },
     },
@@ -243,8 +226,7 @@ async function exaSearch(query, limit = 5) {
   return (await response.json()).results;
 }
 
-async function runTool(call) {
-  if (call.function.name !== "web_search") return `Error: unknown tool ${call.function.name}`;
+async function runSearch(call) {
   try {
     const { query } = JSON.parse(call.function.arguments);
     return JSON.stringify(await exaSearch(query.slice(0, 400)));
@@ -269,7 +251,7 @@ async function ask(question, maxRounds = 6) {
     if (!message.tool_calls?.length) return message.content;
     messages.push(message);
     for (const call of message.tool_calls) {
-      messages.push({ role: "tool", tool_call_id: call.id, content: await runTool(call) });
+      messages.push({ role: "tool", tool_call_id: call.id, content: await runSearch(call) });
     }
   }
   throw new Error(`No answer after ${maxRounds} rounds`);
@@ -279,16 +261,13 @@ console.log(await ask("What changed in the latest stable release of Python?"));
 ```
 </CodeGroup>
 
-The model only writes the query. Your code decides everything else: the provider, the number of results, and what happens when a search fails. A few details in the loop are worth keeping when you adapt it:
+The model only writes the query. Your code decides everything else: the provider, the number of results, and what happens when a search fails. Three details are worth keeping when you adapt the loop:
 
-- **Truncate model-written queries.** The endpoint rejects queries longer than 400 characters instead of shortening them, and models sometimes write long ones, so the tool runner cuts each query to 400 characters before searching.
+- **Truncate model-written queries.** The endpoint rejects queries longer than 400 characters instead of shortening them, and models sometimes write long ones.
 - **Return errors as tool results.** A failed search becomes a tool message starting with `Error:`, so the model can try a different query or explain the failure instead of the loop crashing.
-- **Append the assistant message before its tool results.** Every `tool` message has to follow the assistant turn that requested it. Appending the message object itself also keeps fields such as `reasoning_content`, which reasoning models like GLM 5.3 Flash return, so the model keeps its reasoning across tool rounds.
-- **Keep results short.** Every result goes back to Venice as input on the next round, so the helper asks for five results per search.
-- **Turn off the Venice system prompt.** `include_venice_system_prompt: false` makes your system prompt the only instruction the model gets, and trims input tokens from every round.
-- **Bound the loop.** Each round is a Venice request plus whatever searches the model asks for, so `max_rounds` limits both latency and cost.
+- **Append the assistant message before its tool results.** Every `tool` message has to follow the assistant turn that requested it. Appending the message object itself also keeps `reasoning_content`, which reasoning models like GLM 5.3 Flash return, so the model keeps its reasoning across rounds.
 
-Search results carry snippets, not whole pages. To let the model read a page it finds, add a second tool that calls [`/augment/scrape`](/api-reference/endpoint/augment/scrape), which returns the page as Markdown.
+Each result's `content` is page text, up to about 10,000 characters, so the model can usually answer from the search results alone. When it needs a whole page, add a second tool that calls [`/augment/scrape`](/api-reference/endpoint/augment/scrape), which returns the page as Markdown.
 
 ## Search first, then generate
 
@@ -400,7 +379,7 @@ If you [call the Exa API directly](#use-the-exa-api-directly), those requests go
 
 ## Costs
 
-Each search costs $0.01, or $10 per 1,000, the same as a Brave or Google search. Venice bills it to your Venice account alongside the tokens your chat requests use, so there's no separate Exa bill. Searches that fail with an error aren't charged, but a search that comes back empty still is. Search results go back to the model as input on the next round, so the size of each search shows up in your token usage too. A few habits keep both down:
+Each search costs $0.01, or $10 per 1,000, the same as a Brave or Google search. Venice bills it to your Venice account alongside the tokens your chat requests use, so there's no separate Exa bill. Searches that fail with an error aren't charged, but a search that comes back empty still is. Search results go back to the model as input on the next round, and because they carry page text, a five-result search often adds 5,000 to 10,000 input tokens. A few habits keep both down:
 
 - Lower `limit` when a handful of sources is enough. A search costs the same at any `limit`, but fewer results mean fewer input tokens on the next round.
 - Keep `max_rounds` low. Each extra round can add searches as well as tokens.
@@ -426,7 +405,7 @@ Agents with a crypto wallet can skip the API key. `/augment/search` and `/chat/c
   </Accordion>
 
   <Accordion title="400 from Venice after a tool round">
-    Each tool call needs a matching `tool` message, placed after the assistant message that made the call. The tool runner answers every call, including calls to tools it doesn't know, so the conversation stays valid. If you add your own tools, give each one a branch in the runner.
+    Some models, including Claude and GPT models, return `400` when a tool call isn't followed by a `tool` message with its `tool_call_id`. GLM models accept the conversation anyway, so this can first appear when you switch models. The loop answers every call right after the assistant message that made it, so keep that shape if you add tools.
   </Accordion>
 
   <Accordion title="The model answers without searching">
