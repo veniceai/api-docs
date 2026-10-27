@@ -14,7 +14,7 @@
 - **Markdown pages:** append `.md` to any docs URL for the raw Markdown version, e.g. `https://docs.venice.ai/getting-started/quick-start.md`
 - **Agent skill file:** https://docs.venice.ai/skill.md — install with `npx skills add docs.venice.ai`
 - **Canonical Agent Skills repo:** https://github.com/veniceai/skills
-- **MCP server:** https://github.com/veniceai/venice-mcp-server (31 tools, any MCP host)
+- **MCP server:** https://github.com/veniceai/venice-mcp-server (45 tools incl. billing, API keys, and TEE attestation, any MCP host)
 
 ## Quick example
 
