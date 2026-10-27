@@ -1,0 +1,431 @@
+---
+title: "Exa Search"
+description: "Cerca sul web con Exa tramite l'API di Venice, con zero data retention e senza un account Exa separato, e offri ai modelli Venice la ricerca Exa come tool."
+"og:title": "Exa Search | Venice API Docs"
+"og:description": "Esegui ricerche web Exa tramite Venice e usale come tool per i modelli chat di Venice."
+---
+
+[Exa](https://exa.ai) è un motore di ricerca web pensato per gli agenti AI. L'[endpoint di ricerca web](/it/api-reference/endpoint/augment/search) di Venice può eseguire le tue query su Exa: imposta `search_provider` su `"exa"` e Venice esegue la ricerca con Exa in regime di zero data retention. Ti autentichi con la tua chiave API Venice, Venice fattura la ricerca e non ti serve un account Exa.
+
+I risultati hanno la stessa struttura per ogni provider, quindi Exa si integra in qualsiasi cosa tu abbia costruito sulla ricerca Brave predefinita di Venice, e cambiare provider richiede la modifica di un solo campo. Questa guida spiega come chiamare l'endpoint, come offrire a un modello Venice la ricerca Exa come tool, come basare tu stesso un prompt sui risultati di Exa e quando conviene invece chiamare direttamente l'API di Exa.
+
+## Prerequisiti
+
+- Una [chiave API Venice](/it/guides/getting-started/generating-api-key)
+- Python 3.10 o successivo, oppure Node.js 22 o successivo
+- Per l'esempio con l'agente, un modello Venice che supporti il [function calling](/it/guides/features/function-calling). Gli esempi usano `z-ai-glm-5-3-flash`.
+
+## Configurazione
+
+Installa l'SDK OpenAI, più `requests` per Python. Node.js include `fetch` nativamente:
+
+<CodeGroup>
+```bash Python
+pip install openai requests
+```
+
+```bash Node.js
+npm install openai
+```
+</CodeGroup>
+
+Aggiungi la tua chiave API Venice all'ambiente:
+
+```bash
+export VENICE_API_KEY=your-venice-api-key
+```
+
+## Cercare con Exa
+
+Invia una query a `/augment/search` con `search_provider` impostato su `"exa"`:
+
+<CodeGroup>
+```python Python
+import os
+
+import requests
+
+response = requests.post(
+    "https://api.venice.ai/api/v1/augment/search",
+    headers={"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"},
+    json={
+        "query": "open-source alternatives to vector databases",
+        "limit": 5,
+        "search_provider": "exa",
+    },
+    timeout=60,
+)
+response.raise_for_status()
+
+for result in response.json()["results"]:
+    print(result["title"], result["url"])
+```
+
+```javascript Node.js
+const response = await fetch("https://api.venice.ai/api/v1/augment/search", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    query: "open-source alternatives to vector databases",
+    limit: 5,
+    search_provider: "exa",
+  }),
+});
+if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+
+for (const result of (await response.json()).results) {
+  console.log(result.title, result.url);
+}
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/augment/search \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "open-source alternatives to vector databases",
+    "limit": 5,
+    "search_provider": "exa"
+  }'
+```
+</CodeGroup>
+
+La risposta contiene la query e un elenco di risultati, ciascuno con quattro campi:
+
+```json
+{
+  "query": "open-source alternatives to vector databases",
+  "results": [
+    {
+      "title": "Page title",
+      "url": "https://example.com/article",
+      "content": "Page text, up to about 10,000 characters",
+      "date": "Publication date, or an empty string"
+    }
+  ]
+}
+```
+
+`limit` vale 10 per impostazione predefinita e accetta valori da 1 a 20, mentre `query` accetta da 1 a 400 caratteri. I valori fuori da questi intervalli restituiscono `400` invece di essere ricondotti nei limiti. Considera `date` come facoltativo, perché molte pagine non pubblicano una data.
+
+## Offrire la ricerca Exa a un modello Venice
+
+Per lasciare che sia il modello a decidere quando e cosa cercare, descrivi una funzione `web_search` nell'array `tools` di una richiesta chat ed esegui tu la ricerca ogni volta che il modello la chiama. Questo programma racchiude la richiesta precedente in un helper di ricerca, restituisce i risultati al modello come messaggio `tool` e continua il ciclo finché il modello non risponde con del testo:
+
+<CodeGroup>
+```python Python
+import json
+import os
+
+import requests
+from openai import OpenAI
+
+BASE_URL = "https://api.venice.ai/api/v1"
+VENICE_API_KEY = os.environ["VENICE_API_KEY"]
+MODEL = "z-ai-glm-5-3-flash"
+
+venice = OpenAI(api_key=VENICE_API_KEY, base_url=BASE_URL)
+
+SYSTEM_PROMPT = "Search the web for recent or specific facts. Cite the URL of each source."
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web with Exa. Describe the pages to find in natural language.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    }
+]
+
+
+def exa_search(query: str, limit: int = 5) -> list[dict]:
+    response = requests.post(
+        f"{BASE_URL}/augment/search",
+        headers={"Authorization": f"Bearer {VENICE_API_KEY}"},
+        json={"query": query, "limit": limit, "search_provider": "exa"},
+        timeout=60,
+    )
+    response.raise_for_status()
+    return response.json()["results"]
+
+
+def run_search(call) -> str:
+    try:
+        query = json.loads(call.function.arguments)["query"]
+        return json.dumps(exa_search(query[:400]))
+    except Exception as error:
+        return f"Error: {error}"
+
+
+def ask(question: str, max_rounds: int = 6) -> str:
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": question},
+    ]
+    for _ in range(max_rounds):
+        completion = venice.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            tools=TOOLS,
+            extra_body={"venice_parameters": {"include_venice_system_prompt": False}},
+        )
+        message = completion.choices[0].message
+        if not message.tool_calls:
+            return message.content
+        messages.append(message)
+        for call in message.tool_calls:
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": run_search(call)})
+    raise RuntimeError(f"No answer after {max_rounds} rounds")
+
+
+print(ask("What changed in the latest stable release of Python?"))
+```
+
+```javascript Node.js
+import OpenAI from "openai";
+
+const BASE_URL = "https://api.venice.ai/api/v1";
+const MODEL = "z-ai-glm-5-3-flash";
+
+const venice = new OpenAI({ apiKey: process.env.VENICE_API_KEY, baseURL: BASE_URL });
+
+const SYSTEM_PROMPT = "Search the web for recent or specific facts. Cite the URL of each source.";
+const tools = [
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "Search the web with Exa. Describe the pages to find in natural language.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+    },
+  },
+];
+
+async function exaSearch(query, limit = 5) {
+  const response = await fetch(`${BASE_URL}/augment/search`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, limit, search_provider: "exa" }),
+  });
+  if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+  return (await response.json()).results;
+}
+
+async function runSearch(call) {
+  try {
+    const { query } = JSON.parse(call.function.arguments);
+    return JSON.stringify(await exaSearch(query.slice(0, 400)));
+  } catch (error) {
+    return `Error: ${error.message}`;
+  }
+}
+
+async function ask(question, maxRounds = 6) {
+  const messages = [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: question },
+  ];
+  for (let round = 0; round < maxRounds; round++) {
+    const completion = await venice.chat.completions.create({
+      model: MODEL,
+      messages,
+      tools,
+      venice_parameters: { include_venice_system_prompt: false },
+    });
+    const message = completion.choices[0].message;
+    if (!message.tool_calls?.length) return message.content;
+    messages.push(message);
+    for (const call of message.tool_calls) {
+      messages.push({ role: "tool", tool_call_id: call.id, content: await runSearch(call) });
+    }
+  }
+  throw new Error(`No answer after ${maxRounds} rounds`);
+}
+
+console.log(await ask("What changed in the latest stable release of Python?"));
+```
+</CodeGroup>
+
+Il modello scrive solo la query. Tutto il resto lo decide il tuo codice: il provider, il numero di risultati e cosa succede quando una ricerca fallisce. Quando adatti il ciclo, vale la pena mantenere tre dettagli:
+
+- **Tronca le query scritte dal modello.** L'endpoint rifiuta le query più lunghe di 400 caratteri invece di accorciarle, e a volte i modelli ne scrivono di lunghe.
+- **Restituisci gli errori come risultati del tool.** Una ricerca fallita diventa un messaggio tool che inizia con `Error:`, così il modello può provare una query diversa o spiegare l'errore invece di far bloccare il ciclo.
+- **Aggiungi il messaggio dell'assistente prima dei relativi risultati dei tool.** Ogni messaggio `tool` deve seguire il turno dell'assistente che lo ha richiesto. Aggiungere direttamente l'oggetto messaggio conserva anche `reasoning_content`, restituito dai modelli di ragionamento come GLM 5.3 Flash, così il modello mantiene il proprio ragionamento tra un round e l'altro.
+
+Il campo `content` di ogni risultato contiene il testo della pagina, fino a circa 10.000 caratteri, quindi di solito il modello può rispondere basandosi solo sui risultati di ricerca. Quando gli serve una pagina intera, aggiungi un secondo tool che chiami [`/augment/scrape`](/it/api-reference/endpoint/augment/scrape), che restituisce la pagina in Markdown.
+
+## Prima cerca, poi genera
+
+Il function calling permette al modello di decidere quando e cosa cercare. Quando il tuo codice sa già cosa cercare, puoi saltare il ciclo dei tool: esegui una ricerca Exa, numera i risultati e chiedi a Venice di rispondere basandosi su di essi. Funziona con qualsiasi modello di testo Venice e, poiché conservi l'elenco delle fonti inserite nel prompt, ogni citazione nella risposta riconduce a un URL.
+
+Usando l'helper di ricerca, il client e il modello dell'esempio precedente:
+
+<CodeGroup>
+```python Python
+question = "What are the main techniques for reducing LLM inference latency?"
+
+results = exa_search(question, limit=8)
+sources = "\n\n".join(
+    f"[{i}] {result['title']}\n{result['url']}\n{result['content']}"
+    for i, result in enumerate(results, start=1)
+)
+
+completion = venice.chat.completions.create(
+    model=MODEL,
+    messages=[
+        {
+            "role": "system",
+            "content": "Answer only from the numbered sources. Cite each claim by number, like [2].",
+        },
+        {"role": "user", "content": f"Question: {question}\n\nSources:\n\n{sources}"},
+    ],
+    extra_body={"venice_parameters": {"include_venice_system_prompt": False}},
+)
+
+print(completion.choices[0].message.content)
+for i, result in enumerate(results, start=1):
+    print(f"[{i}] {result['url']}")
+```
+
+```javascript Node.js
+const question = "What are the main techniques for reducing LLM inference latency?";
+
+const results = await exaSearch(question, 8);
+const sources = results
+  .map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`)
+  .join("\n\n");
+
+const completion = await venice.chat.completions.create({
+  model: MODEL,
+  messages: [
+    {
+      role: "system",
+      content: "Answer only from the numbered sources. Cite each claim by number, like [2].",
+    },
+    { role: "user", content: `Question: ${question}\n\nSources:\n\n${sources}` },
+  ],
+  venice_parameters: { include_venice_system_prompt: false },
+});
+
+console.log(completion.choices[0].message.content);
+results.forEach((r, i) => console.log(`[${i + 1}] ${r.url}`));
+```
+</CodeGroup>
+
+[Risposte con citazioni tramite ricerca web](/it/guides/tools/cited-web-answers) estende questo pattern con la selezione delle fonti, lo scraping delle pagine e la gestione delle pagine che non si caricano. Il suo helper di ricerca accetta un argomento provider, quindi passa `"exa"` per eseguirlo su Exa.
+
+## Usare direttamente le API di Exa
+
+L'endpoint di ricerca di Venice accetta una query e un numero di risultati. L'API di Exa offre più controlli: categorie per notizie, articoli di ricerca, aziende, persone e report finanziari, filtri per dominio e data, estratti mirati sulla query e testo completo delle pagine, e una ricerca approfondita in più passaggi. Per usarli, chiama Exa direttamente con una chiave API ottenuta dalla [dashboard di Exa](https://dashboard.exa.ai/api-keys). Queste richieste vanno dalla tua applicazione a Exa, sono soggette ai termini di Exa anziché a quelli di Venice e vengono fatturate sul tuo account Exa. Exa offre la [Zero Data Retention](https://exa.ai/docs/admin/security/zero-data-retention) nei piani Enterprise.
+
+Gli SDK di Exa, `exa-py` e `exa-js` 2.24.0 o successivi, includono tool nel formato Chat Completions che si inseriscono direttamente nel ciclo precedente. Sostituisci l'elenco dei tool con quelli di Exa:
+
+<CodeGroup>
+```python Python
+from exa_py import Exa
+
+exa = Exa()  # reads EXA_API_KEY
+TOOLS = [
+    exa.openai.web_search(),
+    exa.openai.get_contents(text={"max_characters": 10000}),
+]
+```
+
+```javascript Node.js
+import Exa from "exa-js";
+
+const exa = new Exa(); // reads EXA_API_KEY
+const tools = [
+  exa.openai.webSearch(),
+  exa.openai.getContents({ text: { maxCharacters: 10000 } }),
+];
+```
+</CodeGroup>
+
+Poi passa ogni messaggio con chiamate ai tool all'SDK invece che al tuo esecutore di tool: `messages += exa.openai.handle_tool_calls(message)` in Python, oppure `messages.push(...(await exa.openai.handleToolCalls(message)))` in Node.js. L'SDK esegue ogni chiamata a Exa e restituisce i messaggi `tool` corrispondenti, segnalando gli errori come risultati `Error:`. Mantieni il limite sul testo delle pagine, perché senza di esso `exa-js` restituisce le pagine intere. Gli argomenti keyword come `category`, `include_domains` e `start_published_date` vengono inoltrati alla ricerca di Exa. Consulta la [guida al tool calling](https://exa.ai/docs/integrations/tool-calling/openai) di Exa per tutte le opzioni.
+
+## Modelli consigliati
+
+| Caso d'uso | Modello | Perché |
+| --- | --- | --- |
+| Agenti di ricerca | `z-ai-glm-5-3-flash` | Modello privato veloce ed economico con function calling |
+| Predefinito per l'uso dei tool | `zai-org-glm-5-2` | L'attuale `function_calling_default` di Venice |
+| Ricerca senza censura | `venice-uncensored-1-2` | Function calling senza filtri sui contenuti |
+
+Gli ID dei modelli cambiano nel tempo. Recupera a runtime il modello predefinito attuale per il function calling con [`GET /models/traits`](/it/api-reference/endpoint/models/traits), oppure consulta i [modelli di testo](/it/models/text) per trovarne altri che supportano il function calling.
+
+## Privacy
+
+Con `search_provider: "exa"`, la tua applicazione comunica solo con Venice, e Venice esegue ogni ricerca con Exa in regime di zero data retention. Venice non memorizza il contenuto di prompt e risposte, e il [livello di privacy](/it/overview/privacy) del modello determina cosa accade a livello di inferenza. I modelli privati girano su un'infrastruttura a zero data retention.
+
+Un aspetto facile da trascurare è che il modello scrive le query di ricerca a partire dalla conversazione, quindi i dettagli di un prompt possono finire in una query inviata a Exa. Se i prompt possono contenere informazioni personali o riservate, indica al modello nel system prompt di escludere quei dettagli dalle ricerche, oppure usa il [pattern che cerca prima di generare](#prima-cerca-poi-genera) in modo che sia il tuo codice a scrivere ogni query.
+
+Se invece [chiami direttamente le API di Exa](#usare-direttamente-le-api-di-exa), quelle richieste vanno a Exa e sono soggette ai termini di Exa.
+
+## Costi
+
+Ogni ricerca costa $0,01, ovvero $10 ogni 1.000, come una ricerca Brave o Google. Venice la addebita sul tuo account Venice insieme ai token usati dalle tue richieste chat, quindi non c'è una fattura Exa separata. Le ricerche che falliscono con un errore non vengono addebitate, mentre una ricerca che restituisce zero risultati viene comunque addebitata. I risultati di ricerca tornano al modello come input nel round successivo e, poiché contengono il testo delle pagine, una ricerca con cinque risultati aggiunge spesso da 5.000 a 10.000 token di input. Alcune abitudini aiutano a contenere entrambi i costi:
+
+- Riduci `limit` quando bastano poche fonti. Una ricerca costa uguale con qualsiasi `limit`, ma meno risultati significano meno token di input nel round successivo.
+- Mantieni basso `max_rounds`. Ogni round aggiuntivo può aggiungere ricerche oltre che token.
+- Usa il pattern che cerca prima di generare quando il tuo codice sa cosa cercare. Esegue esattamente una ricerca e una richiesta chat.
+
+<Tip>
+Gli agenti con un wallet crypto possono fare a meno della chiave API. Sia `/augment/search` sia `/chat/completions` accettano l'[autenticazione con wallet x402](/it/guides/integrations/x402-venice-api), così un agente può pagare ricerche Exa e inferenza da un unico saldo USDC prepagato.
+</Tip>
+
+## Risoluzione dei problemi
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized o credenziali mancanti">
+    Verifica che `VENICE_API_KEY` sia impostata nel processo che esegue il tuo codice. Senza di essa, Python solleva `KeyError: 'VENICE_API_KEY'`, e l'SDK OpenAI per Node.js ripiega su `OPENAI_API_KEY`. Se anche questa non è impostata, ottieni un errore `Missing credentials`. Se è impostata, l'SDK invia la tua chiave OpenAI a Venice, che la rifiuta con `401`. Un `401` con `VENICE_API_KEY` impostata significa che Venice ha rifiutato la chiave stessa, quindi controlla che non contenga errori di battitura oppure [generane una nuova](/it/guides/getting-started/generating-api-key).
+  </Accordion>
+
+  <Accordion title="400 dall'endpoint di ricerca">
+    `query` deve contenere da 1 a 400 caratteri, `limit` deve essere compreso tra 1 e 20, e `search_provider` deve essere `brave`, `google` o `exa`. I valori fuori da questi intervalli vengono rifiutati invece di essere ricondotti nei limiti. Nel ciclo dei tool, una ricerca rifiutata arriva al modello come risultato del tool `Error:` invece di sollevare un'eccezione.
+  </Accordion>
+
+  <Accordion title="402 Payment Required">
+    Il tuo saldo Venice non è sufficiente a coprire la richiesta. Le richieste effettuate con una chiave API restituiscono `INSUFFICIENT_BALANCE`, quindi ricarica il tuo saldo Venice. Le richieste effettuate con l'autenticazione con wallet x402 restituiscono nella risposta le istruzioni per la ricarica.
+  </Accordion>
+
+  <Accordion title="400 da Venice dopo un round di tool">
+    Alcuni modelli, inclusi i modelli Claude e GPT, restituiscono `400` quando una chiamata a un tool non è seguita da un messaggio `tool` con il relativo `tool_call_id`. I modelli GLM accettano comunque la conversazione, quindi il problema può comparire per la prima volta quando cambi modello. Il ciclo risponde a ogni chiamata subito dopo il messaggio dell'assistente che l'ha effettuata, quindi mantieni questa struttura se aggiungi altri tool.
+  </Accordion>
+
+  <Accordion title="Il modello risponde senza cercare">
+    Verifica che il modello supporti il function calling e indica nel system prompt quando cercare. I modelli spesso saltano il tool quando pensano di poter rispondere a memoria, a meno che tu non dica loro di cercare fatti recenti o specifici.
+  </Accordion>
+</AccordionGroup>
+
+## Risorse
+
+<CardGroup cols={2}>
+  <Card title="Web Search API" icon="search" href="/it/api-reference/endpoint/augment/search">
+    Parametri, provider di ricerca e schema della risposta
+  </Card>
+  <Card title="Risposte con citazioni" icon="list" href="/it/guides/tools/cited-web-answers">
+    Una pipeline completa di ricerca, scraping e citazione su Venice
+  </Card>
+  <Card title="Function Calling" icon="code" href="/it/guides/features/function-calling">
+    Come funzionano le chiamate ai tool su Venice
+  </Card>
+  <Card title="Documentazione Exa" icon="book" href="https://exa.ai/docs">
+    API, SDK e opzioni di ricerca di Exa
+  </Card>
+</CardGroup>
