@@ -1,0 +1,431 @@
+---
+title: "Exa Search"
+description: "通过 Venice API 使用 Exa 搜索网页，享有零数据保留且无需单独的 Exa 账户，并将 Exa 搜索作为工具提供给 Venice 模型。"
+"og:title": "Exa Search | Venice API Docs"
+"og:description": "通过 Venice 运行 Exa 网页搜索，并将其用作 Venice 聊天模型的工具。"
+---
+
+[Exa](https://exa.ai) 是一款专为 AI 智能体打造的网页搜索引擎。Venice 的[网页搜索端点](/zh/api-reference/endpoint/augment/search)可以在 Exa 上运行你的查询：将 `search_provider` 设置为 `"exa"`，Venice 就会在零数据保留的条件下通过 Exa 执行搜索。你使用 Venice API 密钥进行身份验证，搜索费用由 Venice 计费，无需 Exa 账户。
+
+所有提供商返回的结果格式都相同，因此 Exa 可以直接接入你基于 Venice 默认 Brave 搜索构建的任何应用，切换提供商只需修改一个字段。本指南介绍如何调用该端点、如何将 Exa 搜索作为工具提供给 Venice 模型、如何自行用 Exa 结果为提示词提供依据，以及何时应改为调用 Exa 自己的 API。
+
+## 前提条件
+
+- 一个 [Venice API 密钥](/zh/guides/getting-started/generating-api-key)
+- Python 3.10 或更高版本，或 Node.js 22 或更高版本
+- 对于智能体示例，需要一个支持[函数调用](/zh/guides/features/function-calling)的 Venice 模型。示例使用 `z-ai-glm-5-3-flash`。
+
+## 设置
+
+安装 OpenAI SDK，Python 还需安装 `requests`。Node.js 已内置 `fetch`：
+
+<CodeGroup>
+```bash Python
+pip install openai requests
+```
+
+```bash Node.js
+npm install openai
+```
+</CodeGroup>
+
+将你的 Venice API 密钥添加到环境变量中：
+
+```bash
+export VENICE_API_KEY=your-venice-api-key
+```
+
+## 使用 Exa 搜索
+
+向 `/augment/search` 发送查询，并将 `search_provider` 设置为 `"exa"`：
+
+<CodeGroup>
+```python Python
+import os
+
+import requests
+
+response = requests.post(
+    "https://api.venice.ai/api/v1/augment/search",
+    headers={"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"},
+    json={
+        "query": "open-source alternatives to vector databases",
+        "limit": 5,
+        "search_provider": "exa",
+    },
+    timeout=60,
+)
+response.raise_for_status()
+
+for result in response.json()["results"]:
+    print(result["title"], result["url"])
+```
+
+```javascript Node.js
+const response = await fetch("https://api.venice.ai/api/v1/augment/search", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    query: "open-source alternatives to vector databases",
+    limit: 5,
+    search_provider: "exa",
+  }),
+});
+if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+
+for (const result of (await response.json()).results) {
+  console.log(result.title, result.url);
+}
+```
+
+```bash cURL
+curl https://api.venice.ai/api/v1/augment/search \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "open-source alternatives to vector databases",
+    "limit": 5,
+    "search_provider": "exa"
+  }'
+```
+</CodeGroup>
+
+响应包含查询和结果列表，每条结果有四个字段：
+
+```json
+{
+  "query": "open-source alternatives to vector databases",
+  "results": [
+    {
+      "title": "Page title",
+      "url": "https://example.com/article",
+      "content": "Page text, up to about 10,000 characters",
+      "date": "Publication date, or an empty string"
+    }
+  ]
+}
+```
+
+`limit` 默认为 10，可接受 1 到 20 之间的值；`query` 可接受 1 到 400 个字符。超出这些范围的值会返回 `400`，而不会被自动截断到范围内。请将 `date` 视为可选字段，因为许多页面不会公布日期。
+
+## 为 Venice 模型提供 Exa 搜索
+
+要让模型自行决定何时搜索以及搜索什么，请在聊天请求的 `tools` 数组中描述一个 `web_search` 函数，并在模型每次调用它时由你自己执行搜索。下面的程序将上面的请求封装为一个搜索辅助函数，以 `tool` 消息的形式将结果返回给模型，并不断循环，直到模型以文本形式作答：
+
+<CodeGroup>
+```python Python
+import json
+import os
+
+import requests
+from openai import OpenAI
+
+BASE_URL = "https://api.venice.ai/api/v1"
+VENICE_API_KEY = os.environ["VENICE_API_KEY"]
+MODEL = "z-ai-glm-5-3-flash"
+
+venice = OpenAI(api_key=VENICE_API_KEY, base_url=BASE_URL)
+
+SYSTEM_PROMPT = "Search the web for recent or specific facts. Cite the URL of each source."
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web with Exa. Describe the pages to find in natural language.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    }
+]
+
+
+def exa_search(query: str, limit: int = 5) -> list[dict]:
+    response = requests.post(
+        f"{BASE_URL}/augment/search",
+        headers={"Authorization": f"Bearer {VENICE_API_KEY}"},
+        json={"query": query, "limit": limit, "search_provider": "exa"},
+        timeout=60,
+    )
+    response.raise_for_status()
+    return response.json()["results"]
+
+
+def run_search(call) -> str:
+    try:
+        query = json.loads(call.function.arguments)["query"]
+        return json.dumps(exa_search(query[:400]))
+    except Exception as error:
+        return f"Error: {error}"
+
+
+def ask(question: str, max_rounds: int = 6) -> str:
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": question},
+    ]
+    for _ in range(max_rounds):
+        completion = venice.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            tools=TOOLS,
+            extra_body={"venice_parameters": {"include_venice_system_prompt": False}},
+        )
+        message = completion.choices[0].message
+        if not message.tool_calls:
+            return message.content
+        messages.append(message)
+        for call in message.tool_calls:
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": run_search(call)})
+    raise RuntimeError(f"No answer after {max_rounds} rounds")
+
+
+print(ask("What changed in the latest stable release of Python?"))
+```
+
+```javascript Node.js
+import OpenAI from "openai";
+
+const BASE_URL = "https://api.venice.ai/api/v1";
+const MODEL = "z-ai-glm-5-3-flash";
+
+const venice = new OpenAI({ apiKey: process.env.VENICE_API_KEY, baseURL: BASE_URL });
+
+const SYSTEM_PROMPT = "Search the web for recent or specific facts. Cite the URL of each source.";
+const tools = [
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "Search the web with Exa. Describe the pages to find in natural language.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+    },
+  },
+];
+
+async function exaSearch(query, limit = 5) {
+  const response = await fetch(`${BASE_URL}/augment/search`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.VENICE_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, limit, search_provider: "exa" }),
+  });
+  if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+  return (await response.json()).results;
+}
+
+async function runSearch(call) {
+  try {
+    const { query } = JSON.parse(call.function.arguments);
+    return JSON.stringify(await exaSearch(query.slice(0, 400)));
+  } catch (error) {
+    return `Error: ${error.message}`;
+  }
+}
+
+async function ask(question, maxRounds = 6) {
+  const messages = [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: question },
+  ];
+  for (let round = 0; round < maxRounds; round++) {
+    const completion = await venice.chat.completions.create({
+      model: MODEL,
+      messages,
+      tools,
+      venice_parameters: { include_venice_system_prompt: false },
+    });
+    const message = completion.choices[0].message;
+    if (!message.tool_calls?.length) return message.content;
+    messages.push(message);
+    for (const call of message.tool_calls) {
+      messages.push({ role: "tool", tool_call_id: call.id, content: await runSearch(call) });
+    }
+  }
+  throw new Error(`No answer after ${maxRounds} rounds`);
+}
+
+console.log(await ask("What changed in the latest stable release of Python?"));
+```
+</CodeGroup>
+
+模型只负责编写查询，其余一切都由你的代码决定：提供商、结果数量，以及搜索失败时如何处理。在改写这个循环时，有三个细节值得保留：
+
+- **截断模型编写的查询。** 端点会直接拒绝超过 400 个字符的查询，而不是将其缩短，而模型有时会写出很长的查询。
+- **将错误作为工具结果返回。** 失败的搜索会变成一条以 `Error:` 开头的工具消息，这样模型可以尝试其他查询或解释失败原因，而不是让循环崩溃。
+- **先追加助手消息，再追加其工具结果。** 每条 `tool` 消息都必须跟在请求它的助手回合之后。直接追加消息对象本身还能保留 `reasoning_content`（GLM 5.3 Flash 等推理模型会返回该字段），从而让模型在多轮之间保持推理过程。
+
+每条结果的 `content` 是页面文本，最多约 10,000 个字符，因此模型通常仅凭搜索结果就能作答。当需要完整页面时，可以再添加一个调用 [`/augment/scrape`](/zh/api-reference/endpoint/augment/scrape) 的工具，它会以 Markdown 形式返回页面。
+
+## 先搜索再生成
+
+函数调用让模型决定何时搜索以及搜索什么。当你的代码已经知道要搜索什么时，可以跳过工具循环：运行一次 Exa 搜索，为结果编号，然后让 Venice 基于这些结果作答。这种方式适用于任何 Venice 文本模型，而且由于你保留了输入提示词的来源列表，答案中的每条引用都能对应回一个 URL。
+
+使用上一个示例中的搜索辅助函数、客户端和模型：
+
+<CodeGroup>
+```python Python
+question = "What are the main techniques for reducing LLM inference latency?"
+
+results = exa_search(question, limit=8)
+sources = "\n\n".join(
+    f"[{i}] {result['title']}\n{result['url']}\n{result['content']}"
+    for i, result in enumerate(results, start=1)
+)
+
+completion = venice.chat.completions.create(
+    model=MODEL,
+    messages=[
+        {
+            "role": "system",
+            "content": "Answer only from the numbered sources. Cite each claim by number, like [2].",
+        },
+        {"role": "user", "content": f"Question: {question}\n\nSources:\n\n{sources}"},
+    ],
+    extra_body={"venice_parameters": {"include_venice_system_prompt": False}},
+)
+
+print(completion.choices[0].message.content)
+for i, result in enumerate(results, start=1):
+    print(f"[{i}] {result['url']}")
+```
+
+```javascript Node.js
+const question = "What are the main techniques for reducing LLM inference latency?";
+
+const results = await exaSearch(question, 8);
+const sources = results
+  .map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.content}`)
+  .join("\n\n");
+
+const completion = await venice.chat.completions.create({
+  model: MODEL,
+  messages: [
+    {
+      role: "system",
+      content: "Answer only from the numbered sources. Cite each claim by number, like [2].",
+    },
+    { role: "user", content: `Question: ${question}\n\nSources:\n\n${sources}` },
+  ],
+  venice_parameters: { include_venice_system_prompt: false },
+});
+
+console.log(completion.choices[0].message.content);
+results.forEach((r, i) => console.log(`[${i + 1}] ${r.url}`));
+```
+</CodeGroup>
+
+[基于网页搜索的带引用回答](/zh/guides/tools/cited-web-answers)在此模式基础上扩展了来源筛选、页面抓取以及加载失败页面的处理。其搜索辅助函数接受一个提供商参数，传入 `"exa"` 即可在 Exa 上运行。
+
+## 直接使用 Exa API
+
+Venice 的搜索端点接受一个查询和结果数量。Exa 自己的 API 提供更多控制选项：新闻、研究论文、公司、人物和财务报告等类别，域名和日期筛选，面向查询的高亮片段和完整页面文本，以及深度多步搜索。要使用这些功能，请使用从 [Exa 控制台](https://dashboard.exa.ai/api-keys)获取的 API 密钥直接调用 Exa。这些请求从你的应用直接发送到 Exa，受 Exa 而非 Venice 的条款约束，并计入你的 Exa 账户。Exa 在企业版套餐中提供[零数据保留](https://exa.ai/docs/admin/security/zero-data-retention)。
+
+Exa SDK（`exa-py` 和 2.24.0 或更高版本的 `exa-js`）包含 Chat Completions 格式的工具，可以直接放入上面的循环中。将工具列表替换为 Exa 的工具：
+
+<CodeGroup>
+```python Python
+from exa_py import Exa
+
+exa = Exa()  # reads EXA_API_KEY
+TOOLS = [
+    exa.openai.web_search(),
+    exa.openai.get_contents(text={"max_characters": 10000}),
+]
+```
+
+```javascript Node.js
+import Exa from "exa-js";
+
+const exa = new Exa(); // reads EXA_API_KEY
+const tools = [
+  exa.openai.webSearch(),
+  exa.openai.getContents({ text: { maxCharacters: 10000 } }),
+];
+```
+</CodeGroup>
+
+然后将每条调用工具的消息交给 SDK 处理，而不是使用你自己的工具执行函数：在 Python 中使用 `messages += exa.openai.handle_tool_calls(message)`，在 Node.js 中使用 `messages.push(...(await exa.openai.handleToolCalls(message)))`。它会执行每个 Exa 调用并返回对应的 `tool` 消息，失败会以 `Error:` 结果报告。请保留页面文本长度上限，因为 `exa-js` 在不设上限时会返回整个页面。`category`、`include_domains` 和 `start_published_date` 等关键字参数会透传给 Exa 的搜索。有关所有选项，请参阅 Exa 的[工具调用指南](https://exa.ai/docs/integrations/tool-calling/openai)。
+
+## 推荐模型
+
+| 使用场景 | 模型 | 原因 |
+| --- | --- | --- |
+| 研究型智能体 | `z-ai-glm-5-3-flash` | 快速、低成本、支持函数调用的私密模型 |
+| 工具调用默认模型 | `zai-org-glm-5-2` | Venice 当前的 `function_calling_default` |
+| 无审查研究 | `venice-uncensored-1-2` | 支持函数调用且不进行内容过滤 |
+
+模型 ID 会轮换。可以在运行时通过 [`GET /models/traits`](/zh/api-reference/endpoint/models/traits) 获取当前的函数调用默认模型，或浏览[文本模型](/zh/models/text)查找其他支持函数调用的模型。
+
+## 隐私
+
+使用 `search_provider: "exa"` 时，你的应用只与 Venice 通信，Venice 在零数据保留的条件下通过 Exa 执行每次搜索。Venice 不存储提示词或响应内容，而推理层如何处理数据则由模型的[隐私级别](/zh/overview/privacy)决定。私密模型运行在零数据保留的基础设施上。
+
+容易被忽视的一点是：模型会根据对话内容编写搜索查询，因此提示词中的细节可能会出现在发送给 Exa 的查询中。如果提示词可能包含个人或机密信息，请在系统提示词中告诉模型不要将这些细节放入搜索，或者使用[先搜索模式](#先搜索再生成)，让你自己的代码编写每一条查询。
+
+如果你[直接调用 Exa API](#直接使用-exa-api)，这些请求将改为受 Exa 条款约束并发送至 Exa。
+
+## 费用
+
+每次搜索费用为 $0.01，即每 1,000 次 $10，与 Brave 或 Google 搜索相同。Venice 会将其与聊天请求使用的 token 一起计入你的 Venice 账户，因此不会有单独的 Exa 账单。因错误而失败的搜索不收费，但返回空结果的搜索仍会收费。搜索结果会在下一轮作为输入返回给模型，由于其中包含页面文本，一次五条结果的搜索通常会增加 5,000 到 10,000 个输入 token。以下几个习惯可以同时降低这两项开销：
+
+- 当少量来源就足够时，降低 `limit`。无论 `limit` 为多少，搜索费用都相同，但结果越少，下一轮的输入 token 就越少。
+- 保持较低的 `max_rounds`。每多一轮都可能增加搜索次数和 token 用量。
+- 当你的代码知道要搜索什么时，使用先搜索模式。它只运行一次搜索和一次聊天请求。
+
+<Tip>
+拥有加密钱包的智能体可以不使用 API 密钥。`/augment/search` 和 `/chat/completions` 都支持 [x402 钱包认证](/zh/guides/integrations/x402-venice-api)，因此智能体可以用同一笔预付的 USDC 余额支付 Exa 搜索和推理费用。
+</Tip>
+
+## 故障排除
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized 或缺少凭据">
+    请确认运行代码的进程中已设置 `VENICE_API_KEY`。如果未设置，Python 会抛出 `KeyError: 'VENICE_API_KEY'`，而 Node.js OpenAI SDK 会回退到 `OPENAI_API_KEY`。如果它也未设置，你会收到 `Missing credentials` 错误。如果已设置，SDK 会将你的 OpenAI 密钥发送给 Venice，Venice 会以 `401` 拒绝。在已设置 `VENICE_API_KEY` 的情况下收到 `401`，说明 Venice 拒绝了该密钥本身，请检查是否有拼写错误，或[生成新密钥](/zh/guides/getting-started/generating-api-key)。
+  </Accordion>
+
+  <Accordion title="搜索端点返回 400">
+    `query` 必须为 1 到 400 个字符，`limit` 必须为 1 到 20，`search_provider` 必须为 `brave`、`google` 或 `exa`。超出这些范围的值会被拒绝，而不会被自动截断到范围内。在工具循环中，被拒绝的搜索会以 `Error:` 工具结果的形式传给模型，而不会抛出异常。
+  </Accordion>
+
+  <Accordion title="402 Payment Required">
+    你的 Venice 余额不足以支付该请求。使用 API 密钥发出的请求会返回 `INSUFFICIENT_BALANCE`，请为你的 Venice 余额充值。使用 x402 钱包认证发出的请求会在响应中返回充值说明。
+  </Accordion>
+
+  <Accordion title="工具回合后 Venice 返回 400">
+    包括 Claude 和 GPT 模型在内的部分模型，在工具调用之后没有紧跟带有对应 `tool_call_id` 的 `tool` 消息时，会返回 `400`。GLM 模型仍会接受这样的对话，因此该问题可能在你切换模型时才首次出现。上面的循环会在发起调用的助手消息之后立即响应每个调用，如果你添加工具，请保持这种结构。
+  </Accordion>
+
+  <Accordion title="模型未搜索就直接作答">
+    请检查模型是否支持函数调用，并在系统提示词中说明何时应进行搜索。模型如果认为可以凭记忆作答，往往会跳过工具，除非你明确要求它针对最新或具体的事实进行搜索。
+  </Accordion>
+</AccordionGroup>
+
+## 资源
+
+<CardGroup cols={2}>
+  <Card title="Web Search API" icon="search" href="/zh/api-reference/endpoint/augment/search">
+    参数、搜索提供商和响应架构
+  </Card>
+  <Card title="带引用回答" icon="list" href="/zh/guides/tools/cited-web-answers">
+    在 Venice 上实现完整的搜索、抓取和引用流程
+  </Card>
+  <Card title="函数调用" icon="code" href="/zh/guides/features/function-calling">
+    工具调用在 Venice 上的工作方式
+  </Card>
+  <Card title="Exa 文档" icon="book" href="https://exa.ai/docs">
+    Exa 自己的 API、SDK 和搜索选项
+  </Card>
+</CardGroup>
