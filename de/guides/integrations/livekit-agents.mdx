@@ -1,11 +1,11 @@
 ---
 title: "LiveKit Agents"
-description: "Erstellen Sie Echtzeit-Sprachagenten mit LiveKit Agents und Venice, indem Sie Venice STT, LLM und TTS über das OpenAI-kompatible Plugin in einer STT-LLM-TTS-Pipeline verdrahten."
+description: "Erstellen Sie Echtzeit-Sprachagenten mit LiveKit unter Verwendung von Venice STT, LLM und TTS."
 "og:title": "LiveKit Agents | Venice API Docs"
 "og:description": "Betreiben Sie LiveKit-Sprachagenten mit den privaten, unzensierten STT-, LLM- und TTS-Modellen von Venice."
 ---
 
-[LiveKit Agents](https://docs.livekit.io/agents/) ist ein Framework zum Erstellen von Echtzeit-Sprach-KI. Da Venice für Chat, Transkription und Sprache vollständig OpenAI-kompatibel ist, können Sie alle drei Stufen eines Sprachagenten – **Speech-to-Text (STT)**, **das LLM** und **Text-to-Speech (TTS)** – über das Plugin `livekit-plugins-openai` ansteuern, indem Sie es auf die Venice-Basis-URL verweisen.
+[LiveKit Agents](https://docs.livekit.io/agents/) ist ein Framework zum Erstellen von Echtzeit-Sprach-KI. Venice kann alle drei Stufen eines Sprachagenten ansteuern: **Speech-to-Text (STT)**, **das LLM** und **Text-to-Speech (TTS)**. Das Plugin `livekit-plugins-openai` übernimmt STT und das LLM, wenn Sie es auf die Venice-Basis-URL verweisen. Für TTS ruft eine kurze `VeniceTTS`-Klasse den Venice-Endpunkt `/audio/speech` direkt auf.
 
 <Note>
 Venice passt zur Architektur der **STT-LLM-TTS-Pipeline** in LiveKit Agents. Venice stellt keine OpenAI Realtime (Speech-to-Speech) WebSocket-API bereit, daher ist der Pfad `RealtimeModel` / multimodal nicht verfügbar. Verwenden Sie die unten gezeigte komponentisierte Pipeline – sie gibt Ihnen die volle Kontrolle über jedes Modell und hält die Inferenz auf der privaten Infrastruktur von Venice.
@@ -13,11 +13,11 @@ Venice passt zur Architektur der **STT-LLM-TTS-Pipeline** in LiveKit Agents. Ven
 
 ## So wird Venice auf LiveKit Agents abgebildet
 
-| LiveKit-Komponente | Venice-Endpunkt | Plugin-Klasse |
-|-------------------|-----------------|--------------|
+| LiveKit-Komponente | Venice-Endpunkt | Klasse |
+|-------------------|-----------------|-------|
 | LLM | `POST /chat/completions` | `openai.LLM` |
 | STT | `POST /audio/transcriptions` | `openai.STT` |
-| TTS | `POST /audio/speech` | `openai.TTS` |
+| TTS | `POST /audio/speech` | `VeniceTTS` ([siehe unten](#venice-tts-klasse)) |
 | Turn-Erkennung (VAD) | — (läuft lokal) | `silero.VAD` |
 
 ## Einrichtung
@@ -46,16 +46,116 @@ export LIVEKIT_API_SECRET="your-livekit-api-secret"
 Das OpenAI-Plugin fällt auf `OPENAI_API_KEY` zurück, wenn `api_key` weggelassen wird. Da Sie es auf Venice verweisen, übergeben Sie `api_key` immer explizit (andernfalls würde der Schlüssel aus der falschen Variable gelesen). Die untenstehenden Beispiele lesen `VENICE_API_KEY`.
 </Note>
 
+## Venice-TTS-Klasse
+
+Verwenden Sie die Klasse `openai.TTS` des Plugins nicht mit Venice. Aktuelle Versionen von `livekit-plugins-openai` senden bei jeder Sprachanfrage ein Feld `stream_format`, das der Venice-Endpunkt `/audio/speech` mit **400** ablehnt. Speichern Sie stattdessen diese Klasse als `venice_tts.py` neben Ihrem Agenten. Sie ruft `/audio/speech` nur mit den Feldern auf, die Venice akzeptiert, und übergibt das Audio an LiveKit, sobald es eintrifft.
+
+```python venice_tts.py
+import os
+
+import openai
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    tts,
+    utils,
+)
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+
+# pcm is raw 16-bit mono at 24 kHz on tts-kokoro; LiveKit decodes and resamples mp3 and wav
+MIME_TYPES = {"pcm": "audio/pcm", "mp3": "audio/mpeg", "wav": "audio/wav"}
+
+
+class VeniceTTS(tts.TTS):
+    def __init__(
+        self,
+        *,
+        model: str = "tts-kokoro",
+        voice: str = "af_sky",
+        response_format: str = "pcm",
+        speed: float = 1.0,
+        base_url: str = "https://api.venice.ai/api/v1",
+        api_key: str | None = None,
+    ) -> None:
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=False),
+            sample_rate=24000,
+            num_channels=1,
+        )
+        self._model = model
+        self._voice = voice
+        self._format = response_format
+        self._mime_type = MIME_TYPES[response_format]
+        self._speed = speed
+        self._client = openai.AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key or os.environ["VENICE_API_KEY"],
+        )
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def provider(self) -> str:
+        return "venice"
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> tts.ChunkedStream:
+        return VeniceChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
+    async def aclose(self) -> None:
+        await self._client.close()
+
+
+class VeniceChunkedStream(tts.ChunkedStream):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        venice: VeniceTTS = self._tts
+        try:
+            async with venice._client.audio.speech.with_streaming_response.create(
+                model=venice._model,
+                voice=venice._voice,
+                input=self.input_text,
+                response_format=venice._format,
+                speed=venice._speed,
+                timeout=30,
+            ) as response:
+                output_emitter.initialize(
+                    request_id=response.request_id or utils.shortuuid(),
+                    sample_rate=venice.sample_rate,
+                    num_channels=venice.num_channels,
+                    mime_type=venice._mime_type,
+                )
+                async for chunk in response.iter_bytes():
+                    output_emitter.push(chunk)
+            output_emitter.flush()
+        except openai.APITimeoutError:
+            raise APITimeoutError() from None
+        except openai.APIStatusError as e:
+            raise APIStatusError(
+                e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
+            ) from None
+        except Exception as e:
+            raise APIConnectionError() from e
+```
+
+`response_format` muss ein Format sein, das das Modell unterstützt. Prüfen Sie `model_spec.supported_formats` in `GET /models?type=tts`. Verwenden Sie `pcm` mit `tts-kokoro`, das LiveKit ohne Dekodierungsschritt abspielt. Übergeben Sie bei anderen Modellen `mp3` oder `wav`, und LiveKit dekodiert das Audio.
+
 ## Vollständiger Sprachagent
 
-Dies ist ein vollständiger Sprachagent, der mit Venice STT transkribiert, mit einem Venice-LLM denkt und mit Venice TTS spricht. Silero stellt eine lokale Voice-Activity-Detection bereit, damit die Batch-STT weiß, wann ein Turn abgeschlossen ist.
+Dies ist ein vollständiger Sprachagent, der mit Venice STT transkribiert, mit einem Venice-LLM denkt und über die obige `VeniceTTS`-Klasse mit Venice TTS spricht. Silero stellt eine lokale Voice-Activity-Detection bereit, damit die Batch-STT weiß, wann ein Turn abgeschlossen ist.
 
-```python
+```python agent.py
 import os
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession, RoomInputOptions
 from livekit.plugins import openai, silero
+
+from venice_tts import VeniceTTS
 
 VENICE_BASE_URL = "https://api.venice.ai/api/v1"
 VENICE_API_KEY = os.environ["VENICE_API_KEY"]
@@ -84,7 +184,7 @@ async def entrypoint(ctx: agents.JobContext):
             api_key=VENICE_API_KEY,
         ),
         # Text-to-speech — Venice /audio/speech
-        tts=openai.TTS(
+        tts=VeniceTTS(
             model="tts-kokoro",
             voice="af_sky",
             base_url=VENICE_BASE_URL,
@@ -157,15 +257,13 @@ stt = openai.STT(
 
 ### Text-to-Speech
 
-Das OpenAI-TTS von LiveKit ruft `/audio/speech` auf. Stimmen sind in Venice modellspezifisch – übergeben Sie ein `model`/`voice`-Paar aus demselben Modell. `tts-kokoro` hält die Sprachstufe privat und unzensiert, sodass sie die Ausgabe des LLM wortgetreu sprechen kann; fordern Sie `pcm` an, um einen MP3-Dekodierungsschritt zu vermeiden und ein wenig Latenz einzusparen. Schnellere, providerbasierte Stimmen (z. B. Gemini) können Inhaltsfilterung anwenden, vermeiden Sie sie daher, wenn Sie unzensierte Sprache benötigen.
+[`VeniceTTS`](#venice-tts-klasse) ruft `/audio/speech` auf. Stimmen sind in Venice modellspezifisch – übergeben Sie ein `model`/`voice`-Paar aus demselben Modell. `tts-kokoro` hält die Sprachstufe privat und unzensiert, sodass sie die Ausgabe des LLM wortgetreu sprechen kann, und seine `pcm`-Ausgabe vermeidet einen MP3-Dekodierungsschritt und spart ein wenig Latenz ein. Schnellere, providerbasierte Stimmen (z. B. Gemini) können Inhaltsfilterung anwenden, vermeiden Sie sie daher, wenn Sie unzensierte Sprache benötigen.
 
 ```python
-tts = openai.TTS(
+tts = VeniceTTS(
     model="tts-kokoro",
     voice="af_sky",
-    base_url="https://api.venice.ai/api/v1",
-    api_key=os.environ["VENICE_API_KEY"],
-    response_format="pcm",  # mp3 | opus | aac | flac | wav | pcm
+    response_format="pcm",  # pcm on tts-kokoro; mp3 or wav on other models
     speed=1.0,
 )
 ```
@@ -182,9 +280,9 @@ Modell-IDs ändern sich mit der Zeit – **ermitteln Sie die aktuellen Optionen 
 | STT (niedrigste Latenz) | `nvidia/parakeet-tdt-0.6b-v3` | Klein, schnell, mehrsprachig |
 | STT (neu / Genauigkeit) | `stt-xai-v1`, `elevenlabs/scribe-v2` | Neuere Transkriptionsmodelle |
 | TTS (privat + unzensiert, Sprachstandard) | `tts-kokoro` | Umfangreicher Stimmenkatalog, niedrige Latenz, spricht Ausgabe wortgetreu |
-| TTS (schnelle Alternativen) | `tts-gemini-3-1-flash`, `tts-elevenlabs-turbo-v2-5`, `tts-qwen3-0-6b` | Schnellere Stufen, aber providerbasierte Stimmen können Inhalte filtern |
+| TTS (schnelle Alternativen) | `tts-gemini-3-1-flash`, `tts-elevenlabs-turbo-v2-5`, `tts-qwen3-0-6b` | Schnellere Stufen, aber providerbasierte Stimmen können Inhalte filtern. Verwenden Sie `response_format="mp3"`. |
 
-<Card title="Alle Modelle durchsuchen" icon="database" href="/models/overview">
+<Card title="Alle Modelle durchsuchen" icon="database" href="/de/models/overview">
   Filtern Sie nach Text-, Speech-to-Text- und Text-to-Speech-Modellen mit aktuellen Preisen und Fähigkeiten.
 </Card>
 
@@ -203,7 +301,7 @@ Rechnen Sie mit **~0,8–1,5 s bis zum ersten Audio** – ideal für assistenten
 
 ### Latenz reduzieren
 
-- Verwenden Sie `response_format="pcm"` bei TTS, um den MP3-Dekodierungsschritt zu überspringen.
+- Verwenden Sie `tts-kokoro` mit `response_format="pcm"`, dem Standard von `VeniceTTS`, um den MP3-Dekodierungsschritt zu überspringen.
 - Passen Sie Silero VAD (`silero.VAD.load(min_silence_duration=0.4)`) an, um das Endpointing zu verkürzen, ohne die Sprache abzuschneiden.
 - Bevorzugen Sie latenzarme Stufen für STT/TTS (z. B. `tts-kokoro` TTS, `nvidia/parakeet-tdt-0.6b-v3` STT). Behalten Sie `venice-uncensored-1-2` für das LLM bei, um privat und unzensiert zu bleiben; wechseln Sie nur dann zu einem LLM der `flash`-Klasse, wenn Sie eine schnellere Time-to-first-Token benötigen.
 - Halten Sie Antworten knapp – der erste Satz bestimmt die wahrgenommene Reaktionsfähigkeit.
@@ -241,14 +339,14 @@ Beginnen Sie mit einem reinen Venice-Setup für die einfachste und privateste Ko
 
 - **Keine Speech-to-Speech- / Realtime-API.** Venice verfügt über keinen OpenAI Realtime WebSocket, daher sind `openai.realtime.RealtimeModel` und der multimodale Agentenpfad nicht verfügbar. Verwenden Sie die oben gezeigte STT-LLM-TTS-Pipeline.
 - **STT ist Batch, nicht Streaming.** Die Venice-Transkription funktioniert per Request/Response, daher ist ein VAD (Silero) für das Endpointing erforderlich. Dies verursacht eine geringe zusätzliche Latenz gegenüber einem Streaming-STT-Socket.
-- **TTS wird vom Plugin gepuffert.** Der OpenAI-TTS-Wrapper von LiveKit meldet `streaming=False` und verwendet daher nicht das satzweise `streaming`-Flag von Venice. Die Latenz ist für die meisten Agenten dennoch akzeptabel; verwenden Sie `response_format="pcm"`, um den Dekodierungs-Overhead zu minimieren.
-- **Stimme zum Modell passend wählen.** TTS-`voice`-IDs sind nur für ihr zugehöriges `model` gültig. Siehe [Text-to-Speech-Modelle](/models/text-to-speech).
-- **Modelllisten nicht fest codieren.** Venice-Modell-IDs werden regelmäßig veraltet und ersetzt – fragen Sie `GET /models` / `GET /models/traits` zur Laufzeit ab. Siehe [Deprecations](/overview/deprecations).
+- **TTS verwendet die Klasse `VeniceTTS`, nicht `openai.TTS`.** Aktuelle Versionen von `livekit-plugins-openai` senden `stream_format` bei Sprachanfragen, was Venice mit **400** ablehnt. `VeniceTTS` meldet `streaming=False`, daher synthetisiert LiveKit die Antwort etwa satzweise und verwendet nicht das `streaming`-Flag von Venice. Die Latenz ist für die meisten Agenten dennoch akzeptabel; verwenden Sie `response_format="pcm"`, um den Dekodierungs-Overhead zu minimieren.
+- **Stimme zum Modell passend wählen.** TTS-`voice`-IDs sind nur für ihr zugehöriges `model` gültig. Siehe [Text-to-Speech-Modelle](/de/models/text-to-speech).
+- **Modelllisten nicht fest codieren.** Venice-Modell-IDs werden regelmäßig veraltet und ersetzt – fragen Sie `GET /models` / `GET /models/traits` zur Laufzeit ab. Siehe [Deprecations](/de/overview/deprecations).
 
 ## Verwandte Ressourcen
 
 - [LiveKit Agents-Dokumentation](https://docs.livekit.io/agents/)
-- [Speech-to-Text-Leitfaden](/guides/media/speech-to-text) · [Modelle](/models/speech-to-text)
-- [Text-to-Speech-Leitfaden](/guides/media/text-to-speech) · [Modelle](/models/text-to-speech)
-- [Function Calling](/guides/features/function-calling)
-- [KI-Agenten](/guides/integrations/ai-agents)
+- [Speech-to-Text-Leitfaden](/de/guides/media/speech-to-text) · [Modelle](/de/models/speech-to-text)
+- [Text-to-Speech-Leitfaden](/de/guides/media/text-to-speech) · [Modelle](/de/models/text-to-speech)
+- [Function Calling](/de/guides/features/function-calling)
+- [KI-Agenten](/de/guides/integrations/ai-agents)

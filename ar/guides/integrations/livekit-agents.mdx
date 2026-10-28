@@ -1,11 +1,11 @@
 ---
 title: "LiveKit Agents"
-description: "ابنِ وكلاء صوتيين بالزمن الفعلي باستخدام LiveKit Agents و Venice، مع ربط خدمات STT و LLM و TTS من Venice عبر ملحق متوافق مع OpenAI في خط أنابيب STT-LLM-TTS."
+description: "ابنِ وكلاء صوتيين بالزمن الفعلي باستخدام LiveKit ونماذج STT و LLM و TTS من Venice."
 "og:title": "LiveKit Agents | وثائق Venice API"
 "og:description": "شغّل وكلاء LiveKit الصوتيين بنماذج Venice الخاصة وغير الخاضعة للرقابة لـ STT و LLM و TTS."
 ---
 
-[LiveKit Agents](https://docs.livekit.io/agents/) هو إطار عمل لبناء ذكاء اصطناعي صوتي بالزمن الفعلي. وبما أن Venice متوافقة بالكامل مع OpenAI في المحادثة والتفريغ الصوتي وتوليد الكلام، يمكنك تشغيل جميع المراحل الثلاث للوكيل الصوتي — **تحويل الكلام إلى نص (STT)**، و**نموذج اللغة الكبير (LLM)**، و**تحويل النص إلى كلام (TTS)** — من خلال ملحق `livekit-plugins-openai` عبر توجيهه إلى عنوان Venice الأساسي.
+[LiveKit Agents](https://docs.livekit.io/agents/) هو إطار عمل لبناء ذكاء اصطناعي صوتي بالزمن الفعلي. يمكن لـ Venice تشغيل جميع المراحل الثلاث للوكيل الصوتي: **تحويل الكلام إلى نص (STT)**، و**نموذج اللغة الكبير (LLM)**، و**تحويل النص إلى كلام (TTS)**. يتولى ملحق `livekit-plugins-openai` مرحلتي STT و LLM عند توجيهه إلى عنوان Venice الأساسي. أما بالنسبة إلى TTS، فتستدعي فئة `VeniceTTS` قصيرة نقطة النهاية `/audio/speech` في Venice مباشرةً.
 
 <Note>
 تتناسب Venice مع بنية **خط أنابيب STT-LLM-TTS** في LiveKit Agents. لا توفّر Venice واجهة WebSocket لـ OpenAI Realtime (الكلام إلى كلام)، لذا لا يتوفر مسار `RealtimeModel` / الوسائط المتعددة. استخدم خط الأنابيب المكوّن الموضح أدناه — فهو يمنحك تحكمًا كاملًا في كل نموذج ويُبقي الاستدلال على البنية التحتية الخاصة بـ Venice.
@@ -13,11 +13,11 @@ description: "ابنِ وكلاء صوتيين بالزمن الفعلي باس�
 
 ## كيف تُقابل Venice مكونات LiveKit Agents
 
-| مكوّن LiveKit | نقطة نهاية Venice | فئة الملحق |
-|-------------------|-----------------|--------------|
+| مكوّن LiveKit | نقطة نهاية Venice | الفئة |
+|-------------------|-----------------|-------|
 | LLM | `POST /chat/completions` | `openai.LLM` |
 | STT | `POST /audio/transcriptions` | `openai.STT` |
-| TTS | `POST /audio/speech` | `openai.TTS` |
+| TTS | `POST /audio/speech` | `VeniceTTS` ([أدناه](#فئة-venice-tts)) |
 | كشف انتهاء الدور (VAD) | — (يعمل محليًا) | `silero.VAD` |
 
 ## الإعداد
@@ -46,16 +46,116 @@ export LIVEKIT_API_SECRET="your-livekit-api-secret"
 يعود ملحق OpenAI إلى `OPENAI_API_KEY` عند حذف `api_key`. وبما أنك توجهه إلى Venice، مرّر دائمًا `api_key` صراحةً (وإلا سيُقرأ المفتاح من المتغيّر الخطأ). تقرأ الأمثلة أدناه `VENICE_API_KEY`.
 </Note>
 
+## فئة Venice TTS
+
+لا تستخدم فئة `openai.TTS` من الملحق مع Venice. ترسل الإصدارات الحالية من `livekit-plugins-openai` الحقل `stream_format` مع كل طلب كلام، وترفضه نقطة النهاية `/audio/speech` في Venice بالخطأ **400**. بدلًا من ذلك، احفظ هذه الفئة باسم `venice_tts.py` بجوار وكيلك. فهي تستدعي `/audio/speech` بالحقول التي تقبلها Venice فقط، وتسلّم الصوت إلى LiveKit فور وصوله.
+
+```python venice_tts.py
+import os
+
+import openai
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    tts,
+    utils,
+)
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+
+# pcm is raw 16-bit mono at 24 kHz on tts-kokoro; LiveKit decodes and resamples mp3 and wav
+MIME_TYPES = {"pcm": "audio/pcm", "mp3": "audio/mpeg", "wav": "audio/wav"}
+
+
+class VeniceTTS(tts.TTS):
+    def __init__(
+        self,
+        *,
+        model: str = "tts-kokoro",
+        voice: str = "af_sky",
+        response_format: str = "pcm",
+        speed: float = 1.0,
+        base_url: str = "https://api.venice.ai/api/v1",
+        api_key: str | None = None,
+    ) -> None:
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=False),
+            sample_rate=24000,
+            num_channels=1,
+        )
+        self._model = model
+        self._voice = voice
+        self._format = response_format
+        self._mime_type = MIME_TYPES[response_format]
+        self._speed = speed
+        self._client = openai.AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key or os.environ["VENICE_API_KEY"],
+        )
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def provider(self) -> str:
+        return "venice"
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> tts.ChunkedStream:
+        return VeniceChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
+    async def aclose(self) -> None:
+        await self._client.close()
+
+
+class VeniceChunkedStream(tts.ChunkedStream):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        venice: VeniceTTS = self._tts
+        try:
+            async with venice._client.audio.speech.with_streaming_response.create(
+                model=venice._model,
+                voice=venice._voice,
+                input=self.input_text,
+                response_format=venice._format,
+                speed=venice._speed,
+                timeout=30,
+            ) as response:
+                output_emitter.initialize(
+                    request_id=response.request_id or utils.shortuuid(),
+                    sample_rate=venice.sample_rate,
+                    num_channels=venice.num_channels,
+                    mime_type=venice._mime_type,
+                )
+                async for chunk in response.iter_bytes():
+                    output_emitter.push(chunk)
+            output_emitter.flush()
+        except openai.APITimeoutError:
+            raise APITimeoutError() from None
+        except openai.APIStatusError as e:
+            raise APIStatusError(
+                e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
+            ) from None
+        except Exception as e:
+            raise APIConnectionError() from e
+```
+
+يجب أن تكون قيمة `response_format` صيغةً يدعمها النموذج. تحقّق من `model_spec.supported_formats` في `GET /models?type=tts`. استخدم `pcm` مع `tts-kokoro`، إذ يشغّلها LiveKit دون خطوة فك ترميز. أما مع النماذج الأخرى، فمرّر `mp3` أو `wav` وسيتولى LiveKit فك ترميز الصوت.
+
 ## وكيل صوتي متكامل
 
-هذا وكيل صوتي كامل يفرّغ الكلام باستخدام Venice STT، ويفكّر عبر Venice LLM، ويتحدث بواسطة Venice TTS. يوفّر Silero كشفًا محليًا لنشاط الصوت حتى يعرف STT بوضع الدُفعات متى اكتمل الدور.
+هذا وكيل صوتي كامل يفرّغ الكلام باستخدام Venice STT، ويفكّر عبر Venice LLM، ويتحدث بواسطة Venice TTS من خلال فئة `VeniceTTS` أعلاه. يوفّر Silero كشفًا محليًا لنشاط الصوت حتى يعرف STT بوضع الدُفعات متى اكتمل الدور.
 
-```python
+```python agent.py
 import os
 
 from livekit import agents
 from livekit.agents import Agent, AgentSession, RoomInputOptions
 from livekit.plugins import openai, silero
+
+from venice_tts import VeniceTTS
 
 VENICE_BASE_URL = "https://api.venice.ai/api/v1"
 VENICE_API_KEY = os.environ["VENICE_API_KEY"]
@@ -84,7 +184,7 @@ async def entrypoint(ctx: agents.JobContext):
             api_key=VENICE_API_KEY,
         ),
         # Text-to-speech — Venice /audio/speech
-        tts=openai.TTS(
+        tts=VeniceTTS(
             model="tts-kokoro",
             voice="af_sky",
             base_url=VENICE_BASE_URL,
@@ -157,15 +257,13 @@ stt = openai.STT(
 
 ### تحويل النص إلى كلام
 
-يستدعي OpenAI TTS في LiveKit المسار `/audio/speech`. الأصوات في Venice خاصة بكل نموذج — مرّر زوج `model`/`voice` من النموذج نفسه. يُبقي `tts-kokoro` مرحلة الصوت خاصة وغير خاضعة للرقابة حتى يستطيع نطق مخرجات الـ LLM حرفيًا؛ اطلب `pcm` لتفادي خطوة فك ترميز MP3 وتوفير قليل من زمن التأخير. قد تطبّق الأصوات الأسرع المدعومة من مزوّدين آخرين (مثل Gemini) تصفية للمحتوى، لذا تجنّبها إذا احتجت إلى كلام غير خاضع للرقابة.
+تستدعي [`VeniceTTS`](#فئة-venice-tts) المسار `/audio/speech`. الأصوات في Venice خاصة بكل نموذج — مرّر زوج `model`/`voice` من النموذج نفسه. يُبقي `tts-kokoro` مرحلة الصوت خاصة وغير خاضعة للرقابة حتى يستطيع نطق مخرجات الـ LLM حرفيًا، كما أن مخرجاته بصيغة `pcm` تتفادى خطوة فك ترميز MP3 وتوفّر قليلًا من زمن التأخير. قد تطبّق الأصوات الأسرع المدعومة من مزوّدين آخرين (مثل Gemini) تصفية للمحتوى، لذا تجنّبها إذا احتجت إلى كلام غير خاضع للرقابة.
 
 ```python
-tts = openai.TTS(
+tts = VeniceTTS(
     model="tts-kokoro",
     voice="af_sky",
-    base_url="https://api.venice.ai/api/v1",
-    api_key=os.environ["VENICE_API_KEY"],
-    response_format="pcm",  # mp3 | opus | aac | flac | wav | pcm
+    response_format="pcm",  # pcm on tts-kokoro; mp3 or wav on other models
     speed=1.0,
 )
 ```
@@ -182,9 +280,9 @@ tts = openai.TTS(
 | STT (أقل زمن تأخير) | `nvidia/parakeet-tdt-0.6b-v3` | صغير وسريع ومتعدد اللغات |
 | STT (حديث / دقيق) | `stt-xai-v1`, `elevenlabs/scribe-v2` | نماذج تفريغ أحدث |
 | TTS (خاص + غير خاضع للرقابة، الافتراضي للصوت) | `tts-kokoro` | كتالوج أصوات واسع، زمن تأخير منخفض، ينطق المخرجات حرفيًا |
-| TTS (بدائل سريعة) | `tts-gemini-3-1-flash`, `tts-elevenlabs-turbo-v2-5`, `tts-qwen3-0-6b` | فئات أسرع، لكن الأصوات المدعومة من مزوّدين قد تفلتر المحتوى |
+| TTS (بدائل سريعة) | `tts-gemini-3-1-flash`, `tts-elevenlabs-turbo-v2-5`, `tts-qwen3-0-6b` | فئات أسرع، لكن الأصوات المدعومة من مزوّدين قد تفلتر المحتوى. استخدم `response_format="mp3"`. |
 
-<Card title="تصفح جميع النماذج" icon="database" href="/models/overview">
+<Card title="تصفح جميع النماذج" icon="database" href="/ar/models/overview">
   تصفية حسب النص وتحويل الكلام إلى نص وتحويل النص إلى كلام مع التسعير والقدرات الحيّة.
 </Card>
 
@@ -203,7 +301,7 @@ tts = openai.TTS(
 
 ### تقليل زمن التأخير
 
-- استخدم `response_format="pcm"` في TTS لتخطي خطوة فك ترميز MP3.
+- استخدم `tts-kokoro` مع `response_format="pcm"`، وهو الإعداد الافتراضي في `VeniceTTS`، لتخطي خطوة فك ترميز MP3.
 - اضبط Silero VAD (`silero.VAD.load(min_silence_duration=0.4)`) لتقصير كشف انتهاء الدور دون قطع الكلام.
 - فضّل الفئات منخفضة زمن التأخير لـ STT/TTS (مثل TTS `tts-kokoro`، و STT `nvidia/parakeet-tdt-0.6b-v3`). أبقِ `venice-uncensored-1-2` كـ LLM للحفاظ على الخصوصية وعدم الخضوع للرقابة؛ ولا تنتقل إلى LLM من فئة `flash` إلا إذا احتجت إلى زمن أسرع للوصول إلى أول رمز.
 - اجعل الردود موجزة — فالجملة الأولى هي ما يحدد الاستجابة المُدركة.
@@ -241,14 +339,14 @@ session = AgentSession(
 
 - **لا يوجد Realtime API أو كلام إلى كلام.** لا تمتلك Venice WebSocket لـ OpenAI Realtime، لذا فإن `openai.realtime.RealtimeModel` ومسار الوكيل متعدد الوسائط غير متاحين. استخدم خط أنابيب STT-LLM-TTS الموضّح أعلاه.
 - **STT بوضع الدُفعات لا التدفّق.** التفريغ الصوتي في Venice طلب/استجابة، لذا يلزم VAD (مثل Silero) لكشف انتهاء الدور. يضيف ذلك قدرًا يسيرًا من زمن التأخير مقارنةً بمقبس STT تدفّقي.
-- **يقوم الملحق بتخزين TTS مؤقتًا.** يُبلّغ غلاف OpenAI TTS في LiveKit بأن `streaming=False`، لذا لا يستخدم علامة `streaming` جملةً جملةً في Venice. يبقى زمن التأخير مناسبًا لمعظم الوكلاء؛ استخدم `response_format="pcm"` لتقليل تكلفة فك الترميز.
-- **طابق الصوت مع النموذج.** معرّفات `voice` في TTS صالحة فقط مع `model` المطابق لها. راجع [نماذج تحويل النص إلى كلام](/models/text-to-speech).
-- **لا تُرمّز قوائم النماذج بشكل ثابت.** يتم إهمال معرّفات نماذج Venice واستبدالها بانتظام — استعلم عن `GET /models` / `GET /models/traits` أثناء التشغيل. راجع [الإهمالات](/overview/deprecations).
+- **يستخدم TTS فئة `VeniceTTS` وليس `openai.TTS`.** ترسل الإصدارات الحالية من `livekit-plugins-openai` الحقل `stream_format` في طلبات الكلام، وهو ما ترفضه Venice بالخطأ **400**. تُبلّغ `VeniceTTS` بأن `streaming=False`، لذا يُركّب LiveKit الرد جملةً تقريبًا في كل مرة، ولا تستخدم الفئة علامة `streaming` في Venice. يبقى زمن التأخير مناسبًا لمعظم الوكلاء؛ استخدم `response_format="pcm"` لتقليل تكلفة فك الترميز.
+- **طابق الصوت مع النموذج.** معرّفات `voice` في TTS صالحة فقط مع `model` المطابق لها. راجع [نماذج تحويل النص إلى كلام](/ar/models/text-to-speech).
+- **لا تُرمّز قوائم النماذج بشكل ثابت.** يتم إهمال معرّفات نماذج Venice واستبدالها بانتظام — استعلم عن `GET /models` / `GET /models/traits` أثناء التشغيل. راجع [الإهمالات](/ar/overview/deprecations).
 
 ## موارد ذات صلة
 
 - [وثائق LiveKit Agents](https://docs.livekit.io/agents/)
-- [دليل تحويل الكلام إلى نص](/guides/media/speech-to-text) · [النماذج](/models/speech-to-text)
-- [دليل تحويل النص إلى كلام](/guides/media/text-to-speech) · [النماذج](/models/text-to-speech)
-- [استدعاء الدوال](/guides/features/function-calling)
-- [وكلاء الذكاء الاصطناعي](/guides/integrations/ai-agents)
+- [دليل تحويل الكلام إلى نص](/ar/guides/media/speech-to-text) · [النماذج](/ar/models/speech-to-text)
+- [دليل تحويل النص إلى كلام](/ar/guides/media/text-to-speech) · [النماذج](/ar/models/text-to-speech)
+- [استدعاء الدوال](/ar/guides/features/function-calling)
+- [وكلاء الذكاء الاصطناعي](/ar/guides/integrations/ai-agents)
