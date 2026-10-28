@@ -36,7 +36,7 @@ Python (OpenAI SDK): `OpenAI(base_url="https://api.venice.ai/api/v1", api_key=os
 | --- | --- |
 | Chat / text | `POST /chat/completions` (streaming, vision, audio/video input, tool calling), `POST /responses` (beta) |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`, OpenAI-style `POST /images/generations` |
-| Video | `POST /video/queue` → `POST /video/retrieve` with `{model, queue_id}`, or `POST /video/complete` (one call); `POST /video/quote` for pricing |
+| Video | `POST /video/queue` → poll `POST /video/retrieve` with `{model, queue_id}` → optionally `POST /video/complete` to delete stored output; `POST /video/quote` for pricing |
 | Audio | `POST /audio/speech` (TTS), `POST /audio/voices` (voice cloning), `POST /audio/transcriptions` (STT); music via `/audio/queue`, `/audio/retrieve`, `/audio/quote`, `/audio/complete`; voice changer via `/audio/voice-changer/quote`, `/audio/voice-changer/queue`, `/audio/voice-changer/retrieve`, `/audio/voice-changer/complete` |
 | Embeddings | `POST /embeddings` |
 | Decisions (beta) | `POST /decisions` (alias `POST /systemone`) |
