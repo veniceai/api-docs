@@ -645,7 +645,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   const FilterRail = ({ modality, task, filters, setFilters, providerCounts, providers, onClear }) => {
     const toggleIn = (key, value) => setFilters(prev => ({ ...prev, [key]: prev[key].includes(value) ? prev[key].filter(v => v !== value) : [...prev[key], value] }));
-    const setOne = (key, value) => setFilters(prev => ({ ...prev, [key]: prev[key] === value ? '' : value }));
     const [showAll, setShowAll] = useState(false);
     const providerList = Object.entries(providerCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
     const visibleProviders = showAll ? providerList : providerList.slice(0, 8);
