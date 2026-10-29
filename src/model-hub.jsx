@@ -1481,6 +1481,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (model.modality === 'image' || model.modality === 'video') list.push(['parameters', 'Parameters']);
     if (model.task === 'tts' && model.audio && model.audio.voices && model.audio.voices.length) list.push(['voices', 'Voices']);
     list.push(['api', 'API']);
+    if (hasCensorship(model)) list.push(['censorship', 'Censorship']);
     if (variants > 1) list.push(['variants', 'Variants']);
     if (related) list.push(['related', 'Related models']);
     if (faq) list.push(['faq', 'FAQ']);
@@ -1693,6 +1694,66 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           </>
         ) : null}
       </dl>
+    );
+  };
+
+  const CENSORSHIP_LEVELS = [['uncensored', 'Uncensored'], ['light', 'Lightly filtered'], ['censored', 'Censored']];
+  const hasCensorship = model => ['chat', 'image-generation', 'image-edit', 'video'].includes(model.task);
+  // Venice's uncensored flag first. Otherwise a provider's policies apply when
+  // Venice proxies the request or the weights are proprietary; overrides in
+  // data/model-overrides.json correct any model.
+  const censorshipLevel = model => (model.moderation && model.moderation.level) ||
+    (model.uncensored ? 'uncensored' : model.privacy === 'anonymized' || !model.openWeights ? 'censored' : 'light');
+  // The maker is the upstream for proprietary models; an open-weight model's
+  // host isn't known, so it isn't named.
+  const upstreamName = (model, provider) => (!model.openWeights && provider ? provider.name : null);
+  const censorshipNote = (model, provider) => {
+    const level = censorshipLevel(model);
+    if (level === 'uncensored') return 'No content filtering';
+    if (level === 'light') return 'No added content filter';
+    const by = upstreamName(model, provider);
+    return by ? `Moderation applied upstream by ${by}` : 'Moderation applied upstream';
+  };
+
+  const Censorship = ({ model, family, provider }) => {
+    const level = censorshipLevel(model);
+    const by = upstreamName(model, provider);
+    const isText = model.modality === 'text';
+    const policy = {
+      uncensored: 'Responds to prompts without content-based refusals or filtering.',
+      light: "Venice adds no content filter. Refusals come from the model's own training.",
+      censored: `${by ? `${by}'s` : "The upstream provider's"} usage policies and safety ${isText ? 'training' : 'filters'} apply. Venice can't remove them.`
+    }[level];
+    const rows = [['Content policy', policy]];
+    if (isText) {
+      rows.push(['Venice system prompt', <>On by default. Send <code>venice_parameters.include_venice_system_prompt: false</code> to leave it out{level === 'censored' ? '; upstream filtering still applies' : ''}.</>]);
+    }
+    if (model.task === 'image-generation' || model.task === 'image-edit') {
+      rows.push(['Safe mode', <>On by default: images classified as adult content come back blurred. Send <code>safe_mode: false</code> to turn it off.</>]);
+    }
+    if (model.moderation && model.moderation.billedOnBlock) {
+      rows.push(['Blocked requests', "Requests the provider's filters block are still billed at the full rate."]);
+    }
+    const modality = MODALITIES.find(m => m.key === model.modality);
+    return (
+      <>
+        <div className="vx-scale">
+          {CENSORSHIP_LEVELS.map(([key, label]) => (
+            <div key={key} className={cls('vx-scale-step', key === level && `is-active is-${key}`)} aria-current={key === level ? 'true' : undefined}>
+              <span className="vx-scale-bar" aria-hidden="true" />
+              <span className="vx-scale-label">{label}{key === level ? ` · ${family.name}` : ''}</span>
+            </div>
+          ))}
+        </div>
+        <dl className="vx-kv">
+          {rows.map(([label, value]) => (
+            <div key={label} className="vx-kv-row"><dt>{label}</dt><dd>{value}</dd></div>
+          ))}
+        </dl>
+        {level !== 'uncensored' && modality ? (
+          <p className="vx-footnote">For unrestricted output, use one of Venice's <a href={`${modality.path}?flag=uncensored`}>uncensored {modality.label.toLowerCase()} models</a>.</p>
+        ) : null}
+      </>
     );
   };
 
@@ -2264,6 +2325,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
               <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
             </Section>
+
+            {has('censorship') ? (
+              <Section id="censorship" title="Censorship" note={censorshipNote(model, provider)}>
+                <Censorship model={model} family={family} provider={provider} />
+              </Section>
+            ) : null}
 
             {has('variants') ? (
               <Section id="variants" title="Variants">

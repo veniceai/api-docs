@@ -572,6 +572,7 @@ function normalizeModel(model, ctx) {
   }
 
   entry.endpoints = endpointsFor(entry, ctx.overrides);
+  entry.moderation = moderationFor(entry, ctx.overrides);
   entry.media = (ctx.media.models?.[model.id] || []).slice(0, 12);
   entry.benchmarks = ctx.benchmarks.results?.[model.id] || null;
   entry.telemetry = ctx.telemetry.models?.[model.id] || null;
@@ -625,6 +626,14 @@ function endpointsFor(entry, overrides) {
     if (note && target.id === recommendation) target.recommendation = note;
   }
   return list;
+}
+
+// Content moderation facts GET /models doesn't carry: a censorship level that
+// overrides the page's default, and whether blocked requests are billed.
+function moderationFor(entry, overrides) {
+  const rule = (overrides.moderationRules || []).find(r => matchesRule(entry, r.match || {}));
+  const moderation = { ...rule?.moderation, ...overrides.models?.[entry.id]?.moderation };
+  return Object.keys(moderation).length ? moderation : null;
 }
 
 function matchesRule(entry, match) {
