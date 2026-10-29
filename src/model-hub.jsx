@@ -1991,7 +1991,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const max = values.length ? Math.max(...values) : 0;
     return (
       <>
-        <div className="vx-table-wrap vx-ptable-wrap">
+        <div className="vx-table-wrap vx-ruled vx-ptable-wrap">
           <table className="vx-ptable">
             <thead>
               <tr>
@@ -2097,7 +2097,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           <strong className="vx-estimate">{usd(vp.clip)}</strong> per clip
           <span className="vx-muted"> · {vp.seconds}s{vp.resolution ? ` · ${vp.resolution}` : ''}{vp.audio ? ' · with audio' : ' · silent'} · {usd(vp.perSecond)} / sec · {usd(vp.perSecond != null ? vp.perSecond * 60 : null)} / min</span>
         </p>
-        <div className="vx-table-wrap">
+        <div className="vx-table-wrap vx-ruled">
           <table className="vx-dtable vx-matrix">
             <caption className="vx-sr-only">Clip price by duration and resolution{video.audio === 'optional' ? (a === 'on' ? ', with audio' : ', silent') : ''}</caption>
             <thead>
@@ -2191,14 +2191,16 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (p.kind === 'tiered' && p.tiers) {
       return (
         <>
-          <table className="vx-dtable">
-            <thead><tr><th>Track length</th><th className="vx-al-right">Price</th></tr></thead>
-            <tbody>
-              {p.tiers.map(t => (
-                <tr key={t.upTo}><td>{t.from === t.upTo ? `${t.upTo}s` : t.from ? `${t.from}–${t.upTo}s` : `Up to ${t.upTo}s`}</td><td className="vx-al-right vx-num">{usd(t.usd)}</td></tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="vx-table-wrap vx-ruled">
+            <table className="vx-dtable">
+              <thead><tr><th>Track length</th><th className="vx-al-right">Price</th></tr></thead>
+              <tbody>
+                {p.tiers.map(t => (
+                  <tr key={t.upTo}><td>{t.from === t.upTo ? `${t.upTo}s` : t.from ? `${t.from}–${t.upTo}s` : `Up to ${t.upTo}s`}</td><td className="vx-al-right vx-num">{usd(t.usd)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <p className="vx-footnote">Billed by duration bucket. Use <code>POST /audio/quote</code> for an exact price.</p>
         </>
       );
@@ -2288,7 +2290,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const showEffort = isText && models.some(m => m.text && m.text.reasoning && m.text.reasoning.effort && m.text.reasoning.effort.length);
     const showPrecision = isText && models.some(m => m.text && m.text.quantization);
     return (
-      <div className="vx-table-wrap">
+      <div className="vx-table-wrap vx-ruled">
         <table className="vx-dtable vx-variants-table">
           <thead>
             <tr>
@@ -2301,10 +2303,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           </thead>
           <tbody>
             {models.map(m => (
-              <tr key={m.id} className={cls(m.id === activeId && 'is-selected', 'is-clickable')} onClick={() => onSelect(m.id)}>
+              <tr key={m.id} className={cls(m.id === activeId && 'is-current', 'is-clickable')} onClick={() => onSelect(m.id)}>
                 <td><button type="button" className="vx-row-btn" aria-pressed={m.id === activeId} onClick={e => { e.stopPropagation(); onSelect(m.id); }}>{VARIANT_LABELS[m.variant] || m.variant}</button></td>
                 <td><span className="vx-id vx-id-inline" title={m.id}><code>{m.id}</code><CopyButton text={m.id} iconOnly label={`Copy model ID ${m.id}`} /></span></td>
-                <td className="vx-hide-sm"><PrivacyBadge tier={m.privacy} /></td>
+                <td className="vx-hide-sm">{PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy}</td>
                 {isText ? (
                   <>
                     <td className="vx-al-right vx-num vx-hide-sm">{tokens(m.text && m.text.context)}</td>
