@@ -2562,11 +2562,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             {has('faq') ? (
               <Section id="faq" title="FAQ">
                 <div className="vx-faq">
-                  {faq.map(item => (
-                    <div key={item.q} className="vx-faq-item">
-                      <h3 className="vx-h3"><RichText text={item.q} /></h3>
-                      <p className="vx-text"><RichText text={item.a} /></p>
-                    </div>
+                  {faq.map((item, i) => (
+                    <details key={item.q} className="vx-faq-item" open={i === 0}>
+                      <summary>
+                        <h3 className="vx-faq-q"><RichText text={item.q} /></h3>
+                        <Icon name="chevronDown" className="vx-faq-icon" />
+                      </summary>
+                      <p className="vx-faq-a"><RichText text={item.a} /></p>
+                    </details>
                   ))}
                 </div>
               </Section>
