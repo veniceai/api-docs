@@ -128,7 +128,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   const PRIVACY = {
     e2ee: { label: 'E2EE', long: 'End-to-end encrypted', icon: 'lock', desc: 'Prompts are encrypted on your device and only decrypted inside an attested hardware enclave. Neither Venice nor the GPU provider can read them.' },
     tee: { label: 'TEE', long: 'Trusted execution', icon: 'shield', desc: 'Runs inside a hardware-secured enclave with cryptographic attestation. No prompt data is stored or accessible outside the enclave.' },
-    private: { label: 'Private', long: 'Zero data retention', icon: 'eyeOff', desc: 'Served on infrastructure Venice controls with zero data retention. Prompts and outputs are never stored or used for training.' },
+    private: { label: 'Private', long: 'Zero data retention', icon: 'eyeOff', desc: 'Zero data retention, enforced by contract. Prompts and outputs are processed for inference only and not retained after the request completes.' },
     anonymized: { label: 'Anonymized', long: 'Anonymized proxy', icon: 'mask', desc: 'Proxied to the upstream provider without your identity. The provider may retain prompt data; use a Private, TEE or E2EE model for sensitive work.' }
   };
   const PRIVACY_ORDER = ['e2ee', 'tee', 'private', 'anonymized'];
