@@ -30,12 +30,12 @@ The catalog becomes a model hub with three surfaces:
 | Surface | URL | What it does |
 |---|---|---|
 | Explorer | `/models/overview`, plus `/models/text`, `/image`, `/video`, `/text-to-speech`, `/speech-to-text`, `/music`, `/embeddings` | Browse every model by modality with modality-specific columns, filters, a pricing lens and a compare tray |
-| Model pages | `/models/<family>` (251 pages today) | One page per model family, with variants, key numbers, capabilities, pricing calculator, endpoints, code and reference outputs |
+| Model pages | `/models/<family>` (276 pages today) | One page per model family, with variants, key numbers, capabilities, pricing calculator, endpoints, code and reference outputs |
 | Compare | `/models/compare?ids=a,b,c` | Up to four models side by side, with the same reference prompts rendered by each for image and video |
 
 Four decisions carry most of the value:
 
-1. **Families, not IDs.** 366 model IDs collapse into 251 families (snapshot of Sep 28). Video drops from 132 rows to 53, because text-to-video, image-to-video and reference-to-video modes of one model are one family. E2EE and Fast variants hang off their base model. The page is the family; the variant is a switch.
+1. **Families, not IDs.** 398 model IDs collapse into 276 families (snapshot of Oct 29). Video drops from 137 rows to 56, because text-to-video, image-to-video and reference-to-video modes of one model are one family. E2EE and Fast variants hang off their base model. The page is the family; the variant is a switch.
 2. **One reference price per modality, next to the native unit.** Text shows a blended 3:1 price. Video prices come from a full quote matrix computed at build time, which replaces the per-row live quotes and the "Variable" label. Audio shows per minute and per hour.
 3. **Same prompts, every model.** Image and video models are shown on Venice's standard prompt suite (already produced for venice.ai/models), so the explorer gallery and the compare view are real comparisons rather than a highlight reel.
 4. **Built for the data we don't have yet.** Performance and benchmarks are specified now ([sections 11](#11-performance-telemetry-future) and [12](#12-benchmarks-future)) and join the pages once measured data exists.
@@ -69,7 +69,7 @@ Four decisions carry most of the value:
 | `/models/compare` | custom | Explore |
 | `/models/methodology` | default docs page | Explore |
 | `/models/text`, `/image`, `/video`, `/text-to-speech`, `/speech-to-text`, `/music`, `/embeddings` | custom | By modality |
-| `/models/<family-slug>` (251 pages) | custom | Hidden group, `searchable: true` |
+| `/models/<family-slug>` (276 pages) | custom | Hidden group, `searchable: true` |
 
 - Modality pages are the same explorer with a preset tab. They exist for search entry points and stable links; switching tabs in the explorer doesn't navigate.
 - Model pages sit in a hidden navigation group with `searchable: true`. They stay out of the sidebar but are included in site search, the sitemap, AI assistant context and search engines, which is how Mintlify documents keeping hidden pages discoverable. Pages that are simply left out of navigation would be dropped from search and the sitemap.
@@ -253,7 +253,7 @@ Blended price understates reasoning models, which can spend several times more o
 
 ### Mintlify constraints we hit
 
-- **Every page compiles the snippets it imports**, and root `.js` files are inlined into every docs page's HTML (that's how `model-search.js` ships today). Neither suits a 180 KB UI used by 261 pages, which is why the UI is a separately built bundle behind a 3 KB mount (see [Build cost](#build-cost)).
+- **Every page compiles the snippets it imports**, and root `.js` files are inlined into every docs page's HTML (that's how `model-search.js` ships today). Neither suits a 180 KB UI used by 286 pages, which is why the UI is a separately built bundle behind a 3 KB mount (see [Build cost](#build-cost)).
 - **Snippet exports are evaluated in isolation.** A page only receives the exports it imports; anything else a snippet references is out of scope. `HubMount` is therefore fully self-contained.
 - **MDX remaps lowercase tags in snippets** (`table`, `img`, `pre`, headings) to Mintlify components with their own classes. The bundle avoids this by creating elements through `HubMount`'s `h`, which uses a variable tag.
 - **Global `style.css` forces an 18rem sidebar gutter and an 820px column on every page.** `model-hub.css` releases both with `:has(.vx, .vx-mount)`.
@@ -264,7 +264,7 @@ Blended price understates reasoning models, which can spend several times more o
 ```bash
 node scripts/quote-video-pricing.js          # incremental; --force to re-quote everything
 node scripts/sync-model-media.js
-node scripts/build-model-catalog.js          # catalog JSON, 251 pages, docs.json
+node scripts/build-model-catalog.js          # catalog JSON, 276 pages, docs.json
 node scripts/build-model-hub.js              # after editing src/model-hub.jsx
 npx http-server . -p 3333 --cors -c-1 &      # any static server with CORS; hub pages read :3333/data/ on localhost
 npx mintlify dev
@@ -296,7 +296,7 @@ The branch now ships the UI as a bundle behind `<HubMount>`:
 - `HubMount` fetches `/data/model-hub.bundle.json` and instantiates it with `new Function`. The docs' Content-Security-Policy allows `'unsafe-eval'`, and the file is first-party and same-origin. If that's unacceptable, the fallback is to split the UI into per-page-type snippets, which cuts compile cost by about 40%.
 - A root `.js` file was rejected: Mintlify inlines those into every docs page, so it would add 180 KB to all 1,000+ pages.
 - Trade-off: the rich view isn't server-rendered. The page's Markdown (spec, prices, variants) is in the HTML for search and agents, and becomes visible if the bundle fails.
-- `node scripts/build-model-hub.js` must be rerun after UI changes; it fails the build if the output doesn't evaluate. All 251 model pages, the explorer and the compare view were server-rendered through the bundle with React as a check.
+- `node scripts/build-model-hub.js` must be rerun after UI changes; it fails the build if the output doesn't evaluate. All 276 model pages, the explorer and the compare view were server-rendered through the bundle with React as a check.
 
 ## 11. Performance telemetry (future)
 
