@@ -1843,35 +1843,45 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
+  // One card per billed unit, four a row, on the same hairline gaps as the
+  // key numbers.
+  const PriceCards = ({ items }) => {
+    const cells = items.filter(Boolean);
+    if (!cells.length) return null;
+    const cols = Math.min(cells.length, 4);
+    const empty = (cols - (cells.length % cols)) % cols;
+    return (
+      <div className={cls('vx-prices', cells.length % 2 && 'is-odd')} style={{ '--vx-cols': cols }}>
+        {cells.map((item, i) => (
+          <div key={item.label} className={cls('vx-price-card', i === cells.length - 1 && 'is-last')}>
+            <div className="vx-price-card-label">{item.label}{item.hint ? <span className="vx-muted"> {item.hint}</span> : null}</div>
+            <div className="vx-price-card-value">{item.value}</div>
+            {item.sub ? <div className="vx-price-card-sub">{item.sub}</div> : null}
+          </div>
+        ))}
+        {Array.from({ length: empty }, (_, i) => <span key={`empty-${i}`} className="vx-price-card is-empty" aria-hidden="true" />)}
+      </div>
+    );
+  };
+
   const TextPricing = ({ model }) => {
     const p = model.pricing || {};
-    const discount = p.cacheRead != null && p.input ? Math.round((1 - p.cacheRead / p.input) * 100) : null;
-    const rows = [
-      ['Input', p.input, p.extended && p.extended.input],
-      ['Cached input (read)', p.cacheRead, p.extended && p.extended.cacheRead, discount != null ? `${discount}% off input` : null],
-      ['Cache write', p.cacheWrite, p.extended && p.extended.cacheWrite],
-      ['Output', p.output, p.extended && p.extended.output],
-      ['Blended', p.blended, null, '3:1 input to output, the price the catalog sorts by']
-    ].filter(row => row[1] != null || row[2] != null);
+    const ext = p.extended;
+    const above = value => (ext && value != null ? `${usd(value)} above ${tokens(ext.threshold)}` : null);
     return (
       <>
-        <table className="vx-dtable">
-          <thead>
-            <tr><th>Per 1M tokens</th><th className="vx-al-right">{p.extended ? `Prompt ≤ ${tokens(p.extended.threshold)}` : 'Price'}</th>{p.extended ? <th className="vx-al-right">Prompt &gt; {tokens(p.extended.threshold)}</th> : null}</tr>
-          </thead>
-          <tbody>
-            {rows.map(([label, base, ext, note]) => (
-              <tr key={label}>
-                <td>{label}{note ? <span className="vx-muted"> · {note}</span> : null}</td>
-                <td className="vx-al-right vx-num">{usd(base)}</td>
-                {p.extended ? <td className="vx-al-right vx-num">{ext != null ? usd(ext) : '—'}</td> : null}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <PriceCards items={[
+          { label: 'Input', value: usd(p.input), sub: above(ext && ext.input) },
+          p.cacheRead != null ? { label: 'Cached input', value: usd(p.cacheRead), sub: above(ext && ext.cacheRead) } : null,
+          p.cacheWrite != null ? { label: 'Cache write', value: usd(p.cacheWrite), sub: above(ext && ext.cacheWrite) } : null,
+          { label: 'Output', hint: model.text && model.text.reasoning ? 'incl. reasoning' : null, value: usd(p.output), sub: above(ext && ext.output) }
+        ]} />
         <h3 className="vx-h3">Estimate your cost</h3>
         <CostEstimator model={model} />
-        <p className="vx-footnote">Prompt caching is automatic on supported models; see <a href="/guides/features/prompt-caching">Prompt caching</a>. Billed in USD or DIEM at parity. Months are 30 days.</p>
+        <p className="vx-footnote">
+          {p.blended != null ? `Blended ${usd(p.blended)} per 1M at 3:1 input to output, the price the catalog sorts by. ` : ''}
+          Prompt caching is automatic on supported models; see <a href="/guides/features/prompt-caching">Prompt caching</a>. Billed in USD or DIEM at parity. Months are 30 days.
+        </p>
       </>
     );
   };
@@ -1949,21 +1959,27 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const ImagePricing = ({ model }) => {
+  const ImagePricing = ({ model, models }) => {
     const p = model.pricing || {};
+    const verb = model.task === 'image-edit' ? 'edit' : 'generation';
+    const editor = model.task === 'image-generation' ? models.find(m => m.task === 'image-edit') : null;
+    const editPrice = editor && editor.pricing ? (editor.pricing.edit != null ? editor.pricing.edit : editor.pricing.perImage) : null;
+    const upscale = p.upscale && model.task !== 'image-upscale' ? Object.entries(p.upscale).filter(([, v]) => v != null) : [];
     return (
       <>
-        <table className="vx-dtable">
-          <thead><tr><th>Item</th><th className="vx-al-right">Price</th></tr></thead>
-          <tbody>
-            {p.byResolution ? Object.entries(p.byResolution).map(([res, value]) => (
-              <tr key={res}><td>{model.task === 'image-edit' ? 'Edit' : 'Image'} at {res}</td><td className="vx-al-right vx-num">{usd(value)}</td></tr>
-            )) : <tr><td>{model.task === 'image-edit' ? 'Per edit' : model.task === 'image-upscale' ? '2x upscale' : 'Per image'}</td><td className="vx-al-right vx-num">{usd(p.perImage)}</td></tr>}
-            {p.extraInputImage != null ? <tr><td>Each additional input image</td><td className="vx-al-right vx-num">{usd(p.extraInputImage)}</td></tr> : null}
-            {p.upscale ? Object.entries(p.upscale).filter(([, v]) => v != null).map(([k, v]) => <tr key={k}><td>Upscale {k}</td><td className="vx-al-right vx-num">{usd(v)}</td></tr>) : null}
-          </tbody>
-        </table>
-        <p className="vx-footnote">Billed per successful output. {p.perImage ? `$10 buys about ${Math.floor(10 / p.perImage).toLocaleString('en-US')} images at the default resolution.` : ''}</p>
+        <PriceCards items={[
+          ...(p.byResolution
+            ? Object.entries(p.byResolution).map(([res, value]) => ({ label: `${res} ${verb}`, value: usd(value) }))
+            : [{ label: model.task === 'image-edit' ? 'Edit' : model.task === 'image-upscale' ? '2x upscale' : 'Per image', value: usd(p.perImage) }]),
+          model.task === 'image-upscale' && p.upscale && p.upscale['4x'] != null ? { label: '4x upscale', value: usd(p.upscale['4x']) } : null,
+          editPrice != null ? { label: 'Edit', value: usd(editPrice) } : null,
+          p.extraInputImage != null ? { label: 'Extra input image', value: usd(p.extraInputImage) } : null
+        ]} />
+        <p className="vx-footnote">
+          {p.extraInputImage != null ? 'Billed per output, plus each input image after the first.' : "Billed per output; prompts and reference images aren't billed separately."}
+          {upscale.length ? ` Optional upscale: ${listText(upscale.map(([k, v]) => `${usd(v)} at ${k}`))}.` : ''}
+          {p.perImage ? ` $10 buys about ${Math.floor(10 / p.perImage).toLocaleString('en-US')} images at the default resolution.` : ''}
+        </p>
       </>
     );
   };
@@ -1973,30 +1989,24 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (model.task === 'tts') {
       return (
         <>
-          <table className="vx-dtable">
-            <thead><tr><th>Unit</th><th className="vx-al-right">Price</th></tr></thead>
-            <tbody>
-              <tr><td>1M characters (billed unit)</td><td className="vx-al-right vx-num">{usd(p.per1MChars)}</td></tr>
-              <tr><td>1 minute of speech (≈ 825 characters)</td><td className="vx-al-right vx-num">{usd(p.perMinute)}</td></tr>
-              <tr><td>1 hour of speech</td><td className="vx-al-right vx-num">{usd(p.perHour)}</td></tr>
-              <tr><td>A 2,000-word article (≈ 12K characters)</td><td className="vx-al-right vx-num">{usd(p.per1MChars != null ? p.per1MChars * 0.012 : null)}</td></tr>
-            </tbody>
-          </table>
+          <PriceCards items={[
+            { label: '1M characters', hint: 'billed unit', value: usd(p.per1MChars) },
+            { label: '1 minute', value: usd(p.perMinute), sub: '≈ 825 characters' },
+            { label: '1 hour', value: usd(p.perHour) },
+            { label: '2,000-word article', value: usd(p.per1MChars != null ? p.per1MChars * 0.012 : null), sub: '≈ 12K characters' }
+          ]} />
           <p className="vx-footnote">Billed on input characters. Minute and hour figures assume 150 words per minute, the convention Artificial Analysis uses.</p>
         </>
       );
     }
     if (model.task === 'stt') {
       return (
-        <table className="vx-dtable">
-          <thead><tr><th>Audio length</th><th className="vx-al-right">Price</th></tr></thead>
-          <tbody>
-            <tr><td>1 second (billed unit)</td><td className="vx-al-right vx-num">{usd(p.perSecond)}</td></tr>
-            <tr><td>1 minute</td><td className="vx-al-right vx-num">{usd(p.perMinute)}</td></tr>
-            <tr><td>1 hour</td><td className="vx-al-right vx-num">{usd(p.perHour)}</td></tr>
-            <tr><td>1,000 minutes</td><td className="vx-al-right vx-num">{usd(p.perMinute != null ? p.perMinute * 1000 : null)}</td></tr>
-          </tbody>
-        </table>
+        <PriceCards items={[
+          { label: '1 second', hint: 'billed unit', value: usd(p.perSecond) },
+          { label: '1 minute', value: usd(p.perMinute) },
+          { label: '1 hour', value: usd(p.perHour) },
+          { label: '1,000 minutes', value: usd(p.perMinute != null ? p.perMinute * 1000 : null) }
+        ]} />
       );
     }
     if (p.kind === 'tiered' && p.tiers) {
@@ -2352,11 +2362,24 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
             <Section id="pricing" title="Pricing" note={`USD ${priceUnit(model)} · billed from Venice API balance`}>
               {model.modality === 'text' && model.task === 'chat' ? <TextPricing model={model} /> : null}
-              {model.modality === 'image' ? <ImagePricing model={model} /> : null}
+              {model.modality === 'image' ? <ImagePricing model={model} models={models} /> : null}
               {model.modality === 'video' ? <VideoCalculator model={model} /> : null}
               {model.modality === 'audio' ? <AudioPricing model={model} /> : null}
-              {model.modality === 'embedding' ? <p className="vx-text">Billed on input tokens only. Embedding one million 500-token documents costs about {usd((model.pricing && model.pricing.input || 0) * 500)}.</p> : null}
-              {model.task === 'decision' ? <p className="vx-text">Billed per 1M state tokens in and decision tokens out.</p> : null}
+              {model.modality === 'embedding' ? (
+                <>
+                  <PriceCards items={[
+                    { label: 'Input', value: usd(model.pricing && model.pricing.input) },
+                    { label: '1M documents', value: usd(model.pricing && model.pricing.input != null ? model.pricing.input * 500 : null), sub: '500 tokens each, embedded once' }
+                  ]} />
+                  <p className="vx-footnote">Billed on input tokens only.</p>
+                </>
+              ) : null}
+              {model.task === 'decision' ? (
+                <PriceCards items={[
+                  { label: 'State tokens in', value: usd(model.pricing && model.pricing.input) },
+                  { label: 'Decision tokens out', value: usd(model.pricing && model.pricing.output) }
+                ]} />
+              ) : null}
             </Section>
 
             {has('parameters') ? (
