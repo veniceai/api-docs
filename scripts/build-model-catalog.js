@@ -1146,6 +1146,18 @@ function priceLabel(model) {
   return 'Use /audio/quote';
 }
 
+// The prices a model page's pricing comparison lines up: input and output for
+// text, each resolution plus the family's edit price for image.
+function comparablePricing(family, modelsById) {
+  const primary = modelsById[family.primary];
+  const p = primary.pricing || {};
+  if (primary.task === 'chat') return { input: p.input, output: p.output };
+  if (primary.modality !== 'image') return null;
+  const editor = family.variants.map(id => modelsById[id]).find(m => m.task === 'image-edit');
+  const edit = editor?.pricing ? (editor.pricing.edit ?? editor.pricing.perImage) : null;
+  return { byResolution: p.byResolution, perImage: p.perImage, edit };
+}
+
 function relatedSummary(slugs, familiesBySlug, modelsById) {
   return slugs.map(slug => {
     const family = familiesBySlug[slug];
@@ -1158,6 +1170,7 @@ function relatedSummary(slugs, familiesBySlug, modelsById) {
       privacy: family.privacy,
       created: family.created,
       headline: primary.headline,
+      pricing: comparablePricing(family, modelsById),
       videoFrom: primary.pricing?.fromPerSecond ?? null,
       variants: family.variants.length
     });
