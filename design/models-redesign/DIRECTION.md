@@ -38,7 +38,7 @@ Four decisions carry most of the value:
 1. **Families, not IDs.** 366 model IDs collapse into 251 families (snapshot of Sep 28). Video drops from 132 rows to 53, because text-to-video, image-to-video and reference-to-video modes of one model are one family. E2EE and Fast variants hang off their base model. The page is the family; the variant is a switch.
 2. **One reference price per modality, next to the native unit.** Text shows a blended 3:1 price. Video prices come from a full quote matrix computed at build time, which replaces the per-row live quotes and the "Variable" label. Audio shows per minute and per hour.
 3. **Same prompts, every model.** Image and video models are shown on Venice's standard prompt suite (already produced for venice.ai/models), so the explorer gallery and the compare view are real comparisons rather than a highlight reel.
-4. **Built for the data we don't have yet.** Performance and benchmark modules are designed, placed and specified now. For this first version they show labeled sample values by default so the layout can be reviewed; `?preview=0` shows the honest "not measured yet" state they fall back to without data.
+4. **Built for the data we don't have yet.** Performance and benchmarks are specified now ([sections 11](#11-performance-telemetry-future) and [12](#12-benchmarks-future)) and join the pages once measured data exists.
 
 ## 2. What is wrong today
 
@@ -55,7 +55,7 @@ Four decisions carry most of the value:
 2. **Normalize, then disclose.** Always show a comparable number and the assumption behind it, and always show the native billing unit next to it.
 3. **Privacy is a first-class dimension.** E2EE, TEE, Private and Anonymized are Venice's differentiator. Every row, card and page shows the tier, and filtering by tier shows the price of that tier's variant.
 4. **Measure the model as served.** Benchmarks and telemetry describe Venice's endpoint, not the lab's press release, and say so.
-5. **Honest empty states.** Missing data is shown as missing, with what will appear and when. Sample values always carry a "Sample data" label. They are on by default in the prototype (`SAMPLE_DATA_DEFAULT` in `src/model-hub.jsx`) and must be switched off before launch, since search engines that run JavaScript would index them.
+5. **Honest empty states.** Missing data is shown as missing, with what will appear and when. Metrics that aren't measured yet stay off the pages rather than appear as placeholder values.
 6. **Agent-readable.** Every page has a plain-text spec, a "Copy for AI" button and stable URLs. The catalog JSON is public.
 7. **Generated, not hand-written.** Every number comes from `GET /models`, `POST /video/quote` or a declared data file. A curated overrides file covers gaps until the API exposes them.
 
@@ -190,7 +190,6 @@ Prototype: `/models/compare?ids=veo3.1-full-text-to-video,kling-v3-pro-text-to-v
 - Entry points: the explorer tray, "Compare" on model pages, the lightbox's "Compare this prompt", suggested comparisons, or a pasted link.
 - **Side by side** (image and video): prompt tabs, the prompt text, then each model's render of it. Video has "Play all in sync".
 - **Specifications**: rows grouped as overview, pricing, limits and capabilities, with the best value per row highlighted and one legend above the table. Values that display the same share the highlight; rows where every model has the same value get none. Video pricing follows the Draft/Production lens.
-- **Performance and benchmarks**: rows with labeled sample data in the prototype; without data, one row names what will appear.
 
 ## 8. Pricing normalization
 
@@ -271,7 +270,7 @@ npx http-server . -p 3333 --cors -c-1 &      # any static server with CORS; hub 
 npx mintlify dev
 ```
 
-Open `/models/overview`. Sample performance and benchmark data is on by default; add `?preview=0` to any hub page to see the empty states. UI changes need only `build-model-hub.js` and a browser refresh; no page recompiles.
+Open `/models/overview`. UI changes need only `build-model-hub.js` and a browser refresh; no page recompiles.
 
 ### CI
 
@@ -342,7 +341,7 @@ The backend already records per-request latency, queue time, execution time, tok
 }
 ```
 
-The prototype reads flat fields (`uptime`, `ttft`, `tps`); adjust the component when the contract is final. Vercel exposes P50/P95 latency and throughput without auth; OpenRouter returns null publicly. Publishing it unauthenticated in `GET /models` is a way to lead.
+The catalog build passes these records through as each model's `telemetry`; no page reads them yet. Vercel exposes P50/P95 latency and throughput without auth; OpenRouter returns null publicly. Publishing it unauthenticated in `GET /models` is a way to lead.
 
 ## 12. Benchmarks (future)
 
@@ -456,8 +455,8 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 
 - **Actions.** One primary button per context (the tray's Compare), secondary outline buttons, tertiary text buttons and links.
 - **Privacy tiers** use the catalog's existing badge: E2EE and TEE outlined in the accent colour, Private and Anonymized neutral. No icons, since the badge text carries the meaning.
-- **Components** (all in `model-hub.css`): page header, search, tabs with counts, filter rail (checkbox, radio, collapsible groups), segmented control, pricing lens, data table with sortable headers, gallery card with hover video, compare tray, stats row, variant switcher, model ID chip, code tabs, price matrix, feature list, definition list, related list, lightbox, empty, loading, error and "Sample data" states.
-- **States covered:** loading skeleton, catalog load failure, no results with a clear action, pending telemetry, not evaluated, renders pending, input-dependent pricing, disabled (compare with fewer than two models, a full compare set, unsupported endpoints), selected (rows, variants, matrix cell, current section), overflow (truncated IDs with the full value on hover, long voice and provider lists), deprecated, beta.
+- **Components** (all in `model-hub.css`): page header, search, tabs with counts, filter rail (checkbox, radio, collapsible groups), segmented control, pricing lens, data table with sortable headers, gallery card with hover video, compare tray, stats row, variant switcher, model ID chip, code tabs, price matrix, feature list, definition list, related list, lightbox, empty, loading and error states.
+- **States covered:** loading skeleton, catalog load failure, no results with a clear action, renders pending, input-dependent pricing, disabled (compare with fewer than two models, a full compare set, unsupported endpoints), selected (rows, variants, matrix cell, current section), overflow (truncated IDs with the full value on hover, long voice and provider lists), deprecated, beta.
 - **Accessibility:** visible focus rings, real buttons for sort headers and matrix cells, `aria-sort`, `aria-pressed` and live regions for copied states and result counts, 24px minimum targets, reduced-motion support.
 - **To explore:** a price-vs-quality scatter with a Pareto line per modality (once benchmarks exist); a status dot per row driven by telemetry; voice previews; before/after sliders for editing models; brand typography (Canela, Aeonik) if the docs theme allows it.
 
