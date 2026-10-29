@@ -674,16 +674,23 @@ function buildFamilies(models) {
     });
   }
 
-  // Resolve slug collisions (e.g. "Wan 2.7" exists as an image and a video family).
-  const bySlug = new Map();
-  families.forEach(family => {
-    if (!bySlug.has(family.slug)) bySlug.set(family.slug, []);
-    bySlug.get(family.slug).push(family);
-  });
-  for (const [slug, list] of bySlug) {
-    if (list.length > 1) list.forEach(family => { family.slug = `${slug}-${family.modality}`; });
-    list.forEach(family => { if (RESERVED_SLUGS.has(family.slug)) family.slug = `${family.slug}-model`; });
+  // Resolve slug collisions. Families in different modalities ("Wan 2.7" image
+  // and video) take a modality suffix. Within one modality ("DeepSeek V4.1
+  // Flash" and "DeepSeek v4.1 Flash (1017)") the oldest keeps the slug and the
+  // others take their primary model ID, so existing URLs survive new releases.
+  const groupBy = (list, keyOf) => list.reduce((map, item) => map.set(keyOf(item), [...(map.get(keyOf(item)) || []), item]), new Map());
+  for (const [slug, list] of groupBy(families, family => family.slug)) {
+    if (list.length < 2) continue;
+    const crossModality = new Set(list.map(family => family.modality)).size > 1;
+    for (const group of groupBy(list, family => family.modality).values()) {
+      const base = crossModality ? `${slug}-${group[0].modality}` : slug;
+      group.sort((a, b) => (a.created || 0) - (b.created || 0) || a.primary.localeCompare(b.primary));
+      group.forEach((family, i) => { family.slug = i === 0 ? base : slugify(family.primary); });
+    }
   }
+  families.forEach(family => { if (RESERVED_SLUGS.has(family.slug)) family.slug = `${family.slug}-model`; });
+  const duplicates = [...groupBy(families, family => family.slug)].filter(([, list]) => list.length > 1).map(([slug]) => slug);
+  if (duplicates.length) throw new Error(`Duplicate family slugs would overwrite pages: ${duplicates.join(', ')}`);
   families.forEach(family => { if (!Number.isFinite(family.created)) family.created = null; });
   return families;
 }
