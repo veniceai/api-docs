@@ -77,7 +77,7 @@ Four decisions carry most of the value:
 
 ### The sidebar
 
-Hub pages run in Mintlify's `custom` mode, so the explorer, model pages and compare view have no docs sidebar; their navigation is in the page (modality tabs, breadcrumbs, "On this page"). The sidebar remains for the Methodology page, restructured into **Explore** and **By modality** groups. The alternative, `frame` mode, keeps the sidebar next to custom layouts. It's listed as a decision in [section 15](#15-decisions-needed).
+Hub pages run in Mintlify's `custom` mode, so the explorer, model pages and compare view have no docs sidebar; their navigation is in the page (modality tabs in the explorer, and a side column with the breadcrumb and section links on model pages). The sidebar remains for the Methodology page, restructured into **Explore** and **By modality** groups. The alternative, `frame` mode, keeps the sidebar next to custom layouts. It's listed as a decision in [section 15](#15-decisions-needed).
 
 ### Families and variants
 
@@ -140,7 +140,7 @@ Prototype: `/models/glm-5-3`, `/models/veo-3-1-full-quality`, `/models/nano-bana
 
 ### Structure, top to bottom
 
-1. **Breadcrumb**: Models / Modality / Family.
+1. **Side column**, sticky beside the page: a Models / Family breadcrumb, then a link to each section that highlights the one in view. Below 1024px the links move above the page and scroll sideways, and Mintlify's mobile bar carries the breadcrumb.
 2. **Header**: provider logo, name, provider, task, date added, then badges for privacy (single-variant families), open weights, license, status (New, Beta, Deprecated) and Uncensored. Actions: **Add to compare** (secondary); **Copy for AI** (a Markdown spec for agents and READMEs) and **Source** (tertiary).
 3. **Description**, directly under the title as on every docs page.
 4. **Variant switcher** when the family has more than one variant: label, privacy tier and headline price per variant. Selecting one updates every number on the page and the URL.
@@ -150,7 +150,7 @@ Prototype: `/models/glm-5-3`, `/models/veo-3-1-full-quality`, `/models/nano-bana
    - Image: price per resolution tier, extra input image, upscale, max output, prompt limit.
    - Video: from/to per second, draft clip, production clip, max resolution, duration range, audio.
    - Text to speech: per 1M characters, per minute, per hour, voices, formats.
-7. **Main column** with a sticky "On this page" list that highlights the current section:
+7. **Sections**, each listed in the side column:
    - **Reference outputs** (image and video families with renders): the prompt suite with prompts shown, lightbox, and "Compare this prompt across models". Omitted until a family is rendered.
    - **Capabilities** (text): an input and output table, every feature as supported or not, then a details list: reasoning, effort levels with the default marked, served precision with a plain-English note, default sampling.
    - **Pricing**: text price table (cached discount, cache write, long-context tier, blended) and a cost estimator (input and output tokens, cached share, requests per day). Video gets a calculator plus the full resolution × duration matrix; clicking a cell selects it. Image gets per-tier prices. Audio gets per minute, hour and article, or duration buckets.
