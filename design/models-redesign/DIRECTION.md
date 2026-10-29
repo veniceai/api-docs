@@ -73,7 +73,7 @@ Four decisions carry most of the value:
 
 - Modality pages are the same explorer with a preset tab. They exist for search entry points and stable links; switching tabs in the explorer doesn't navigate.
 - Model pages sit in a hidden navigation group with `searchable: true`. They stay out of the sidebar but are included in site search, the sitemap, AI assistant context and search engines, which is how Mintlify documents keeping hidden pages discoverable. Pages that are simply left out of navigation would be dropped from search and the sitemap.
-- Family slugs come from the display name (`glm-5-3`, `kling-v3-pro`, `veo-3-1-full-quality`). Collisions across modalities get a suffix (`wan-2-7-image`, `wan-2-7-video`). `?v=<model-id>` preselects a variant.
+- Family slugs come from the display name (`glm-5-3`, `kling-v3-pro`, `veo-3-1-full-quality`). Collisions across modalities get a suffix (`wan-2-7-image`, `wan-2-7-video`). Within one modality the oldest family keeps the slug and later ones take their primary model ID (`deepseek-v4-1-flash-1017`), and the build fails rather than let two families share a page. `?v=<model-id>` preselects a variant.
 
 ### The sidebar
 
