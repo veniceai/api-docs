@@ -534,7 +534,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }
     return (
       <>
-        <div className={cls('vx-gallery', isVideo ? 'vx-gallery-video' : 'vx-gallery-image')}>
+        <div className={cls('vx-gallery', isVideo ? 'vx-gallery-video' : 'vx-gallery-image', !isVideo && media.length === 4 && 'is-four')}>
           {media.map(item => (
             <figure key={item.url} className="vx-shot">
               <button type="button" className="vx-shot-media" onClick={() => setOpen(item)} aria-label={`Open ${item.title} sample`}>
@@ -542,12 +542,15 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   ? <HoverVideo src={item.url} className="vx-shot-el" />
                   : <img className="vx-shot-el" src={item.url} alt={item.caption || item.title} loading="lazy" />}
               </button>
-              <figcaption><span className="vx-shot-title">{item.title}</span>{item.caption}</figcaption>
+              <figcaption>
+                <span className="vx-shot-title">{item.title}</span>
+                {item.caption ? <span className="vx-shot-caption" title={item.caption}>{item.caption}</span> : null}
+              </figcaption>
             </figure>
           ))}
         </div>
         <p className="vx-footnote">
-          Rendered on Venice with the reference prompt suite: the same prompts for every {isVideo ? 'video' : 'image'} model, default settings.
+          The same prompts for every {isVideo ? 'video' : 'image'} model, rendered on Venice at default settings.
           {' '}<a href={`/models/compare?ids=${encodeURIComponent(model.id)}`}>Compare against other models</a>
         </p>
         <Lightbox item={open} onClose={() => setOpen(null)} compareHref={open ? `/models/compare?ids=${encodeURIComponent(model.id)}&prompt=${encodeURIComponent(open.prompt)}` : null} />
@@ -1473,9 +1476,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   /* ------------------------------------------------------------ model page */
 
   const pageSections = (model, { variants = 1, related = false, faq = false, examples = false, capabilities = false } = {}) => {
-    const list = [['overview', 'Overview']];
-    if (examples) list.push(['examples', 'Reference outputs']);
-    list.push(['pricing', 'Pricing']);
+    const list = [['overview', 'Overview'], ['pricing', 'Pricing']];
+    if (examples) list.push(['examples', 'Examples']);
     if (model.task === 'tts' && model.audio && model.audio.voices && model.audio.voices.length) list.push(['voices', 'Voices']);
     list.push(['api', 'API']);
     if (hasCensorship(model)) list.push(['censorship', 'Censorship']);
@@ -2483,12 +2485,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
             <KeyStats model={model} models={models} />
 
-            {has('examples') ? (
-              <Section id="examples" title="Reference outputs">
-                <MediaGallery model={model.media && model.media.length ? model : (models.find(m => m.media && m.media.length) || model)} />
-              </Section>
-            ) : null}
-
             <Section id="pricing" title="Pricing" note={`USD ${priceUnit(model)} · billed from Venice API balance`}>
               {model.modality === 'text' && model.task === 'chat' ? <TextPricing model={model} family={family} related={related} /> : null}
               {model.modality === 'image' ? <ImagePricing model={model} models={models} family={family} related={related} /> : null}
@@ -2510,6 +2506,13 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 ]} />
               ) : null}
             </Section>
+
+            {has('examples') ? (
+              <Section id="examples" title="Examples" note={`Reference prompts · ${model.modality === 'video' ? 'hover to play' : 'square crop'}`}>
+                <MediaGallery model={model.media && model.media.length ? model : (models.find(m => m.media && m.media.length) || model)} />
+              </Section>
+            ) : null}
+
             {has('voices') ? (
               <Section id="voices" title="Voices">
                 <Voices model={model} />

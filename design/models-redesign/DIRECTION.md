@@ -30,7 +30,7 @@ The catalog becomes a model hub with three surfaces:
 | Surface | URL | What it does |
 |---|---|---|
 | Explorer | `/models/overview`, plus `/models/text`, `/image`, `/video`, `/text-to-speech`, `/speech-to-text`, `/music`, `/embeddings` | Browse every model by modality with modality-specific columns, filters, a pricing lens and a compare tray |
-| Model pages | `/models/<family>` (276 pages today) | One page per model family, with variants, key numbers, capabilities, pricing calculator, endpoints, code and reference outputs |
+| Model pages | `/models/<family>` (276 pages today) | One page per model family, with variants, key numbers, capabilities, pricing calculator, endpoints, code and example outputs |
 | Compare | `/models/compare?ids=a,b,c` | Up to four models side by side, with the same reference prompts rendered by each for image and video |
 
 Four decisions carry most of the value:
@@ -151,8 +151,8 @@ Prototype: `/models/glm-5-3`, `/models/veo-3-1-full-quality`, `/models/nano-bana
    - Video: from/to per second, draft clip, production clip, max resolution, duration range, audio.
    - Text to speech: per 1M characters, per minute, per hour, voices, formats.
 7. **Sections**, each listed in the side column:
-   - **Reference outputs** (image and video families with renders): the prompt suite with prompts shown, lightbox, and "Compare this prompt across models". Omitted until a family is rendered.
    - **Pricing**: a card per billed unit. Text shows input, cached input, cache write and output, each with its long-context price, then a comparison with the similar models from Related (input, output and a relative-price bar), then a cost estimator (input and output tokens, cached share, requests per day). Image shows each resolution and the family's edit price, with the same comparison per resolution. Audio shows per minute, hour and article, or duration buckets. Video gets a calculator plus the full resolution × duration matrix; clicking a cell selects it.
+   - **Examples** (image and video families with renders): the reference prompt suite as captioned figures, three to a row (four when there are exactly four, so none is left alone), with the prompt under each title, a lightbox, and "Compare this prompt across models". Omitted until a family is rendered.
    - **Voices** (text to speech): searchable, click to copy, first 48 shown.
    - **API**: an endpoint selector when there are alternatives, with the recommendation as text; Recommended is only badged for alternatives, not for steps of one flow (queue, retrieve, quote). Alpha and unsupported endpoints are marked. Code in cURL, Python and TypeScript, generated for the selected variant and endpoint (reasoning effort, video inputs, voices filled in). "Get an API key" sits in the section header.
    - **Censorship** (text, image and video): a three-step scale (uncensored, lightly filtered, censored) and where filtering comes from. Venice's uncensored flag decides first; otherwise the provider's policies apply when Venice proxies the request or the weights are proprietary, and Venice-served open weights are lightly filtered. Rows add the Venice system prompt switch (text), safe mode (image) and whether blocked requests are billed. `moderationRules` and per-model `moderation` in `data/model-overrides.json` correct any model.
@@ -451,7 +451,7 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 |---|---|
 | Type | Aeonik for text and Aeonik Fono for labels, IDs and figures, loaded from venice.ai; JetBrains Mono for code. 36 page title, 20 section title, 15.5 model page description and 18/28 explorer description, 14 body and tables, 13 controls, 12 labels, captions and Fono section notes, 11 uppercase badges and Fono table headings. venice.ai serves the regular weight only, so heavier weights are synthesized |
 | Spacing | 4px scale: 4, 8, 12, 16, 24, 32, 48 |
-| Radius | 4px badges and chips, 8px controls, media and floating panels, 16px code blocks (as in docs code groups) |
+| Radius | 4px badges and chips, 8px controls and floating panels, 10px cards and media, 16px code blocks (as in docs code groups) |
 | Colour | Venice's brand palette, from Jordan's design. Dark: page #06090D, cards #0E1217, text off-white #F7F5ED, secondary sea-mid #B3D0EB, muted #8A949C, dividers at 8% and borders at 14% off-white, one accent, venetian blue #3C8FDD. Light mirrors it: navy text #0E1217, mid-sea #29526C secondary, muted #677079 (5:1) and accent #125DA3. Green #4FB286 and stucco #BEA989 only for states |
 | Surfaces | Hairline rules and whitespace. Cards only where figures sit side by side, on 1px hairline gaps with a 10px radius. Shadows only on the compare tray and menus. No gradients or blur |
 
