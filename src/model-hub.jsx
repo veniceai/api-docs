@@ -109,11 +109,20 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     { key: 'audio', label: 'Audio', short: 'Audio', path: '/models/text-to-speech', icon: 'music', blurb: 'Speech, transcription, music and sound' },
     { key: 'embedding', label: 'Embeddings', short: 'Embeddings', path: '/models/embeddings', icon: 'layers', blurb: 'Vectors for search and RAG' }
   ];
-  const AUDIO_TASKS = [
-    { key: 'tts', label: 'Text to speech', path: '/models/text-to-speech', tasks: ['tts'] },
-    { key: 'stt', label: 'Speech to text', path: '/models/speech-to-text', tasks: ['stt'] },
-    { key: 'music', label: 'Music & sound effects', path: '/models/music', tasks: ['music', 'sfx'] }
+  // The explorer's modality facet. Each family has one key: audio splits by
+  // task and decision models stand apart from chat, as in Jordan's design.
+  const SCOPES = [
+    { key: 'text', label: 'Text' }, { key: 'image', label: 'Image' }, { key: 'video', label: 'Video' },
+    { key: 'tts', label: 'Text to speech' }, { key: 'stt', label: 'Speech to text' }, { key: 'music', label: 'Music & sound effects' },
+    { key: 'embedding', label: 'Embeddings' }, { key: 'decision', label: 'Decisions' }
   ];
+  const AUDIO_SCOPES = ['tts', 'stt', 'music'];
+  const familyScope = family => {
+    if (family.modality === 'text') return family.task === 'decision' ? 'decision' : 'text';
+    if (family.modality === 'audio') return family.task === 'sfx' ? 'music' : family.task;
+    return family.modality;
+  };
+  const initialScopes = (modality, task) => (modality === 'all' ? [] : modality === 'audio' ? [task || 'tts'] : [modality]);
   const TASK_LABELS = {
     chat: 'Chat', decision: 'Decisions', 'image-generation': 'Image generation', 'image-edit': 'Image editing',
     'image-upscale': 'Upscaling', 'background-removal': 'Background removal', video: 'Video',
@@ -568,7 +577,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   const PAGE_TITLES = {
     all: 'Models', text: 'Text Models', image: 'Image Models', video: 'Video Models', embedding: 'Embedding Models',
-    tts: 'Text-to-Speech Models', stt: 'Speech-to-Text Models', music: 'Music & Sound Effects Models'
+    tts: 'Text-to-Speech Models', stt: 'Speech-to-Text Models', music: 'Music & Sound Effects Models', decision: 'Decision Models'
   };
   const UNIT_NOTES = { text: 'prices per 1M tokens' };
   const SCOPE_BLURBS = {
@@ -579,7 +588,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     tts: 'Speech synthesis with multilingual voices, priced per character.',
     stt: 'Transcription with timestamps, priced per second of audio.',
     music: 'Songs, instrumental tracks and sound effects, priced per track or minute.',
-    embedding: 'Vectors for search and retrieval, priced per 1M input tokens.'
+    embedding: 'Vectors for search and retrieval, priced per 1M input tokens.',
+    decision: 'Typed judgments instead of generated text, priced per 1M tokens.'
   };
 
   const EMPTY_FILTERS = { providers: [], privacy: [], caps: [], modes: [], flags: [], quant: [], ctx: '', price: '', res: '', audio: '', dur: '' };
@@ -684,7 +694,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   );
 
   // The filter column; below 1024px it opens as a drawer from the toolbar.
-  const FilterRail = ({ modality, task, filters, setFilters, providerCounts, providers, onClear, open, onClose }) => {
+  const FilterRail = ({ modality, task, scopes, scopeCounts, onToggleScope, filters, setFilters, providerCounts, providers, onClear, open, onClose }) => {
     const toggleIn = (key, value) => setFilters(prev => ({ ...prev, [key]: prev[key].includes(value) ? prev[key].filter(v => v !== value) : [...prev[key], value] }));
     const [showAll, setShowAll] = useState(false);
     const providerList = Object.entries(providerCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
@@ -698,6 +708,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             {count ? <button type="button" className="vx-link-btn" onClick={onClear}>Clear all ({count})</button> : null}
             <button type="button" className="vx-btn vx-btn-sm vx-rail-done" onClick={onClose}>Done</button>
           </div>
+
+          <FilterGroup title="Modality">
+            {SCOPES.filter(s => scopeCounts[s.key]).map(s => (
+              <Check key={s.key} checked={scopes.includes(s.key)} onChange={() => onToggleScope(s.key)} label={s.label} count={scopeCounts[s.key]} />
+            ))}
+          </FilterGroup>
 
           {modality === 'text' ? (
             <>
@@ -1138,8 +1154,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const { catalog, error } = useCatalog();
     const compare = useCompare();
     const now = useNow();
-    const [modality, setModality] = useState(initialModality);
-    const [task, setTask] = useState(initialTask || 'tts');
+    const startScopes = initialScopes(initialModality, initialTask);
+    const [scopes, setScopes] = useState(startScopes);
     const [query, setQuery] = useState('');
     const [filters, setFilters] = useState(EMPTY_FILTERS);
     const [sort, setSort] = useState('newest');
@@ -1148,11 +1164,20 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const [railOpen, setRailOpen] = useState(false);
     const [hydrated, setHydrated] = useState(false);
     const searchRef = useRef(null);
+    // Columns, filters and price lenses for one modality apply when exactly
+    // one is chosen; otherwise the explorer shows the cross-modality view.
+    const single = scopes.length === 1 ? scopes[0] : null;
+    const modality = AUDIO_SCOPES.includes(single) ? 'audio' : single && single !== 'decision' ? single : 'all';
+    const task = AUDIO_SCOPES.includes(single) ? single : 'tts';
 
     useEffect(() => {
       const params = readParams();
-      if (params.get('m') && MODALITIES.some(m => m.key === params.get('m'))) setModality(params.get('m'));
-      if (params.get('t') && AUDIO_TASKS.some(t => t.key === params.get('t'))) setTask(params.get('t'));
+      // `m=audio&t=stt` is the shape of links from before the facet.
+      const m = params.get('m') === 'audio' ? params.get('t') || 'tts' : params.get('m') || (initialModality === 'audio' && params.get('t'));
+      if (m) {
+        const keys = m === 'all' ? [] : m.split(',').filter(key => SCOPES.some(s => s.key === key));
+        if (keys.length || m === 'all') setScopes(keys);
+      }
       if (params.get('q')) setQuery(params.get('q'));
       if (params.get('sort') && SORTS[params.get('sort')]) setSort(params.get('sort'));
       if (params.get('view')) setView(params.get('view') === 'grid' ? 'grid' : 'table');
@@ -1178,8 +1203,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       if (!hydrated) return;
       const lensDefault = lens.video.h === DEFAULT_VIDEO_LENS.h && lens.video.s === DEFAULT_VIDEO_LENS.s && lens.video.a === DEFAULT_VIDEO_LENS.a;
       writeParams({
-        m: modality !== initialModality ? modality : null,
-        t: modality === 'audio' && task !== (initialTask || 'tts') ? task : null,
+        m: scopes.join(',') !== startScopes.join(',') ? scopes.join(',') || 'all' : null,
         q: query || null,
         sort: sort !== 'newest' ? sort : null,
         view: view !== (modality === 'image' || modality === 'video' ? 'grid' : 'table') ? view : null,
@@ -1187,7 +1211,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         res1: modality === 'image' && lens.image !== '1K' ? lens.image : null,
         ...filtersToParams(filters)
       });
-    }, [hydrated, modality, task, query, sort, view, lens, filters]);
+    }, [hydrated, scopes, query, sort, view, lens, filters]);
 
     useEffect(() => {
       if (!railOpen) return undefined;
@@ -1205,27 +1229,26 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       };
     }, [railOpen]);
 
-    const switchModality = key => {
-      setModality(key);
+    // Filters for one modality and the provider list reset with the facet,
+    // so no checked filter is left out of view.
+    const toggleScope = key => {
+      const next = scopes.includes(key) ? scopes.filter(k => k !== key) : [...scopes, key];
+      const nextSingle = next.length === 1 ? next[0] : null;
+      setScopes(next);
       setFilters(prev => ({ ...EMPTY_FILTERS, providers: [], privacy: prev.privacy, flags: prev.flags }));
-      setView(key === 'image' || key === 'video' ? 'grid' : 'table');
-      if (sort !== 'newest' && sort !== 'name' && sort !== 'price') setSort('newest');
+      setView(nextSingle === 'image' || nextSingle === 'video' ? 'grid' : 'table');
+      if (nextSingle !== 'text' && !['newest', 'name', 'price'].includes(sort)) setSort('newest');
     };
 
     const providers = catalog ? catalog.providers : {};
 
-    const scoped = useMemo(() => {
-      if (!catalog) return [];
-      return catalog.families.filter(family => {
-        if (modality !== 'all' && family.modality !== modality) return false;
-        if (modality === 'audio') {
-          const allowed = (AUDIO_TASKS.find(t => t.key === task) || AUDIO_TASKS[0]).tasks;
-          const models = family.variants.map(id => catalog.models[id]).filter(Boolean);
-          if (!models.some(m => allowed.includes(m.task))) return false;
-        }
-        return true;
-      });
-    }, [catalog, modality, task]);
+    const scoped = useMemo(() => (catalog ? catalog.families.filter(family => !scopes.length || scopes.includes(familyScope(family))) : []), [catalog, scopes]);
+
+    const scopeCounts = useMemo(() => {
+      const out = {};
+      (catalog ? catalog.families : []).forEach(family => { const key = familyScope(family); out[key] = (out[key] || 0) + 1; });
+      return out;
+    }, [catalog]);
 
     const rows = useMemo(() => {
       if (!catalog) return [];
@@ -1249,10 +1272,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
     const modelCount = rows.reduce((n, row) => n + row.family.variants.length, 0);
     const columns = catalog ? explorerColumns(modality, task, lens, catalog) : [];
-    const counts = catalog ? catalog.counts : null;
     const canGrid = modality === 'image' || modality === 'video';
     const filterCount = activeFilterCount(filters);
-    const scopeKey = modality === 'audio' ? task : modality;
+    const scopeKey = single || 'all';
 
     const updated = catalog && catalog.generatedAt ? fmtDate(Math.floor(new Date(catalog.generatedAt).getTime() / 1000)) : null;
 
@@ -1260,7 +1282,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       <div className="vx vx-page vx-explorer not-prose">
         <div className="vx-page-grid">
           {catalog ? (
-            <FilterRail modality={modality} task={task} filters={filters} setFilters={setFilters} providerCounts={providerCounts} providers={providers}
+            <FilterRail modality={modality} task={task} scopes={scopes} scopeCounts={scopeCounts} onToggleScope={toggleScope}
+              filters={filters} setFilters={setFilters} providerCounts={providerCounts} providers={providers}
               onClear={() => setFilters(EMPTY_FILTERS)} open={railOpen} onClose={() => setRailOpen(false)} />
           ) : <aside className="vx-side vx-filters" aria-hidden="true" />}
           {railOpen ? <button type="button" className="vx-filters-backdrop" onClick={() => setRailOpen(false)} aria-label="Close filters" /> : null}
@@ -1277,24 +1300,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 <a className="vx-btn vx-btn-tertiary" href="/api-reference/endpoint/models/list">Models API</a>
               </div>
             </header>
-
-            <div className="vx-tabs" role="group" aria-label="Modality">
-              {MODALITIES.map(m => {
-                const c = m.key === 'all' ? (counts && counts.families) : (counts && counts.byModality[m.key] && counts.byModality[m.key].families);
-                return (
-                  <button key={m.key} type="button" className={cls('vx-tab', modality === m.key && 'is-active')} onClick={() => switchModality(m.key)} aria-pressed={modality === m.key}>
-                    {m.short}
-                    {c != null ? <span className="vx-tab-count">{c}</span> : null}
-                  </button>
-                );
-              })}
-            </div>
-
-            {modality === 'audio' ? (
-              <div className="vx-subtabs">
-                <Segmented ariaLabel="Audio task" value={task} onChange={setTask} options={AUDIO_TASKS.map(t => ({ value: t.key, label: t.label }))} />
-              </div>
-            ) : null}
 
             <div className="vx-toolbar">
               <button type="button" className={cls('vx-btn vx-rail-toggle', filterCount && 'vx-btn-active')} onClick={() => setRailOpen(!railOpen)} aria-expanded={railOpen} aria-controls="vx-filters" disabled={!catalog}>
