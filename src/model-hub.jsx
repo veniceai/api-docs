@@ -683,11 +683,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       { key: 'venice-rag', category: 'Retrieval (Venice)', label: 'Venice held-out retrieval', unit: 'nDCG@10', max: 100, inHouse: true, prov: 'venice', by: 'Venice', sample: [40, 88] }
     ] }
   };
-  const PROVENANCE = {
-    venice: { label: 'Venice-verified', tone: 'accent', title: 'Run by Venice on this endpoint, as served.' },
-    independent: { label: 'Independent', tone: null, title: 'Measured by a third party, usually on the first-party API.' },
-    lab: { label: 'Lab-reported', tone: 'deprecated', title: "Published by the model's creator; not reproduced by Venice." }
-  };
   const benchmarkSetFor = model => {
     if (model.modality === 'text') return BENCHMARKS.text;
     if (model.modality === 'image') return BENCHMARKS.image;
@@ -727,16 +722,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     set.items.forEach(item => { out[item.key] = value(item, 0.3); });
     return out;
   };
-  // 95% confidence half-width: arenas run ±6–18 Elo, pass rates ±1–4 points.
-  const sampleInterval = (model, item) => {
-    const r = seeded(`ci:${model.id}:${item.key}`);
-    if (item.unit === 'Elo') return range(r, 6, 18);
-    if (item.unit === '%') return range(r, 1.1, 3.8, 1);
-    return item === (benchmarkSetFor(model) || {}).composite ? 1 : range(r, 0.6, 2.4, 1);
-  };
-  // Hosted open-weight models: share of the reference deployment's score on
-  // the parity subsets (BFCL, HLE and AA-LCR).
-  const sampleParity = model => range(seeded(`parity:${model.id}`), 97.2, 100, 1);
 
   /* ------------------------------------------------------------ explorer */
 
@@ -1705,8 +1690,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (model.modality === 'image' || model.modality === 'video') list.push(['parameters', 'Parameters']);
     if (model.task === 'tts' && model.audio && model.audio.voices && model.audio.voices.length) list.push(['voices', 'Voices']);
     list.push(['api', 'API']);
-    list.push(['performance', 'Performance']);
-    list.push(['benchmarks', 'Benchmarks']);
     if (variants > 1) list.push(['variants', 'Variants']);
     if (related) list.push(['related', 'Related models']);
     if (faq) list.push(['faq', 'FAQ']);
@@ -1829,23 +1812,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       );
     }
     return null;
-  };
-
-  const LiveStrip = ({ model, preview }) => {
-    const t = model.telemetry || (preview ? sampleTelemetry(model) : null);
-    if (!t) return null;
-    const defs = telemetryFor(model).slice(0, 4);
-    return (
-      <div className="vx-live">
-        <span className="vx-live-label"><span className="vx-live-dot" aria-hidden="true" />Live, last 30 days</span>
-        {defs.map(def => (
-          <span key={def.key} className="vx-live-item" title={def.hint}>
-            <span className="vx-muted">{def.label}</span> <strong>{withUnit(t[def.key], def.unit)}</strong>
-          </span>
-        ))}
-        {!model.telemetry ? <SampleMark /> : null}
-      </div>
-    );
   };
 
   const Supported = ({ on, children, title }) => (
@@ -2263,121 +2229,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   };
 
   const listText = items => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0] || '');
-  const lowerFirst = s => (/^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s);
 
   const PreviewToggle = ({ preview, setPreview }) => (
     <button type="button" className="vx-link-btn" onClick={() => setPreview(!preview)}>{preview ? 'Hide sample data' : 'Preview with sample data'}</button>
   );
-
-  const PerformancePanel = ({ model, preview, setPreview }) => {
-    const defs = telemetryFor(model);
-    const t = model.telemetry || (preview ? sampleTelemetry(model) : null);
-    if (!t) {
-      return (
-        <p className="vx-text">
-          Not measured yet. Venice will publish {listText(defs.map(d => lowerFirst(d.label)))} for this model from synthetic probes (never customer
-          prompts), as rolling 30-day values with p50 and p95. <a href="/models/methodology#performance">How it will be measured</a>
-          {' · '}<PreviewToggle preview={preview} setPreview={setPreview} />
-        </p>
-      );
-    }
-    const updated = model.telemetry ? model.telemetry.updatedMinutes : Math.round(range(seeded(`u:${model.id}`), 2, 28));
-    return (
-      <>
-        <div className="vx-stats vx-stats-plain">
-          {defs.map(def => (
-            <Stat key={def.key} label={def.label} value={withUnit(t[def.key], def.unit)} hint={def.hint}
-              sub={def.p95 && t.p95 && t.p95[def.key] != null ? `p50 · p95 ${withUnit(t.p95[def.key], def.unit)}` : def.window} />
-          ))}
-        </div>
-        <div className="vx-uptime">
-          <div className="vx-uptime-head"><span>Daily uptime, last 30 days</span><span>{Math.min(...(t.daily || [100])) >= 99.9 ? 'No incidents' : `Lowest ${withUnit(Math.min(...t.daily), '%')}`}</span></div>
-          <div className="vx-uptime-bars" role="img" aria-label={`Daily uptime for the last 30 days, lowest ${Math.min(...(t.daily || [100]))}%`}>
-            {Array.from({ length: 30 }, (_, i) => {
-              const v = t.daily ? t.daily[i] : null;
-              const tone = v == null ? 'none' : v >= 99.9 ? 'ok' : v >= 99 ? 'warn' : 'bad';
-              return <span key={i} className={`vx-bar vx-bar-${tone}`} title={v == null ? 'No data' : `${30 - i} days ago: ${withUnit(v, '%')}`} />;
-            })}
-          </div>
-        </div>
-        <p className="vx-footnote">
-          Synthetic probes every 5 minutes from US East, EU West and Asia Pacific, never customer prompts. 25,920 probes in 30 days, updated {updated} minutes ago.
-          {!model.telemetry ? <> Sample values for layout review, not measurements. <PreviewToggle preview={preview} setPreview={setPreview} /></> : null}
-        </p>
-      </>
-    );
-  };
-
-  const BenchmarksPanel = ({ model, preview, setPreview, providerName }) => {
-    const levels = (model.text && model.text.reasoning && model.text.reasoning.effort) || [];
-    const defaultEffort = levels.includes(model.text && model.text.reasoning && model.text.reasoning.defaultEffort)
-      ? model.text.reasoning.defaultEffort : levels[levels.length - 1];
-    const [effort, setEffort] = useState(defaultEffort);
-    useEffect(() => { setEffort(defaultEffort); }, [model.id]);
-    const set = benchmarkSetFor(model);
-    if (!set) return <p className="vx-text">No benchmark set is defined for this model type yet.</p>;
-    const scores = model.benchmarks || (preview ? sampleBenchmarks(model, effort) : null);
-    const items = [set.composite, ...set.items].filter(Boolean);
-    if (!scores) {
-      return (
-        <p className="vx-text">
-          Not evaluated yet. The planned set is {listText(items.map(i => i.label))}. Each score will name its source (Venice-verified on this
-          endpoint, independent, or lab-reported) with the harness version, reasoning effort and date. <a href="/models/methodology#benchmarks">Methodology</a>
-          {' · '}<PreviewToggle preview={preview} setPreview={setPreview} />
-        </p>
-      );
-    }
-    const bar = (item, value) => {
-      if (value == null) return 0;
-      const lo = item.min || 0;
-      const pct = ((value - lo) / ((item.max || 100) - lo)) * 100;
-      return Math.max(2, Math.min(100, item.lowerIsBetter ? 100 - pct : pct));
-    };
-    const now = new Date();
-    const tested = `${MONTHS[now.getUTCMonth()]} ${now.getUTCFullYear()}`;
-    const hosted = model.modality === 'text' && model.privacy !== 'anonymized' && model.openWeights;
-    return (
-      <>
-        {set.composite || hosted || levels.length > 1 ? (
-          <div className="vx-bench-head">
-            {set.composite ? <Stat label={set.composite.label} value={withUnit(scores[set.composite.key], '')} sub={`${set.composite.source} · ±${sampleInterval(model, set.composite)}`} hint="Composite of the agent, coding, general and scientific reasoning evaluations." /> : null}
-            {hosted ? <Stat label="Serving parity" value={`${sampleParity(model)}%`} sub="of the reference weights, within CI" hint="This endpoint's score as a share of a reference deployment of the official weights, on the BFCL, HLE and AA-LCR parity subsets." /> : null}
-            {levels.length > 1 ? (
-              <div className="vx-control vx-bench-effort">
-                <span className="vx-control-label">Reasoning effort</span>
-                <Segmented ariaLabel="Reasoning effort" value={effort} onChange={setEffort} options={levels.map(level => ({ value: level, label: level }))} />
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="vx-table-wrap">
-          <table className="vx-dtable vx-bench">
-            <thead><tr><th>Benchmark</th><th className="vx-al-right">Score</th><th className="vx-hide-sm" aria-hidden="true" /><th>Source</th><th className="vx-al-right vx-hide-md">Tested</th></tr></thead>
-            <tbody>
-              {set.items.map(item => {
-                const value = scores[item.key];
-                const prov = PROVENANCE[item.prov] || PROVENANCE.independent;
-                const by = item.prov === 'lab' ? providerName : item.by;
-                return (
-                  <tr key={item.key}>
-                    <td><div className="vx-bench-name">{item.label}</div><div className="vx-bench-cat">{item.category}{item.lowerIsBetter ? ', lower is better' : ''}</div></td>
-                    <td className="vx-al-right vx-num">{withUnit(value, item.unit)}<span className="vx-bench-ci"> ±{sampleInterval(model, item)}</span></td>
-                    <td className="vx-bench-bar-cell vx-hide-sm" aria-hidden="true"><span className="vx-bench-bar"><span style={{ width: `${bar(item, value)}%` }} /></span></td>
-                    <td><Tag tone={prov.tone} title={prov.title}>{prov.label}</Tag>{by && item.prov !== 'venice' ? <span className="vx-bench-by"> {by}</span> : null}</td>
-                    <td className="vx-al-right vx-muted vx-hide-md vx-nowrap">{item.prov === 'lab' ? shortDate(model.created) : tested}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <p className="vx-footnote">
-          Venice-verified scores are run on this endpoint{levels.length > 1 ? ` at ${effort} reasoning effort` : ''}; independent and lab-reported scores come from the named source. Intervals are 95%, and sources are never averaged together. <a href="/models/methodology#benchmarks">Methodology</a>
-          {!model.benchmarks ? <> · Sample values for layout review, not measurements. <PreviewToggle preview={preview} setPreview={setPreview} /></> : null}
-        </p>
-      </>
-    );
-  };
 
   const VariantsTable = ({ models, activeId, onSelect }) => {
     const first = models[0];
@@ -2479,7 +2334,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const { family, models, related, providers } = data;
     const [variantId, setVariantId] = useState(family.primary);
     const [endpointId, setEndpointId] = useState(null);
-    const [preview, setPreview] = usePreview();
     const compare = useCompare();
     const now = useNow();
     const [copied, setCopied] = useState(false);
@@ -2579,7 +2433,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         </div>
 
         <KeyStats model={model} />
-        <LiveStrip model={model} preview={preview} />
 
         <div className="vx-page-layout">
           <main className="vx-page-main">
@@ -2622,14 +2475,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               <Endpoints model={model} endpointId={activeEndpoint && activeEndpoint.id} setEndpointId={setEndpointId} />
               {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
               <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
-            </Section>
-
-            <Section id="performance" title="Performance" actions={preview && !model.telemetry ? <SampleMark /> : null}>
-              <PerformancePanel model={model} preview={preview} setPreview={setPreview} />
-            </Section>
-
-            <Section id="benchmarks" title="Benchmarks" actions={preview && !model.benchmarks && benchmarkSetFor(model) ? <SampleMark /> : null}>
-              <BenchmarksPanel model={model} preview={preview} setPreview={setPreview} providerName={provider ? provider.name : family.provider} />
             </Section>
 
             {has('variants') ? (

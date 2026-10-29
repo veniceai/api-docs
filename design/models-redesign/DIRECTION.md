@@ -30,7 +30,7 @@ The catalog becomes a model hub with three surfaces:
 | Surface | URL | What it does |
 |---|---|---|
 | Explorer | `/models/overview`, plus `/models/text`, `/image`, `/video`, `/text-to-speech`, `/speech-to-text`, `/music`, `/embeddings` | Browse every model by modality with modality-specific columns, filters, a pricing lens and a compare tray |
-| Model pages | `/models/<family>` (251 pages today) | One page per model family, with variants, key numbers, capabilities, pricing calculator, endpoints, code, reference outputs, and slots for performance and benchmarks |
+| Model pages | `/models/<family>` (251 pages today) | One page per model family, with variants, key numbers, capabilities, pricing calculator, endpoints, code and reference outputs |
 | Compare | `/models/compare?ids=a,b,c` | Up to four models side by side, with the same reference prompts rendered by each for image and video |
 
 Four decisions carry most of the value:
@@ -150,15 +150,13 @@ Prototype: `/models/glm-5-3`, `/models/veo-3-1-full-quality`, `/models/nano-bana
    - Image: price per resolution tier, extra input image, upscale, max output, prompt limit.
    - Video: from/to per second, draft clip, production clip, max resolution, duration range, audio.
    - Text to speech: per 1M characters, per minute, per hour, voices, formats.
-7. **Live strip**: four metrics for the modality. Hidden until telemetry exists (shown with sample data in preview).
-8. **Main column** with a sticky "On this page" list that highlights the current section:
+7. **Main column** with a sticky "On this page" list that highlights the current section:
    - **Reference outputs** (image and video families with renders): the prompt suite with prompts shown, lightbox, and "Compare this prompt across models". Omitted until a family is rendered.
    - **Capabilities** (text): an input and output table, every feature as supported or not, then a details list: reasoning, effort levels with the default marked, served precision with a plain-English note, default sampling.
    - **Pricing**: text price table (cached discount, cache write, long-context tier, blended) and a cost estimator (input and output tokens, cached share, requests per day). Video gets a calculator plus the full resolution × duration matrix; clicking a cell selects it. Image gets per-tier prices. Audio gets per minute, hour and article, or duration buckets.
    - **Parameters** (image, video): resolutions, aspect ratios drawn to shape, durations, inputs, audio, prompt limit.
    - **Voices** (text to speech): searchable, click to copy, first 48 shown.
    - **API**: an endpoint selector when there are alternatives, with the recommendation as text; Recommended is only badged for alternatives, not for steps of one flow (queue, retrieve, quote). Alpha and unsupported endpoints are marked. Code in cURL, Python and TypeScript, generated for the selected variant and endpoint (reasoning effort, video inputs, voices filled in). "Get an API key" sits in the section header.
-   - **Performance**: p50 with p95 for latency metrics, the window for the rest, 30-day uptime bars and the probe setup. **Benchmarks**: the composite index, serving parity for open-weight models Venice hosts, a reasoning-effort switch, and per-benchmark score ± 95% interval with its provenance (Venice-verified, independent or lab-reported), source and test date. Both show labeled sample values in the prototype; without data they fall back to one sentence naming what will be published. See sections [11](#11-performance-telemetry-future) and [12](#12-benchmarks-future).
    - **Variants** table (families with more than one variant): differences on one screen (context, max output, prices, effort levels, precision).
    - **Related** (when there are any): other versions of the same line, and similar models by task, price and recency.
    - **FAQ**: cost, model ID, privacy, the modality's key limits and which endpoint to call, generated from the same data as the page.
@@ -303,7 +301,7 @@ The branch now ships the UI as a bundle behind `<HubMount>`:
 
 ## 11. Performance telemetry (future)
 
-Designed into every page now; published when the data exists.
+Specified now; published when the data exists.
 
 ### Metrics
 
@@ -390,7 +388,7 @@ Every score carries one label: **Venice-verified** (run on this endpoint), **Ind
 
 - 95% confidence intervals or rank ranges; statistically tied models grouped.
 - Every number shows benchmark version, harness and version, reasoning effort, temperature and max tokens, repeats, judge model if graded by an LLM, test date, and a stale flag after 90 days.
-- The prototype's benchmark panel has the slot for all of this; the data contract is `data/model-benchmarks.json`:
+- The data contract is `data/model-benchmarks.json`:
 
 ```json
 {
@@ -458,7 +456,7 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 
 - **Actions.** One primary button per context (the tray's Compare), secondary outline buttons, tertiary text buttons and links.
 - **Privacy tiers** use the catalog's existing badge: E2EE and TEE outlined in the accent colour, Private and Anonymized neutral. No icons, since the badge text carries the meaning.
-- **Components** (all in `model-hub.css`): page header, search, tabs with counts, filter rail (checkbox, radio, collapsible groups), segmented control, pricing lens, data table with sortable headers, gallery card with hover video, compare tray, stats row, live strip, variant switcher, model ID chip, code tabs, price matrix, feature list, definition list, uptime bars, benchmark table, related list, lightbox, empty, loading, error and "Sample data" states.
+- **Components** (all in `model-hub.css`): page header, search, tabs with counts, filter rail (checkbox, radio, collapsible groups), segmented control, pricing lens, data table with sortable headers, gallery card with hover video, compare tray, stats row, variant switcher, model ID chip, code tabs, price matrix, feature list, definition list, related list, lightbox, empty, loading, error and "Sample data" states.
 - **States covered:** loading skeleton, catalog load failure, no results with a clear action, pending telemetry, not evaluated, renders pending, input-dependent pricing, disabled (compare with fewer than two models, a full compare set, unsupported endpoints), selected (rows, variants, matrix cell, current section), overflow (truncated IDs with the full value on hover, long voice and provider lists), deprecated, beta.
 - **Accessibility:** visible focus rings, real buttons for sort headers and matrix cells, `aria-sort`, `aria-pressed` and live regions for copied states and result counts, 24px minimum targets, reduced-motion support.
 - **To explore:** a price-vs-quality scatter with a Pareto line per modality (once benchmarks exist); a status dot per row driven by telemetry; voice previews; before/after sliders for editing models; brand typography (Canela, Aeonik) if the docs theme allows it.
