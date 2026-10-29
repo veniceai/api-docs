@@ -141,10 +141,10 @@ Prototype: `/models/glm-5-3`, `/models/veo-3-1-full-quality`, `/models/nano-bana
 ### Structure, top to bottom
 
 1. **Side column**, sticky beside the page: a Models / Family breadcrumb, then a link to each section that highlights the one in view. Below 1024px the links move above the page and scroll sideways, and Mintlify's mobile bar carries the breadcrumb.
-2. **Header**: provider logo, name, provider, task, date added, then badges for privacy (single-variant families), open weights, license, status (New, Beta, Deprecated) and Uncensored. Actions: **Add to compare** (secondary); **Copy for AI** (a Markdown spec for agents and READMEs) and **Source** (tertiary).
+2. **Header**: a meta line (provider, date added, the family's task, privacy tier, open weights, license, Uncensored and status), then the model name as the page title. **Add to compare**, **Copy for AI** (a Markdown spec for agents and READMEs) and **Source** sit in the side column.
 3. **Description**, directly under the title as on every docs page.
 4. **Variant switcher** when the family has more than one variant: label, privacy tier and headline price per variant. Selecting one updates every number on the page and the URL.
-5. **ID bar**: copyable model ID and the endpoint to call.
+5. **ID bar**: the model ID with a Copy button, and the full URL of the recommended endpoint.
 6. **Key numbers**, per modality, on hairline rules rather than in cards:
    - Text: context (with a pages translation), max output, input, output. Cached input and blended price live in the pricing table.
    - Image: price per resolution tier, extra input image, upscale, max output, prompt limit.
@@ -167,7 +167,7 @@ Prototype: `/models/glm-5-3`, `/models/veo-3-1-full-quality`, `/models/nano-bana
 Each model page targets "<model> API":
 
 - **Title and description.** `title` is "Wan 3.0 Prime Pro API" (also used for the social image and site search). `og:title`, which Mintlify uses as the document `<title>`, adds "Pricing, Specs and Examples | Venice" within 60 characters. The meta description is written per modality, 110–160 characters: what the model does, its limits, the starting price and the privacy tier.
-- **Headings.** The visible H1 is "<model> API".
+- **Headings.** The visible H1 is the model name, as in Jordan's design. The server-rendered specification keeps "<model> API" as its H1, alongside the title, document title, description and FAQ.
 - **Server-rendered text.** Mintlify server-renders page MDX but not the children of snippet components, so the interactive page is invisible to crawlers that don't run JavaScript. The generator therefore writes a full text version after `<HubMount>`: H1, intro, pricing (with the clip-price matrix for video), specifications, a cURL example from the same builder the API section uses, the FAQ and links to related model pages. It sits in the collapsed "Plain-text specification" disclosure.
 - **Links.** Related-model links in that text, and model names in the modality pages' static tables, point to model pages with "<model> API" or model-name anchors. Pages stay in the sitemap through the hidden, `searchable` navigation group.
 - **Structured data.** Mintlify emits its own JSON-LD (WebPage, BreadcrumbList, TechArticle) from the frontmatter, so no custom schema is added.
@@ -447,7 +447,7 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 
 | | System |
 |---|---|
-| Type | Aeonik for text and Aeonik Fono for labels, IDs and figures, loaded from venice.ai; JetBrains Mono for code. 30 page title, 20 section title, 18/28 description, 14 body and tables, 13 controls, 12 labels and captions, 11 uppercase badges. venice.ai serves the regular weight only, so heavier weights are synthesized |
+| Type | Aeonik for text and Aeonik Fono for labels, IDs and figures, loaded from venice.ai; JetBrains Mono for code. 36 page title, 20 section title, 15.5 model page description and 18/28 explorer description, 14 body and tables, 13 controls, 12 labels and captions, 11 uppercase badges. venice.ai serves the regular weight only, so heavier weights are synthesized |
 | Spacing | 4px scale: 4, 8, 12, 16, 24, 32, 48 |
 | Radius | 4px badges and chips, 8px controls, media and floating panels, 16px code blocks (as in docs code groups) |
 | Colour | Venice's brand palette, from Jordan's design. Dark: page #06090D, cards #0E1217, text off-white #F7F5ED, secondary sea-mid #B3D0EB, muted #8A949C, dividers at 8% and borders at 14% off-white, one accent, venetian blue #3C8FDD. Light mirrors it: navy text #0E1217, mid-sea #29526C secondary, muted #677079 (5:1) and accent #125DA3. Green #4FB286 and stucco #BEA989 only for states |
