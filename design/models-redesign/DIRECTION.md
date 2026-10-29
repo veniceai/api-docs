@@ -450,7 +450,7 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 | Type | Aeonik for text and Aeonik Fono for labels, IDs and figures, loaded from venice.ai; JetBrains Mono for code. 30 page title, 20 section title, 18/28 description, 14 body and tables, 13 controls, 12 labels and captions, 11 uppercase badges. venice.ai serves the regular weight only, so heavier weights are synthesized |
 | Spacing | 4px scale: 4, 8, 12, 16, 24, 32, 48 |
 | Radius | 4px badges and chips, 8px controls, media and floating panels, 16px code blocks (as in docs code groups) |
-| Colour | Text #17191B, secondary #3F4143, muted #707274 (4.9:1), dividers #EEF0F2, one accent #125DA3 (#6BA7E0 in dark mode). Green, amber and red only for states |
+| Colour | Venice's brand palette, from Jordan's design. Dark: page #06090D, cards #0E1217, text off-white #F7F5ED, secondary sea-mid #B3D0EB, muted #8A949C, dividers at 8% and borders at 14% off-white, one accent, venetian blue #3C8FDD. Light mirrors it: navy text #0E1217, mid-sea #29526C secondary, muted #677079 (5:1) and accent #125DA3. Green #4FB286 and stucco #BEA989 only for states |
 | Surfaces | Hairline rules and whitespace instead of cards. Shadows only on the compare tray and menus. No gradients or blur |
 
 - **Actions.** One primary button per context (the tray's Compare), secondary outline buttons, tertiary text buttons and links.
