@@ -2339,20 +2339,30 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
+  // Text lists input and output, as the price comparison does, rather than
+  // the blended figure the catalog sorts by.
+  const relatedPrice = item => {
+    const p = item.pricing;
+    if (p && p.input != null && p.output != null) return <>{usd(p.input)} / {usd(p.output)}<span className="vx-muted"> per 1M</span></>;
+    if (item.modality === 'video' && item.videoFrom != null) return <>from {usd(item.videoFrom)}<span className="vx-muted"> / sec</span></>;
+    if (item.headline && item.headline.value != null) return <>{usd(item.headline.value)}<span className="vx-muted"> {item.headline.unit}</span></>;
+    return null;
+  };
+
   const RelatedList = ({ items, providers, title }) => {
     if (!items || !items.length) return null;
     return (
       <div className="vx-related">
-        <h3 className="vx-h3">{title}</h3>
+        <h3 className="vx-related-head">{title}</h3>
         <ul className="vx-related-list">
           {items.map(item => (
             <li key={item.slug}>
-              <ProviderLogo provider={providers[item.provider]} size={24} />
-              <a href={`/models/${item.slug}`}>{item.name}</a>
-              <span className="vx-muted">
-                {(providers[item.provider] && providers[item.provider].name) || item.provider}
-                {item.modality === 'video' && item.videoFrom != null ? ` · from ${usd(item.videoFrom)} / sec` : item.headline && item.headline.value != null ? ` · ${usd(item.headline.value)} ${item.headline.unit}` : ''}
+              <ProviderLogo provider={providers[item.provider]} size={20} />
+              <span className="vx-related-name">
+                <a href={`/models/${item.slug}`}>{item.name}</a>
+                <span className="vx-muted">{(providers[item.provider] && providers[item.provider].name) || item.provider}</span>
               </span>
+              <span className="vx-related-price">{relatedPrice(item)}</span>
             </li>
           ))}
         </ul>
