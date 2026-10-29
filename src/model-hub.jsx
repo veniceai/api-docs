@@ -683,110 +683,114 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     </label>
   );
 
-  const FilterRail = ({ modality, task, filters, setFilters, providerCounts, providers, onClear }) => {
+  // The filter column; below 1024px it opens as a drawer from the toolbar.
+  const FilterRail = ({ modality, task, filters, setFilters, providerCounts, providers, onClear, open, onClose }) => {
     const toggleIn = (key, value) => setFilters(prev => ({ ...prev, [key]: prev[key].includes(value) ? prev[key].filter(v => v !== value) : [...prev[key], value] }));
     const [showAll, setShowAll] = useState(false);
     const providerList = Object.entries(providerCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
     const visibleProviders = showAll ? providerList : providerList.slice(0, 8);
     const count = activeFilterCount(filters);
     return (
-      <aside className="vx-rail" aria-label="Filters">
-        <div className="vx-rail-head">
-          <span>Filters</span>
-          {count ? <button type="button" className="vx-link-btn" onClick={onClear}>Clear all ({count})</button> : null}
-        </div>
+      <aside id="vx-filters" className={cls('vx-side vx-filters', open && 'is-open')} aria-label="Filters">
+        <div className="vx-side-inner">
+          <div className="vx-rail-head">
+            <span>Filters</span>
+            {count ? <button type="button" className="vx-link-btn" onClick={onClear}>Clear all ({count})</button> : null}
+            <button type="button" className="vx-btn vx-btn-sm vx-rail-done" onClick={onClose}>Done</button>
+          </div>
 
-        {modality === 'text' ? (
-          <>
-            <FilterGroup title="Capabilities">
-              {TEXT_CAPS.filter(c => !['logprobs', 'xSearch', 'audioInput'].includes(c.key)).map(cap => (
-                <Check key={cap.key} checked={filters.caps.includes(cap.key)} onChange={() => toggleIn('caps', cap.key)} label={cap.label} title={cap.desc} />
-              ))}
-            </FilterGroup>
-            <FilterGroup title="Context window">
-              {[['', 'Any'], ['128000', '128K+'], ['256000', '256K+'], ['1000000', '1M+']].map(([value, label]) => (
-                <Radio key={label} checked={filters.ctx === value} onChange={() => setFilters(prev => ({ ...prev, ctx: value }))} label={label} />
-              ))}
-            </FilterGroup>
-            <FilterGroup title="Blended price (per 1M tokens)">
-              {[['', 'Any'], ['0.5', 'Under $0.50'], ['1', 'Under $1'], ['3', 'Under $3'], ['10', 'Under $10']].map(([value, label]) => (
-                <Radio key={label} checked={filters.price === value} onChange={() => setFilters(prev => ({ ...prev, price: value }))} label={label} />
-              ))}
-            </FilterGroup>
-            <FilterGroup title="Served precision" defaultOpen={false}>
-              {[['bf16', 'BF16'], ['fp16', 'FP16'], ['fp8', 'FP8'], ['fp4', 'FP4'], ['int4', 'INT4'], ['none', 'Not disclosed']].map(([value, label]) => (
-                <Check key={value} checked={filters.quant.includes(value)} onChange={() => toggleIn('quant', value)} label={label} title={QUANT_NOTES[value]} />
-              ))}
-            </FilterGroup>
-          </>
-        ) : null}
-
-        {modality === 'image' ? (
-          <>
-            <FilterGroup title="Task">
-              {[['generate', 'Generate'], ['edit', 'Edit'], ['upscale', 'Upscale'], ['background-removal', 'Remove background']].map(([value, label]) => (
-                <Check key={value} checked={filters.modes.includes(value)} onChange={() => toggleIn('modes', value)} label={label} />
-              ))}
-            </FilterGroup>
-            <FilterGroup title="Output resolution">
-              {[['', 'Any'], ['2K', '2K available'], ['4K', '4K available']].map(([value, label]) => (
-                <Radio key={label} checked={filters.res === value} onChange={() => setFilters(prev => ({ ...prev, res: value }))} label={label} />
-              ))}
-            </FilterGroup>
-            <FilterGroup title="Features">
-              <Check checked={filters.caps.includes('webSearch')} onChange={() => toggleIn('caps', 'webSearch')} label="Web-grounded generation" />
-              <Check checked={filters.caps.includes('multiImage')} onChange={() => toggleIn('caps', 'multiImage')} label="Multi-image editing" />
-            </FilterGroup>
-          </>
-        ) : null}
-
-        {modality === 'video' ? (
-          <>
-            <FilterGroup title="Mode">
-              {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition'].map(mode => (
-                <Check key={mode} checked={filters.modes.includes(mode)} onChange={() => toggleIn('modes', mode)} label={VARIANT_LABELS[mode]} />
-              ))}
-            </FilterGroup>
-            <FilterGroup title="Audio">
-              {[['', 'Any'], ['audio', 'Generates audio'], ['silent', 'Can be silent']].map(([value, label]) => (
-                <Radio key={label} checked={filters.audio === value} onChange={() => setFilters(prev => ({ ...prev, audio: value }))} label={label} />
-              ))}
-            </FilterGroup>
-            <FilterGroup title="Max resolution">
-              {[['', 'Any'], ['1080', '1080p+'], ['1440', '1440p+'], ['2160', '4K']].map(([value, label]) => (
-                <Radio key={label} checked={filters.res === value} onChange={() => setFilters(prev => ({ ...prev, res: value }))} label={label} />
-              ))}
-            </FilterGroup>
-            <FilterGroup title="Max clip length">
-              {[['', 'Any'], ['10', '10s+'], ['15', '15s+'], ['20', '20s+']].map(([value, label]) => (
-                <Radio key={label} checked={filters.dur === value} onChange={() => setFilters(prev => ({ ...prev, dur: value }))} label={label} />
-              ))}
-            </FilterGroup>
-          </>
-        ) : null}
-
-        <FilterGroup title="Privacy">
-          {PRIVACY_ORDER.map(tier => (
-            <Check key={tier} checked={filters.privacy.includes(tier)} onChange={() => toggleIn('privacy', tier)} label={PRIVACY[tier].long} title={PRIVACY[tier].desc} />
-          ))}
-        </FilterGroup>
-
-        <FilterGroup title="Attributes">
-          <Check checked={filters.flags.includes('picks')} onChange={() => toggleIn('flags', 'picks')} label="Venice picks" title="Featured, recommended or a Venice default for a task" />
-          <Check checked={filters.flags.includes('open')} onChange={() => toggleIn('flags', 'open')} label="Open weights" />
-          <Check checked={filters.flags.includes('uncensored')} onChange={() => toggleIn('flags', 'uncensored')} label="Uncensored" />
-          <Check checked={filters.flags.includes('new')} onChange={() => toggleIn('flags', 'new')} label="Added in the last 30 days" />
-          <Check checked={filters.flags.includes('stable')} onChange={() => toggleIn('flags', 'stable')} label="Hide beta and deprecated" />
-        </FilterGroup>
-
-        <FilterGroup title="Provider" defaultOpen={modality !== 'all'}>
-          {visibleProviders.map(([slug, n]) => (
-            <Check key={slug} checked={filters.providers.includes(slug)} onChange={() => toggleIn('providers', slug)} label={(providers[slug] && providers[slug].name) || slug} count={n} />
-          ))}
-          {providerList.length > 8 ? (
-            <button type="button" className="vx-link-btn vx-more" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : `Show all ${providerList.length}`}</button>
+          {modality === 'text' ? (
+            <>
+              <FilterGroup title="Capabilities">
+                {TEXT_CAPS.filter(c => !['logprobs', 'xSearch', 'audioInput'].includes(c.key)).map(cap => (
+                  <Check key={cap.key} checked={filters.caps.includes(cap.key)} onChange={() => toggleIn('caps', cap.key)} label={cap.label} title={cap.desc} />
+                ))}
+              </FilterGroup>
+              <FilterGroup title="Context window">
+                {[['', 'Any'], ['128000', '128K+'], ['256000', '256K+'], ['1000000', '1M+']].map(([value, label]) => (
+                  <Radio key={label} checked={filters.ctx === value} onChange={() => setFilters(prev => ({ ...prev, ctx: value }))} label={label} />
+                ))}
+              </FilterGroup>
+              <FilterGroup title="Blended price (per 1M tokens)">
+                {[['', 'Any'], ['0.5', 'Under $0.50'], ['1', 'Under $1'], ['3', 'Under $3'], ['10', 'Under $10']].map(([value, label]) => (
+                  <Radio key={label} checked={filters.price === value} onChange={() => setFilters(prev => ({ ...prev, price: value }))} label={label} />
+                ))}
+              </FilterGroup>
+              <FilterGroup title="Served precision" defaultOpen={false}>
+                {[['bf16', 'BF16'], ['fp16', 'FP16'], ['fp8', 'FP8'], ['fp4', 'FP4'], ['int4', 'INT4'], ['none', 'Not disclosed']].map(([value, label]) => (
+                  <Check key={value} checked={filters.quant.includes(value)} onChange={() => toggleIn('quant', value)} label={label} title={QUANT_NOTES[value]} />
+                ))}
+              </FilterGroup>
+            </>
           ) : null}
-        </FilterGroup>
+
+          {modality === 'image' ? (
+            <>
+              <FilterGroup title="Task">
+                {[['generate', 'Generate'], ['edit', 'Edit'], ['upscale', 'Upscale'], ['background-removal', 'Remove background']].map(([value, label]) => (
+                  <Check key={value} checked={filters.modes.includes(value)} onChange={() => toggleIn('modes', value)} label={label} />
+                ))}
+              </FilterGroup>
+              <FilterGroup title="Output resolution">
+                {[['', 'Any'], ['2K', '2K available'], ['4K', '4K available']].map(([value, label]) => (
+                  <Radio key={label} checked={filters.res === value} onChange={() => setFilters(prev => ({ ...prev, res: value }))} label={label} />
+                ))}
+              </FilterGroup>
+              <FilterGroup title="Features">
+                <Check checked={filters.caps.includes('webSearch')} onChange={() => toggleIn('caps', 'webSearch')} label="Web-grounded generation" />
+                <Check checked={filters.caps.includes('multiImage')} onChange={() => toggleIn('caps', 'multiImage')} label="Multi-image editing" />
+              </FilterGroup>
+            </>
+          ) : null}
+
+          {modality === 'video' ? (
+            <>
+              <FilterGroup title="Mode">
+                {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition'].map(mode => (
+                  <Check key={mode} checked={filters.modes.includes(mode)} onChange={() => toggleIn('modes', mode)} label={VARIANT_LABELS[mode]} />
+                ))}
+              </FilterGroup>
+              <FilterGroup title="Audio">
+                {[['', 'Any'], ['audio', 'Generates audio'], ['silent', 'Can be silent']].map(([value, label]) => (
+                  <Radio key={label} checked={filters.audio === value} onChange={() => setFilters(prev => ({ ...prev, audio: value }))} label={label} />
+                ))}
+              </FilterGroup>
+              <FilterGroup title="Max resolution">
+                {[['', 'Any'], ['1080', '1080p+'], ['1440', '1440p+'], ['2160', '4K']].map(([value, label]) => (
+                  <Radio key={label} checked={filters.res === value} onChange={() => setFilters(prev => ({ ...prev, res: value }))} label={label} />
+                ))}
+              </FilterGroup>
+              <FilterGroup title="Max clip length">
+                {[['', 'Any'], ['10', '10s+'], ['15', '15s+'], ['20', '20s+']].map(([value, label]) => (
+                  <Radio key={label} checked={filters.dur === value} onChange={() => setFilters(prev => ({ ...prev, dur: value }))} label={label} />
+                ))}
+              </FilterGroup>
+            </>
+          ) : null}
+
+          <FilterGroup title="Privacy">
+            {PRIVACY_ORDER.map(tier => (
+              <Check key={tier} checked={filters.privacy.includes(tier)} onChange={() => toggleIn('privacy', tier)} label={PRIVACY[tier].long} title={PRIVACY[tier].desc} />
+            ))}
+          </FilterGroup>
+
+          <FilterGroup title="Attributes">
+            <Check checked={filters.flags.includes('picks')} onChange={() => toggleIn('flags', 'picks')} label="Venice picks" title="Featured, recommended or a Venice default for a task" />
+            <Check checked={filters.flags.includes('open')} onChange={() => toggleIn('flags', 'open')} label="Open weights" />
+            <Check checked={filters.flags.includes('uncensored')} onChange={() => toggleIn('flags', 'uncensored')} label="Uncensored" />
+            <Check checked={filters.flags.includes('new')} onChange={() => toggleIn('flags', 'new')} label="Added in the last 30 days" />
+            <Check checked={filters.flags.includes('stable')} onChange={() => toggleIn('flags', 'stable')} label="Hide beta and deprecated" />
+          </FilterGroup>
+
+          <FilterGroup title="Provider" defaultOpen={modality !== 'all'}>
+            {visibleProviders.map(([slug, n]) => (
+              <Check key={slug} checked={filters.providers.includes(slug)} onChange={() => toggleIn('providers', slug)} label={(providers[slug] && providers[slug].name) || slug} count={n} />
+            ))}
+            {providerList.length > 8 ? (
+              <button type="button" className="vx-link-btn vx-more" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : `Show all ${providerList.length}`}</button>
+            ) : null}
+          </FilterGroup>
+        </div>
       </aside>
     );
   };
@@ -1185,6 +1189,22 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       });
     }, [hydrated, modality, task, query, sort, view, lens, filters]);
 
+    useEffect(() => {
+      if (!railOpen) return undefined;
+      // The drawer comes before the results in the DOM, so focus moves into
+      // it on open and back to the toggle on close.
+      const drawer = document.getElementById('vx-filters');
+      const done = drawer && drawer.querySelector('.vx-rail-done');
+      if (done) done.focus();
+      const onKey = e => { if (e.key === 'Escape') setRailOpen(false); };
+      window.addEventListener('keydown', onKey);
+      return () => {
+        window.removeEventListener('keydown', onKey);
+        const toggle = document.querySelector('[aria-controls="vx-filters"]');
+        if (toggle && drawer && drawer.contains(document.activeElement)) toggle.focus();
+      };
+    }, [railOpen]);
+
     const switchModality = key => {
       setModality(key);
       setFilters(prev => ({ ...EMPTY_FILTERS, providers: [], privacy: prev.privacy, flags: prev.flags }));
@@ -1234,101 +1254,109 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const filterCount = activeFilterCount(filters);
     const scopeKey = modality === 'audio' ? task : modality;
 
+    const updated = catalog && catalog.generatedAt ? fmtDate(Math.floor(new Date(catalog.generatedAt).getTime() / 1000)) : null;
+
     return (
-      <div className="vx vx-explorer not-prose">
-        <header className="vx-hero">
-          <div className="vx-hero-text">
-            <div className="vx-eyebrow">Model catalog</div>
-            <h1 className="vx-h1">{PAGE_TITLES[scopeKey] || PAGE_TITLES.all}</h1>
-            <p className="vx-lede">{SCOPE_BLURBS[scopeKey] || SCOPE_BLURBS.all}</p>
-          </div>
-          <div className="vx-hero-actions">
-            <a className="vx-btn" href="/models/compare">Compare{compare.ids.length ? <span className="vx-btn-count">{compare.ids.length}</span> : null}</a>
-            <a className="vx-btn vx-btn-tertiary" href="/api-reference/endpoint/models/list">Models API</a>
-          </div>
-        </header>
+      <div className="vx vx-page vx-explorer not-prose">
+        <div className="vx-page-grid">
+          {catalog ? (
+            <FilterRail modality={modality} task={task} filters={filters} setFilters={setFilters} providerCounts={providerCounts} providers={providers}
+              onClear={() => setFilters(EMPTY_FILTERS)} open={railOpen} onClose={() => setRailOpen(false)} />
+          ) : <aside className="vx-side vx-filters" aria-hidden="true" />}
+          {railOpen ? <button type="button" className="vx-filters-backdrop" onClick={() => setRailOpen(false)} aria-label="Close filters" /> : null}
 
-        <div className="vx-search">
-          <Icon name="search" size={16} />
-          <input ref={searchRef} type="search" value={query} onChange={e => setQuery(e.target.value)}
-            placeholder="Search by model, provider or model ID" aria-label="Search models" />
-          {query ? <button type="button" className="vx-icon-btn" onClick={() => setQuery('')} aria-label="Clear search"><Icon name="x" size={14} /></button> : <kbd aria-hidden="true">/</kbd>}
-        </div>
-
-        <div className="vx-tabs" role="group" aria-label="Modality">
-          {MODALITIES.map(m => {
-            const c = m.key === 'all' ? (counts && counts.families) : (counts && counts.byModality[m.key] && counts.byModality[m.key].families);
-            return (
-              <button key={m.key} type="button" className={cls('vx-tab', modality === m.key && 'is-active')} onClick={() => switchModality(m.key)} aria-pressed={modality === m.key}>
-                {m.short}
-                {c != null ? <span className="vx-tab-count">{c}</span> : null}
-              </button>
-            );
-          })}
-        </div>
-
-        {modality === 'audio' ? (
-          <div className="vx-subtabs">
-            <Segmented ariaLabel="Audio task" value={task} onChange={setTask} options={AUDIO_TASKS.map(t => ({ value: t.key, label: t.label }))} />
-          </div>
-        ) : null}
-
-        {!catalog ? (
-          <>
-            {error
-              ? <div className="vx-error" role="alert">The interactive catalog could not load. The full model list is below.</div>
-              : <><span className="vx-sr-only" role="status">Loading models</span><ExplorerSkeleton /></>}
-            <div className={error ? 'vx-fallback' : 'vx-fallback vx-sr-only'}>{children}</div>
-          </>
-        ) : (
-          <div className={cls('vx-layout', railOpen && 'rail-open')}>
-            <FilterRail modality={modality} task={task} filters={filters} setFilters={setFilters} providerCounts={providerCounts} providers={providers} onClear={() => setFilters(EMPTY_FILTERS)} />
-            <section className="vx-results" aria-label="Models">
-              <div className="vx-toolbar">
-                <button type="button" className={cls('vx-btn vx-rail-toggle', filterCount && 'vx-btn-active')} onClick={() => setRailOpen(!railOpen)} aria-expanded={railOpen}>
-                  Filters{filterCount ? <span className="vx-btn-count">{filterCount}</span> : null}
-                </button>
-                <div className="vx-result-count" aria-live="polite">
-                  <strong>{plural(rows.length, 'family')}</strong>
-                  <span className="vx-muted"> · {plural(modelCount, 'model ID')}{UNIT_NOTES[scopeKey] && !(canGrid && view === 'grid') ? ` · ${UNIT_NOTES[scopeKey]}` : ''}</span>
-                </div>
-                <LensBar modality={modality} lens={lens} setLens={setLens} />
-                <div className="vx-toolbar-right">
-                  <select className="vx-select" value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
-                    {['newest', 'price', 'name', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{`Sort: ${SORTS[key].label}`}</option>)}
-                  </select>
-                  {canGrid ? (
-                    <Segmented ariaLabel="View" value={view} onChange={setView} options={[{ value: 'grid', label: '', icon: 'grid', title: 'Gallery' }, { value: 'table', label: '', icon: 'rows', title: 'Table' }]} />
-                  ) : null}
-                </div>
+          <div className="vx-page-main">
+            <header className="vx-hero">
+              <div className="vx-hero-text">
+                <div className="vx-eyebrow">Venice API · Models</div>
+                <h1 className="vx-h1">{PAGE_TITLES[scopeKey] || PAGE_TITLES.all}</h1>
+                <p className="vx-lede">{SCOPE_BLURBS[scopeKey] || SCOPE_BLURBS.all} Use a model ID as the <code>model</code> parameter in requests.</p>
               </div>
+              <div className="vx-hero-actions">
+                <a className="vx-btn" href="/models/compare">Compare{compare.ids.length ? <span className="vx-btn-count">{compare.ids.length}</span> : null}</a>
+                <a className="vx-btn vx-btn-tertiary" href="/api-reference/endpoint/models/list">Models API</a>
+              </div>
+            </header>
 
-              {rows.length === 0 ? (
-                <Empty title="No models match">
-                  {query ? <>Nothing matches “{query}”{filterCount ? ' with the current filters' : ''}. </> : 'Try removing a filter. '}
-                  <button type="button" className="vx-btn vx-btn-sm" onClick={() => { setFilters(EMPTY_FILTERS); setQuery(''); }}>Clear {query && filterCount ? 'search and filters' : query ? 'search' : 'filters'}</button>
-                </Empty>
-              ) : canGrid && view === 'grid' ? (
-                <Gallery rows={rows} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} lens={lens} compare={compare} catalog={catalog} modality={modality} />
-              ) : (
-                <ExplorerTable rows={rows} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} compare={compare} />
-              )}
+            <div className="vx-tabs" role="group" aria-label="Modality">
+              {MODALITIES.map(m => {
+                const c = m.key === 'all' ? (counts && counts.families) : (counts && counts.byModality[m.key] && counts.byModality[m.key].families);
+                return (
+                  <button key={m.key} type="button" className={cls('vx-tab', modality === m.key && 'is-active')} onClick={() => switchModality(m.key)} aria-pressed={modality === m.key}>
+                    {m.short}
+                    {c != null ? <span className="vx-tab-count">{c}</span> : null}
+                  </button>
+                );
+              })}
+            </div>
 
-              <footer className="vx-explorer-foot">
-                <p>
-                  Prices in USD from <code>GET /models</code>{modality === 'video' || modality === 'all' ? <> and build-time <code>POST /video/quote</code> matrices</> : null}.
-                  {catalog.generatedAt ? ` Updated ${fmtDate(Math.floor(new Date(catalog.generatedAt).getTime() / 1000))}.` : ''}
-                  {' '}Uptime, latency and benchmark scores are planned.
-                </p>
-                <nav aria-label="Related pages">
-                  <a href="/models/methodology">Methodology</a>
-                  <a href="/overview/deprecations">Deprecations</a>
-                  <a href="/overview/beta-models">Beta models</a>
-                </nav>
-              </footer>
-            </section>
+            {modality === 'audio' ? (
+              <div className="vx-subtabs">
+                <Segmented ariaLabel="Audio task" value={task} onChange={setTask} options={AUDIO_TASKS.map(t => ({ value: t.key, label: t.label }))} />
+              </div>
+            ) : null}
+
+            <div className="vx-toolbar">
+              <button type="button" className={cls('vx-btn vx-rail-toggle', filterCount && 'vx-btn-active')} onClick={() => setRailOpen(!railOpen)} aria-expanded={railOpen} aria-controls="vx-filters" disabled={!catalog}>
+                Filters{filterCount ? <span className="vx-btn-count">{filterCount}</span> : null}
+              </button>
+              <div className="vx-search">
+                <Icon name="search" size={16} />
+                <input ref={searchRef} type="search" value={query} onChange={e => setQuery(e.target.value)}
+                  placeholder="Search by name, ID or provider" aria-label="Search models" />
+                {query ? <button type="button" className="vx-icon-btn" onClick={() => setQuery('')} aria-label="Clear search"><Icon name="x" size={14} /></button> : <kbd aria-hidden="true">/</kbd>}
+              </div>
+              <select className="vx-select" value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
+                {['newest', 'price', 'name', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{`Sort: ${SORTS[key].label}`}</option>)}
+              </select>
+              {canGrid ? (
+                <Segmented ariaLabel="View" value={view} onChange={setView} options={[{ value: 'grid', label: '', icon: 'grid', title: 'Gallery' }, { value: 'table', label: '', icon: 'rows', title: 'Table' }]} />
+              ) : null}
+            </div>
+
+            {!catalog ? (
+              <>
+                {error
+                  ? <div className="vx-error" role="alert">The interactive catalog could not load. The full model list is below.</div>
+                  : <><span className="vx-sr-only" role="status">Loading models</span><ExplorerSkeleton /></>}
+                <div className={error ? 'vx-fallback' : 'vx-fallback vx-sr-only'}>{children}</div>
+              </>
+            ) : (
+              <section className="vx-results" aria-label="Models">
+                <LensBar modality={modality} lens={lens} setLens={setLens} />
+                <div className="vx-countline">
+                  <span className="vx-result-count" aria-live="polite">
+                    <strong>{plural(rows.length, 'family')}</strong> · {plural(modelCount, 'model ID')}{UNIT_NOTES[scopeKey] && !(canGrid && view === 'grid') ? ` · ${UNIT_NOTES[scopeKey]}` : ''}
+                  </span>
+                  <span className="vx-source">Prices from <code>GET /models</code>{updated ? ` · ${updated}` : ''}</span>
+                </div>
+
+                {rows.length === 0 ? (
+                  <Empty title="No models match">
+                    {query ? <>Nothing matches “{query}”{filterCount ? ' with the current filters' : ''}. </> : 'Try removing a filter. '}
+                    <button type="button" className="vx-btn vx-btn-sm" onClick={() => { setFilters(EMPTY_FILTERS); setQuery(''); }}>Clear {query && filterCount ? 'search and filters' : query ? 'search' : 'filters'}</button>
+                  </Empty>
+                ) : canGrid && view === 'grid' ? (
+                  <Gallery rows={rows} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} lens={lens} compare={compare} catalog={catalog} modality={modality} />
+                ) : (
+                  <ExplorerTable rows={rows} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} compare={compare} />
+                )}
+
+                <footer className="vx-explorer-foot">
+                  <p>
+                    Prices in USD from <code>GET /models</code>{modality === 'video' || modality === 'all' ? <> and build-time <code>POST /video/quote</code> matrices</> : null}.
+                    {' '}Uptime, latency and benchmark scores are planned.
+                  </p>
+                  <nav aria-label="Related pages">
+                    <a href="/models/methodology">Methodology</a>
+                    <a href="/overview/deprecations">Deprecations</a>
+                    <a href="/overview/beta-models">Beta models</a>
+                  </nav>
+                </footer>
+              </section>
+            )}
           </div>
-        )}
+        </div>
         <CompareTray compare={compare} catalog={catalog} />
       </div>
     );
