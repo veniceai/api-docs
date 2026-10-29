@@ -1476,11 +1476,11 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const list = [['overview', 'Overview']];
     if (examples) list.push(['examples', 'Reference outputs']);
     list.push(['pricing', 'Pricing']);
-    if (model.modality === 'image' || model.modality === 'video') list.push(['parameters', 'Parameters']);
     if (model.task === 'tts' && model.audio && model.audio.voices && model.audio.voices.length) list.push(['voices', 'Voices']);
     list.push(['api', 'API']);
     if (hasCensorship(model)) list.push(['censorship', 'Censorship']);
     if (capabilities) list.push(['capabilities', 'Capabilities']);
+    list.push(['specs', 'Specs']);
     if (variants > 1) list.push(['variants', 'Variants']);
     if (related) list.push(['related', 'Related models']);
     if (faq) list.push(['faq', 'FAQ']);
@@ -1721,43 +1721,101 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  // Reasoning, serving precision and sampling defaults as one definition list.
-  const TechDetails = ({ model }) => {
-    const text = model.text || {};
-    const r = text.reasoning;
-    const levels = (r && r.effort) || [];
-    const q = text.quantization;
-    const sampling = text.sampling && Object.keys(text.sampling).length ? text.sampling : null;
+  const count = n => n.toLocaleString('en-US');
+  const ratioShapes = (ratios, active) => <span className="vx-ratios">{ratios.map(ar => <AspectShape key={ar} ratio={ar} active={ar === active} />)}</span>;
+
+  // The rows each modality adds to Specs, between the IDs and the dates.
+  const modalitySpecs = model => {
+    if (model.task === 'chat') {
+      const t = model.text || {};
+      const r = t.reasoning;
+      const levels = (r && r.effort) || [];
+      const q = t.quantization;
+      const sampling = t.sampling && Object.keys(t.sampling).length ? Object.entries(t.sampling).map(([k, v]) => `${k} ${v}`).join(' · ') : null;
+      return [
+        ['Context window', t.context ? `${count(t.context)} tokens` : 'Not published'],
+        ['Max output', t.maxOutput ? `${count(t.maxOutput)} tokens` : 'Not published'],
+        ['Reasoning effort', !r ? 'No separate reasoning phase' : levels.length
+          ? <><code>reasoning_effort: {levels.join(' | ')}</code>{r.defaultEffort ? <span className="vx-muted"> · default {r.defaultEffort}</span> : null} · <a href="/guides/features/reasoning-models#reasoning-effort">guide</a></>
+          : <>Always on; send <code>{'"reasoning": { "enabled": false }'}</code> to skip thinking · <a href="/guides/features/reasoning-models">guide</a></>],
+        ['Served precision', q ? <>{QUANT_LABELS[q] || q}<span className="vx-muted"> · {QUANT_NOTES[q]}</span></> : model.privacy === 'anonymized' ? 'Set by the upstream provider' : 'Not disclosed'],
+        sampling ? ['Default sampling', <>{sampling}<span className="vx-muted"> · when a request omits them</span></>] : null
+      ];
+    }
+    if (model.task === 'decision') {
+      const d = model.decision || {};
+      return [
+        d.maxStateTokens ? ['Max state', `${count(d.maxStateTokens)} tokens`] : null,
+        d.maxTotalTokens ? ['Max total', `${count(d.maxTotalTokens)} tokens`] : null
+      ];
+    }
+    if (model.modality === 'image') {
+      const image = model.image || {};
+      return [
+        image.resolutions && image.resolutions.length ? ['Resolutions', `${image.resolutions.join(', ')}${image.defaultResolution ? ` (default ${image.defaultResolution})` : ''}`] : null,
+        image.aspectRatios && image.aspectRatios.length ? ['Aspect ratios', ratioShapes(image.aspectRatios, image.defaultAspectRatio)] : null,
+        image.promptLimit ? ['Prompt limit', `${count(image.promptLimit)} characters`] : null,
+        image.steps ? ['Steps', `default ${image.steps.default}, max ${image.steps.max}`] : null,
+        image.maxInputImages ? ['Input images', `Up to ${image.maxInputImages}${image.combineImages ? ', combined into one edit' : ''}`] : null
+      ];
+    }
+    if (model.modality === 'video') {
+      const video = model.video || {};
+      const inputs = video.inputs || {};
+      return [
+        ['Mode', VARIANT_LABELS[model.variant] || model.variant],
+        ['Inputs', ['Prompt', inputs.image && 'image', inputs.reference && 'reference images', inputs.video && 'video', inputs.audio && 'audio'].filter(Boolean).join(', ')],
+        video.resolutions && video.resolutions.length ? ['Resolutions', video.resolutions.map(r => r.label).join(', ')] : null,
+        video.durations && video.durations.length ? ['Durations', video.durations.map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ')] : null,
+        video.aspectRatios && video.aspectRatios.length ? ['Aspect ratios', ratioShapes(video.aspectRatios)] : null,
+        ['Audio', video.audio === 'native' ? 'Always generated' : video.audio === 'optional' ? <>Optional; set <code>"audio": true</code></> : 'Silent output'],
+        video.promptLimit ? ['Prompt limit', `${count(video.promptLimit)} characters`] : null
+      ];
+    }
+    if (model.task === 'tts') {
+      const a = model.audio || {};
+      return [
+        a.voices && a.voices.length ? ['Voices', `${a.voices.length}${a.customVoice ? ', plus custom voice IDs' : ''}`] : null,
+        a.formats && a.formats.length ? ['Formats', `${a.formats.join(', ')}${a.defaultFormat ? ` (default ${a.defaultFormat})` : ''}`] : null
+      ];
+    }
+    if (model.modality === 'audio' && model.task !== 'stt') {
+      const a = model.audio || {};
+      return [
+        a.maxDuration ? ['Duration', `${a.minDuration || 1}–${a.maxDuration} seconds${a.defaultDuration ? ` (default ${a.defaultDuration})` : ''}`] : null,
+        ['Lyrics', a.lyricsRequired ? 'Required' : a.lyrics ? 'Supported' : 'Not supported'],
+        a.instrumental ? ['Instrumental', 'Can be forced'] : null,
+        a.loop ? ['Seamless loop', 'Supported'] : null,
+        a.formats && a.formats.length ? ['Formats', a.formats.join(', ')] : null,
+        a.promptLimit ? ['Prompt limit', `${count(a.promptLimit)} characters`] : null
+      ];
+    }
+    if (model.modality === 'embedding') {
+      const e = model.embedding || {};
+      return [
+        e.dimensions ? ['Dimensions', count(e.dimensions)] : null,
+        e.maxInputTokens ? ['Max input', `${count(e.maxInputTokens)} tokens per item`] : null
+      ];
+    }
+    return [];
+  };
+
+  const Specs = ({ model, models }) => {
+    const endpoint = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
+    const editor = model.task === 'image-generation' ? models.find(m => m.task === 'image-edit') : null;
+    const rows = [
+      ['Model ID', <code>{model.id}</code>],
+      editor ? ['Edit model ID', <code>{editor.id}</code>] : null,
+      endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+      ...modalitySpecs(model),
+      ['Added', fmtDate(model.created)],
+      model.openWeights ? ['Weights', `Open${model.license ? ` · ${model.license}` : ''}`] : null
+    ].filter(Boolean);
     return (
-      <dl className="vx-dl">
-        <dt>Reasoning</dt>
-        <dd>
-          {!r ? 'No separate reasoning phase; the model answers directly.' : levels.length
-            ? <>Adjustable with <code>reasoning_effort</code> (or <code>reasoning.effort</code>). Higher effort spends more output tokens and time. <a href="/guides/features/reasoning-models#reasoning-effort">Reasoning guide</a></>
-            : <>Always on; effort is not adjustable, so leave <code>reasoning_effort</code> unset. To skip thinking, send <code>{'"reasoning": { "enabled": false }'}</code>. <a href="/guides/features/reasoning-models">Reasoning guide</a></>}
-        </dd>
-        {levels.length ? (
-          <>
-            <dt>Effort levels</dt>
-            <dd className="vx-effort">
-              {levels.map(level => <code key={level} className={cls(level === r.defaultEffort && 'is-default')}>{level}</code>)}
-              {r.defaultEffort ? <span className="vx-muted">Default: {r.defaultEffort}</span> : null}
-            </dd>
-          </>
-        ) : null}
-        <dt>Served precision</dt>
-        <dd>
-          {q ? <><strong>{QUANT_LABELS[q] || q}</strong> <span className="vx-muted">{QUANT_NOTES[q]}</span></>
-            : model.privacy === 'anonymized'
-              ? <span className="vx-muted">Set by the upstream provider, which does not disclose it.</span>
-              : <span className="vx-muted">Not disclosed. Venice serves this model on its own infrastructure; <code>GET /models</code> does not report precision yet.</span>}
-        </dd>
-        {sampling ? (
-          <>
-            <dt>Default sampling</dt>
-            <dd>{Object.entries(sampling).map(([k, v]) => `${k} ${v}`).join(' · ')} <span className="vx-muted">when a request omits them</span></dd>
-          </>
-        ) : null}
+      <dl className="vx-kv vx-specs">
+        {rows.map(([label, value]) => (
+          <div key={label} className="vx-kv-row"><dt>{label}</dt><dd>{value}</dd></div>
+        ))}
       </dl>
     );
   };
@@ -2109,46 +2167,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return <p className="vx-text">{p.kind === 'per-second' ? `${usd(p.perSecond)} per second of generated audio.` : p.kind === 'per-track' ? `${usd(p.perTrack)} per generated track.` : 'Use POST /audio/quote for this model.'}</p>;
   };
 
-  const ValueList = ({ values, active }) => (
-    <span className="vx-values">
-      {values.map(v => <span key={v} className={v === active ? 'is-default' : undefined}>{v}{v === active ? ' (default)' : ''}</span>)}
-    </span>
-  );
-
-  const Parameters = ({ model }) => {
-    if (model.modality === 'image') {
-      const image = model.image || {};
-      return (
-        <dl className="vx-dl">
-          {image.resolutions && image.resolutions.length ? <><dt>Resolutions</dt><dd><ValueList values={image.resolutions} active={image.defaultResolution} /></dd></> : null}
-          {image.aspectRatios && image.aspectRatios.length ? <><dt>Aspect ratios</dt><dd className="vx-ratios">{image.aspectRatios.map(ar => <AspectShape key={ar} ratio={ar} active={ar === image.defaultAspectRatio} />)}</dd></> : null}
-          {image.promptLimit ? <><dt>Prompt limit</dt><dd>{image.promptLimit.toLocaleString('en-US')} characters</dd></> : null}
-          {image.steps ? <><dt>Steps</dt><dd>Default {image.steps.default}, max {image.steps.max}</dd></> : null}
-          {image.maxInputImages ? <><dt>Input images</dt><dd>Up to {image.maxInputImages}{image.combineImages ? ', combined into one edit' : ''}</dd></> : null}
-          <dt>Web-grounded</dt><dd>{image.webSearch ? 'Yes, can search the web for reference' : 'No'}</dd>
-          <dt>Style references</dt><dd>{image.styleReferences ? 'Supported' : 'No'}</dd>
-        </dl>
-      );
-    }
-    const video = model.video || {};
-    const inputs = ['Prompt',
-      video.inputs && video.inputs.image ? 'Image' : null,
-      video.inputs && video.inputs.reference ? 'Reference images' : null,
-      video.inputs && video.inputs.video ? 'Video' : null,
-      video.inputs && video.inputs.audio ? 'Audio' : null].filter(Boolean);
-    return (
-      <dl className="vx-dl">
-        <dt>Mode</dt><dd>{VARIANT_LABELS[model.variant] || model.variant}</dd>
-        <dt>Inputs</dt><dd><ValueList values={inputs} /></dd>
-        {video.resolutions && video.resolutions.length ? <><dt>Resolutions</dt><dd><ValueList values={video.resolutions.map(r => r.label)} /></dd></> : null}
-        {video.durations && video.durations.length ? <><dt>Durations</dt><dd><ValueList values={video.durations.map(d => (d.seconds ? `${d.seconds}s` : d.value))} /></dd></> : null}
-        {video.aspectRatios && video.aspectRatios.length ? <><dt>Aspect ratios</dt><dd className="vx-ratios">{video.aspectRatios.map(ar => <AspectShape key={ar} ratio={ar} />)}</dd></> : null}
-        <dt>Audio</dt><dd>{video.audio === 'native' ? 'Always generated' : video.audio === 'optional' ? <>Optional; set <code>"audio": true</code></> : 'Silent output'}</dd>
-        {video.promptLimit ? <><dt>Prompt limit</dt><dd>{video.promptLimit.toLocaleString('en-US')} characters</dd></> : null}
-      </dl>
-    );
-  };
-
   const AspectShape = ({ ratio, active }) => {
     const [w, h] = String(ratio).split(':').map(Number);
     if (!w || !h) return <span className="vx-ratio"><span>{ratio}</span></span>;
@@ -2455,13 +2473,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 ]} />
               ) : null}
             </Section>
-
-            {has('parameters') ? (
-              <Section id="parameters" title="Parameters">
-                <Parameters model={model} />
-              </Section>
-            ) : null}
-
             {has('voices') ? (
               <Section id="voices" title="Voices">
                 <Voices model={model} />
@@ -2483,14 +2494,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             {has('capabilities') ? (
               <Section id="capabilities" title="Capabilities">
                 <CapabilityMatrix model={model} models={models} />
-                {model.task === 'chat' ? (
-                  <>
-                    <h3 className="vx-h3">Details</h3>
-                    <TechDetails model={model} />
-                  </>
-                ) : null}
               </Section>
             ) : null}
+
+            <Section id="specs" title="Specs">
+              <Specs model={model} models={models} />
+            </Section>
 
             {has('variants') ? (
               <Section id="variants" title="Variants">
