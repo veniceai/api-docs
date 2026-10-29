@@ -625,7 +625,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       if (!f.quant.includes(q)) return false;
     }
     if (f.ctx && model.modality === 'text' && !((model.text && model.text.context) >= Number(f.ctx))) return false;
-    if (f.price && model.modality === 'text' && !(model.pricing && model.pricing.blended != null && model.pricing.blended <= Number(f.price))) return false;
+    if (f.price && model.modality === 'text' && !(model.pricing && model.pricing.input != null && model.pricing.input <= Number(f.price))) return false;
     if (f.res && model.modality === 'image' && !((model.image && model.image.resolutions) || []).includes(f.res)) return false;
     if (f.res && model.modality === 'video' && !(maxVideoHeight(model) >= Number(f.res))) return false;
     if (f.audio && model.modality === 'video') {
@@ -727,8 +727,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   <Radio key={label} checked={filters.ctx === value} onChange={() => setFilters(prev => ({ ...prev, ctx: value }))} label={label} />
                 ))}
               </FilterGroup>
-              <FilterGroup title="Blended price (per 1M tokens)">
-                {[['', 'Any'], ['0.5', 'Under $0.50'], ['1', 'Under $1'], ['3', 'Under $3'], ['10', 'Under $10']].map(([value, label]) => (
+              <FilterGroup title="Input price (per 1M tokens)">
+                {[['', 'Any'], ['0.5', 'Up to $0.50'], ['2', 'Up to $2'], ['5', 'Up to $5']].map(([value, label]) => (
                   <Radio key={label} checked={filters.price === value} onChange={() => setFilters(prev => ({ ...prev, price: value }))} label={label} />
                 ))}
               </FilterGroup>

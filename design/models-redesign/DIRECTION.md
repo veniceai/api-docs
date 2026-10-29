@@ -51,7 +51,7 @@ Four decisions carry most of the value:
 
 ## 3. Principles
 
-1. **Answer "which model should I use?" in under a minute.** Filters are named for what people need (1M+ context, under $1, end-to-end encrypted), not for API field names.
+1. **Answer "which model should I use?" in under a minute.** Filters are named for what people need (1M+ context, input up to $2, end-to-end encrypted), not for API field names.
 2. **Normalize, then disclose.** Always show a comparable number and the assumption behind it, and always show the native billing unit next to it.
 3. **Privacy is a first-class dimension.** E2EE, TEE, Private and Anonymized are Venice's differentiator. Every row, card and page shows the tier, and filtering by tier shows the price of that tier's variant.
 4. **Measure the model as served.** Benchmarks and telemetry describe Venice's endpoint, not the lab's press release, and say so.
@@ -99,7 +99,7 @@ Prototype: `/models/overview`, `src/model-hub.jsx` (`ModelExplorer`).
 1. Header in Jordan's style: a "Venice API · Models" eyebrow, the page title (Models, Text Models, …) and a one-line description that names the `model` parameter. **Compare** is a secondary button, **Models API** a tertiary link.
 2. Toolbar: search across name, provider, model ID and tags (`/` focuses it), sort, and gallery or table view on one row, then the pricing lens.
 3. Modality facet at the top of the filter column, with family counts: text, image, video, text to speech, speech to text, music and sound effects, embeddings and decisions. Several can be checked. A page's own modality starts checked, and the columns, filters and pricing lens for one modality apply when exactly one is.
-4. Filter column, the full height of the page like the model page's side column (below 1024px a drawer opened from the toolbar): capabilities, context, blended price and served precision (text); task, resolution and features (image); mode, audio, resolution and clip length (video); then privacy, attributes (Venice picks, open weights, uncensored, added in the last 30 days, hide beta and deprecated) and provider for all.
+4. Filter column, the full height of the page like the model page's side column (below 1024px a drawer opened from the toolbar): capabilities, context, input price and served precision (text); task, resolution and features (image); mode, audio, resolution and clip length (video); then privacy, attributes (Venice picks, open weights, uncensored, added in the last 30 days, hide beta and deprecated) and provider for all.
 5. Count line: live result count (families and model IDs; text adds "prices per 1M tokens"), with the price source and update date.
 6. Results, then a footer with data sources and a note that performance and benchmark data are planned.
 7. A compare tray fixed at the bottom once anything is selected.
