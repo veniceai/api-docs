@@ -161,7 +161,7 @@ Prototype: `/models/glm-5-3`, `/models/veo-3-1-full-quality`, `/models/nano-bana
    - **Privacy**: Venice's four modes as a strip, with this model's tier raised and described. Lower tiers read "Included", since each mode builds on the one before; a higher tier offered by another variant links to it, and the rest read "Not available". E2EE variants count for TEE, since they also run TEE-only under the same ID.
    - **Variants** table (families with more than one variant): differences on one screen (context, max output, prices, effort levels, precision).
    - **Related** (when there are any): other versions of the same line, and similar models by task, price and recency.
-   - **FAQ**: cost, model ID, privacy, the modality's key limits and which endpoint to call, generated from the same data as the page.
+   - **FAQ**: cost, model ID, privacy, the modality's key limits and which endpoint to call, generated from the same data as the page. An accordion of native `details` elements with the first answer open, so keyboard, screen reader and find-in-page support come from the browser.
    - **Plain-text specification**: a collapsed disclosure holding the server-rendered text version of the page (below).
 
 ### SEO
@@ -457,7 +457,7 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 
 - **Actions.** One primary button per context (the tray's Compare), secondary outline buttons, tertiary text buttons and links.
 - **Privacy tiers** use the catalog's existing badge: E2EE and TEE outlined in the accent colour, Private and Anonymized neutral. No icons, since the badge text carries the meaning.
-- **Components** (all in `model-hub.css`): page header, search, tabs with counts, filter rail (checkbox, radio, collapsible groups), segmented control, pricing lens, data table with sortable headers, gallery card with hover video, compare tray, key-number card grid, price cards, price comparison table, censorship scale, variant switcher, model ID chip, code tabs, price matrix, capability tables, specs table, privacy tier strip, related list, lightbox, empty, loading and error states.
+- **Components** (all in `model-hub.css`): page header, search, tabs with counts, filter rail (checkbox, radio, collapsible groups), segmented control, pricing lens, data table with sortable headers, gallery card with hover video, compare tray, key-number card grid, price cards, price comparison table, censorship scale, variant switcher, model ID chip, code tabs, price matrix, capability tables, specs table, privacy tier strip, related list, FAQ accordion, lightbox, empty, loading and error states.
 - **States covered:** loading skeleton, catalog load failure, no results with a clear action, renders pending, input-dependent pricing, disabled (compare with fewer than two models, a full compare set, unsupported endpoints), selected (rows, variants, matrix cell, current section), overflow (truncated IDs with the full value on hover, long voice and provider lists), deprecated, beta.
 - **Accessibility:** visible focus rings, real buttons for sort headers and matrix cells, `aria-sort`, `aria-pressed` and live regions for copied states and result counts, 24px minimum targets, reduced-motion support.
 - **To explore:** a price-vs-quality scatter with a Pareto line per modality (once benchmarks exist); a status dot per row driven by telemetry; voice previews; before/after sliders for editing models; brand typography (Canela, Aeonik) if the docs theme allows it.
