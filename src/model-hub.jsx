@@ -2740,16 +2740,18 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     };
     const rows = [];
     const group = title => rows.push({ group: title });
+    // Figures (prices, token limits, counts) are set in Fono.
     const row = (label, get, opts = {}) => {
       const values = models.map(get);
       const target = opts.compare ? best(values.map(v => (typeof v === 'object' && v !== null ? v.n : v)), opts.lower !== false) : null;
-      rows.push({ label, values, target, format: opts.format || (v => (v == null ? '—' : v)), hint: opts.hint });
+      const num = opts.num != null ? opts.num : Boolean(opts.compare || opts.format === usd || opts.format === tokens);
+      rows.push({ label, values, target, num, format: opts.format || (v => (v == null ? '—' : v)), hint: opts.hint });
     };
     group('Overview');
     row('Provider', m => m._providerName);
     row('Type', m => TASK_LABELS[m.task] || m.modality);
     row('Variant', m => VARIANT_LABELS[m.variant] || m.variant);
-    row('Privacy', m => m.privacy, { format: v => <PrivacyBadge tier={v} /> });
+    row('Privacy', m => m.privacy, { format: v => (PRIVACY[v] ? PRIVACY[v].label : v) });
     row('Added', m => m.created, { format: v => fmtDate(v) });
     if (modality === 'text') {
       group('Pricing per 1M tokens');
@@ -2770,9 +2772,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       ['1K', '2K', '4K'].forEach(res => row(`Per image at ${res}`, m => (m.pricing && m.pricing.byResolution ? m.pricing.byResolution[res] : (res === '1K' ? m.pricing && m.pricing.perImage : null)), { compare: true, format: usd }));
       row('Extra input image', m => m.pricing && m.pricing.extraInputImage, { format: usd });
       group('Output');
-      row('Max resolution', m => imageMaxRes(m));
+      row('Max resolution', m => imageMaxRes(m), { num: true });
       row('Aspect ratios', m => (m.image && m.image.aspectRatios ? m.image.aspectRatios.filter(a => a !== 'auto').length : null), { compare: true, lower: false });
-      row('Prompt limit', m => m.image && m.image.promptLimit, { format: v => (v ? `${v.toLocaleString('en-US')} chars` : '—') });
+      row('Prompt limit', m => m.image && m.image.promptLimit, { num: true, format: v => (v ? `${v.toLocaleString('en-US')} chars` : '—') });
       row('Web-grounded', m => m.image && m.image.webSearch, { format: v => (v ? <Icon name="check" size={14} className="vx-yes" /> : <Icon name="minus" size={14} className="vx-no" />) });
     } else if (modality === 'video') {
       group(`Pricing at ${heightLabel(lens.h)} · ${lens.s}s · ${lens.a === 'on' ? 'audio' : 'silent'}`);
@@ -2791,7 +2793,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     } else if (modality === 'embedding') {
       group('Specs');
       row('Per 1M tokens', m => m.pricing && m.pricing.input, { compare: true, format: usd });
-      row('Dimensions', m => m.embedding && m.embedding.dimensions, { format: v => (v ? v.toLocaleString('en-US') : '—') });
+      row('Dimensions', m => m.embedding && m.embedding.dimensions, { num: true, format: v => (v ? v.toLocaleString('en-US') : '—') });
       row('Max input', m => m.embedding && m.embedding.maxInputTokens, { compare: true, lower: false, format: tokens });
     }
     return rows;
@@ -2869,7 +2871,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           {isVideo ? <button type="button" className="vx-btn" onClick={playAll} aria-pressed={playing}>{playing ? 'Pause all' : 'Play all in sync'}</button> : null}
         </div>
         {shown ? <p className="vx-sbs-prompt"><span className="vx-sbs-prompt-label">Prompt</span>{shown.prompt}</p> : null}
-        <div className="vx-sbs-grid" style={{ gridTemplateColumns: `repeat(${models.length}, minmax(0, 1fr))` }}>
+        <div className="vx-sbs-grid" style={{ gridTemplateColumns: `repeat(${Math.max(models.length, 2)}, minmax(0, 1fr))` }}>
           {models.map(m => {
             const item = (m.media || []).find(x => x.prompt === (shown && shown.id));
             return (
@@ -3006,7 +3008,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               ) : null}
             </div>
             {rows.some(r => r.target != null) ? <p className="vx-footnote vx-legend"><span className="vx-best-swatch" aria-hidden="true" />Best value in the row</p> : null}
-            <div className="vx-table-wrap">
+            <div className="vx-table-wrap vx-ctable-wrap">
               <table className="vx-dtable vx-ctable">
                 <thead>
                   <tr>
@@ -3032,7 +3034,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                         const shown = r.format(raw);
                         // Values that display identically are ties, even if they differ past the shown precision.
                         const best = r.target != null && raw != null && (raw === r.target || (typeof shown === 'string' && shown === r.format(r.target)));
-                        return <td key={j} className={cls(best && 'is-best')}>{r.format(v)}{best ? <span className="vx-sr-only"> (best)</span> : null}</td>;
+                        return <td key={j} className={cls(r.num && 'vx-num', best && 'is-best')}>{r.format(v)}{best ? <span className="vx-sr-only"> (best)</span> : null}</td>;
                       })}
                     </tr>
                   ))}
