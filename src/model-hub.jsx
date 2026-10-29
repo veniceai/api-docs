@@ -596,7 +596,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   // A family matches when any of its variants matches; the first matching
   // variant becomes the row's display variant so prices follow the filters.
   const variantMatches = (model, f, catalog) => {
-    if (f.privacy.length && !f.privacy.includes(model.privacy)) return false;
+    if (f.privacy.length && !f.privacy.some(tier => offersTier(model, tier))) return false;
     if (f.caps.length) {
       if (model.modality === 'text' && !f.caps.every(key => hasCap(model, key))) return false;
       if (model.modality === 'image' && f.caps.includes('webSearch') && !(model.image && model.image.webSearch)) return false;
