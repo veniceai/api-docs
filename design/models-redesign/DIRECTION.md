@@ -77,7 +77,7 @@ Four decisions carry most of the value:
 
 ### The sidebar
 
-Hub pages run in Mintlify's `custom` mode, so the explorer, model pages and compare view have no docs sidebar; their navigation is in the page (modality tabs in the explorer, and a side column with the breadcrumb and section links on model pages). The sidebar remains for the Methodology page, restructured into **Explore** and **By modality** groups. The alternative, `frame` mode, keeps the sidebar next to custom layouts. It's listed as a decision in [section 15](#15-decisions-needed).
+Hub pages run in Mintlify's `custom` mode, so the explorer, model pages and compare view have no docs sidebar; their navigation is in the page (modality tabs and the filter column in the explorer, and a side column with the breadcrumb and section links on model pages). The sidebar remains for the Methodology page, restructured into **Explore** and **By modality** groups. The alternative, `frame` mode, keeps the sidebar next to custom layouts. It's listed as a decision in [section 15](#15-decisions-needed).
 
 ### Families and variants
 
@@ -96,12 +96,12 @@ Prototype: `/models/overview`, `src/model-hub.jsx` (`ModelExplorer`).
 
 ### Layout
 
-1. Header in the docs page-header style: "Model catalog" eyebrow, the page title (Models, Text Models, …) and a one-line description. **Compare** is a secondary button, **Models API** a tertiary link.
-2. Search across name, provider, model ID and tags. `/` focuses it.
+1. Header in Jordan's style: a "Venice API · Models" eyebrow, the page title (Models, Text Models, …) and a one-line description that names the `model` parameter. **Compare** is a secondary button, **Models API** a tertiary link.
+2. Toolbar: search across name, provider, model ID and tags (`/` focuses it), sort, and gallery or table view on one row, then the pricing lens.
 3. Modality tabs with family counts: All · Text · Image · Video · Audio (text to speech / speech to text / music and sound effects) · Embeddings.
-4. Filter rail: capabilities, context, blended price and served precision (text); task, resolution and features (image); mode, audio, resolution and clip length (video); then privacy, attributes (Venice picks, open weights, uncensored, added in the last 30 days, hide beta and deprecated) and provider for all.
-5. Toolbar: live result count (families and model IDs; text adds "prices per 1M tokens"), pricing lens, sort, gallery or table view.
-6. Results, then a footer with data sources, update time and a note that performance and benchmark data are planned.
+4. Filter column, the full height of the page like the model page's side column (below 1024px a drawer opened from the toolbar): capabilities, context, blended price and served precision (text); task, resolution and features (image); mode, audio, resolution and clip length (video); then privacy, attributes (Venice picks, open weights, uncensored, added in the last 30 days, hide beta and deprecated) and provider for all.
+5. Count line: live result count (families and model IDs; text adds "prices per 1M tokens"), with the price source and update date.
+6. Results, then a footer with data sources and a note that performance and benchmark data are planned.
 7. A compare tray fixed at the bottom once anything is selected.
 
 An earlier iteration had quick-pick chips above the results. Each one duplicated a rail filter, so they were removed; the only unique one, Venice picks, is now a filter.
@@ -449,7 +449,7 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 
 | | System |
 |---|---|
-| Type | Aeonik for text and Aeonik Fono for labels, IDs and figures, loaded from venice.ai; JetBrains Mono for code. 36 page title, 20 section title, 15.5 model page description and 18/28 explorer description, 14 body and tables, 13 controls, 12 labels, captions and Fono section notes, 11 uppercase badges and Fono table headings. venice.ai serves the regular weight only, so heavier weights are synthesized |
+| Type | Aeonik for text and Aeonik Fono for labels, IDs and figures, loaded from venice.ai; JetBrains Mono for code. 36 page title, 20 section title, 15.5 model page and 15 explorer descriptions, 14 body and tables, 13 controls, 12 labels, captions and Fono section notes, 11 uppercase badges and Fono table headings. venice.ai serves the regular weight only, so heavier weights are synthesized |
 | Spacing | 4px scale: 4, 8, 12, 16, 24, 32, 48 |
 | Radius | 4px badges, 6px chips and segmented options, 8px controls and floating panels, 10px cards, tables, media and code blocks |
 | Colour | Venice's brand palette, from Jordan's design. Dark: page #06090D, cards #0E1217, text off-white #F7F5ED, secondary sea-mid #B3D0EB, muted #8A949C, dividers at 8% and borders at 14% off-white, one accent, venetian blue #3C8FDD. Light mirrors it: navy text #0E1217, mid-sea #29526C secondary, muted #677079 (5:1) and accent #125DA3. Green #4FB286 and stucco #BEA989 only for states |
@@ -457,7 +457,7 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 
 - **Actions.** One primary button per context (the tray's Compare), secondary outline buttons, tertiary text buttons and links.
 - **Privacy tiers** use the catalog's existing badge in the explorer table: E2EE and TEE outlined in the accent colour, Private and Anonymized neutral. No icons, since the badge text carries the meaning. Ruled tables give the tier as text.
-- **Components** (all in `model-hub.css`): page header, search, tabs with counts, filter rail (checkbox, radio, collapsible groups), segmented control, pricing lens, data table with sortable headers, ruled tables, gallery card with hover video, compare tray, key-number card grid, price cards, price comparison table, censorship scale, variant switcher, model ID chip, code tabs, price matrix, capability tables, specs table, privacy tier strip, related list, FAQ accordion, lightbox, empty, loading and error states.
+- **Components** (all in `model-hub.css`): page header, search, tabs with counts, filter column (checkbox, radio, collapsible groups; a drawer on phones), segmented control, pricing lens, data table with sortable headers, ruled tables, gallery card with hover video, compare tray, key-number card grid, price cards, price comparison table, censorship scale, variant switcher, model ID chip, code tabs, price matrix, capability tables, specs table, privacy tier strip, related list, FAQ accordion, lightbox, empty, loading and error states.
 - **States covered:** loading skeleton, catalog load failure, no results with a clear action, renders pending, input-dependent pricing, disabled (compare with fewer than two models, a full compare set, unsupported endpoints), selected (rows, variants, matrix cell, current section), overflow (truncated IDs with the full value on hover, long voice and provider lists), deprecated, beta.
 - **Accessibility:** visible focus rings, real buttons for sort headers and matrix cells, `aria-sort`, `aria-pressed` and live regions for copied states and result counts, 24px minimum targets, reduced-motion support.
 - **To explore:** a price-vs-quality scatter with a Pareto line per modality (once benchmarks exist); a status dot per row driven by telemetry; voice previews; before/after sliders for editing models; brand typography (Canela, Aeonik) if the docs theme allows it.
