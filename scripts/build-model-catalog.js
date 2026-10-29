@@ -746,9 +746,10 @@ function catalogFamily(family) {
   return compactFamily({ ...family, description: truncate(family.description, 180) });
 }
 
+// 128,000 is a multiple of 1024 too, so decimal sizes are checked first.
 function fmtTokens(n) {
-  if (n >= 1e6) return `${n % 1048576 === 0 ? n / 1048576 : Math.round(n / 1e4) / 100}M`;
-  if (n >= 1e3) return `${n % 1024 === 0 ? n / 1024 : Math.round(n / 1e3)}K`;
+  if (n >= 1e6) return `${n % 1e6 && n % 1048576 === 0 ? n / 1048576 : Math.round(n / 1e4) / 100}M`;
+  if (n >= 1e3) return `${n % 1e3 && n % 1024 === 0 ? n / 1024 : Math.round(n / 1e3)}K`;
   return String(n);
 }
 
