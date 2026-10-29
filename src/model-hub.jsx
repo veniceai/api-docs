@@ -1472,15 +1472,15 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   /* ------------------------------------------------------------ model page */
 
-  const pageSections = (model, { variants = 1, related = false, faq = false, examples = false } = {}) => {
+  const pageSections = (model, { variants = 1, related = false, faq = false, examples = false, capabilities = false } = {}) => {
     const list = [['overview', 'Overview']];
     if (examples) list.push(['examples', 'Reference outputs']);
-    if (model.modality === 'text' && model.task === 'chat') list.push(['capabilities', 'Capabilities']);
     list.push(['pricing', 'Pricing']);
     if (model.modality === 'image' || model.modality === 'video') list.push(['parameters', 'Parameters']);
     if (model.task === 'tts' && model.audio && model.audio.voices && model.audio.voices.length) list.push(['voices', 'Voices']);
     list.push(['api', 'API']);
     if (hasCensorship(model)) list.push(['censorship', 'Censorship']);
+    if (capabilities) list.push(['capabilities', 'Capabilities']);
     if (variants > 1) list.push(['variants', 'Variants']);
     if (related) list.push(['related', 'Related models']);
     if (faq) list.push(['faq', 'FAQ']);
@@ -1652,51 +1652,71 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return null;
   };
 
-  const Supported = ({ on, children, title }) => (
-    <li className={on ? 'is-on' : 'is-off'} title={title}>
-      <Icon name={on ? 'check' : 'minus'} size={14} className={on ? 'vx-yes' : 'vx-no'} />
-      <span>{children}</span>
-      <span className="vx-sr-only">{on ? '(supported)' : '(not supported)'}</span>
-    </li>
+  // A ruled table of what a model takes and does: supported values read in
+  // the success color, the rest muted.
+  const CapTable = ({ title, rows }) => (
+    <div className="vx-captable">
+      <div className="vx-captable-head">{title}</div>
+      <dl>
+        {rows.map(([label, value]) => (
+          <div key={label} className="vx-captable-row">
+            <dt>{label}</dt>
+            <dd className={value ? 'is-on' : 'is-off'}>{value || 'Not supported'}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 
-  const CapabilityMatrix = ({ model }) => {
+  const hasCapabilities = (model, models) => model.task === 'chat' || (model.modality === 'image' && models.some(m => m.task === 'image-generation'));
+
+  const CapabilityMatrix = ({ model, models }) => {
+    if (model.modality === 'image') {
+      const image = model.image || {};
+      const editor = models.find(m => m.task === 'image-edit');
+      const refs = editor && editor.image && editor.image.maxInputImages;
+      const upscale = model.pricing && model.pricing.upscale ? Object.keys(model.pricing.upscale).filter(k => model.pricing.upscale[k] != null) : [];
+      return (
+        <div className="vx-capgrid">
+          <CapTable title="Modalities" rows={[
+            ['Text', 'Input'],
+            ['Image', editor ? 'Input and output' : 'Output']
+          ]} />
+          <CapTable title="Features" rows={[
+            ['Image editing', editor ? <code>{editor.id}</code> : null],
+            ['Multi-image editing', refs > 1 ? `up to ${refs} images` : null],
+            ['Web-grounded generation', image.webSearch ? 'Supported' : null],
+            ['Style references', image.styleReferences ? 'Supported' : null],
+            ['Upscale', upscale.length ? listText(upscale) : null]
+          ]} />
+        </div>
+      );
+    }
     const text = model.text || {};
     const caps = text.caps || {};
-    const io = [
-      { label: 'Text', input: true, output: true },
-      { label: 'Image', input: caps.vision, output: false, note: caps.vision && caps.maxImages ? `up to ${caps.maxImages} per request` : null },
-      { label: 'Video', input: caps.videoInput, output: false, note: caps.videoInput && caps.maxVideos ? `up to ${caps.maxVideos} per request` : null },
-      { label: 'Audio', input: caps.audioInput, output: false }
-    ];
-    const mark = on => (on
-      ? <><Icon name="check" size={14} className="vx-yes" /><span className="vx-sr-only">Yes</span></>
-      : <><Icon name="minus" size={14} className="vx-no" /><span className="vx-sr-only">No</span></>);
+    const r = text.reasoning;
+    const levels = (r && r.effort) || [];
+    const per = (on, n) => (on ? `Input only${n ? ` · up to ${n}` : ''}` : null);
     return (
       <div className="vx-capgrid">
-        <div>
-          <h3 className="vx-h3">Input and output</h3>
-          <table className="vx-dtable vx-io">
-            <thead><tr><th>Modality</th><th className="vx-al-center">Input</th><th className="vx-al-center">Output</th></tr></thead>
-            <tbody>
-              {io.map(row => (
-                <tr key={row.label}>
-                  <td>{row.label}{row.note ? <span className="vx-muted"> · {row.note}</span> : null}</td>
-                  <td className="vx-al-center">{mark(row.input)}</td>
-                  <td className="vx-al-center">{mark(row.output)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div>
-          <h3 className="vx-h3">Features</h3>
-          <ul className="vx-features">
-            {TEXT_CAPS.filter(c => !['effort', 'vision', 'videoInput', 'audioInput'].includes(c.key)).map(cap => (
-              <Supported key={cap.key} on={hasCap(model, cap.key)} title={cap.desc}>{cap.label}</Supported>
-            ))}
-          </ul>
-        </div>
+        <CapTable title="Modalities" rows={[
+          ['Text', 'Input and output'],
+          ['Image', per(caps.vision, caps.maxImages)],
+          ['Audio', per(caps.audioInput)],
+          ['Video', per(caps.videoInput, caps.maxVideos)]
+        ]} />
+        <CapTable title="Features" rows={[
+          ['Streaming (SSE)', 'Supported'],
+          ['Function calling', caps.tools ? 'Supported' : null],
+          ['Structured output (json_schema)', caps.structured ? 'Supported' : null],
+          ['Reasoning effort', !r ? null : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'Always on'],
+          ['Prompt caching', hasCap(model, 'caching') ? 'Supported' : null],
+          ['Web search', caps.webSearch ? 'venice_parameters' : null],
+          ['X search', caps.xSearch ? 'venice_parameters' : null],
+          ['Log probabilities', caps.logprobs ? 'Supported' : null],
+          ['Fine-tuning', null],
+          ['Image generation', null]
+        ]} />
       </div>
     );
   };
@@ -2323,7 +2343,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const hasRelated = Boolean(related && ((related.versions || []).length || (related.similar || []).length));
     const faq = data.faq || [];
     const hasExamples = (model.modality === 'image' || model.modality === 'video') && models.some(m => (m.media || []).length);
-    const sections = pageSections(model, { variants: models.length, related: hasRelated, faq: faq.length > 0, examples: hasExamples });
+    const sections = pageSections(model, { variants: models.length, related: hasRelated, faq: faq.length > 0, examples: hasExamples, capabilities: hasCapabilities(model, models) });
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const has = id => sections.some(([key]) => key === id);
     const inCompare = compare.ids.includes(model.id);
@@ -2414,14 +2434,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               </Section>
             ) : null}
 
-            {has('capabilities') ? (
-              <Section id="capabilities" title="Capabilities">
-                <CapabilityMatrix model={model} />
-                <h3 className="vx-h3">Details</h3>
-                <TechDetails model={model} />
-              </Section>
-            ) : null}
-
             <Section id="pricing" title="Pricing" note={`USD ${priceUnit(model)} · billed from Venice API balance`}>
               {model.modality === 'text' && model.task === 'chat' ? <TextPricing model={model} family={family} related={related} /> : null}
               {model.modality === 'image' ? <ImagePricing model={model} models={models} family={family} related={related} /> : null}
@@ -2465,6 +2477,18 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             {has('censorship') ? (
               <Section id="censorship" title="Censorship" note={censorshipNote(model, provider)}>
                 <Censorship model={model} family={family} provider={provider} />
+              </Section>
+            ) : null}
+
+            {has('capabilities') ? (
+              <Section id="capabilities" title="Capabilities">
+                <CapabilityMatrix model={model} models={models} />
+                {model.task === 'chat' ? (
+                  <>
+                    <h3 className="vx-h3">Details</h3>
+                    <TechDetails model={model} />
+                  </>
+                ) : null}
               </Section>
             ) : null}
 
