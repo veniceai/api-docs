@@ -1007,43 +1007,19 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return `${value}${unit ? ` ${unit}` : ''}`;
   };
 
-  // Preview-only columns: how scores and live metrics would sit in the table.
-  const previewColumns = (modality, task) => {
-    const scoreLabel = { text: 'Intelligence', image: 'Arena Elo', video: 'Arena Elo', embedding: 'MTEB' }[modality] || (task === 'stt' ? 'WER' : 'Arena Elo');
-    const speed = {
-      text: ['tps', 'Throughput', 'tok/s'], image: ['gen', 'Gen. time', 's'], video: ['gen', 'Gen. time', 's'], embedding: ['latency', 'Latency', 'ms']
-    }[modality] || (task === 'stt' ? ['speed', 'Speed', 'x'] : task === 'music' ? ['gen', 'Gen. time', 's'] : ['ttfa', 'First audio', 'ms']);
-    const cols = [];
-    if (modality !== 'all') {
-      cols.push({ key: 'p-score', label: scoreLabel, align: 'right', hide: 'md', render: row => {
-        const set = benchmarkSetFor(row.display);
-        const main = set ? (set.composite || set.items[0]) : null;
-        return <span className="vx-num">{main ? withUnit(sampleBenchmarks(row.display)[main.key], main.unit === 'Elo' ? '' : main.unit) : '—'}</span>;
-      } });
-      if (modality !== 'video') cols.push({ key: 'p-speed', label: speed[1], align: 'right', hide: 'lg', render: row => <span className="vx-num">{withUnit(sampleTelemetry(row.display)[speed[0]], speed[2])}</span> });
-    }
-    // Text, image and video tables are already at full width; speed and uptime live on their model pages.
-    if (modality !== 'text' && modality !== 'video' && modality !== 'image') {
-      cols.push({ key: 'p-uptime', label: 'Uptime', align: 'right', hide: 'md', render: row => <span className="vx-num">{withUnit(sampleTelemetry(row.display).uptime, '%')}</span> });
-    }
-    return cols;
-  };
-
   // `hide` drops a column below a breakpoint (lg 1280px, md 1024px, sm 700px);
   // the model cell repeats the key spec and privacy tier on small screens.
-  const explorerColumns = (modality, task, lens, catalog, preview) => {
+  const explorerColumns = (modality, task, lens, catalog) => {
     const privacy = { key: 'privacy', label: 'Privacy', hide: 'sm', render: row => <PrivacyStack tiers={row.family.privacy} /> };
     const added = { key: 'added', label: 'Added', sort: 'newest', align: 'right', hide: 'lg', render: row => <span className="vx-muted vx-nowrap">{shortDate(row.family.updated || row.family.created)}</span> };
-    const sample = preview ? previewColumns(modality, task) : [];
     if (modality === 'text') {
       return [
         { key: 'context', label: 'Context', sort: 'context', align: 'right', hide: 'sm', render: row => <span className="vx-num">{tokens(row.display.text && row.display.text.context)}</span> },
         { key: 'input', label: 'Input', sort: 'input', align: 'right', hide: 'md', render: row => <PriceCell value={row.display.pricing && row.display.pricing.input} /> },
         { key: 'output', label: 'Output', sort: 'output', align: 'right', hide: 'md', render: row => <PriceCell value={row.display.pricing && row.display.pricing.output} /> },
-        ...(preview ? [] : [{ key: 'cache', label: 'Cached', align: 'right', hide: 'lg', hint: 'Cached input (prompt cache read)', render: row => <PriceCell value={row.display.pricing && row.display.pricing.cacheRead} /> }]),
+        { key: 'cache', label: 'Cached', align: 'right', hide: 'lg', hint: 'Cached input (prompt cache read)', render: row => <PriceCell value={row.display.pricing && row.display.pricing.cacheRead} /> },
         { key: 'blended', label: 'Blended', sort: 'price', align: 'right', hint: 'Blended = (3 × input + output) / 4, the mix Artificial Analysis uses.', render: row => <PriceCell value={row.price} strong /> },
-        ...sample,
-        ...(preview ? [] : [{ key: 'caps', label: 'Capabilities', hide: 'md', render: row => <CapIcons model={row.display} /> }]),
+        { key: 'caps', label: 'Capabilities', hide: 'md', render: row => <CapIcons model={row.display} /> },
         privacy
       ];
     }
@@ -1056,7 +1032,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         } },
         { key: 'res', label: 'Max output', align: 'right', hide: 'sm', render: row => <span className="vx-num">{imageMaxRes(row.display) || '—'}</span> },
         { key: 'ar', label: 'Aspect ratios', align: 'right', hide: 'lg', render: row => <span className="vx-num">{((row.display.image && row.display.image.aspectRatios) || []).filter(a => a !== 'auto').length || '—'}</span> },
-        ...sample,
         privacy
       ];
     }
@@ -1081,7 +1056,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           const a = row.display.video && row.display.video.audio;
           return <span className={a === 'native' || a === 'optional' ? undefined : 'vx-muted'}>{a === 'native' ? 'Native' : a === 'optional' ? 'Optional' : 'None'}</span>;
         } },
-        ...sample,
         privacy
       ];
     }
@@ -1090,7 +1064,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         return [
           { key: 'hour', label: 'Per audio hour', sort: 'price', align: 'right', render: row => <PriceCell value={row.display.pricing && row.display.pricing.perHour} strong /> },
           { key: 'k', label: 'Per 1K minutes', align: 'right', hide: 'sm', render: row => <PriceCell value={row.display.pricing && row.display.pricing.perMinute != null ? row.display.pricing.perMinute * 1000 : null} /> },
-          ...sample,
           privacy
         ];
       }
@@ -1100,7 +1073,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           { key: 'price', label: 'Price', sort: 'price', align: 'right', render: row => <PriceCell value={row.price} unit={headlineUnit(row.display)} strong /> },
           { key: 'len', label: 'Max length', align: 'right', hide: 'sm', render: row => <span className="vx-num">{row.display.audio && row.display.audio.maxDuration ? `${Math.round(row.display.audio.maxDuration / 60 * 10) / 10} min` : '—'}</span> },
           { key: 'lyrics', label: 'Lyrics', hide: 'lg', render: row => (row.display.audio && row.display.audio.lyrics ? 'Yes' : <span className="vx-muted">No</span>) },
-          ...sample,
           privacy
         ];
       }
@@ -1108,7 +1080,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         { key: 'chars', label: 'Per 1M chars', sort: 'price', align: 'right', render: row => <PriceCell value={row.price} strong /> },
         { key: 'min', label: 'Per minute', align: 'right', hide: 'sm', hint: 'At about 825 characters per minute of speech.', render: row => <PriceCell value={row.display.pricing && row.display.pricing.perMinute} /> },
         { key: 'voices', label: 'Voices', align: 'right', hide: 'md', render: row => <span className="vx-num">{(row.display.audio && row.display.audio.voiceCount) || '—'}</span> },
-        ...sample,
         privacy
       ];
     }
@@ -1117,7 +1088,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         { key: 'dims', label: 'Dimensions', align: 'right', hide: 'sm', render: row => <span className="vx-num">{(row.display.embedding && row.display.embedding.dimensions) ? row.display.embedding.dimensions.toLocaleString('en-US') : '—'}</span> },
         { key: 'max', label: 'Max input', align: 'right', hide: 'md', render: row => <span className="vx-num">{tokens(row.display.embedding && row.display.embedding.maxInputTokens)}</span> },
         { key: 'price', label: 'Per 1M tokens', sort: 'price', align: 'right', render: row => <PriceCell value={row.price} strong /> },
-        ...sample,
         privacy
       ];
     }
@@ -1125,7 +1095,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       { key: 'type', label: 'Type', hide: 'sm', render: row => <span className="vx-nowrap">{TASK_LABELS[row.display.task] || row.family.modality}</span> },
       { key: 'price', label: 'Price', align: 'right', hint: 'Blended per 1M tokens for text; per image, second, character or minute elsewhere.', render: row => <PriceCell value={row.price} unit={headlineUnit(row.display)} strong /> },
       { key: 'spec', label: 'Key spec', hide: 'md', render: row => <span className="vx-muted vx-nowrap">{keySpec(row.display)}</span> },
-      ...sample,
       privacy, added
     ];
   };
@@ -1338,7 +1307,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const { catalog, error } = useCatalog();
     const compare = useCompare();
     const now = useNow();
-    const [preview, setPreview] = usePreview();
     const [modality, setModality] = useState(initialModality);
     const [task, setTask] = useState(initialTask || 'tts');
     const [query, setQuery] = useState('');
@@ -1433,7 +1401,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }, [scoped]);
 
     const modelCount = rows.reduce((n, row) => n + row.family.variants.length, 0);
-    const columns = catalog ? explorerColumns(modality, task, lens, catalog, preview) : [];
+    const columns = catalog ? explorerColumns(modality, task, lens, catalog) : [];
     const counts = catalog ? catalog.counts : null;
     const canGrid = modality === 'image' || modality === 'video';
     const filterCount = activeFilterCount(filters);
@@ -1499,7 +1467,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 </div>
                 <LensBar modality={modality} lens={lens} setLens={setLens} />
                 <div className="vx-toolbar-right">
-                  {preview ? <span className="vx-preview-flag"><SampleMark /><button type="button" className="vx-link-btn" onClick={() => setPreview(false)}>Hide</button></span> : null}
                   <select className="vx-select" value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
                     {['newest', 'price', 'name', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{`Sort: ${SORTS[key].label}`}</option>)}
                   </select>
@@ -1525,7 +1492,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   Prices in USD from <code>GET /models</code>{modality === 'video' || modality === 'all' ? <> and build-time <code>POST /video/quote</code> matrices</> : null}.
                   {catalog.generatedAt ? ` Updated ${fmtDate(Math.floor(new Date(catalog.generatedAt).getTime() / 1000))}.` : ''}
                   {' '}Uptime, latency and benchmark scores are planned.
-                  {' '}<button type="button" className="vx-link-btn" onClick={() => setPreview(!preview)}>{preview ? 'Hide sample metrics' : 'Preview with sample data'}</button>
                 </p>
                 <nav aria-label="Related pages">
                   <a href="/models/methodology">Methodology</a>

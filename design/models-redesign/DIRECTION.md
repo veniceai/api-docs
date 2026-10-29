@@ -101,7 +101,7 @@ Prototype: `/models/overview`, `src/model-hub.jsx` (`ModelExplorer`).
 3. Modality tabs with family counts: All · Text · Image · Video · Audio (text to speech / speech to text / music and sound effects) · Embeddings.
 4. Filter rail: capabilities, context, blended price and served precision (text); task, resolution and features (image); mode, audio, resolution and clip length (video); then privacy, attributes (Venice picks, open weights, uncensored, added in the last 30 days, hide beta and deprecated) and provider for all.
 5. Toolbar: live result count (families and model IDs; text adds "prices per 1M tokens"), pricing lens, sort, gallery or table view.
-6. Results, then a footer with data sources, update time, a note that performance and benchmark data are planned, and the preview link.
+6. Results, then a footer with data sources, update time and a note that performance and benchmark data are planned.
 7. A compare tray fixed at the bottom once anything is selected.
 
 An earlier iteration had quick-pick chips above the results. Each one duplicated a rail filter, so they were removed; the only unique one, Venice picks, is now a filter.
@@ -123,7 +123,7 @@ All state is in the URL (`?m=video&mode=i2v&privacy=private&lens=1080-10-on&view
 
 Image and video default to a gallery of cards with the model's reference render (video plays on hover). Families without renders are listed in a table under the gallery rather than shown as empty tiles. Every card and row has a compare checkbox.
 
-Columns drop by priority below 1280, 1024 and 700 px instead of scrolling sideways. On phones a row is the model name, its headline price and one line with provider, key spec and privacy tier. Sample score, speed and uptime columns show where measured data will sit (hidden with `?preview=0`).
+Columns drop by priority below 1280, 1024 and 700 px instead of scrolling sideways. On phones a row is the model name, its headline price and one line with provider, key spec and privacy tier.
 
 ### The row follows the filters
 
