@@ -1855,7 +1855,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             <thead><tr><th>Track length</th><th className="vx-al-right">Price</th></tr></thead>
             <tbody>
               {p.tiers.map(t => (
-                <tr key={t.upTo}><td>{t.from ? `${t.from}–${t.upTo}s` : `Up to ${t.upTo}s`}</td><td className="vx-al-right vx-num">{usd(t.usd)}</td></tr>
+                <tr key={t.upTo}><td>{t.from === t.upTo ? `${t.upTo}s` : t.from ? `${t.from}–${t.upTo}s` : `Up to ${t.upTo}s`}</td><td className="vx-al-right vx-num">{usd(t.usd)}</td></tr>
               ))}
             </tbody>
           </table>
