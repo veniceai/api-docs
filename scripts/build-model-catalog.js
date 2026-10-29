@@ -790,7 +790,7 @@ const PRIVACY_LABELS = { e2ee: 'End-to-end encrypted', tee: 'Trusted execution (
 const PRIVACY_TEXT = {
   e2ee: ['is end-to-end encrypted', 'are end-to-end encrypted', ': prompts are encrypted on your device and decrypted only inside an attested hardware enclave, so neither Venice nor the GPU provider can read them'],
   tee: ['runs', 'run', ' inside a hardware-secured trusted execution environment with cryptographic attestation'],
-  private: ['is private', 'are private', ': requests run on infrastructure Venice controls with zero data retention, and prompts and outputs are never stored or used for training'],
+  private: ['is private', 'are private', ': zero data retention is enforced by contract, so prompts and outputs are processed for inference only and not retained after the request completes'],
   anonymized: ['is anonymized', 'are anonymized', ': Venice forwards requests to the provider without your identity, but the provider may retain prompt data, so use a private model for sensitive work']
 };
 
