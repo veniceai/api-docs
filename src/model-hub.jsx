@@ -124,6 +124,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   };
   const initialScopes = (modality, task) => (modality === 'all' ? [] : modality === 'audio' ? [task || 'tts'] : [modality]);
   const VIEWS = ['list', 'table', 'grid'];
+  const PAGE_SIZE = 60;
   const defaultView = modality => (modality === 'image' || modality === 'video' ? 'grid' : 'list');
   const TASK_LABELS = {
     chat: 'Chat', decision: 'Decisions', 'image-generation': 'Image generation', 'image-edit': 'Image editing',
@@ -1217,6 +1218,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const [view, setView] = useState(defaultView(initialModality));
     const [lens, setLens] = useState({ image: '1K', video: DEFAULT_VIDEO_LENS });
     const [railOpen, setRailOpen] = useState(false);
+    const [limit, setLimit] = useState(PAGE_SIZE);
     const [hydrated, setHydrated] = useState(false);
     const searchRef = useRef(null);
     // Columns, filters and price lenses for one modality apply when exactly
@@ -1267,6 +1269,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         ...filtersToParams(filters)
       });
     }, [hydrated, scopes, query, sort, view, lens, filters]);
+
+    useEffect(() => { setLimit(PAGE_SIZE); }, [scopes, filters, query, sort, view]);
 
     useEffect(() => {
       if (!railOpen) return undefined;
@@ -1340,6 +1344,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }, [scoped]);
 
     const modelCount = rows.reduce((n, row) => n + row.family.variants.length, 0);
+    const page = rows.slice(0, limit);
+    const remaining = rows.length - page.length;
     const columns = catalog ? explorerColumns(modality, task, lens, catalog) : [];
     const canGrid = modality === 'image' || modality === 'video';
     // A gallery link opened with text or audio in scope falls back to the list.
@@ -1412,12 +1418,20 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                     <button type="button" className="vx-btn vx-btn-sm" onClick={() => { setFilters(EMPTY_FILTERS); setQuery(''); }}>Clear {query && filterCount ? 'search and filters' : query ? 'search' : 'filters'}</button>
                   </Empty>
                 ) : shownView === 'grid' ? (
-                  <Gallery rows={rows} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} lens={lens} compare={compare} catalog={catalog} modality={modality} />
+                  <Gallery rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} lens={lens} compare={compare} catalog={catalog} modality={modality} />
                 ) : shownView === 'table' ? (
-                  <ExplorerTable rows={rows} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} compare={compare} />
+                  <ExplorerTable rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} compare={compare} />
                 ) : (
-                  <ExplorerList rows={rows} providers={providers} now={now} lens={lens} catalog={catalog} />
+                  <ExplorerList rows={page} providers={providers} now={now} lens={lens} catalog={catalog} />
                 )}
+
+                {remaining > 0 ? (
+                  <div className="vx-more-row">
+                    <button type="button" className="vx-btn vx-more-btn" onClick={() => setLimit(limit + PAGE_SIZE)}>
+                      {remaining > PAGE_SIZE ? `Show ${PAGE_SIZE} more · ${remaining} remaining` : `Show the last ${remaining}`}
+                    </button>
+                  </div>
+                ) : null}
 
                 <footer className="vx-explorer-foot">
                   <p>
