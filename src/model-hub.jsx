@@ -676,9 +676,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const Check = ({ checked, onChange, label, count, title }) => (
-    <label className={cls('vx-check', checked && 'is-checked')} title={title}>
-      <input type="checkbox" checked={checked} onChange={onChange} />
+  const Check = ({ checked, onChange, label, count, title, disabled }) => (
+    <label className={cls('vx-check', checked && 'is-checked', disabled && 'is-disabled')} title={title}>
+      <input type="checkbox" checked={checked} onChange={onChange} disabled={disabled} />
       <span className="vx-check-box"><Icon name="check" size={11} /></span>
       <span className="vx-check-label">{label}</span>
       {count != null ? <span className="vx-check-count">{count}</span> : null}
@@ -686,8 +686,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   );
 
   // The filter column; below 1024px it opens as a drawer from the toolbar.
-  const FilterRail = ({ modality, task, scopes, scopeCounts, onToggleScope, filters, setFilters, providerCounts, providers, onClear, open, onClose }) => {
+  const FilterRail = ({ modality, task, scopes, scopeCounts, onToggleScope, filters, setFilters, facetCount, providerCounts, providers, onClear, open, onClose }) => {
     const toggleIn = (key, value) => setFilters(prev => ({ ...prev, [key]: prev[key].includes(value) ? prev[key].filter(v => v !== value) : [...prev[key], value] }));
+    // An option nothing in scope matches is disabled unless already checked.
+    const option = (key, value, label, title) => {
+      const checked = filters[key].includes(value);
+      const count = facetCount(key, value);
+      return <Check key={value} checked={checked} onChange={() => toggleIn(key, value)} label={label} title={title} count={count} disabled={!checked && count === 0} />;
+    };
     // Single-choice filters are segmented tracks, as in Jordan's column.
     const range = (key, title, options) => (
       <FilterGroup title={title}>
@@ -715,24 +721,18 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           </FilterGroup>
 
           <FilterGroup title="Privacy">
-            {PRIVACY_ORDER.map(tier => (
-              <Check key={tier} checked={filters.privacy.includes(tier)} onChange={() => toggleIn('privacy', tier)} label={PRIVACY[tier].long} title={PRIVACY[tier].desc} />
-            ))}
+            {PRIVACY_ORDER.map(tier => option('privacy', tier, PRIVACY[tier].long, PRIVACY[tier].desc))}
           </FilterGroup>
 
           {modality === 'text' ? (
             <>
               <FilterGroup title="Capabilities">
-                {TEXT_CAPS.filter(c => !['logprobs', 'xSearch', 'audioInput'].includes(c.key)).map(cap => (
-                  <Check key={cap.key} checked={filters.caps.includes(cap.key)} onChange={() => toggleIn('caps', cap.key)} label={cap.label} title={cap.desc} />
-                ))}
+                {TEXT_CAPS.filter(c => !['logprobs', 'xSearch', 'audioInput'].includes(c.key)).map(cap => option('caps', cap.key, cap.label, cap.desc))}
               </FilterGroup>
               {range('ctx', 'Context length', [['', 'Any'], ['128000', '128K', '128K tokens or more'], ['256000', '256K', '256K tokens or more'], ['1000000', '1M', '1M tokens or more']])}
               {range('price', 'Input price (per 1M tokens)', [['', 'Any'], ['0.5', '≤$0.5', 'Up to $0.50'], ['2', '≤$2', 'Up to $2'], ['5', '≤$5', 'Up to $5']])}
               <FilterGroup title="Served precision" defaultOpen={false}>
-                {[['bf16', 'BF16'], ['fp16', 'FP16'], ['fp8', 'FP8'], ['fp4', 'FP4'], ['int4', 'INT4'], ['none', 'Not disclosed']].map(([value, label]) => (
-                  <Check key={value} checked={filters.quant.includes(value)} onChange={() => toggleIn('quant', value)} label={label} title={QUANT_NOTES[value]} />
-                ))}
+                {[['bf16', 'BF16'], ['fp16', 'FP16'], ['fp8', 'FP8'], ['fp4', 'FP4'], ['int4', 'INT4'], ['none', 'Not disclosed']].map(([value, label]) => option('quant', value, label, QUANT_NOTES[value]))}
               </FilterGroup>
             </>
           ) : null}
@@ -740,14 +740,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           {modality === 'image' ? (
             <>
               <FilterGroup title="Task">
-                {[['generate', 'Generate'], ['edit', 'Edit'], ['upscale', 'Upscale'], ['background-removal', 'Remove background']].map(([value, label]) => (
-                  <Check key={value} checked={filters.modes.includes(value)} onChange={() => toggleIn('modes', value)} label={label} />
-                ))}
+                {[['generate', 'Generate'], ['edit', 'Edit'], ['upscale', 'Upscale'], ['background-removal', 'Remove background']].map(([value, label]) => option('modes', value, label))}
               </FilterGroup>
               {range('res', 'Output resolution', [['', 'Any'], ['2K', '2K', '2K available'], ['4K', '4K', '4K available']])}
               <FilterGroup title="Features">
-                <Check checked={filters.caps.includes('webSearch')} onChange={() => toggleIn('caps', 'webSearch')} label="Web-grounded generation" />
-                <Check checked={filters.caps.includes('multiImage')} onChange={() => toggleIn('caps', 'multiImage')} label="Multi-image editing" />
+                {option('caps', 'webSearch', 'Web-grounded generation')}
+                {option('caps', 'multiImage', 'Multi-image editing')}
               </FilterGroup>
             </>
           ) : null}
@@ -755,9 +753,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           {modality === 'video' ? (
             <>
               <FilterGroup title="Mode">
-                {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition'].map(mode => (
-                  <Check key={mode} checked={filters.modes.includes(mode)} onChange={() => toggleIn('modes', mode)} label={VARIANT_LABELS[mode]} />
-                ))}
+                {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition'].map(mode => option('modes', mode, VARIANT_LABELS[mode]))}
               </FilterGroup>
               {range('audio', 'Audio', [['', 'Any'], ['audio', 'Audio', 'Generates audio'], ['silent', 'Silent', 'Can be silent']])}
               {range('res', 'Max resolution', [['', 'Any'], ['1080', '1080p', '1080p or higher'], ['1440', '1440p', '1440p or higher'], ['2160', '4K']])}
@@ -766,11 +762,11 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           ) : null}
 
           <FilterGroup title="Attributes">
-            <Check checked={filters.flags.includes('picks')} onChange={() => toggleIn('flags', 'picks')} label="Venice picks" title="Featured, recommended or a Venice default for a task" />
-            <Check checked={filters.flags.includes('open')} onChange={() => toggleIn('flags', 'open')} label="Open weights" />
-            <Check checked={filters.flags.includes('uncensored')} onChange={() => toggleIn('flags', 'uncensored')} label="Uncensored" />
-            <Check checked={filters.flags.includes('new')} onChange={() => toggleIn('flags', 'new')} label="Added in the last 30 days" />
-            <Check checked={filters.flags.includes('stable')} onChange={() => toggleIn('flags', 'stable')} label="Hide beta and deprecated" />
+            {option('flags', 'picks', 'Venice picks', 'Featured, recommended or a Venice default for a task')}
+            {option('flags', 'open', 'Open weights')}
+            {option('flags', 'uncensored', 'Uncensored')}
+            {option('flags', 'new', 'Added in the last 30 days')}
+            {option('flags', 'stable', 'Hide beta and deprecated')}
           </FilterGroup>
 
           <FilterGroup title="Provider" defaultOpen={modality !== 'all'}>
@@ -1225,6 +1221,20 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       return out;
     }, [catalog]);
 
+    // An option's count is the families in scope it matches on its own, run
+    // through the same test as the filter so the two never disagree.
+    const facetCount = useMemo(() => {
+      const cache = new Map();
+      return (key, value) => {
+        const id = `${key}:${value}`;
+        if (!cache.has(id)) {
+          const only = { ...EMPTY_FILTERS, [key]: [value] };
+          cache.set(id, scoped.filter(family => familyMatches(family, family.variants.map(v => catalog.models[v]).filter(Boolean), only, now)).length);
+        }
+        return cache.get(id);
+      };
+    }, [catalog, scoped, now]);
+
     const rows = useMemo(() => {
       if (!catalog) return [];
       const list = [];
@@ -1258,7 +1268,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         <div className="vx-page-grid">
           {catalog ? (
             <FilterRail modality={modality} task={task} scopes={scopes} scopeCounts={scopeCounts} onToggleScope={toggleScope}
-              filters={filters} setFilters={setFilters} providerCounts={providerCounts} providers={providers}
+              filters={filters} setFilters={setFilters} facetCount={facetCount} providerCounts={providerCounts} providers={providers}
               onClear={() => setFilters(EMPTY_FILTERS)} open={railOpen} onClose={() => setRailOpen(false)} />
           ) : <aside className="vx-side vx-filters" aria-hidden="true" />}
           {railOpen ? <button type="button" className="vx-filters-backdrop" onClick={() => setRailOpen(false)} aria-label="Close filters" /> : null}
