@@ -447,7 +447,7 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 
 | | System |
 |---|---|
-| Type | Inter and JetBrains Mono. 30/500 page title, 20/500 section title, 18/28 description, 14 body and tables, 13/500 controls, 12 labels and captions, 11 uppercase badges. Weights 400, 500, 600 only |
+| Type | Aeonik for text and Aeonik Fono for labels, IDs and figures, loaded from venice.ai; JetBrains Mono for code. 30 page title, 20 section title, 18/28 description, 14 body and tables, 13 controls, 12 labels and captions, 11 uppercase badges. venice.ai serves the regular weight only, so heavier weights are synthesized |
 | Spacing | 4px scale: 4, 8, 12, 16, 24, 32, 48 |
 | Radius | 4px badges and chips, 8px controls, media and floating panels, 16px code blocks (as in docs code groups) |
 | Colour | Text #17191B, secondary #3F4143, muted #707274 (4.9:1), dividers #EEF0F2, one accent #125DA3 (#6BA7E0 in dark mode). Green, amber and red only for states |
