@@ -1481,6 +1481,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (hasCensorship(model)) list.push(['censorship', 'Censorship']);
     if (capabilities) list.push(['capabilities', 'Capabilities']);
     list.push(['specs', 'Specs']);
+    if (PRIVACY_TIERS.some(([tier]) => tier === model.privacy)) list.push(['privacy', 'Privacy']);
     if (variants > 1) list.push(['variants', 'Variants']);
     if (related) list.push(['related', 'Related models']);
     if (faq) list.push(['faq', 'FAQ']);
@@ -1882,6 +1883,42 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         {level !== 'uncensored' && modality ? (
           <p className="vx-footnote">For unrestricted output, use one of Venice's <a href={`${modality.path}?flag=uncensored`}>uncensored {modality.label.toLowerCase()} models</a>.</p>
         ) : null}
+      </>
+    );
+  };
+
+  // Venice's four privacy modes, weakest first. Each builds on the one before,
+  // so lower tiers are included in the current one.
+  const PRIVACY_TIERS = [['anonymized', 'Anonymized'], ['private', 'Private'], ['tee', 'TEE'], ['e2ee', 'End-to-end encrypted']];
+  const tierText = (tier, by) => ({
+    anonymized: `Venice hides your identity and stores no prompts. ${by || 'The provider'} still sees the content.`,
+    private: "Zero data retention, enforced by contract. Prompts and outputs aren't stored.",
+    tee: 'Hardware-isolated inference with remote attestation.',
+    e2ee: 'Your client encrypts the prompt, and only the verified enclave decrypts it.'
+  })[tier];
+  // E2EE models also run in TEE-only mode under the same ID.
+  const offersTier = (m, tier) => m.privacy === tier || (tier === 'tee' && Boolean(m.text && m.text.caps && m.text.caps.tee));
+
+  const PrivacyTiers = ({ model, models, provider, onSelect }) => {
+    const rank = PRIVACY_TIERS.findIndex(([tier]) => tier === model.privacy);
+    return (
+      <>
+        <div className="vx-tiers">
+          {PRIVACY_TIERS.map(([tier, label], i) => {
+            const other = i > rank ? models.find(m => m.id !== model.id && offersTier(m, tier)) : null;
+            return (
+              <div key={tier} className={cls('vx-tier', i === rank && 'is-current')} aria-current={i === rank ? 'true' : undefined}>
+                <div className="vx-tier-num">Tier {i + 1}{i === rank ? ' · this model' : ''}</div>
+                <div className="vx-tier-name">{label}</div>
+                {i === rank ? <p className="vx-tier-text">{tierText(tier, upstreamName(model, provider))}</p>
+                  : i < rank ? <p className="vx-tier-text">Included</p>
+                    : other ? <button type="button" className="vx-tier-link" onClick={() => onSelect(other.id)}>Available as <code>{other.id}</code></button>
+                      : <p className="vx-tier-text">Not available</p>}
+              </div>
+            );
+          })}
+        </div>
+        <p className="vx-footnote">How each mode works: <a href="/overview/privacy">Privacy</a>.</p>
       </>
     );
   };
@@ -2500,6 +2537,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             <Section id="specs" title="Specs">
               <Specs model={model} models={models} />
             </Section>
+
+            {has('privacy') ? (
+              <Section id="privacy" title="Privacy">
+                <PrivacyTiers model={model} models={models} provider={provider} onSelect={selectVariant} />
+              </Section>
+            ) : null}
 
             {has('variants') ? (
               <Section id="variants" title="Variants">
