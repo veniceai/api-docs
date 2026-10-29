@@ -123,6 +123,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return family.modality;
   };
   const initialScopes = (modality, task) => (modality === 'all' ? [] : modality === 'audio' ? [task || 'tts'] : [modality]);
+  const VIEWS = ['list', 'table', 'grid'];
+  const defaultView = modality => (modality === 'image' || modality === 'video' ? 'grid' : 'list');
   const TASK_LABELS = {
     chat: 'Chat', decision: 'Decisions', 'image-generation': 'Image generation', 'image-edit': 'Image editing',
     'image-upscale': 'Upscaling', 'background-removal': 'Background removal', video: 'Video',
@@ -1026,6 +1028,87 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
+  // List view, as in Jordan's explorer: name, provider and price; the model
+  // ID with type, privacy and capability pills; then key specs.
+  const TYPE_PILLS = {
+    chat: 'Text', decision: 'Decision', 'image-generation': 'Image', 'image-edit': 'Image edit', 'image-upscale': 'Upscale',
+    'background-removal': 'Background removal', video: 'Video', tts: 'Text to speech', stt: 'Speech to text', music: 'Music', sfx: 'Sound effects', embedding: 'Embedding'
+  };
+  const LIST_CAPS = [['tools', 'Function calling'], ['reasoning', 'Reasoning'], ['vision', 'Vision'], ['code', 'Code']];
+
+  const rowPills = (row, catalog) => {
+    const { family, display } = row;
+    const pills = [];
+    if (display.task === 'chat') LIST_CAPS.forEach(([key, label]) => { if (hasCap(display, key)) pills.push(label); });
+    if (family.modality === 'image') [...new Set(modeChips(family, catalog))].forEach(v => pills.push(VARIANT_LABELS[v] || v));
+    if (family.modality === 'video') modeChips(family, catalog).forEach(v => pills.push(MODE_SHORT[v] || v));
+    if (family.openWeights) pills.push('Open weights');
+    if (family.uncensored) pills.push('Uncensored');
+    return pills;
+  };
+
+  const rowPrice = (row, lens) => {
+    const { display } = row;
+    const p = display.pricing || {};
+    if (display.task === 'chat') return p.input != null ? <>{usd(p.input)} / {usd(p.output)}<span className="vx-muted"> per 1M</span></> : null;
+    if (display.modality === 'video') {
+      const vp = videoPrice(display, lens.video);
+      return vp.status === 'quoted' ? <>{usd(vp.perSecond)}<span className="vx-muted"> / sec</span></> : <span className="vx-muted">By source</span>;
+    }
+    return row.price != null ? <>{usd(row.price)}<span className="vx-muted"> {headlineUnit(display)}</span></> : null;
+  };
+
+  // The price already leads the row, so text lists limits rather than
+  // repeating it.
+  const rowSummary = model => {
+    if (model.task !== 'chat' || !model.text) return keySpec(model);
+    const p = model.pricing || {};
+    return [
+      model.text.context ? `${tokens(model.text.context)} context` : null,
+      model.text.maxOutput ? `${tokens(model.text.maxOutput)} max output` : null,
+      p.cacheRead != null ? `${usd(p.cacheRead)}/M cached input` : null
+    ].filter(Boolean).join(' · ');
+  };
+
+  const IdChip = ({ id }) => {
+    const [done, setDone] = useState(false);
+    return (
+      <button type="button" className={cls('vx-idchip', done && 'is-done')} title={id} aria-label={`Copy model ID ${id}`}
+        onClick={() => copyText(id).then(() => { setDone(true); setTimeout(() => setDone(false), 1400); })}>
+        <span>{id}</span>{done ? <Icon name="check" size={12} /> : null}
+      </button>
+    );
+  };
+
+  const ExplorerList = ({ rows, providers, now, lens, catalog }) => (
+    <ul className="vx-list">
+      {rows.map(row => {
+        const { family, display } = row;
+        const provider = providers[family.provider];
+        const extra = family.variants.length - 1;
+        const summary = rowSummary(display);
+        return (
+          <li key={family.slug} className="vx-list-row">
+            <div className="vx-list-top">
+              <a className="vx-list-name" href={modelHref(family, display.id)}>{family.name}</a>
+              <span className="vx-list-provider">{provider ? provider.name : family.provider}</span>
+              <StatusTags item={family} now={now} />
+              <span className="vx-list-price">{rowPrice(row, lens)}</span>
+            </div>
+            <div className="vx-list-pills">
+              <IdChip id={display.id} />
+              {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
+              <span className="vx-pill is-strong">{TYPE_PILLS[display.task] || family.modality}</span>
+              <span className="vx-pill is-strong">{privacyTiers(family.privacy).map(tier => PRIVACY[tier].label).join(' · ')}</span>
+              {rowPills(row, catalog).map(label => <span key={label} className="vx-pill">{label}</span>)}
+            </div>
+            {summary ? <div className="vx-list-sum">{summary}</div> : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+
   const hasRenders = (family, catalog) => family.variants.some(id => ((catalog.models[id] || {}).media || []).length);
 
   // Families without reference renders go in a table under the gallery rather
@@ -1130,7 +1213,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const [query, setQuery] = useState('');
     const [filters, setFilters] = useState(EMPTY_FILTERS);
     const [sort, setSort] = useState('newest');
-    const [view, setView] = useState(initialModality === 'image' || initialModality === 'video' ? 'grid' : 'table');
+    const [view, setView] = useState(defaultView(initialModality));
     const [lens, setLens] = useState({ image: '1K', video: DEFAULT_VIDEO_LENS });
     const [railOpen, setRailOpen] = useState(false);
     const [hydrated, setHydrated] = useState(false);
@@ -1151,7 +1234,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       }
       if (params.get('q')) setQuery(params.get('q'));
       if (params.get('sort') && SORTS[params.get('sort')]) setSort(params.get('sort'));
-      if (params.get('view')) setView(params.get('view') === 'grid' ? 'grid' : 'table');
+      if (VIEWS.includes(params.get('view'))) setView(params.get('view'));
       const lensVideo = params.get('lens');
       if (lensVideo) {
         const [h, s, a] = lensVideo.split('-');
@@ -1177,7 +1260,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         m: scopes.join(',') !== startScopes.join(',') ? scopes.join(',') || 'all' : null,
         q: query || null,
         sort: sort !== 'newest' ? sort : null,
-        view: view !== (modality === 'image' || modality === 'video' ? 'grid' : 'table') ? view : null,
+        view: view !== defaultView(modality) ? view : null,
         lens: modality === 'video' && !lensDefault ? `${lens.video.h}-${lens.video.s}-${lens.video.a}` : null,
         res1: modality === 'image' && lens.image !== '1K' ? lens.image : null,
         ...filtersToParams(filters)
@@ -1207,7 +1290,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       const nextSingle = next.length === 1 ? next[0] : null;
       setScopes(next);
       setFilters(prev => ({ ...EMPTY_FILTERS, providers: [], privacy: prev.privacy, flags: prev.flags }));
-      setView(nextSingle === 'image' || nextSingle === 'video' ? 'grid' : 'table');
+      setView(defaultView(nextSingle));
       if (nextSingle !== 'text' && !['newest', 'name', 'price'].includes(sort)) setSort('newest');
     };
 
@@ -1258,6 +1341,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const modelCount = rows.reduce((n, row) => n + row.family.variants.length, 0);
     const columns = catalog ? explorerColumns(modality, task, lens, catalog) : [];
     const canGrid = modality === 'image' || modality === 'video';
+    // A gallery link opened with text or audio in scope falls back to the list.
+    const shownView = view === 'grid' && !canGrid ? 'list' : view;
     const filterCount = activeFilterCount(filters);
     const scopeKey = single || 'all';
 
@@ -1299,9 +1384,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               <select className="vx-select" value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
                 {['newest', 'price', 'name', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{`Sort: ${SORTS[key].label}`}</option>)}
               </select>
-              {canGrid ? (
-                <Segmented ariaLabel="View" value={view} onChange={setView} options={[{ value: 'grid', label: '', icon: 'grid', title: 'Gallery' }, { value: 'table', label: '', icon: 'rows', title: 'Table' }]} />
-              ) : null}
+              <Segmented ariaLabel="View" value={shownView} onChange={setView}
+                options={[{ value: 'list', label: 'List' }, { value: 'table', label: 'Table' }, ...(canGrid ? [{ value: 'grid', label: 'Gallery' }] : [])]} />
             </div>
 
             {!catalog ? (
@@ -1316,7 +1400,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 <LensBar modality={modality} lens={lens} setLens={setLens} />
                 <div className="vx-countline">
                   <span className="vx-result-count" aria-live="polite">
-                    <strong>{plural(rows.length, 'family')}</strong> · {plural(modelCount, 'model ID')}{UNIT_NOTES[scopeKey] && !(canGrid && view === 'grid') ? ` · ${UNIT_NOTES[scopeKey]}` : ''}
+                    <strong>{plural(rows.length, 'family')}</strong> · {plural(modelCount, 'model ID')}{UNIT_NOTES[scopeKey] && shownView !== 'grid' ? ` · ${UNIT_NOTES[scopeKey]}` : ''}
                   </span>
                   <span className="vx-source">Prices from <code>GET /models</code>{updated ? ` · ${updated}` : ''}</span>
                 </div>
@@ -1326,10 +1410,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                     {query ? <>Nothing matches “{query}”{filterCount ? ' with the current filters' : ''}. </> : 'Try removing a filter. '}
                     <button type="button" className="vx-btn vx-btn-sm" onClick={() => { setFilters(EMPTY_FILTERS); setQuery(''); }}>Clear {query && filterCount ? 'search and filters' : query ? 'search' : 'filters'}</button>
                   </Empty>
-                ) : canGrid && view === 'grid' ? (
+                ) : shownView === 'grid' ? (
                   <Gallery rows={rows} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} lens={lens} compare={compare} catalog={catalog} modality={modality} />
-                ) : (
+                ) : shownView === 'table' ? (
                   <ExplorerTable rows={rows} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} compare={compare} />
+                ) : (
+                  <ExplorerList rows={rows} providers={providers} now={now} lens={lens} catalog={catalog} />
                 )}
 
                 <footer className="vx-explorer-foot">

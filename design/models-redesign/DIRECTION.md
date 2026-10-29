@@ -97,7 +97,7 @@ Prototype: `/models/overview`, `src/model-hub.jsx` (`ModelExplorer`).
 ### Layout
 
 1. Header in Jordan's style: a "Venice API · Models" eyebrow, the page title (Models, Text Models, …) and a one-line description that names the `model` parameter. **Compare** is a secondary button, **Models API** a tertiary link.
-2. Toolbar: search across name, provider, model ID and tags (`/` focuses it), sort, and gallery or table view on one row, then the pricing lens.
+2. Toolbar: search across name, provider, model ID and tags (`/` focuses it), sort, and the list, table or gallery view on one row, then the pricing lens.
 3. Modality facet at the top of the filter column, with family counts: text, image, video, text to speech, speech to text, music and sound effects, embeddings and decisions. Several can be checked. A page's own modality starts checked, and the columns, filters and pricing lens for one modality apply when exactly one is.
 4. Filter column, the full height of the page like the model page's side column (below 1024px a drawer opened from the toolbar): privacy for all; capabilities, context, input price and served precision (text); task, resolution and features (image); mode, audio, resolution and clip length (video); then attributes (Venice picks, open weights, uncensored, added in the last 30 days, hide beta and deprecated) and the top ten providers for all. Single-choice filters are segmented tracks; groups are spaced with Fono caps headings, as in Jordan's column. Each option shows how many families in scope it matches on its own, and one that matches nothing is disabled unless already checked.
 5. Count line: live result count (families and model IDs; text adds "prices per 1M tokens"), with the price source and update date.
@@ -121,7 +121,9 @@ All state is in the URL (`?m=video&mode=i2v&privacy=private&lens=1080-10-on&view
 | Music and SFX | Model, type, price per minute or track, max length, lyrics, privacy |
 | Embeddings | Model, dimensions, max input, per 1M tokens, privacy |
 
-Image and video default to a gallery of cards with the model's reference render (video plays on hover). Families without renders are listed in a table under the gallery rather than shown as empty tiles. Every card and row has a compare checkbox.
+Outside image and video the default is Jordan's list: per family, the name, provider and price; the model ID (click to copy) with type, privacy and capability pills; then key specs. Text rows give context, max output and cached input there rather than repeating the prices. On phones only the type and privacy pills stay.
+
+Image and video default to a gallery of cards with the model's reference render (video plays on hover). Families without renders are listed in a table under the gallery rather than shown as empty tiles. Table rows and gallery cards carry the compare checkbox.
 
 Columns drop by priority below 1280, 1024 and 700 px instead of scrolling sideways. On phones a row is the model name, its headline price and one line with provider, key spec and privacy tier.
 
@@ -451,13 +453,13 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 |---|---|
 | Type | Aeonik for text and Aeonik Fono for labels, IDs and figures, loaded from venice.ai; JetBrains Mono for code. 36 page title, 20 section title, 15.5 model page and 15 explorer descriptions, 14 body and tables, 13 controls, 12 labels, captions and Fono section notes, 11 uppercase badges and Fono table headings. venice.ai serves the regular weight only, so heavier weights are synthesized |
 | Spacing | 4px scale: 4, 8, 12, 16, 24, 32, 48 |
-| Radius | 4px badges, 6px chips and segmented options, 8px controls and floating panels, 10px cards, tables, media and code blocks |
+| Radius | 4px badges, 6px chips and segmented options, 999px pills, 8px controls and floating panels, 10px cards, tables, media and code blocks |
 | Colour | Venice's brand palette, from Jordan's design. Dark: page #06090D, cards #0E1217, text off-white #F7F5ED, secondary sea-mid #B3D0EB, muted #8A949C, dividers at 8% and borders at 14% off-white, one accent, venetian blue #3C8FDD. Light mirrors it: navy text #0E1217, mid-sea #29526C secondary, muted #677079 (5:1) and accent #125DA3. Green #4FB286 and stucco #BEA989 only for states |
 | Surfaces | Hairline rules and whitespace. Cards only where figures sit side by side, on 1px hairline gaps with a 10px radius. Shadows only on the compare tray and menus. No gradients or blur |
 
 - **Actions.** One primary button per context (the tray's Compare), secondary outline buttons, tertiary text buttons and links.
-- **Privacy tiers** use the catalog's existing badge in the explorer table: E2EE and TEE outlined in the accent colour, Private and Anonymized neutral. No icons, since the badge text carries the meaning. Ruled tables give the tier as text.
-- **Components** (all in `model-hub.css`): page header, search, filter column with the modality facet (checkboxes with counts, segmented ranges, collapsible groups; a drawer on phones), segmented control, pricing lens, data table with sortable headers, ruled tables, gallery card with hover video, compare tray, key-number card grid, price cards, price comparison table, censorship scale, variant switcher, model ID chip, code tabs, price matrix, capability tables, specs table, privacy tier strip, related list, FAQ accordion, lightbox, empty, loading and error states.
+- **Privacy tiers** use the catalog's existing badge in the explorer table: E2EE and TEE outlined in the accent colour, Private and Anonymized neutral. No icons, since the badge text carries the meaning. Ruled tables give the tier as text and list rows as a pill.
+- **Components** (all in `model-hub.css`): page header, search, filter column with the modality facet (checkboxes with counts, segmented ranges, collapsible groups; a drawer on phones), segmented control, pricing lens, data table with sortable headers, ruled tables, list row with a copyable ID chip and pills, gallery card with hover video, compare tray, key-number card grid, price cards, price comparison table, censorship scale, variant switcher, model ID chip, code tabs, price matrix, capability tables, specs table, privacy tier strip, related list, FAQ accordion, lightbox, empty, loading and error states.
 - **States covered:** loading skeleton, catalog load failure, no results with a clear action, renders pending, input-dependent pricing, disabled (compare with fewer than two models, a full compare set, unsupported endpoints), selected (rows, variants, matrix cell, current section), overflow (truncated IDs with the full value on hover, long voice and provider lists), deprecated, beta.
 - **Accessibility:** visible focus rings, real buttons for sort headers and matrix cells, `aria-sort`, `aria-pressed` and live regions for copied states and result counts, 24px minimum targets, reduced-motion support.
 - **To explore:** a price-vs-quality scatter with a Pareto line per modality (once benchmarks exist); a status dot per row driven by telemetry; voice previews; before/after sliders for editing models; brand typography (Canela, Aeonik) if the docs theme allows it.
