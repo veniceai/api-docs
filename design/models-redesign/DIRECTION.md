@@ -71,13 +71,13 @@ Four decisions carry most of the value:
 | `/models/text`, `/image`, `/video`, `/text-to-speech`, `/speech-to-text`, `/music`, `/embeddings` | custom | By modality |
 | `/models/<family-slug>` (276 pages) | custom | Hidden group, `searchable: true` |
 
-- Modality pages are the same explorer with a preset tab. They exist for search entry points and stable links; switching tabs in the explorer doesn't navigate.
+- Modality pages are the same explorer with that modality checked. They exist for search entry points and stable links; changing the facet doesn't navigate.
 - Model pages sit in a hidden navigation group with `searchable: true`. They stay out of the sidebar but are included in site search, the sitemap, AI assistant context and search engines, which is how Mintlify documents keeping hidden pages discoverable. Pages that are simply left out of navigation would be dropped from search and the sitemap.
 - Family slugs come from the display name (`glm-5-3`, `kling-v3-pro`, `veo-3-1-full-quality`). Collisions across modalities get a suffix (`wan-2-7-image`, `wan-2-7-video`). Within one modality the oldest family keeps the slug and later ones take their primary model ID (`deepseek-v4-1-flash-1017`), and the build fails rather than let two families share a page. `?v=<model-id>` preselects a variant.
 
 ### The sidebar
 
-Hub pages run in Mintlify's `custom` mode, so the explorer, model pages and compare view have no docs sidebar; their navigation is in the page (modality tabs and the filter column in the explorer, and a side column with the breadcrumb and section links on model pages). The sidebar remains for the Methodology page, restructured into **Explore** and **By modality** groups. The alternative, `frame` mode, keeps the sidebar next to custom layouts. It's listed as a decision in [section 15](#15-decisions-needed).
+Hub pages run in Mintlify's `custom` mode, so the explorer, model pages and compare view have no docs sidebar; their navigation is in the page (the filter column in the explorer, and a side column with the breadcrumb and section links on model pages). The sidebar remains for the Methodology page, restructured into **Explore** and **By modality** groups. The alternative, `frame` mode, keeps the sidebar next to custom layouts. It's listed as a decision in [section 15](#15-decisions-needed).
 
 ### Families and variants
 
@@ -98,7 +98,7 @@ Prototype: `/models/overview`, `src/model-hub.jsx` (`ModelExplorer`).
 
 1. Header in Jordan's style: a "Venice API · Models" eyebrow, the page title (Models, Text Models, …) and a one-line description that names the `model` parameter. **Compare** is a secondary button, **Models API** a tertiary link.
 2. Toolbar: search across name, provider, model ID and tags (`/` focuses it), sort, and gallery or table view on one row, then the pricing lens.
-3. Modality tabs with family counts: All · Text · Image · Video · Audio (text to speech / speech to text / music and sound effects) · Embeddings.
+3. Modality facet at the top of the filter column, with family counts: text, image, video, text to speech, speech to text, music and sound effects, embeddings and decisions. Several can be checked. A page's own modality starts checked, and the columns, filters and pricing lens for one modality apply when exactly one is.
 4. Filter column, the full height of the page like the model page's side column (below 1024px a drawer opened from the toolbar): capabilities, context, blended price and served precision (text); task, resolution and features (image); mode, audio, resolution and clip length (video); then privacy, attributes (Venice picks, open weights, uncensored, added in the last 30 days, hide beta and deprecated) and provider for all.
 5. Count line: live result count (families and model IDs; text adds "prices per 1M tokens"), with the price source and update date.
 6. Results, then a footer with data sources and a note that performance and benchmark data are planned.
@@ -457,7 +457,7 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 
 - **Actions.** One primary button per context (the tray's Compare), secondary outline buttons, tertiary text buttons and links.
 - **Privacy tiers** use the catalog's existing badge in the explorer table: E2EE and TEE outlined in the accent colour, Private and Anonymized neutral. No icons, since the badge text carries the meaning. Ruled tables give the tier as text.
-- **Components** (all in `model-hub.css`): page header, search, tabs with counts, filter column (checkbox, radio, collapsible groups; a drawer on phones), segmented control, pricing lens, data table with sortable headers, ruled tables, gallery card with hover video, compare tray, key-number card grid, price cards, price comparison table, censorship scale, variant switcher, model ID chip, code tabs, price matrix, capability tables, specs table, privacy tier strip, related list, FAQ accordion, lightbox, empty, loading and error states.
+- **Components** (all in `model-hub.css`): page header, search, filter column with the modality facet (checkbox, radio, collapsible groups; a drawer on phones), segmented control, pricing lens, data table with sortable headers, ruled tables, gallery card with hover video, compare tray, key-number card grid, price cards, price comparison table, censorship scale, variant switcher, model ID chip, code tabs, price matrix, capability tables, specs table, privacy tier strip, related list, FAQ accordion, lightbox, empty, loading and error states.
 - **States covered:** loading skeleton, catalog load failure, no results with a clear action, renders pending, input-dependent pricing, disabled (compare with fewer than two models, a full compare set, unsupported endpoints), selected (rows, variants, matrix cell, current section), overflow (truncated IDs with the full value on hover, long voice and provider lists), deprecated, beta.
 - **Accessibility:** visible focus rings, real buttons for sort headers and matrix cells, `aria-sort`, `aria-pressed` and live regions for copied states and result counts, 24px minimum targets, reduced-motion support.
 - **To explore:** a price-vs-quality scatter with a Pareto line per modality (once benchmarks exist); a status dot per row driven by telemetry; voice previews; before/after sliders for editing models; brand typography (Canela, Aeonik) if the docs theme allows it.
