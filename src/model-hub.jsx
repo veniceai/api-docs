@@ -1437,7 +1437,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   /* ------------------------------------------------------------ model page */
 
   const pageSections = (model, { variants = 1, related = false, faq = false, examples = false } = {}) => {
-    const list = [];
+    const list = [['overview', 'Overview']];
     if (examples) list.push(['examples', 'Reference outputs']);
     if (model.modality === 'text' && model.task === 'chat') list.push(['capabilities', 'Capabilities']);
     list.push(['pricing', 'Pricing']);
@@ -2124,66 +2124,73 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
     return (
       <div className="vx vx-page not-prose">
-        <nav className="vx-crumbs" aria-label="Breadcrumb">
-          <a href="/models/overview">Models</a>
-          <Icon name="chevronRight" size={12} />
-          <a href={family.modality === 'audio' ? (AUDIO_TASKS.find(t => t.tasks.includes(model.task)) || AUDIO_TASKS[0]).path : modalityMeta.path}>{modalityMeta.label}</a>
-          <Icon name="chevronRight" size={12} />
-          <span aria-current="page">{family.name}</span>
-        </nav>
-
-        <header className="vx-model-head">
-          <div className="vx-model-title">
-            <ProviderLogo provider={provider} size={40} />
-            <div className="vx-model-title-text">
-              <h1 className="vx-h1">{family.name} API</h1>
-              <div className="vx-model-meta">
-                <span className="vx-meta-item">{provider ? provider.name : family.provider}</span>
-                <span className="vx-meta-item">{TASK_LABELS[model.task] || modalityMeta.label}</span>
-                <span className="vx-meta-item">Added {fmtDate(model.created)}</span>
-                <span className="vx-badges">
-                  {models.length === 1 ? <PrivacyBadge tier={model.privacy} /> : null}
-                  {model.openWeights ? <Tag>Open weights</Tag> : null}
-                  {model.license ? <Tag>{model.license}</Tag> : null}
-                  <StatusTags item={{ ...family, created: model.created, beta: model.beta, deprecation: model.deprecation }} now={now} />
-                  {model.uncensored ? <Tag>Uncensored</Tag> : null}
-                </span>
-              </div>
+        <div className="vx-page-grid">
+          <aside className="vx-side">
+            <div className="vx-side-inner">
+              <nav className="vx-crumbs" aria-label="Breadcrumb">
+                <a href="/models/overview">Models</a>
+                <span aria-hidden="true">/</span>
+                <span aria-current="page">{family.name}</span>
+              </nav>
+              <nav className="vx-side-nav" aria-label="On this page">
+                {sections.map(([id, label]) => (
+                  <a key={id} href={`#${id}`} className={cls(activeSection === id && 'is-active')} aria-current={activeSection === id ? 'location' : undefined}>{label}</a>
+                ))}
+              </nav>
             </div>
-          </div>
-          <div className="vx-model-actions">
-            <button type="button" className={cls('vx-btn', inCompare && 'vx-btn-active')} aria-pressed={inCompare} onClick={() => compare.toggle(model.id)}>
-              {inCompare ? <><Icon name="check" size={14} />Added to compare</> : 'Add to compare'}
-            </button>
-            <button type="button" className="vx-btn vx-btn-tertiary" onClick={copyForAgents} title="Copy a Markdown spec for an AI agent or README">
-              <span aria-live="polite">{copied ? 'Copied' : 'Copy for AI'}</span>
-            </button>
-            {model.source ? <a className="vx-btn vx-btn-tertiary" href={model.source} target="_blank" rel="noopener">Source<Icon name="external" size={12} /></a> : null}
-          </div>
-        </header>
+          </aside>
 
-        {model.description || family.description ? <p className="vx-description">{model.description || family.description}</p> : null}
+          <div className="vx-page-main">
+            <header id="overview" className="vx-model-head">
+              <div className="vx-model-title">
+                <ProviderLogo provider={provider} size={40} />
+                <div className="vx-model-title-text">
+                  <h1 className="vx-h1">{family.name} API</h1>
+                  <div className="vx-model-meta">
+                    <span className="vx-meta-item">{provider ? provider.name : family.provider}</span>
+                    <span className="vx-meta-item">{TASK_LABELS[model.task] || modalityMeta.label}</span>
+                    <span className="vx-meta-item">Added {fmtDate(model.created)}</span>
+                    <span className="vx-badges">
+                      {models.length === 1 ? <PrivacyBadge tier={model.privacy} /> : null}
+                      {model.openWeights ? <Tag>Open weights</Tag> : null}
+                      {model.license ? <Tag>{model.license}</Tag> : null}
+                      <StatusTags item={{ ...family, created: model.created, beta: model.beta, deprecation: model.deprecation }} now={now} />
+                      {model.uncensored ? <Tag>Uncensored</Tag> : null}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="vx-model-actions">
+                <button type="button" className={cls('vx-btn', inCompare && 'vx-btn-active')} aria-pressed={inCompare} onClick={() => compare.toggle(model.id)}>
+                  {inCompare ? <><Icon name="check" size={14} />Added to compare</> : 'Add to compare'}
+                </button>
+                <button type="button" className="vx-btn vx-btn-tertiary" onClick={copyForAgents} title="Copy a Markdown spec for an AI agent or README">
+                  <span aria-live="polite">{copied ? 'Copied' : 'Copy for AI'}</span>
+                </button>
+                {model.source ? <a className="vx-btn vx-btn-tertiary" href={model.source} target="_blank" rel="noopener">Source<Icon name="external" size={12} /></a> : null}
+              </div>
+            </header>
 
-        {models.length > 1 ? (
-          <div className="vx-variants" role="radiogroup" aria-label="Variant">
-            {models.map(m => (
-              <button key={m.id} type="button" role="radio" aria-checked={m.id === model.id} className={cls('vx-variant', m.id === model.id && 'is-active')} onClick={() => selectVariant(m.id)}>
-                <span className="vx-variant-name">{VARIANT_LABELS[m.variant] || m.variant}</span>
-                <span className="vx-variant-sub">{[m.privacy !== m.variant && PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : null, variantPrice(m)].filter(Boolean).join(' · ')}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
+            {model.description || family.description ? <p className="vx-description">{model.description || family.description}</p> : null}
 
-        <div className="vx-idbar">
-          <ModelId id={model.id} />
-          {recommended ? <MethodPath method={recommended.method} path={recommended.path} /> : null}
-        </div>
+            {models.length > 1 ? (
+              <div className="vx-variants" role="radiogroup" aria-label="Variant">
+                {models.map(m => (
+                  <button key={m.id} type="button" role="radio" aria-checked={m.id === model.id} className={cls('vx-variant', m.id === model.id && 'is-active')} onClick={() => selectVariant(m.id)}>
+                    <span className="vx-variant-name">{VARIANT_LABELS[m.variant] || m.variant}</span>
+                    <span className="vx-variant-sub">{[m.privacy !== m.variant && PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : null, variantPrice(m)].filter(Boolean).join(' · ')}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
 
-        <KeyStats model={model} />
+            <div className="vx-idbar">
+              <ModelId id={model.id} />
+              {recommended ? <MethodPath method={recommended.method} path={recommended.path} /> : null}
+            </div>
 
-        <div className="vx-page-layout">
-          <main className="vx-page-main">
+            <KeyStats model={model} />
+
             {has('examples') ? (
               <Section id="examples" title="Reference outputs">
                 <MediaGallery model={model.media && model.media.length ? model : (models.find(m => m.media && m.media.length) || model)} />
@@ -2252,17 +2259,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 </div>
               </Section>
             ) : null}
-
-          </main>
-
-          <aside className="vx-page-rail" aria-label="On this page">
-            <div className="vx-toc-title">On this page</div>
-            <nav className="vx-toc">
-              {sections.map(([id, label]) => (
-                <a key={id} href={`#${id}`} className={cls(activeSection === id && 'is-active')} aria-current={activeSection === id ? 'location' : undefined}>{label}</a>
-              ))}
-            </nav>
-          </aside>
+          </div>
         </div>
         <CompareTray compare={compare} catalog={catalog || { models: Object.fromEntries(models.map(m => [m.id, m])) }} />
       </div>
