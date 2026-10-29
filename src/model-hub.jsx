@@ -276,6 +276,21 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (model.modality === 'image') return imagePrice(model, lens.image).value;
     return model.headline ? model.headline.value : null;
   };
+  // The unit a model is billed in, as the pricing section's note reads it.
+  const priceUnit = model => {
+    if (model.modality === 'text' || model.modality === 'embedding') return model.modality === 'embedding' ? 'per 1M input tokens' : 'per 1M tokens';
+    if (model.modality === 'video') return 'per clip';
+    if (model.task === 'tts') return 'per 1M characters';
+    if (model.task === 'stt') return 'per second of audio';
+    if (model.modality === 'audio') {
+      if (model.pricing && model.pricing.kind === 'tiered') return 'per track, by length';
+      return model.headline && model.headline.basis === 'track' ? 'per track' : 'per minute of audio';
+    }
+    if (model.task === 'image-edit') return 'per edit';
+    if (model.task === 'image-upscale') return 'per upscale';
+    return 'per image';
+  };
+
   const headlineUnit = model => {
     if (model.modality === 'video') return '/ sec';
     if (model.modality === 'text' && model.task === 'chat') return '/ 1M tok';
@@ -1492,10 +1507,11 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return active;
   };
 
-  const Section = ({ id, title, actions, children }) => (
+  const Section = ({ id, title, note, actions, children }) => (
     <section id={id} className="vx-section" aria-labelledby={`${id}-title`}>
       <div className="vx-section-head">
         <h2 id={`${id}-title`} className="vx-h2">{title}</h2>
+        {note ? <span className="vx-section-note">{note}</span> : null}
         {actions ? <div className="vx-section-actions">{actions}</div> : null}
       </div>
       {children}
@@ -2222,7 +2238,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               </Section>
             ) : null}
 
-            <Section id="pricing" title="Pricing">
+            <Section id="pricing" title="Pricing" note={`USD ${priceUnit(model)} · billed from Venice API balance`}>
               {model.modality === 'text' && model.task === 'chat' ? <TextPricing model={model} /> : null}
               {model.modality === 'image' ? <ImagePricing model={model} /> : null}
               {model.modality === 'video' ? <VideoCalculator model={model} /> : null}
