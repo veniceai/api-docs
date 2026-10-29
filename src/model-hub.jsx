@@ -657,13 +657,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   const matchesQuery = (text, query) => query.toLowerCase().split(/\s+/).filter(Boolean).every(token => text.includes(token));
 
   const SORTS = {
+    name: { label: 'Name A–Z', dir: 'ascending', fn: (a, b) => a.family.name.localeCompare(b.family.name) },
     newest: { label: 'Newest', dir: 'descending', fn: (a, b) => (b.family.updated || 0) - (a.family.updated || 0) },
-    name: { label: 'Name', dir: 'ascending', fn: (a, b) => a.family.name.localeCompare(b.family.name) },
-    price: { label: 'Price', dir: 'ascending', fn: (a, b) => (a.price == null ? 1e9 : a.price) - (b.price == null ? 1e9 : b.price) },
-    context: { label: 'Context', dir: 'descending', fn: (a, b) => ((b.display.text && b.display.text.context) || 0) - ((a.display.text && a.display.text.context) || 0) },
-    output: { label: 'Output price', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.output) || 1e9) - ((b.display.pricing && b.display.pricing.output) || 1e9) },
-    input: { label: 'Input price', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.input) || 1e9) - ((b.display.pricing && b.display.pricing.input) || 1e9) }
+    price: { label: 'Price, low to high', dir: 'ascending', fn: (a, b) => (a.price == null ? 1e9 : a.price) - (b.price == null ? 1e9 : b.price) },
+    context: { label: 'Context, largest', dir: 'descending', fn: (a, b) => ((b.display.text && b.display.text.context) || 0) - ((a.display.text && a.display.text.context) || 0) },
+    input: { label: 'Input price, low to high', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.input) || 1e9) - ((b.display.pricing && b.display.pricing.input) || 1e9) },
+    output: { label: 'Output price, low to high', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.output) || 1e9) - ((b.display.pricing && b.display.pricing.output) || 1e9) }
   };
+  const DEFAULT_SORT = 'name';
 
   const FilterGroup = ({ title, children, defaultOpen = true }) => {
     const [open, setOpen] = useState(defaultOpen);
@@ -1212,7 +1213,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const [scopes, setScopes] = useState(startScopes);
     const [query, setQuery] = useState('');
     const [filters, setFilters] = useState(EMPTY_FILTERS);
-    const [sort, setSort] = useState('newest');
+    const [sort, setSort] = useState(DEFAULT_SORT);
     const [view, setView] = useState(defaultView(initialModality));
     const [lens, setLens] = useState({ image: '1K', video: DEFAULT_VIDEO_LENS });
     const [railOpen, setRailOpen] = useState(false);
@@ -1259,7 +1260,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       writeParams({
         m: scopes.join(',') !== startScopes.join(',') ? scopes.join(',') || 'all' : null,
         q: query || null,
-        sort: sort !== 'newest' ? sort : null,
+        sort: sort !== DEFAULT_SORT ? sort : null,
         view: view !== defaultView(modality) ? view : null,
         lens: modality === 'video' && !lensDefault ? `${lens.video.h}-${lens.video.s}-${lens.video.a}` : null,
         res1: modality === 'image' && lens.image !== '1K' ? lens.image : null,
@@ -1291,7 +1292,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       setScopes(next);
       setFilters(prev => ({ ...EMPTY_FILTERS, providers: [], privacy: prev.privacy, flags: prev.flags }));
       setView(defaultView(nextSingle));
-      if (nextSingle !== 'text' && !['newest', 'name', 'price'].includes(sort)) setSort('newest');
+      if (nextSingle !== 'text' && !['newest', 'name', 'price'].includes(sort)) setSort(DEFAULT_SORT);
     };
 
     const providers = catalog ? catalog.providers : {};
@@ -1328,7 +1329,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         const display = models.find(m => variantMatches(m, filters)) || catalog.models[family.primary] || models[0];
         list.push({ family, models, display, price: headlinePrice(display, lens) });
       }
-      const sorter = SORTS[sort] || SORTS.newest;
+      const sorter = SORTS[sort] || SORTS[DEFAULT_SORT];
       return list.sort(sorter.fn);
     }, [catalog, scoped, filters, query, sort, lens, now]);
 
@@ -1382,7 +1383,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 {query ? <button type="button" className="vx-icon-btn" onClick={() => setQuery('')} aria-label="Clear search"><Icon name="x" size={14} /></button> : <kbd aria-hidden="true">/</kbd>}
               </div>
               <select className="vx-select" value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
-                {['newest', 'price', 'name', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{`Sort: ${SORTS[key].label}`}</option>)}
+                {['name', 'newest', 'price', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{SORTS[key].label}</option>)}
               </select>
               <Segmented ariaLabel="View" value={shownView} onChange={setView}
                 options={[{ value: 'list', label: 'List' }, { value: 'table', label: 'Table' }, ...(canGrid ? [{ value: 'grid', label: 'Gallery' }] : [])]} />
