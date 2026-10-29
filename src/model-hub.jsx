@@ -94,34 +94,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return { ids, toggle, remove, clear };
   };
 
-  // Until telemetry and benchmark feeds exist, sample values are shown by
-  // default so the layout can be reviewed. They are always labeled "Sample
-  // data"; ?preview=0 or the page toggle hides them. Set to false before launch.
-  const SAMPLE_DATA_DEFAULT = true;
-  const PREVIEW_KEY = 'venice-model-samples';
-  const usePreview = () => {
-    const [preview, setPreview] = useState(SAMPLE_DATA_DEFAULT);
-    useEffect(() => {
-      const params = readParams();
-      if (params.has('preview')) {
-        const on = params.get('preview') !== '0';
-        try { window.localStorage.setItem(PREVIEW_KEY, on ? '1' : '0'); } catch (e) {}
-        setPreview(on);
-        return;
-      }
-      try {
-        const stored = window.localStorage.getItem(PREVIEW_KEY);
-        setPreview(stored === null ? SAMPLE_DATA_DEFAULT : stored === '1');
-      } catch (e) {}
-    }, []);
-    const update = on => {
-      try { window.localStorage.setItem(PREVIEW_KEY, on ? '1' : '0'); } catch (e) {}
-      writeParams({ preview: on === SAMPLE_DATA_DEFAULT ? null : (on ? '1' : '0') });
-      setPreview(on);
-    };
-    return [preview, update];
-  };
-
   const copyText = text => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) return navigator.clipboard.writeText(text).catch(() => {});
     return Promise.resolve();
@@ -459,8 +431,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     </div>
   );
 
-  const SampleMark = () => <span className="vx-badge vx-badge-warn" title="Illustrative values for design review. Not measurements.">Sample data</span>;
-
   /* ------------------------------------------------------------ media */
 
   const sampleFor = (model, preferred) => {
@@ -546,181 +516,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         <Lightbox item={open} onClose={() => setOpen(null)} compareHref={open ? `/models/compare?ids=${encodeURIComponent(model.id)}&prompt=${encodeURIComponent(open.prompt)}` : null} />
       </>
     );
-  };
-
-  /* ------------------------------------------------------------ preview samples */
-
-  const seeded = key => {
-    let h = 2166136261;
-    for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); }
-    return () => {
-      h ^= h << 13; h ^= h >>> 17; h ^= h << 5;
-      return ((h >>> 0) % 100000) / 100000;
-    };
-  };
-  const range = (rand, min, max, digits = 0) => {
-    const v = min + rand() * (max - min);
-    const f = 10 ** digits;
-    return Math.round(v * f) / f;
-  };
-
-  // Latency metrics (`p95: true`) show p50 with p95 beside it; the rest show
-  // their measurement window.
-  const UPTIME = { key: 'uptime', label: 'Uptime', unit: '%', window: '30 days', hint: 'Share of synthetic probes that succeeded. Errors caused by the request (4xx) are excluded.' };
-  const SUCCESS = { key: 'success', label: 'Success rate', unit: '%', window: '7 days', hint: 'Requests without a 5xx, timeout or provider error.' };
-  const TELEMETRY = {
-    text: [
-      UPTIME,
-      { key: 'ttft', label: 'Time to first token', unit: 's', p95: true, hint: '1K-token prompt, streaming.' },
-      { key: 'tps', label: 'Throughput', unit: 'tok/s', window: 'p50, after the first token', hint: 'Output tokens per second after the first token.' },
-      { key: 'e2e', label: 'E2E latency', unit: 's', p95: true, hint: 'Time to a complete 500-token response.' },
-      { key: 'cache', label: 'Cache hit rate', unit: '%', window: '7 days, all traffic', hint: 'cache_read ÷ (input + cache_read + cache_write).' },
-      SUCCESS
-    ],
-    image: [
-      UPTIME,
-      { key: 'gen', label: 'Generation time', unit: 's', p95: true, hint: 'One 1K image at default settings, including queue.' },
-      SUCCESS
-    ],
-    video: [
-      UPTIME,
-      { key: 'queue', label: 'Queue time', unit: 's', p95: true, hint: 'From /video/queue to generation start.' },
-      { key: 'gen', label: 'Generation time', unit: 's', p95: true, hint: 'A 5-second 720p clip, excluding queue.' },
-      SUCCESS
-    ],
-    audio: [
-      UPTIME,
-      { key: 'ttfa', label: 'Time to first audio', unit: 'ms', p95: true, hint: 'A 200-character request.' },
-      { key: 'speed', label: 'Speed factor', unit: 'x', window: 'p50', hint: 'Seconds of audio generated per wall-clock second.' },
-      SUCCESS
-    ],
-    embedding: [
-      UPTIME,
-      { key: 'latency', label: 'Latency', unit: 'ms', p95: true, hint: 'A 1K-token input.' },
-      SUCCESS
-    ]
-  };
-  const TELEMETRY_STT = [
-    UPTIME,
-    { key: 'e2e', label: 'Processing time', unit: 's', p95: true, hint: 'A 1-minute audio file.' },
-    { key: 'speed', label: 'Speed factor', unit: 'x', window: 'p50', hint: 'Seconds of audio transcribed per wall-clock second.' },
-    SUCCESS
-  ];
-  const TELEMETRY_MUSIC = [
-    UPTIME,
-    { key: 'queue', label: 'Queue time', unit: 's', p95: true, hint: 'From /audio/queue to generation start.' },
-    { key: 'gen', label: 'Generation time', unit: 's', p95: true, hint: 'A 30-second track, excluding queue.' },
-    SUCCESS
-  ];
-  const telemetryFor = model => {
-    if (model.task === 'stt') return TELEMETRY_STT;
-    if (model.modality === 'audio' && model.task !== 'tts') return TELEMETRY_MUSIC;
-    return TELEMETRY[model.modality] || TELEMETRY.audio;
-  };
-  const sampleTelemetry = model => {
-    const r = seeded(`t:${model.id}`);
-    const t = {
-      uptime: range(r, 99.2, 99.99, 2), ttft: range(r, 0.25, 2.8, 2), tps: range(r, 25, 240), e2e: range(r, 2, 18, 1),
-      cache: range(r, 18, 72), success: range(r, 98.5, 99.95, 2), gen: range(r, 4, 40, 1),
-      queue: range(r, 2, 45), ttfa: range(r, 120, 900), speed: range(r, 8, 90), latency: range(r, 40, 320),
-      daily: Array.from({ length: 30 }, () => (r() > 0.94 ? range(r, 99.2, 99.89, 2) : range(r, 99.9, 100, 2)))
-    };
-    t.p95 = Object.fromEntries(['ttft', 'e2e', 'gen', 'queue', 'ttfa', 'latency'].map(key => {
-      const v = t[key] * range(r, 1.6, 2.6, 2);
-      return [key, v >= 100 ? Math.round(v) : Math.round(v * 10) / 10];
-    }));
-    return t;
-  };
-
-  // The benchmark set is a proposal for the benchmarks team (see
-  // design/models-redesign/DIRECTION.md); scores stay empty until data exists.
-  // `sample` bounds keep preview values inside each benchmark's real late-2026
-  // range, so the sample layout never implies an implausible score.
-  // `prov` is who produces the number: 'venice' (run on this endpoint),
-  // 'independent' (a third party) or 'lab' (the model's creator); `by` names the source.
-  const BENCHMARKS = {
-    text: {
-      composite: { key: 'aa-index', label: 'Intelligence Index', source: 'Artificial Analysis v4.3', prov: 'independent', by: 'Artificial Analysis', max: 100, sample: [18, 58] },
-      items: [
-        { key: 'hle', category: 'Reasoning & knowledge', label: "Humanity's Last Exam", unit: '%', max: 100, prov: 'independent', by: 'Artificial Analysis', sample: [6, 61] },
-        { key: 'tbench', category: 'Agentic coding', label: 'Terminal-Bench 4.0', unit: '%', max: 100, prov: 'venice', by: 'Venice', sample: [8, 58] },
-        { key: 'tau3', category: 'Tool use', label: 'τ³-bench Banking', unit: '%', max: 100, prov: 'venice', by: 'Venice', sample: [12, 55] },
-        { key: 'lcr', category: 'Long context', label: 'AA-LCR v1.1', unit: '%', max: 100, prov: 'independent', by: 'Artificial Analysis', sample: [25, 88] },
-        { key: 'ifbench', category: 'Instruction following', label: 'IFBench', unit: '%', max: 100, prov: 'lab', sample: [30, 83] },
-        { key: 'omniscience', category: 'Factuality', label: 'AA-Omniscience Index', unit: '', max: 100, prov: 'independent', by: 'Artificial Analysis', sample: [-10, 45] },
-        { key: 'openness', category: 'Openness', label: 'Venice Openness Score', unit: '%', max: 100, inHouse: true, prov: 'venice', by: 'Venice', sample: [35, 96] }
-      ]
-    },
-    image: { items: [
-      { key: 'aa-t2i', category: 'Human preference', label: 'AA Text-to-Image Arena', unit: 'Elo', min: 900, max: 1250, prov: 'independent', by: 'Artificial Analysis', sample: [950, 1194] },
-      { key: 'lm-t2i', category: 'Human preference', label: 'LMArena Text-to-Image', unit: 'Elo', min: 1100, max: 1450, prov: 'independent', by: 'LMArena', sample: [1150, 1424] },
-      { key: 'geneval2', category: 'Prompt adherence', label: 'GenEval 2', unit: '%', max: 100, prov: 'venice', by: 'Venice', sample: [35, 85] },
-      { key: 'overrefusal', category: 'Openness', label: 'Venice over-refusal rate', unit: '%', max: 100, lowerIsBetter: true, inHouse: true, prov: 'venice', by: 'Venice', sample: [1, 35] }
-    ] },
-    video: { items: [
-      { key: 'aa-t2v', category: 'Human preference', label: 'AA Text-to-Video Arena (with audio)', unit: 'Elo', min: 950, max: 1260, prov: 'independent', by: 'Artificial Analysis', sample: [1000, 1233] },
-      { key: 'aa-i2v', category: 'Human preference', label: 'AA Image-to-Video Arena', unit: 'Elo', min: 950, max: 1380, prov: 'independent', by: 'Artificial Analysis', sample: [1000, 1369] },
-      { key: 'lm-t2v', category: 'Human preference', label: 'LMArena Text-to-Video', unit: 'Elo', min: 1200, max: 1530, prov: 'independent', by: 'LMArena', sample: [1250, 1516] },
-      { key: 'vbench2', category: 'Diagnostic', label: 'VBench-2.0', unit: '%', max: 100, prov: 'venice', by: 'Venice', sample: [45, 66] }
-    ] },
-    tts: { items: [
-      { key: 'aa-tts', category: 'Human preference', label: 'AA Speech Arena', unit: 'Elo', min: 950, max: 1320, prov: 'independent', by: 'Artificial Analysis', sample: [1000, 1319] },
-      { key: 'wer', category: 'Intelligibility', label: 'Word error rate', unit: '%', max: 10, lowerIsBetter: true, prov: 'venice', by: 'Venice', sample: [1.2, 6] },
-      { key: 'ttfa', category: 'Latency (Venice)', label: 'Time to first audio', unit: 'ms', max: 1500, lowerIsBetter: true, inHouse: true, prov: 'venice', by: 'Venice', sample: [120, 900] }
-    ] },
-    stt: { items: [
-      { key: 'aa-wer', category: 'Accuracy', label: 'AA-WER v2', unit: '%', max: 12, lowerIsBetter: true, prov: 'independent', by: 'Artificial Analysis', sample: [1.7, 9] },
-      { key: 'open-asr', category: 'Accuracy', label: 'Open ASR Leaderboard WER', unit: '%', max: 12, lowerIsBetter: true, prov: 'independent', by: 'Hugging Face', sample: [4, 10] },
-      { key: 'rtfx', category: 'Speed (Venice)', label: 'Speed factor', unit: 'x', max: 200, inHouse: true, prov: 'venice', by: 'Venice', sample: [20, 190] }
-    ] },
-    music: { items: [
-      { key: 'aa-music-i', category: 'Human preference', label: 'AA Music Arena (instrumental)', unit: 'Elo', min: 950, max: 1200, prov: 'independent', by: 'Artificial Analysis', sample: [960, 1186] },
-      { key: 'aa-music-v', category: 'Human preference', label: 'AA Music Arena (vocals)', unit: 'Elo', min: 950, max: 1200, prov: 'independent', by: 'Artificial Analysis', sample: [960, 1171] }
-    ] },
-    embedding: { items: [
-      { key: 'mteb', category: 'General', label: 'MTEB Multilingual v2', unit: '', max: 80, prov: 'independent', by: 'MTEB', sample: [52, 74] },
-      { key: 'rteb', category: 'Retrieval', label: 'RTEB (public)', unit: 'nDCG@10', max: 80, prov: 'independent', by: 'MTEB', sample: [42, 72] },
-      { key: 'venice-rag', category: 'Retrieval (Venice)', label: 'Venice held-out retrieval', unit: 'nDCG@10', max: 100, inHouse: true, prov: 'venice', by: 'Venice', sample: [40, 88] }
-    ] }
-  };
-  const benchmarkSetFor = model => {
-    if (model.modality === 'text') return BENCHMARKS.text;
-    if (model.modality === 'image') return BENCHMARKS.image;
-    if (model.modality === 'video') return BENCHMARKS.video;
-    if (model.task === 'tts') return BENCHMARKS.tts;
-    if (model.task === 'stt') return BENCHMARKS.stt;
-    if (model.modality === 'audio') return BENCHMARKS.music;
-    if (model.modality === 'embedding') return BENCHMARKS.embedding;
-    return null;
-  };
-  // Sample scores fall with lower reasoning effort, as measured scores do.
-  const EFFORT_FACTOR = { minimal: 0.78, none: 0.8, low: 0.86, medium: 0.94, high: 1, xhigh: 1.02, max: 1.04 };
-  // One quality level per model, nudged up by price, so a sample profile is
-  // strong or weak across the board the way real results are.
-  const sampleQuality = model => {
-    const r = seeded(`q:${model.id}`);
-    const price = model.headline && model.headline.value;
-    const nudge = price > 0 && model.modality === 'text' ? Math.max(-0.2, Math.min(0.25, 0.22 * Math.log10(1 + price) - 0.05)) : 0;
-    return Math.max(0.05, Math.min(0.95, 0.3 + r() * 0.4 + nudge));
-  };
-  const sampleBenchmarks = (model, effort) => {
-    const r = seeded(`b:${model.id}`);
-    const set = benchmarkSetFor(model);
-    if (!set) return {};
-    const q = sampleQuality(model);
-    const factor = EFFORT_FACTOR[effort] || 1;
-    const value = (item, jitter) => {
-      const level = Math.max(0, Math.min(1, q + (r() - 0.5) * jitter));
-      const [lo, hi] = item.sample;
-      const raw = item.lowerIsBetter ? hi - (hi - lo) * level : lo + (hi - lo) * level;
-      const scaled = item.lowerIsBetter ? raw / factor : raw * factor;
-      const digits = item.unit === '%' ? 10 : 1;
-      return Math.round(Math.min(item.max || Infinity, scaled) * digits) / digits;
-    };
-    const out = {};
-    if (set.composite) out[set.composite.key] = value(set.composite, 0.06);
-    set.items.forEach(item => { out[item.key] = value(item, 0.3); });
-    return out;
   };
 
   /* ------------------------------------------------------------ explorer */
@@ -999,13 +794,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       {modes.map(v => <span key={v} className={v === active ? 'is-active' : undefined}>{labels[v] || v}</span>)}
     </span>
   );
-
-  // Availability-style percentages read as 99.90%, not 99.9%.
-  const withUnit = (value, unit) => {
-    if (value == null) return '—';
-    if (unit === '%') return `${value >= 99 && value <= 100 ? value.toFixed(2) : value}%`;
-    return `${value}${unit ? ` ${unit}` : ''}`;
-  };
 
   // `hide` drops a column below a breakpoint (lg 1280px, md 1024px, sm 700px);
   // the model cell repeats the key spec and privacy tier on small screens.
@@ -2194,12 +1982,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const listText = items => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0] || '');
-
-  const PreviewToggle = ({ preview, setPreview }) => (
-    <button type="button" className="vx-link-btn" onClick={() => setPreview(!preview)}>{preview ? 'Hide sample data' : 'Preview with sample data'}</button>
-  );
-
   const VariantsTable = ({ models, activeId, onSelect }) => {
     const first = models[0];
     const isText = first.modality === 'text' && first.task === 'chat';
@@ -2658,7 +2440,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   const ModelCompare = () => {
     const { catalog, error } = useCatalog();
     const compare = useCompare();
-    const [preview, setPreview] = usePreview();
     const [ids, setIds] = useState([]);
     const [promptFilter, setPromptFilter] = useState(null);
     const [lens, setLens] = useState(DEFAULT_VIDEO_LENS);
@@ -2709,9 +2490,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const shownModels = mixed ? models.filter(m => m.modality === modality) : models;
     const add = id => setIds(prev => (prev.includes(id) ? prev : [...prev, id].slice(0, COMPARE_MAX)));
     const removeId = id => { setIds(prev => prev.filter(x => x !== id)); compare.remove(id); };
-    const measured = preview || shownModels.some(m => m.telemetry || m.benchmarks);
-    const benchSet = shownModels.length ? benchmarkSetFor(shownModels[0]) : null;
-    const benchItems = benchSet ? [benchSet.composite, ...benchSet.items].filter(Boolean).slice(0, 4) : [];
     const cols = shownModels.length + 1;
 
     return (
@@ -2806,40 +2584,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                       })}
                     </tr>
                   ))}
-                  <tr className="vx-ctable-group"><th colSpan={cols} scope="colgroup">Performance and benchmarks {preview ? <SampleMark /> : null}</th></tr>
-                  {measured ? (
-                    <>
-                      {telemetryFor(shownModels[0]).slice(0, 3).map(def => (
-                        <tr key={def.key}>
-                          <th scope="row" className="vx-ctable-label" title={def.hint}>{def.label}</th>
-                          {shownModels.map(m => {
-                            const t = m.telemetry || (preview ? sampleTelemetry(m) : null);
-                            return <td key={m.id}>{t && t[def.key] != null ? withUnit(t[def.key], def.unit) : <span className="vx-muted">Not measured</span>}</td>;
-                          })}
-                        </tr>
-                      ))}
-                      {benchItems.map(item => (
-                        <tr key={item.key}>
-                          <th scope="row" className="vx-ctable-label">{item.label}</th>
-                          {shownModels.map(m => {
-                            const b = m.benchmarks || (preview ? sampleBenchmarks(m) : null);
-                            return <td key={m.id}>{b && b[item.key] != null ? withUnit(b[item.key], item.unit) : <span className="vx-muted">Not evaluated</span>}</td>;
-                          })}
-                        </tr>
-                      ))}
-                    </>
-                  ) : (
-                    <tr>
-                      <td colSpan={cols} className="vx-muted">
-                        Uptime, latency and {benchItems.length ? listText(benchItems.map(i => i.label)) : 'benchmark'} scores appear here once measured.
-                        {' '}<a href="/models/methodology">Methodology</a>
-                      </td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
             </div>
-            <p className="vx-footnote"><PreviewToggle preview={preview} setPreview={setPreview} /></p>
           </section>
         ) : null}
       </div>
