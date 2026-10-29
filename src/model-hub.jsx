@@ -2266,7 +2266,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   };
 
   const MethodPath = ({ method, path }) => (
-    <span className="vx-endpoint"><span className="vx-method">{method}</span><code>{path}</code></span>
+    <span className="vx-endpoint"><span className="vx-method">{method}</span><code>/api/v1{path}</code></span>
   );
 
   const Endpoints = ({ model, endpointId, setEndpointId }) => {
@@ -2280,11 +2280,11 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           <Segmented ariaLabel="Endpoint" value={active.id} onChange={setEndpointId}
             options={list.map(e => ({ value: e.id, label: `${e.name}${e.status === 'alpha' ? ' (Alpha)' : ''}`, disabled: e.supported === false, title: e.supported === false ? (e.note || 'Not supported for this model') : undefined }))} />
         ) : null}
-        <p className="vx-endpoint-line">
+        <div className="vx-endpoint-line">
           <MethodPath method={active.method} path={active.path} />
           {active.recommended && list.length > 1 && !isFlow ? <Tag tone="accent">Recommended</Tag> : null}
-          {active.recommendation ? <span className="vx-text-2">{active.recommendation}</span> : null}
-        </p>
+        </div>
+        {active.recommendation ? <p className="vx-endpoint-note">{active.recommendation}</p> : null}
       </div>
     );
   };
