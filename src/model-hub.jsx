@@ -1952,10 +1952,13 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           {p.cacheRead != null ? field('Cached share', cachePct, setCachePct, 5, 100, '%') : null}
           {field('Requests per day', daily, setDaily, 100, 100000000)}
         </div>
-        <p className="vx-estimator-out" aria-live="polite">
-          <strong className="vx-estimate">{usd(perReq * daily * 30)}</strong> per month
-          <span className="vx-muted"> · {usd(perReq)} per request · {usd(perReq * 1000)} per 1K requests{ext ? ` · long-context rate above ${tokens(ext.threshold)}` : ''}</span>
-        </p>
+        <div className="vx-estimate" aria-live="polite">
+          <PriceCards items={[
+            { label: 'Per month', value: usd(perReq * daily * 30), sub: `${count(daily)} requests a day, 30 days` },
+            { label: 'Per request', value: usd(perReq), sub: ext ? `Long-context rate above ${tokens(ext.threshold)}` : null },
+            { label: 'Per 1K requests', value: usd(perReq * 1000) }
+          ]} />
+        </div>
       </div>
     );
   };
@@ -2093,10 +2096,13 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             </div>
           ) : null}
         </div>
-        <p className="vx-calc-result" aria-live="polite">
-          <strong className="vx-estimate">{usd(vp.clip)}</strong> per clip
-          <span className="vx-muted"> · {vp.seconds}s{vp.resolution ? ` · ${vp.resolution}` : ''}{vp.audio ? ' · with audio' : ' · silent'} · {usd(vp.perSecond)} / sec · {usd(vp.perSecond != null ? vp.perSecond * 60 : null)} / min</span>
-        </p>
+        <div className="vx-estimate" aria-live="polite">
+          <PriceCards items={[
+            { label: 'Per clip', value: usd(vp.clip), sub: `${vp.seconds}s${vp.resolution ? ` · ${vp.resolution}` : ''} · ${vp.audio ? 'with audio' : 'silent'}` },
+            { label: 'Per second', value: usd(vp.perSecond) },
+            { label: 'Per minute', value: usd(vp.perSecond != null ? vp.perSecond * 60 : null) }
+          ]} />
+        </div>
         <div className="vx-table-wrap vx-ruled">
           <table className="vx-dtable vx-matrix">
             <caption className="vx-sr-only">Clip price by duration and resolution{video.audio === 'optional' ? (a === 'on' ? ', with audio' : ', silent') : ''}</caption>
