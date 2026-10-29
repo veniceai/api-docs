@@ -1864,7 +1864,52 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const TextPricing = ({ model }) => {
+  // This model's prices against similar models on Venice. The bar scales one
+  // column across the rows; it repeats the figures, so it's hidden from
+  // assistive tech.
+  const PriceCompare = ({ label, columns, bar, rows, note }) => {
+    const shown = rows.filter(row => row.current || columns.some(col => col.get(row) != null));
+    if (shown.length < 2) return null;
+    const values = shown.map(bar.get).filter(v => v != null && v > 0);
+    const max = values.length ? Math.max(...values) : 0;
+    return (
+      <>
+        <div className="vx-table-wrap vx-ptable-wrap">
+          <table className="vx-ptable">
+            <thead>
+              <tr>
+                <th scope="col">{label}</th>
+                {columns.map(col => <th key={col.label} scope="col" className="vx-al-right">{col.label}</th>)}
+                <th scope="col" className="vx-ptable-bar-head vx-hide-sm">{bar.label}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map(row => {
+                const value = bar.get(row);
+                return (
+                  <tr key={row.key} className={cls(row.current && 'is-current')}>
+                    <th scope="row">{row.href ? <a href={row.href}>{row.name}</a> : row.name}</th>
+                    {columns.map(col => <td key={col.label} className="vx-al-right vx-num">{usd(col.get(row))}</td>)}
+                    <td className="vx-ptable-bar vx-hide-sm" aria-hidden="true">
+                      <span className="vx-ptable-track"><span style={{ width: value && max ? `${Math.max(1, (value / max) * 100)}%` : 0 }} /></span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {note ? <p className="vx-footnote">{note}</p> : null}
+      </>
+    );
+  };
+
+  const similarRows = (related, current) => [
+    current,
+    ...((related && related.similar) || []).filter(item => item.pricing).map(item => ({ key: item.slug, name: item.name, href: `/models/${item.slug}`, ...item.pricing }))
+  ];
+
+  const TextPricing = ({ model, family, related }) => {
     const p = model.pricing || {};
     const ext = p.extended;
     const above = value => (ext && value != null ? `${usd(value)} above ${tokens(ext.threshold)}` : null);
@@ -1876,6 +1921,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           p.cacheWrite != null ? { label: 'Cache write', value: usd(p.cacheWrite), sub: above(ext && ext.cacheWrite) } : null,
           { label: 'Output', hint: model.text && model.text.reasoning ? 'incl. reasoning' : null, value: usd(p.output), sub: above(ext && ext.output) }
         ]} />
+        <PriceCompare
+          label="Compare"
+          columns={[{ label: 'Input', get: row => row.input }, { label: 'Output', get: row => row.output }]}
+          bar={{ label: 'Output price, relative', get: row => row.output }}
+          rows={similarRows(related, { key: model.id, name: family.name, current: true, input: p.input, output: p.output })}
+          note="Similar models on Venice by task, price and release date, at their standard prices per 1M tokens." />
         <h3 className="vx-h3">Estimate your cost</h3>
         <CostEstimator model={model} />
         <p className="vx-footnote">
@@ -1959,12 +2010,15 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const ImagePricing = ({ model, models }) => {
+  const ImagePricing = ({ model, models, family, related }) => {
     const p = model.pricing || {};
     const verb = model.task === 'image-edit' ? 'edit' : 'generation';
     const editor = model.task === 'image-generation' ? models.find(m => m.task === 'image-edit') : null;
     const editPrice = editor && editor.pricing ? (editor.pricing.edit != null ? editor.pricing.edit : editor.pricing.perImage) : null;
     const upscale = p.upscale && model.task !== 'image-upscale' ? Object.entries(p.upscale).filter(([, v]) => v != null) : [];
+    const resolutions = p.byResolution ? Object.keys(p.byResolution) : [];
+    const top = resolutions[resolutions.length - 1];
+    const at = (row, res) => (row.byResolution ? row.byResolution[res] : res === resolutions[0] ? row.perImage : null);
     return (
       <>
         <PriceCards items={[
@@ -1975,6 +2029,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           editPrice != null ? { label: 'Edit', value: usd(editPrice) } : null,
           p.extraInputImage != null ? { label: 'Extra input image', value: usd(p.extraInputImage) } : null
         ]} />
+        {model.task === 'image-generation' && resolutions.length ? (
+          <PriceCompare
+            label="Compare on Venice"
+            columns={[...resolutions.map(res => ({ label: res, get: row => at(row, res) })), { label: 'Edit', get: row => row.edit }]}
+            bar={{ label: `${top}, relative`, get: row => at(row, top) }}
+            rows={similarRows(related, { key: model.id, name: family.name, current: true, byResolution: p.byResolution, perImage: p.perImage, edit: editPrice })}
+            note="Similar image models on Venice by price and release date, per image." />
+        ) : null}
         <p className="vx-footnote">
           {p.extraInputImage != null ? 'Billed per output, plus each input image after the first.' : "Billed per output; prompts and reference images aren't billed separately."}
           {upscale.length ? ` Optional upscale: ${listText(upscale.map(([k, v]) => `${usd(v)} at ${k}`))}.` : ''}
@@ -2361,8 +2423,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             ) : null}
 
             <Section id="pricing" title="Pricing" note={`USD ${priceUnit(model)} · billed from Venice API balance`}>
-              {model.modality === 'text' && model.task === 'chat' ? <TextPricing model={model} /> : null}
-              {model.modality === 'image' ? <ImagePricing model={model} models={models} /> : null}
+              {model.modality === 'text' && model.task === 'chat' ? <TextPricing model={model} family={family} related={related} /> : null}
+              {model.modality === 'image' ? <ImagePricing model={model} models={models} family={family} related={related} /> : null}
               {model.modality === 'video' ? <VideoCalculator model={model} /> : null}
               {model.modality === 'audio' ? <AudioPricing model={model} /> : null}
               {model.modality === 'embedding' ? (
