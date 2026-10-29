@@ -2374,7 +2374,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         <div className="vx-search vx-search-sm">
           <Icon name="plus" size={14} />
           <input type="search" value={q} onFocus={() => setOpen(true)} onChange={e => { setQ(e.target.value); setOpen(true); }}
-            placeholder={modality ? `Add a ${modality === 'embedding' ? 'embedding' : modality} model` : 'Add a model'} aria-label="Add a model to compare" />
+            placeholder={modality ? `Add ${/^[aeiou]/.test(modality) ? 'an' : 'a'} ${modality} model` : 'Add a model'} aria-label="Add a model to compare" />
         </div>
         {open && q ? (
           <div className="vx-add-menu" role="listbox" aria-label="Matching models">
