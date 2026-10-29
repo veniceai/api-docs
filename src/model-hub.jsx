@@ -196,7 +196,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
   };
   const isNew = (ts, now) => Boolean(now && ts && (now - ts * 1000) / 86400000 <= 30);
-  const pagesFor = n => Number((n / 667).toPrecision(2)).toLocaleString('en-US');
   const plural = (n, word) => `${n.toLocaleString('en-US')} ${n === 1 ? word : word.endsWith('y') ? `${word.slice(0, -1)}ies` : `${word}s`}`;
   const cls = (...parts) => parts.filter(Boolean).join(' ');
 
@@ -454,8 +453,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     </span>
   );
 
-  const Stat = ({ label, value, sub, tone, hint }) => (
-    <div className={cls('vx-stat', tone && `vx-stat-${tone}`)} title={hint}>
+  const Stat = ({ label, value, sub, last }) => (
+    <div className={cls('vx-stat', last && 'is-last')}>
       <div className="vx-stat-label">{label}</div>
       <div className="vx-stat-value">{value}</div>
       {sub ? <div className="vx-stat-sub">{sub}</div> : null}
@@ -1519,31 +1518,76 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     </section>
   );
 
-  const KeyStats = ({ model }) => {
+  // Three cards a row, or four when a model has only four facts. Empty cells
+  // fill the last row so its hairlines stay unbroken.
+  const StatGrid = ({ items }) => {
+    const cells = items.filter(Boolean).slice(0, 6);
+    if (!cells.length) return null;
+    const cols = cells.length <= 4 ? cells.length : 3;
+    const empty = (cols - (cells.length % cols)) % cols;
+    return (
+      <div className={cls('vx-stats', cells.length % 2 && 'is-odd')} style={{ '--vx-cols': cols }}>
+        {cells.map((item, i) => <Stat key={item.label} {...item} last={i === cells.length - 1} />)}
+        {Array.from({ length: empty }, (_, i) => <span key={`empty-${i}`} className="vx-stat is-empty" aria-hidden="true" />)}
+      </div>
+    );
+  };
+
+  const KeyStats = ({ model, models }) => {
     const p = model.pricing || {};
     if (model.modality === 'text' && model.task === 'chat') {
       const text = model.text || {};
+      const caps = text.caps || {};
+      const r = text.reasoning;
+      const levels = (r && r.effort) || [];
       return (
-        <div className="vx-stats">
-          <Stat label="Context" value={tokens(text.context)} sub={text.context ? `≈ ${pagesFor(text.context)} pages` : null} />
-          <Stat label="Max output" value={tokens(text.maxOutput)} sub={text.maxOutput ? 'tokens per response' : 'Not published'} />
-          <Stat label="Input" value={usd(p.input)} sub="per 1M tokens" />
-          <Stat label="Output" value={usd(p.output)} sub="per 1M tokens" />
-        </div>
+        <StatGrid items={[
+          { label: 'Input / output', value: `${usd(p.input)} / ${usd(p.output)}`, sub: 'per 1M tokens' },
+          { label: 'Context', value: tokens(text.context), sub: text.maxOutput ? `${tokens(text.maxOutput)} max output` : 'max output not published' },
+          {
+            label: 'Reasoning',
+            value: !r ? 'None' : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'Always on',
+            sub: !r ? 'answers directly' : r.defaultEffort ? `default ${r.defaultEffort}` : levels.length ? 'reasoning_effort' : 'not adjustable'
+          },
+          p.cacheRead != null
+            ? { label: 'Cached input', value: usd(p.cacheRead), sub: p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens' }
+            : { label: 'Cached input', value: '—', sub: 'no prompt caching' },
+          censorshipStat(model),
+          { label: 'Modalities', value: ['Text', caps.vision && 'image', caps.videoInput && 'video', caps.audioInput && 'audio'].filter(Boolean).join(', '), sub: 'out: text' }
+        ]} />
+      );
+    }
+    if (model.task === 'decision') {
+      const d = model.decision || {};
+      return (
+        <StatGrid items={[
+          { label: 'Input / output', value: `${usd(p.input)} / ${usd(p.output)}`, sub: 'per 1M tokens' },
+          d.maxStateTokens ? { label: 'Max state', value: tokens(d.maxStateTokens), sub: 'tokens' } : null,
+          d.maxTotalTokens ? { label: 'Max total', value: tokens(d.maxTotalTokens), sub: 'tokens per request' } : null
+        ]} />
       );
     }
     if (model.modality === 'image') {
-      const byRes = p.byResolution ? Object.entries(p.byResolution) : [];
+      const image = model.image || {};
+      const prices = p.byResolution ? Object.values(p.byResolution).filter(v => v != null) : [];
+      const lo = prices.length ? Math.min(...prices) : p.perImage;
+      const hi = prices.length ? Math.max(...prices) : p.perImage;
+      const unit = model.task === 'image-edit' ? 'edit' : model.task === 'image-upscale' ? '2x upscale' : 'image';
+      const resolutions = image.resolutions || [];
+      const ratios = (image.aspectRatios || []).filter(a => a !== 'auto');
+      const editor = model.task === 'image-edit' ? model : models.find(m => m.task === 'image-edit');
+      const refs = editor && editor.image && editor.image.maxInputImages;
       return (
-        <div className="vx-stats">
-          {byRes.length
-            ? byRes.map(([res, value]) => <Stat key={res} label={`${res} image`} value={usd(value)} sub={model.task === 'image-edit' ? 'per edit' : 'per image'} />)
-            : <Stat label={model.task === 'image-upscale' ? '2x upscale' : model.task === 'image-edit' ? 'Per edit' : 'Per image'} value={usd(p.perImage)} sub={p.perImage ? `${Math.floor(10 / p.perImage)} for $10` : null} />}
-          {p.extraInputImage != null ? <Stat label="Extra input image" value={usd(p.extraInputImage)} sub="per additional image" /> : null}
-          {p.upscale && p.upscale['4x'] != null ? <Stat label="4x upscale" value={usd(p.upscale['4x'])} sub="optional" /> : null}
-          <Stat label="Max output" value={imageMaxRes(model) || '—'} sub={model.image && model.image.aspectRatios && model.image.aspectRatios.length ? `${model.image.aspectRatios.filter(a => a !== 'auto').length} aspect ratios` : null} />
-          {model.image && model.image.promptLimit ? <Stat label="Prompt limit" value={tokens(model.image.promptLimit)} sub="characters" /> : null}
-        </div>
+        <StatGrid items={[
+          { label: `Price per ${unit}`, value: lo === hi ? usd(lo) : `${usd(lo)} – ${usd(hi)}`, sub: resolutions.length > 1 ? `${resolutions[0]} to ${resolutions[resolutions.length - 1]}` : resolutions[0] || null },
+          model.task === 'image-upscale' && p.upscale && p.upscale['4x'] != null ? { label: '4x upscale', value: usd(p.upscale['4x']), sub: 'per image' } : null,
+          resolutions.length ? { label: 'Resolution', value: resolutions.join(' · '), sub: image.defaultResolution ? `default ${image.defaultResolution}` : null } : null,
+          ratios.length ? { label: 'Aspect ratios', value: plural(ratios.length, 'ratio'), sub: image.defaultAspectRatio ? `default ${image.defaultAspectRatio}` : null } : null,
+          refs ? { label: 'Reference images', value: `Up to ${refs}`, sub: editor.image.combineImages ? 'combined in one edit' : 'per edit' } : null,
+          censorshipStat(model),
+          image.promptLimit ? { label: 'Prompt limit', value: image.promptLimit.toLocaleString('en-US'), sub: 'characters' } : null,
+          p.extraInputImage != null ? { label: 'Extra input image', value: usd(p.extraInputImage), sub: 'per additional image' } : null
+        ]} />
       );
     }
     if (model.modality === 'video') {
@@ -1551,57 +1595,58 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       const prod = videoPrice(model, VIDEO_PRESETS[1].lens);
       const video = model.video || {};
       return (
-        <div className="vx-stats">
-          <Stat label="From" value={p.status === 'quoted' ? `${usd(p.fromPerSecond)} / sec` : 'By source'} sub={p.status === 'quoted' ? `up to ${usd(p.toPerSecond)} / sec` : 'Priced per second of input'} />
-          <Stat label="Draft clip" value={draft.status === 'quoted' ? usd(draft.clip) : '—'} sub={draft.status === 'quoted' ? `${draft.seconds}s · ${draft.resolution || 'default'}${draft.audio ? ' · audio' : ''}` : null} />
-          <Stat label="Production clip" value={prod.status === 'quoted' ? usd(prod.clip) : '—'} sub={prod.status === 'quoted' ? `${prod.seconds}s · ${prod.resolution || 'default'}${prod.audio ? ' · audio' : ''}` : null} />
-          <Stat label="Max resolution" value={heightLabel(maxVideoHeight(model))} sub={`${(video.resolutions || []).length || 1} options`} />
-          <Stat label="Duration" value={minVideoSeconds(model) ? `${minVideoSeconds(model)}–${maxVideoSeconds(model)}s` : 'Source length'} sub={`${(video.durations || []).length} options`} />
-          <Stat label="Audio" value={video.audio === 'native' ? 'Native' : video.audio === 'optional' ? 'Optional' : 'None'} sub={video.audio === 'optional' ? 'toggle with audio' : null} />
-        </div>
+        <StatGrid items={[
+          { label: 'From', value: p.status === 'quoted' ? `${usd(p.fromPerSecond)} / sec` : 'By source', sub: p.status === 'quoted' ? `up to ${usd(p.toPerSecond)} / sec` : 'priced per second of input' },
+          { label: 'Draft clip', value: draft.status === 'quoted' ? usd(draft.clip) : '—', sub: draft.status === 'quoted' ? `${draft.seconds}s · ${draft.resolution || 'default'}${draft.audio ? ' · audio' : ''}` : null },
+          { label: 'Production clip', value: prod.status === 'quoted' ? usd(prod.clip) : '—', sub: prod.status === 'quoted' ? `${prod.seconds}s · ${prod.resolution || 'default'}${prod.audio ? ' · audio' : ''}` : null },
+          { label: 'Max resolution', value: heightLabel(maxVideoHeight(model)), sub: plural((video.resolutions || []).length || 1, 'option') },
+          { label: 'Duration', value: minVideoSeconds(model) ? `${minVideoSeconds(model)}–${maxVideoSeconds(model)}s` : 'Source length', sub: plural((video.durations || []).length, 'option') },
+          { label: 'Audio', value: video.audio === 'native' ? 'Native' : video.audio === 'optional' ? 'Optional' : 'None', sub: video.audio === 'optional' ? 'toggle with audio' : null }
+        ]} />
       );
     }
     if (model.task === 'tts') {
+      const audio = model.audio || {};
       return (
-        <div className="vx-stats">
-          <Stat label="Per 1M characters" value={usd(p.per1MChars)} />
-          <Stat label="Per minute" value={usd(p.perMinute)} sub="≈ 825 characters" />
-          <Stat label="Per hour" value={usd(p.perHour)} sub="of generated speech" />
-          <Stat label="Voices" value={(model.audio && model.audio.voices && model.audio.voices.length) || '—'} />
-          <Stat label="Formats" value={(model.audio && model.audio.formats && model.audio.formats.length) || '—'} sub={model.audio && model.audio.formats ? model.audio.formats.slice(0, 4).join(', ') : null} />
-        </div>
+        <StatGrid items={[
+          { label: 'Per 1M characters', value: usd(p.per1MChars) },
+          { label: 'Per minute', value: usd(p.perMinute), sub: '≈ 825 characters' },
+          { label: 'Per hour', value: usd(p.perHour), sub: 'of generated speech' },
+          { label: 'Voices', value: (audio.voices && audio.voices.length) || '—', sub: audio.customVoice ? 'plus custom voice IDs' : null },
+          { label: 'Formats', value: (audio.formats && audio.formats.length) || '—', sub: audio.formats ? audio.formats.slice(0, 4).join(', ') : null }
+        ]} />
       );
     }
     if (model.task === 'stt') {
       return (
-        <div className="vx-stats">
-          <Stat label="Per audio second" value={usd(p.perSecond)} />
-          <Stat label="Per minute" value={usd(p.perMinute)} />
-          <Stat label="Per hour" value={usd(p.perHour)} />
-          <Stat label="Per 1K minutes" value={usd(p.perMinute != null ? p.perMinute * 1000 : null)} sub="for batch planning" />
-        </div>
+        <StatGrid items={[
+          { label: 'Per audio second', value: usd(p.perSecond) },
+          { label: 'Per minute', value: usd(p.perMinute) },
+          { label: 'Per hour', value: usd(p.perHour) },
+          { label: 'Per 1K minutes', value: usd(p.perMinute != null ? p.perMinute * 1000 : null), sub: 'for batch planning' }
+        ]} />
       );
     }
     if (model.modality === 'audio') {
       const audio = model.audio || {};
       return (
-        <div className="vx-stats">
-          <Stat label="Price" value={p.perMinute != null ? usd(p.perMinute) : usd(p.perTrack)} sub={p.perMinute != null ? 'per minute of audio' : 'per track'} />
-          <Stat label="Length" value={audio.maxDuration ? `${audio.minDuration || 1}s–${Math.round(audio.maxDuration / 60 * 10) / 10}m` : '—'} />
-          <Stat label="Lyrics" value={audio.lyrics ? 'Supported' : 'No'} />
-          <Stat label="Instrumental" value={audio.instrumental ? 'Forceable' : '—'} />
-        </div>
+        <StatGrid items={[
+          { label: 'Price', value: p.perMinute != null ? usd(p.perMinute) : usd(p.perTrack), sub: p.perMinute != null ? 'per minute of audio' : 'per track' },
+          { label: 'Length', value: audio.maxDuration ? `${audio.minDuration || 1}s–${Math.round(audio.maxDuration / 60 * 10) / 10}m` : '—' },
+          { label: 'Lyrics', value: audio.lyrics ? 'Supported' : 'No' },
+          { label: 'Instrumental', value: audio.instrumental ? 'Forceable' : '—' }
+        ]} />
       );
     }
     if (model.modality === 'embedding') {
       const e = model.embedding || {};
       return (
-        <div className="vx-stats">
-          <Stat label="Per 1M tokens" value={usd(p.input)} />
-          <Stat label="Dimensions" value={e.dimensions ? e.dimensions.toLocaleString('en-US') : '—'} />
-          <Stat label="Max input" value={tokens(e.maxInputTokens)} sub="tokens per item" />
-          <Stat label="1M docs × 500 tokens" value={usd(p.input != null ? p.input * 500 : null)} sub="to embed once" />
-        </div>
+        <StatGrid items={[
+          { label: 'Per 1M tokens', value: usd(p.input) },
+          { label: 'Dimensions', value: e.dimensions ? e.dimensions.toLocaleString('en-US') : '—' },
+          { label: 'Max input', value: tokens(e.maxInputTokens), sub: 'tokens per item' },
+          { label: '1M docs × 500 tokens', value: usd(p.input != null ? p.input * 500 : null), sub: 'to embed once' }
+        ]} />
       );
     }
     return null;
@@ -1707,6 +1752,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   // The maker is the upstream for proprietary models; an open-weight model's
   // host isn't known, so it isn't named.
   const upstreamName = (model, provider) => (!model.openWeights && provider ? provider.name : null);
+  const CENSORSHIP_SUBS = { uncensored: 'no content filtering', light: 'model safeguards only', censored: 'provider safeguards' };
+  const censorshipStat = model => {
+    if (!hasCensorship(model)) return null;
+    const level = censorshipLevel(model);
+    return { label: 'Censorship', value: CENSORSHIP_LEVELS.find(([key]) => key === level)[1], sub: CENSORSHIP_SUBS[level] };
+  };
   const censorshipNote = (model, provider) => {
     const level = censorshipLevel(model);
     if (level === 'uncensored') return 'No content filtering';
@@ -2283,7 +2334,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               </div>
             </header>
 
-            <KeyStats model={model} />
+            <KeyStats model={model} models={models} />
 
             {has('examples') ? (
               <Section id="examples" title="Reference outputs">

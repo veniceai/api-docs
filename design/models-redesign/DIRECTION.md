@@ -145,9 +145,9 @@ Prototype: `/models/glm-5-3`, `/models/veo-3-1-full-quality`, `/models/nano-bana
 3. **Description**, directly under the title as on every docs page.
 4. **Variant switcher** when the family has more than one variant: label, privacy tier and headline price per variant. Selecting one updates every number on the page and the URL.
 5. **ID bar**: the model ID with a Copy button, and the full URL of the recommended endpoint.
-6. **Key numbers**, per modality, on hairline rules rather than in cards:
-   - Text: context (with a pages translation), max output, input, output. Cached input and blended price live in the pricing table.
-   - Image: price per resolution tier, extra input image, upscale, max output, prompt limit.
+6. **Key numbers**, per modality, as a grid of up to six cards on hairline gaps:
+   - Text: input and output price, context with max output, reasoning effort range, cached input, censorship, input modalities.
+   - Image: price range across resolutions, resolutions, aspect ratios, reference images for edits, censorship, prompt limit.
    - Video: from/to per second, draft clip, production clip, max resolution, duration range, audio.
    - Text to speech: per 1M characters, per minute, per hour, voices, formats.
 7. **Sections**, each listed in the side column:
@@ -452,11 +452,11 @@ For the design team to refine; the prototype sets the baseline. The hub reuses t
 | Spacing | 4px scale: 4, 8, 12, 16, 24, 32, 48 |
 | Radius | 4px badges and chips, 8px controls, media and floating panels, 16px code blocks (as in docs code groups) |
 | Colour | Venice's brand palette, from Jordan's design. Dark: page #06090D, cards #0E1217, text off-white #F7F5ED, secondary sea-mid #B3D0EB, muted #8A949C, dividers at 8% and borders at 14% off-white, one accent, venetian blue #3C8FDD. Light mirrors it: navy text #0E1217, mid-sea #29526C secondary, muted #677079 (5:1) and accent #125DA3. Green #4FB286 and stucco #BEA989 only for states |
-| Surfaces | Hairline rules and whitespace instead of cards. Shadows only on the compare tray and menus. No gradients or blur |
+| Surfaces | Hairline rules and whitespace. Cards only where figures sit side by side, on 1px hairline gaps with a 10px radius. Shadows only on the compare tray and menus. No gradients or blur |
 
 - **Actions.** One primary button per context (the tray's Compare), secondary outline buttons, tertiary text buttons and links.
 - **Privacy tiers** use the catalog's existing badge: E2EE and TEE outlined in the accent colour, Private and Anonymized neutral. No icons, since the badge text carries the meaning.
-- **Components** (all in `model-hub.css`): page header, search, tabs with counts, filter rail (checkbox, radio, collapsible groups), segmented control, pricing lens, data table with sortable headers, gallery card with hover video, compare tray, stats row, censorship scale, variant switcher, model ID chip, code tabs, price matrix, feature list, definition list, related list, lightbox, empty, loading and error states.
+- **Components** (all in `model-hub.css`): page header, search, tabs with counts, filter rail (checkbox, radio, collapsible groups), segmented control, pricing lens, data table with sortable headers, gallery card with hover video, compare tray, key-number card grid, censorship scale, variant switcher, model ID chip, code tabs, price matrix, feature list, definition list, related list, lightbox, empty, loading and error states.
 - **States covered:** loading skeleton, catalog load failure, no results with a clear action, renders pending, input-dependent pricing, disabled (compare with fewer than two models, a full compare set, unsupported endpoints), selected (rows, variants, matrix cell, current section), overflow (truncated IDs with the full value on hover, long voice and provider lists), deprecated, beta.
 - **Accessibility:** visible focus rings, real buttons for sort headers and matrix cells, `aria-sort`, `aria-pressed` and live regions for copied states and result counts, 24px minimum targets, reduced-motion support.
 - **To explore:** a price-vs-quality scatter with a Pareto line per modality (once benchmarks exist); a status dot per row driven by telemetry; voice previews; before/after sliders for editing models; brand typography (Canela, Aeonik) if the docs theme allows it.
