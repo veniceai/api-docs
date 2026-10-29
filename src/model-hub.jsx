@@ -685,20 +685,19 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     </label>
   );
 
-  const Radio = ({ checked, onChange, label }) => (
-    <label className={cls('vx-check vx-radio', checked && 'is-checked')}>
-      <input type="radio" checked={checked} onChange={onChange} />
-      <span className="vx-check-box" />
-      <span className="vx-check-label">{label}</span>
-    </label>
-  );
-
   // The filter column; below 1024px it opens as a drawer from the toolbar.
   const FilterRail = ({ modality, task, scopes, scopeCounts, onToggleScope, filters, setFilters, providerCounts, providers, onClear, open, onClose }) => {
     const toggleIn = (key, value) => setFilters(prev => ({ ...prev, [key]: prev[key].includes(value) ? prev[key].filter(v => v !== value) : [...prev[key], value] }));
+    // Single-choice filters are segmented tracks, as in Jordan's column.
+    const range = (key, title, options) => (
+      <FilterGroup title={title}>
+        <Segmented ariaLabel={title} value={filters[key]} onChange={value => setFilters(prev => ({ ...prev, [key]: value }))}
+          options={options.map(([value, label, hint]) => ({ value, label, title: hint }))} />
+      </FilterGroup>
+    );
     const [showAll, setShowAll] = useState(false);
     const providerList = Object.entries(providerCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-    const visibleProviders = showAll ? providerList : providerList.slice(0, 8);
+    const visibleProviders = showAll ? providerList : providerList.slice(0, 10);
     const count = activeFilterCount(filters);
     return (
       <aside id="vx-filters" className={cls('vx-side vx-filters', open && 'is-open')} aria-label="Filters">
@@ -715,6 +714,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             ))}
           </FilterGroup>
 
+          <FilterGroup title="Privacy">
+            {PRIVACY_ORDER.map(tier => (
+              <Check key={tier} checked={filters.privacy.includes(tier)} onChange={() => toggleIn('privacy', tier)} label={PRIVACY[tier].long} title={PRIVACY[tier].desc} />
+            ))}
+          </FilterGroup>
+
           {modality === 'text' ? (
             <>
               <FilterGroup title="Capabilities">
@@ -722,16 +727,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   <Check key={cap.key} checked={filters.caps.includes(cap.key)} onChange={() => toggleIn('caps', cap.key)} label={cap.label} title={cap.desc} />
                 ))}
               </FilterGroup>
-              <FilterGroup title="Context window">
-                {[['', 'Any'], ['128000', '128K+'], ['256000', '256K+'], ['1000000', '1M+']].map(([value, label]) => (
-                  <Radio key={label} checked={filters.ctx === value} onChange={() => setFilters(prev => ({ ...prev, ctx: value }))} label={label} />
-                ))}
-              </FilterGroup>
-              <FilterGroup title="Input price (per 1M tokens)">
-                {[['', 'Any'], ['0.5', 'Up to $0.50'], ['2', 'Up to $2'], ['5', 'Up to $5']].map(([value, label]) => (
-                  <Radio key={label} checked={filters.price === value} onChange={() => setFilters(prev => ({ ...prev, price: value }))} label={label} />
-                ))}
-              </FilterGroup>
+              {range('ctx', 'Context length', [['', 'Any'], ['128000', '128K', '128K tokens or more'], ['256000', '256K', '256K tokens or more'], ['1000000', '1M', '1M tokens or more']])}
+              {range('price', 'Input price (per 1M tokens)', [['', 'Any'], ['0.5', '≤$0.5', 'Up to $0.50'], ['2', '≤$2', 'Up to $2'], ['5', '≤$5', 'Up to $5']])}
               <FilterGroup title="Served precision" defaultOpen={false}>
                 {[['bf16', 'BF16'], ['fp16', 'FP16'], ['fp8', 'FP8'], ['fp4', 'FP4'], ['int4', 'INT4'], ['none', 'Not disclosed']].map(([value, label]) => (
                   <Check key={value} checked={filters.quant.includes(value)} onChange={() => toggleIn('quant', value)} label={label} title={QUANT_NOTES[value]} />
@@ -747,11 +744,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   <Check key={value} checked={filters.modes.includes(value)} onChange={() => toggleIn('modes', value)} label={label} />
                 ))}
               </FilterGroup>
-              <FilterGroup title="Output resolution">
-                {[['', 'Any'], ['2K', '2K available'], ['4K', '4K available']].map(([value, label]) => (
-                  <Radio key={label} checked={filters.res === value} onChange={() => setFilters(prev => ({ ...prev, res: value }))} label={label} />
-                ))}
-              </FilterGroup>
+              {range('res', 'Output resolution', [['', 'Any'], ['2K', '2K', '2K available'], ['4K', '4K', '4K available']])}
               <FilterGroup title="Features">
                 <Check checked={filters.caps.includes('webSearch')} onChange={() => toggleIn('caps', 'webSearch')} label="Web-grounded generation" />
                 <Check checked={filters.caps.includes('multiImage')} onChange={() => toggleIn('caps', 'multiImage')} label="Multi-image editing" />
@@ -766,29 +759,11 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   <Check key={mode} checked={filters.modes.includes(mode)} onChange={() => toggleIn('modes', mode)} label={VARIANT_LABELS[mode]} />
                 ))}
               </FilterGroup>
-              <FilterGroup title="Audio">
-                {[['', 'Any'], ['audio', 'Generates audio'], ['silent', 'Can be silent']].map(([value, label]) => (
-                  <Radio key={label} checked={filters.audio === value} onChange={() => setFilters(prev => ({ ...prev, audio: value }))} label={label} />
-                ))}
-              </FilterGroup>
-              <FilterGroup title="Max resolution">
-                {[['', 'Any'], ['1080', '1080p+'], ['1440', '1440p+'], ['2160', '4K']].map(([value, label]) => (
-                  <Radio key={label} checked={filters.res === value} onChange={() => setFilters(prev => ({ ...prev, res: value }))} label={label} />
-                ))}
-              </FilterGroup>
-              <FilterGroup title="Max clip length">
-                {[['', 'Any'], ['10', '10s+'], ['15', '15s+'], ['20', '20s+']].map(([value, label]) => (
-                  <Radio key={label} checked={filters.dur === value} onChange={() => setFilters(prev => ({ ...prev, dur: value }))} label={label} />
-                ))}
-              </FilterGroup>
+              {range('audio', 'Audio', [['', 'Any'], ['audio', 'Audio', 'Generates audio'], ['silent', 'Silent', 'Can be silent']])}
+              {range('res', 'Max resolution', [['', 'Any'], ['1080', '1080p', '1080p or higher'], ['1440', '1440p', '1440p or higher'], ['2160', '4K']])}
+              {range('dur', 'Max clip length', [['', 'Any'], ['10', '10s', '10 seconds or longer'], ['15', '15s', '15 seconds or longer'], ['20', '20s', '20 seconds or longer']])}
             </>
           ) : null}
-
-          <FilterGroup title="Privacy">
-            {PRIVACY_ORDER.map(tier => (
-              <Check key={tier} checked={filters.privacy.includes(tier)} onChange={() => toggleIn('privacy', tier)} label={PRIVACY[tier].long} title={PRIVACY[tier].desc} />
-            ))}
-          </FilterGroup>
 
           <FilterGroup title="Attributes">
             <Check checked={filters.flags.includes('picks')} onChange={() => toggleIn('flags', 'picks')} label="Venice picks" title="Featured, recommended or a Venice default for a task" />
@@ -802,7 +777,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             {visibleProviders.map(([slug, n]) => (
               <Check key={slug} checked={filters.providers.includes(slug)} onChange={() => toggleIn('providers', slug)} label={(providers[slug] && providers[slug].name) || slug} count={n} />
             ))}
-            {providerList.length > 8 ? (
+            {providerList.length > 10 ? (
               <button type="button" className="vx-link-btn vx-more" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : `Show all ${providerList.length}`}</button>
             ) : null}
           </FilterGroup>
