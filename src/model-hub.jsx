@@ -867,6 +867,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     <PriceCell value={offer.value} unit={offer.unit} note={offer.note} from={offer.from} breakdown={offer.breakdown} strong={strong} />
   );
 
+  const modelHref = (family, id) => `/models/${family.slug}${id !== family.primary ? `?v=${encodeURIComponent(id)}` : ''}`;
   const privacySummary = tiers => privacyTiers(tiers).map(tier => (PRIVACY[tier] ? PRIVACY[tier].label : tier)).join(', ');
 
   const ModelCell = ({ row, providers, now }) => {
@@ -878,7 +879,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         <ProviderLogo provider={provider} size={32} />
         <div className="vx-mcell-body">
           <div className="vx-mcell-top">
-            <span className="vx-mcell-name">{family.name}</span>
+            <a className="vx-mcell-name" href={modelHref(family, display.id)}>{family.name}</a>
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-mcell-sub">
@@ -1043,17 +1044,18 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const media = sampleFor(display, isVideo ? 'cinematic-landscape' : 'photoreal') ||
       family.variants.map(id => catalog.models[id]).map(m => sampleFor(m, isVideo ? 'cinematic-landscape' : 'photoreal')).find(Boolean);
     const { offer } = row;
+    const href = modelHref(family, display.id);
     return (
       <article className="vx-card">
-        <div className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} aria-hidden="true">
+        <a className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} href={href} tabIndex={-1} aria-hidden="true">
           {media
             ? (media.type === 'video' ? <HoverVideo src={media.url} className="vx-card-el" /> : <img className="vx-card-el" src={media.url} alt="" loading="lazy" />)
             : <MediaFallback />}
           {isVideo && media ? <span className="vx-card-play"><Icon name="play" size={10} /></span> : null}
-        </div>
+        </a>
         <div className="vx-card-body">
           <div className="vx-card-top">
-            <span className="vx-card-name" title={family.name}>{family.name}</span>
+            <a className="vx-card-name" href={href} title={family.name}>{family.name}</a>
           </div>
           <div className="vx-card-meta">
             <span>{provider ? provider.name : family.provider}</span>
@@ -1129,7 +1131,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           <li key={family.slug} className="vx-list-row">
             <div className="vx-list-top">
               <ProviderLogo provider={provider} size={24} />
-              <span className="vx-list-name">{family.name}</span>
+              <a className="vx-list-name" href={modelHref(family, display.id)}>{family.name}</a>
               <span className="vx-list-provider">{provider ? provider.name : family.provider}</span>
               <StatusTags item={family} now={now} />
               <span className="vx-list-price">{rowPrice(row)}</span>
