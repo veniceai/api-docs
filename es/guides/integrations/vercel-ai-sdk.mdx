@@ -1,6 +1,6 @@
 ---
 title: "Vercel AI SDK"
-description: "Transmite chat completions de Venice en apps Next.js y React con el proveedor compatible con OpenAI del Vercel AI SDK en producción."
+description: "Transmite chat completions de Venice en Next.js y React con el Vercel AI SDK."
 "og:title": "Vercel AI SDK | Venice API Docs"
 "og:description": "Transmite respuestas de Venice AI en apps de Next.js con el Vercel AI SDK"
 ---
@@ -9,8 +9,10 @@ El [Vercel AI SDK](https://sdk.vercel.ai/) es la forma más popular de construir
 
 ## Configuración
 
+Los ejemplos usan AI SDK 7. Instálalo junto con el proveedor de OpenAI, los hooks de React y Zod:
+
 ```bash
-npm install ai @ai-sdk/openai
+npm install ai@7 @ai-sdk/openai@4 @ai-sdk/react@4 zod
 ```
 
 ## Configuración del proveedor
@@ -40,19 +42,27 @@ Usar `.chat()` garantiza que las solicitudes vayan al endpoint `/chat/completion
 
 ```typescript
 // app/api/chat/route.ts
-import { streamText } from 'ai';
+import {
+  convertToModelMessages,
+  createUIMessageStreamResponse,
+  streamText,
+  toUIMessageStream,
+  type UIMessage,
+} from 'ai';
 import { venice } from '@/lib/venice';
 
 export async function POST(req: Request) {
-  const { messages } = await req.json();
+  const { messages }: { messages: UIMessage[] } = await req.json();
 
   const result = streamText({
-    model: venice('venice-uncensored'),
-    system: 'You are a helpful, privacy-respecting AI assistant.',
-    messages,
+    model: venice('venice-uncensored-1-2'),
+    instructions: 'You are a helpful, privacy-respecting AI assistant.',
+    messages: await convertToModelMessages(messages),
   });
 
-  return result.toDataStreamResponse();
+  return createUIMessageStreamResponse({
+    stream: toUIMessageStream({ stream: result.stream }),
+  });
 }
 ```
 
@@ -63,9 +73,12 @@ export async function POST(req: Request) {
 'use client';
 
 import { useChat } from '@ai-sdk/react';
+import { useState } from 'react';
 
 export default function Chat() {
-  const { messages, input, handleInputChange, handleSubmit, isLoading } = useChat();
+  const [input, setInput] = useState('');
+  const { messages, sendMessage, status } = useChat();
+  const isLoading = status === 'submitted' || status === 'streaming';
 
   return (
     <div className="max-w-2xl mx-auto p-4">
@@ -73,15 +86,27 @@ export default function Chat() {
         {messages.map((m) => (
           <div key={m.id} className={m.role === 'user' ? 'text-right' : 'text-left'}>
             <span className="font-bold">{m.role === 'user' ? 'You' : 'Venice'}:</span>
-            <p className="whitespace-pre-wrap">{m.content}</p>
+            {m.parts.map((part, i) =>
+              part.type === 'text' ? (
+                <p key={i} className="whitespace-pre-wrap">{part.text}</p>
+              ) : null,
+            )}
           </div>
         ))}
       </div>
 
-      <form onSubmit={handleSubmit} className="flex gap-2">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!input.trim()) return;
+          sendMessage({ text: input });
+          setInput('');
+        }}
+        className="flex gap-2"
+      >
         <input
           value={input}
-          onChange={handleInputChange}
+          onChange={(e) => setInput(e.target.value)}
           placeholder="Ask anything..."
           className="flex-1 border rounded px-3 py-2"
           disabled={isLoading}
@@ -112,31 +137,33 @@ console.log(text);
 ## Salida estructurada
 
 ```typescript
-import { generateObject } from 'ai';
+import { generateText, Output } from 'ai';
 import { venice } from '@/lib/venice';
 import { z } from 'zod';
 
-const { object } = await generateObject({
-  model: venice('venice-uncensored'),
-  schema: z.object({
-    recipe: z.object({
-      name: z.string(),
-      ingredients: z.array(z.string()),
-      steps: z.array(z.string()),
-      prepTimeMinutes: z.number(),
+const { output } = await generateText({
+  model: venice('venice-uncensored-1-2'),
+  output: Output.object({
+    schema: z.object({
+      recipe: z.object({
+        name: z.string(),
+        ingredients: z.array(z.string()),
+        steps: z.array(z.string()),
+        prepTimeMinutes: z.number(),
+      }),
     }),
   }),
   prompt: 'Generate a recipe for chocolate chip cookies.',
 });
 
-console.log(object.recipe.name);
-console.log(`Prep time: ${object.recipe.prepTimeMinutes} minutes`);
+console.log(output.recipe.name);
+console.log(`Prep time: ${output.recipe.prepTimeMinutes} minutes`);
 ```
 
 ## Tool calling
 
 ```typescript
-import { streamText, tool } from 'ai';
+import { isStepCount, streamText, tool } from 'ai';
 import { venice } from '@/lib/venice';
 import { z } from 'zod';
 
@@ -146,7 +173,7 @@ const result = streamText({
   tools: {
     getWeather: tool({
       description: 'Get current weather for a location',
-      parameters: z.object({
+      inputSchema: z.object({
         location: z.string().describe('City name'),
       }),
       execute: async ({ location }) => {
@@ -155,16 +182,19 @@ const result = streamText({
       },
     }),
   },
+  stopWhen: isStepCount(2),
 });
 
-for await (const part of result.fullStream) {
+for await (const part of result.stream) {
   if (part.type === 'text-delta') {
-    process.stdout.write(part.textDelta);
+    process.stdout.write(part.text);
   } else if (part.type === 'tool-result') {
-    console.log('Tool result:', part.result);
+    console.log('Tool result:', part.output);
   }
 }
 ```
+
+`stopWhen: isStepCount(2)` permite que el modelo responda en un segundo paso después de ejecutar la herramienta. Sin esto, el stream termina tras el resultado de la herramienta.
 
 ## Generación de imágenes
 
@@ -184,8 +214,7 @@ export async function POST(req: Request) {
     body: JSON.stringify({
       model: 'qwen-image',
       prompt,
-      width: 1024,
-      height: 1024,
+      aspect_ratio: '1:1',
     }),
   });
 
@@ -200,18 +229,25 @@ Deja que los usuarios elijan entre los modelos de Venice:
 
 ```typescript
 // app/api/chat/route.ts
-import { streamText } from 'ai';
+import {
+  convertToModelMessages,
+  createUIMessageStreamResponse,
+  streamText,
+  toUIMessageStream,
+  type UIMessage,
+} from 'ai';
 import { venice } from '@/lib/venice';
 
 const ALLOWED_MODELS = [
-  'venice-uncensored',
+  'venice-uncensored-1-2',
   'z-ai-glm-5-3-flash',
   'qwen3-vl-235b-a22b',
   'nvidia-nemotron-3-nano-30b-a3b',
 ];
 
 export async function POST(req: Request) {
-  const { messages, model: modelId } = await req.json();
+  const { messages, model: modelId }: { messages: UIMessage[]; model: string } =
+    await req.json();
 
   if (!ALLOWED_MODELS.includes(modelId)) {
     return new Response('Invalid model', { status: 400 });
@@ -219,10 +255,12 @@ export async function POST(req: Request) {
 
   const result = streamText({
     model: venice(modelId),
-    messages,
+    messages: await convertToModelMessages(messages),
   });
 
-  return result.toDataStreamResponse();
+  return createUIMessageStreamResponse({
+    stream: toUIMessageStream({ stream: result.stream }),
+  });
 }
 ```
 
@@ -234,17 +272,16 @@ import { useChat } from '@ai-sdk/react';
 import { useState } from 'react';
 
 const MODELS = [
-  { id: 'venice-uncensored', name: 'Venice Uncensored', desc: 'Fast & uncensored' },
-  { id: 'z-ai-glm-5-3-flash', name: 'GLM 5.3 Flash', desc: 'Razonamiento privado rápido' },
+  { id: 'venice-uncensored-1-2', name: 'Venice Uncensored', desc: 'Fast & uncensored' },
+  { id: 'z-ai-glm-5-3-flash', name: 'GLM 5.3 Flash', desc: 'Fast private reasoning' },
   { id: 'qwen3-vl-235b-a22b', name: 'Qwen Vision', desc: 'Advanced vision + text' },
   { id: 'nvidia-nemotron-3-nano-30b-a3b', name: 'Nemotron 3 Nano 30B', desc: 'Fast & low cost' },
 ];
 
 export default function Chat() {
-  const [model, setModel] = useState('venice-uncensored');
-  const { messages, input, handleInputChange, handleSubmit } = useChat({
-    body: { model },
-  });
+  const [model, setModel] = useState('venice-uncensored-1-2');
+  const [input, setInput] = useState('');
+  const { messages, sendMessage } = useChat();
 
   return (
     <div>
@@ -253,39 +290,44 @@ export default function Chat() {
           <option key={m.id} value={m.id}>{m.name} — {m.desc}</option>
         ))}
       </select>
-      {/* ... UI del chat ... */}
+      {messages.map((m) => (
+        <p key={m.id}>
+          {m.role}: {m.parts.map((part) => (part.type === 'text' ? part.text : '')).join('')}
+        </p>
+      ))}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          sendMessage({ text: input }, { body: { model } });
+          setInput('');
+        }}
+      >
+        <input value={input} onChange={(e) => setInput(e.target.value)} />
+      </form>
     </div>
   );
 }
 ```
 
+`sendMessage` envía el `model` seleccionado en el cuerpo de la solicitud con cada mensaje, así que el cambio de modelo se aplica al siguiente mensaje.
+
 ## Integración con búsqueda web
 
-Pasa parámetros de Venice para la búsqueda web:
+Activa la búsqueda web de Venice con un [sufijo de funciones del modelo](/es/api-reference/endpoint/chat/model_feature_suffix) en el ID del modelo. El sufijo pasa `venice_parameters` a través del ID del modelo, así que no necesitas añadir campos a la solicitud:
 
 ```typescript
 import { streamText } from 'ai';
 import { venice } from '@/lib/venice';
 
 const result = streamText({
-  model: venice('venice-uncensored'),
+  model: venice('venice-uncensored-1-2:enable_web_search=auto'),
   messages: [{ role: 'user', content: 'What happened in AI news today?' }],
-  // Parámetros específicos de Venice
-  experimental_providerMetadata: {
-    venice_parameters: {
-      enable_web_search: 'auto',
-    },
-  },
 });
 ```
 
-<Note>
-Si `experimental_providerMetadata` no pasa, puedes usar un wrapper de fetch personalizado o llamar directamente a la API de Venice para las funciones de búsqueda web.
-</Note>
-
 ## Embeddings
 
-Para embeddings, usa `textEmbeddingModel()` directamente en el proveedor:
+Para embeddings, usa `embeddingModel()` directamente en el proveedor:
 
 ```typescript
 import { embed, embedMany } from 'ai';
@@ -298,13 +340,13 @@ const openai = createOpenAI({
 
 // Embedding único
 const { embedding } = await embed({
-  model: openai.textEmbeddingModel('text-embedding-bge-m3'),
+  model: openai.embeddingModel('text-embedding-bge-m3'),
   value: 'Privacy-first AI infrastructure',
 });
 
 // Embeddings por lotes
 const { embeddings } = await embedMany({
-  model: openai.textEmbeddingModel('text-embedding-bge-m3'),
+  model: openai.embeddingModel('text-embedding-bge-m3'),
   values: [
     'Venice AI provides private inference.',
     'Zero data retention guaranteed.',
@@ -324,7 +366,7 @@ VENICE_API_KEY=your-venice-api-key
 
 | Caso de uso | Modelo | Por qué |
 |----------|-------|-----|
-| Apps de chat | `venice-uncensored` | Rápido, barato, sin filtrado |
+| Apps de chat | `venice-uncensored-1-2` | Rápido, barato, sin filtrado |
 | Tareas complejas | `z-ai-glm-5-3-flash` | Razonamiento privado rápido |
 | Apps de visión | `qwen3-vl-235b-a22b` | Comprensión avanzada de imágenes |
 | Alto volumen | `nvidia-nemotron-3-nano-30b-a3b` | Económico a $0.075/1M de entrada, $0.30/1M de salida |
@@ -334,7 +376,7 @@ VENICE_API_KEY=your-venice-api-key
   <Card title="Docs del Vercel AI SDK" icon="book" href="https://sdk.vercel.ai/docs">
     Documentación oficial del Vercel AI SDK
   </Card>
-  <Card title="Modelos de Venice" icon="database" href="/models/overview">
+  <Card title="Modelos de Venice" icon="database" href="/es/models/overview">
     Explora todos los modelos de Venice
   </Card>
 </CardGroup>
