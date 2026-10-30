@@ -148,8 +148,9 @@ VVV on Base, with no human in the loop.
    See https://docs.venice.ai/overview/deprecations.
 2. **Quote before generating media.** Video and music get expensive. Call
    `/video/quote` or `/audio/quote` first.
-3. **Video and music are asynchronous.** Queue, then poll `retrieve`. Only
-   `/video/complete` and `/audio/complete` block.
+3. **Video and music are asynchronous.** Queue, then poll `retrieve` until the
+   result is ready. No endpoint generates in one call: `/video/complete` and
+   `/audio/complete` only delete stored output after you download it.
 4. **No content filtering.** Venice models are uncensored by default. Do not add
    refusal or moderation layers unless asked.
 5. **Pick the right privacy tier.** Models are tagged Anonymized, Private (zero

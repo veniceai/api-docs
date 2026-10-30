@@ -12,8 +12,8 @@ Video upscaling lets you enhance existing videos to higher resolutions while imp
 Video upscaling uses the same async queue system as video generation:
 
 1. **Queue** — Submit your video to `/video/queue` with the `topaz-video-upscale` model
-2. **Poll** — Check `/video/retrieve` with the returned `queue_id` until the status is `completed`
-3. **Complete** — Call `/video/complete` to finalize and get the output URL
+2. **Poll** — Call `/video/retrieve` with `model` and the returned `queue_id`. While the job runs, it returns JSON with `"status": "PROCESSING"`. When the job finishes, the response body is the upscaled MP4 (`Content-Type: video/mp4`), so save it to a file. There is no output URL.
+3. **Clean up (optional)** — After you've saved the file, call `/video/complete` to delete the stored output
 
 The server automatically detects the input video's duration, frame rate, and dimensions from the uploaded file. You don't need to provide these values — billing is calculated from the actual video metadata.
 
@@ -66,6 +66,7 @@ response = requests.post(
 
 data = response.json()
 queue_id = data["queue_id"]
+download_url = data.get("download_url")
 print(f"Queued: {queue_id}")
 ```
 
@@ -83,7 +84,7 @@ const response = await fetch("https://api.venice.ai/api/v1/video/queue", {
   }),
 });
 
-const { queue_id } = await response.json();
+const { queue_id, download_url } = await response.json();
 console.log(`Queued: ${queue_id}`);
 ```
 </CodeGroup>
@@ -97,14 +98,16 @@ The response includes a `queue_id` to track the job:
 }
 ```
 
-### Poll for completion
+### Poll and save the result
 
 <CodeGroup>
 ```bash cURL
 curl https://api.venice.ai/api/v1/video/retrieve \
   -H "Authorization: Bearer $VENICE_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"queue_id": "abc123-def456-..."}'
+  -d '{"model": "topaz-video-upscale", "queue_id": "abc123-def456-..."}' \
+  -o upscaled.mp4 \
+  -w '%{content_type}\n'
 ```
 
 ```python Python
@@ -114,19 +117,29 @@ while True:
     result = requests.post(
         "https://api.venice.ai/api/v1/video/retrieve",
         headers={"Authorization": "Bearer YOUR_API_KEY"},
-        json={"queue_id": queue_id},
+        json={"model": "topaz-video-upscale", "queue_id": queue_id},
     )
-    data = result.json()
+    result.raise_for_status()
 
-    if data.get("status") == "completed":
-        print(f"Video URL: {data['url']}")
+    if "video/mp4" in result.headers.get("Content-Type", ""):
+        with open("upscaled.mp4", "wb") as f:
+            f.write(result.content)
+        break
+
+    if result.json().get("status") == "COMPLETED" and download_url:
+        with open("upscaled.mp4", "wb") as f:
+            f.write(requests.get(download_url).content)
         break
 
     time.sleep(5)
+
+print("Saved upscaled.mp4")
 ```
 
 ```javascript Node.js
-const poll = async (queueId) => {
+import { writeFile } from "node:fs/promises";
+
+const poll = async (queueId, downloadUrl) => {
   while (true) {
     const res = await fetch("https://api.venice.ai/api/v1/video/retrieve", {
       method: "POST",
@@ -134,32 +147,44 @@ const poll = async (queueId) => {
         "Authorization": "Bearer YOUR_API_KEY",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ queue_id: queueId }),
+      body: JSON.stringify({ model: "topaz-video-upscale", queue_id: queueId }),
     });
-    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(`${res.status}: ${await res.text()}`);
+    }
 
-    if (data.status === "completed") {
-      console.log(`Video URL: ${data.url}`);
-      return data;
+    if (res.headers.get("Content-Type")?.includes("video/mp4")) {
+      await writeFile("upscaled.mp4", Buffer.from(await res.arrayBuffer()));
+      return;
+    }
+
+    const data = await res.json();
+    if (data.status === "COMPLETED" && downloadUrl) {
+      const video = await fetch(downloadUrl);
+      await writeFile("upscaled.mp4", Buffer.from(await video.arrayBuffer()));
+      return;
     }
 
     await new Promise((r) => setTimeout(r, 5000));
   }
 };
 
-await poll(queue_id);
+await poll(queue_id, download_url);
+console.log("Saved upscaled.mp4");
 ```
 </CodeGroup>
 
-### Finalize with complete
+The finished upscale is the response body itself, not a JSON field, so check `Content-Type` before parsing. The cURL example prints the content type of each response: repeat it until it prints `video/mp4`, at which point `upscaled.mp4` holds the video. If the queue response included a `download_url`, retrieve returns JSON with `"status": "COMPLETED"` instead, and you download the file from that URL. See [Private download links](/guides/media/video-generation#private-download-links).
 
-After retrieving the result, call `/video/complete` to finalize:
+### Clean up (optional)
+
+After you've saved the MP4, you can call `/video/complete` to delete the stored output. It doesn't return the video or a URL.
 
 ```bash
 curl https://api.venice.ai/api/v1/video/complete \
   -H "Authorization: Bearer $VENICE_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"queue_id": "abc123-def456-..."}'
+  -d '{"model": "topaz-video-upscale", "queue_id": "abc123-def456-..."}'
 ```
 
 ---
