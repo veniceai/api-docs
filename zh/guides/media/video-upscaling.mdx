@@ -12,8 +12,8 @@ description: "在 Venice 异步视频队列上使用 topaz-video-upscale 模型�
 视频放大使用与视频生成相同的异步队列系统：
 
 1. **排队** —— 使用 `topaz-video-upscale` 模型将视频提交至 `/video/queue`
-2. **轮询** —— 使用返回的 `queue_id` 调用 `/video/retrieve`，直到状态为 `completed`
-3. **完成** —— 调用 `/video/complete` 进行收尾并获取输出 URL
+2. **轮询** —— 使用 `model` 和返回的 `queue_id` 调用 `/video/retrieve`。作业运行期间，它返回包含 `"status": "PROCESSING"` 的 JSON。作业完成后，响应体就是放大后的 MP4（`Content-Type: video/mp4`），因此请将其保存为文件。不会提供输出 URL。
+3. **清理（可选）** —— 保存文件后，调用 `/video/complete` 删除存储的输出
 
 服务器会自动从上传的文件中检测输入视频的时长、帧率和尺寸。您无需提供这些值 —— 计费根据实际视频元数据计算。
 
@@ -66,6 +66,7 @@ response = requests.post(
 
 data = response.json()
 queue_id = data["queue_id"]
+download_url = data.get("download_url")
 print(f"Queued: {queue_id}")
 ```
 
@@ -83,7 +84,7 @@ const response = await fetch("https://api.venice.ai/api/v1/video/queue", {
   }),
 });
 
-const { queue_id } = await response.json();
+const { queue_id, download_url } = await response.json();
 console.log(`Queued: ${queue_id}`);
 ```
 </CodeGroup>
@@ -97,14 +98,16 @@ console.log(`Queued: ${queue_id}`);
 }
 ```
 
-### 轮询完成状态
+### 轮询并保存结果
 
 <CodeGroup>
 ```bash cURL
 curl https://api.venice.ai/api/v1/video/retrieve \
   -H "Authorization: Bearer $VENICE_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"queue_id": "abc123-def456-..."}'
+  -d '{"model": "topaz-video-upscale", "queue_id": "abc123-def456-..."}' \
+  -o upscaled.mp4 \
+  -w '%{content_type}\n'
 ```
 
 ```python Python
@@ -114,19 +117,29 @@ while True:
     result = requests.post(
         "https://api.venice.ai/api/v1/video/retrieve",
         headers={"Authorization": "Bearer YOUR_API_KEY"},
-        json={"queue_id": queue_id},
+        json={"model": "topaz-video-upscale", "queue_id": queue_id},
     )
-    data = result.json()
+    result.raise_for_status()
 
-    if data.get("status") == "completed":
-        print(f"Video URL: {data['url']}")
+    if "video/mp4" in result.headers.get("Content-Type", ""):
+        with open("upscaled.mp4", "wb") as f:
+            f.write(result.content)
+        break
+
+    if result.json().get("status") == "COMPLETED" and download_url:
+        with open("upscaled.mp4", "wb") as f:
+            f.write(requests.get(download_url).content)
         break
 
     time.sleep(5)
+
+print("Saved upscaled.mp4")
 ```
 
 ```javascript Node.js
-const poll = async (queueId) => {
+import { writeFile } from "node:fs/promises";
+
+const poll = async (queueId, downloadUrl) => {
   while (true) {
     const res = await fetch("https://api.venice.ai/api/v1/video/retrieve", {
       method: "POST",
@@ -134,32 +147,44 @@ const poll = async (queueId) => {
         "Authorization": "Bearer YOUR_API_KEY",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ queue_id: queueId }),
+      body: JSON.stringify({ model: "topaz-video-upscale", queue_id: queueId }),
     });
-    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(`${res.status}: ${await res.text()}`);
+    }
 
-    if (data.status === "completed") {
-      console.log(`Video URL: ${data.url}`);
-      return data;
+    if (res.headers.get("Content-Type")?.includes("video/mp4")) {
+      await writeFile("upscaled.mp4", Buffer.from(await res.arrayBuffer()));
+      return;
+    }
+
+    const data = await res.json();
+    if (data.status === "COMPLETED" && downloadUrl) {
+      const video = await fetch(downloadUrl);
+      await writeFile("upscaled.mp4", Buffer.from(await video.arrayBuffer()));
+      return;
     }
 
     await new Promise((r) => setTimeout(r, 5000));
   }
 };
 
-await poll(queue_id);
+await poll(queue_id, download_url);
+console.log("Saved upscaled.mp4");
 ```
 </CodeGroup>
 
-### 通过 complete 完成收尾
+放大完成后的结果就是响应体本身，而不是某个 JSON 字段，因此请在解析之前检查 `Content-Type`。cURL 示例会打印每个响应的内容类型：重复执行，直到它打印出 `video/mp4`，此时 `upscaled.mp4` 中保存的就是视频。如果排队响应中包含 `download_url`，retrieve 会改为返回包含 `"status": "COMPLETED"` 的 JSON，您需要从该 URL 下载文件。请参阅[私有下载链接](/zh/guides/media/video-generation#私有下载链接)。
 
-检索到结果后，调用 `/video/complete` 完成收尾：
+### 清理（可选）
+
+保存 MP4 之后，您可以调用 `/video/complete` 删除存储的输出。它不会返回视频或 URL。
 
 ```bash
 curl https://api.venice.ai/api/v1/video/complete \
   -H "Authorization: Bearer $VENICE_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"queue_id": "abc123-def456-..."}'
+  -d '{"model": "topaz-video-upscale", "queue_id": "abc123-def456-..."}'
 ```
 
 ---
