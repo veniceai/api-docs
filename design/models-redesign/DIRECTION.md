@@ -242,7 +242,7 @@ Blended price understates reasoning models, which can spend several times more o
 | `scripts/quote-video-pricing.js` | Build-time video quote matrix → `data/video-pricing.json` |
 | `scripts/sync-model-media.js` | Reference renders from venice.ai/models → `data/model-media.json` |
 | `data/model-overrides.json` | Curated fields the API doesn't expose yet (endpoint rules, provider fixes, licenses) |
-| `src/model-hub.jsx` | All UI source for the explorer, written as a factory that receives React |
+| `src/model-hub.jsx` | All UI source: explorer and model page, written as a factory that receives React |
 | `scripts/build-model-hub.js` | Compiles the source (sucrase) → `data/model-hub.bundle.json` |
 | `snippets/model-hub-mount.jsx` | `<HubMount view="…">`, the only thing pages import: loads the bundle once and renders a view |
 | `model-hub.css` | All styles, namespaced `.vx-*`, light and dark |
@@ -251,7 +251,7 @@ Blended price understates reasoning models, which can spend several times more o
 
 ### Mintlify constraints we hit
 
-- **Every page compiles the snippets it imports**, and root `.js` files are inlined into every docs page's HTML (that's how `model-search.js` ships today). Neither suits a 77 KB UI shared by every hub page, which is why the UI is a separately built bundle behind a 3 KB mount (see [Build cost](#build-cost)).
+- **Every page compiles the snippets it imports**, and root `.js` files are inlined into every docs page's HTML (that's how `model-search.js` ships today). Neither suits a 162 KB UI shared by every hub page, which is why the UI is a separately built bundle behind a 3 KB mount (see [Build cost](#build-cost)).
 - **Snippet exports are evaluated in isolation.** A page only receives the exports it imports; anything else a snippet references is out of scope. `HubMount` is therefore fully self-contained.
 - **MDX remaps lowercase tags in snippets** (`table`, `img`, `pre`, headings) to Mintlify components with their own classes. The bundle avoids this by creating elements through `HubMount`'s `h`, which uses a variable tag.
 - **Global `style.css` forces an 18rem sidebar gutter and an 820px column on every page.** `model-hub.css` releases both with `:has(.vx, .vx-mount)`.
@@ -280,7 +280,7 @@ The explorer is English-only. The eight localized trees still use the previous b
 
 ### Performance budget
 
-- `data/model-hub.bundle.json`: the compiled UI, about 77 KB (21 KB gzipped). Fetched once per session on hub pages only, cached by the browser, revalidated on each visit.
+- `data/model-hub.bundle.json`: the compiled UI, about 162 KB (40 KB gzipped). Fetched once per session on hub pages only, cached by the browser, revalidated on each visit.
 - `data/model-catalog.json`: about 640 KB minified (54 KB gzipped), fetched once per session by the explorer.
 - Each hub page carries only the 3 KB mount plus its own data and Markdown.
 
