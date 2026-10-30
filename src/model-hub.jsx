@@ -6,7 +6,8 @@
 // and passes in React's element factory plus hooks. JSX compiles to
 // __jsx()/__Fragment, names chosen so local variables can't shadow them.
 // Data comes from scripts/build-model-catalog.js: views fetch
-// data/model-catalog.json.
+// data/model-catalog.json, except model pages, which receive their
+// family inline.
 export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEffect, useRef, useMemo }) => {
   /* ------------------------------------------------------------ data */
 
@@ -70,6 +71,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   /* ------------------------------------------------------------ vocabulary */
 
+  const MODALITIES = [
+    { key: 'all', label: 'All models', short: 'All', path: '/models/overview' },
+    { key: 'text', label: 'Text', short: 'Text', path: '/models/text', icon: 'text', blurb: 'Chat, reasoning, coding and agents' },
+    { key: 'image', label: 'Image', short: 'Image', path: '/models/image', icon: 'image', blurb: 'Generate, edit and upscale' },
+    { key: 'video', label: 'Video', short: 'Video', path: '/models/video', icon: 'video', blurb: 'Text, image and reference to video' },
+    { key: 'audio', label: 'Audio', short: 'Audio', path: '/models/text-to-speech', icon: 'music', blurb: 'Speech, transcription, music and sound' },
+    { key: 'embedding', label: 'Embeddings', short: 'Embeddings', path: '/models/embeddings', icon: 'layers', blurb: 'Vectors for search and RAG' }
+  ];
   // The explorer's modality facet, one choice at a time. Each family has one
   // key: audio splits by task and decision models stand apart from chat, as
   // in Gordon's design.
@@ -120,6 +129,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     { key: 'logprobs', label: 'Log probabilities', short: 'Logprobs', icon: 'activity', desc: 'Token logprobs in responses' },
     { key: 'code', label: 'Optimized for code', short: 'Code', icon: 'code', desc: 'Tuned for software engineering' }
   ];
+  const QUANT_LABELS = { fp4: 'FP4', fp8: 'FP8', fp16: 'FP16', bf16: 'BF16', int4: 'INT4' };
   const QUANT_NOTES = {
     fp4: '4-bit floating point weights. Lowest memory and cost; small accuracy loss on some tasks.',
     int4: '4-bit integer weights. Lowest memory and cost; small accuracy loss on some tasks.',
@@ -177,6 +187,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   const offersTier = (m, tier) => m.privacy === tier || (tier === 'tee' && Boolean(m.text && m.text.caps && m.text.caps.tee));
   const maxVideoHeight = model => Math.max(0, ...((model.video && model.video.resolutions) || []).map(r => r.height || 0));
   const maxVideoSeconds = model => Math.max(0, ...((model.video && model.video.durations) || []).map(d => d.seconds || 0));
+  const minVideoSeconds = model => {
+    const list = ((model.video && model.video.durations) || []).map(d => d.seconds).filter(Boolean);
+    return list.length ? Math.min(...list) : 0;
+  };
   const imageMaxRes = model => {
     const list = (model.image && model.image.resolutions) || [];
     if (list.includes('4K')) return '4K';
@@ -185,6 +199,42 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return list.length ? list[list.length - 1] : null;
   };
   const heightLabel = h => (h >= 2160 ? '4K' : h >= 1440 ? '1440p' : h ? `${h}p` : '—');
+  const listText = items => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0] || '');
+
+  const IMAGE_TASK_WORDS = { 'image-generation': 'generation', 'image-edit': 'editing', 'image-upscale': 'upscaling' };
+  // What a family does across its variants, e.g. "Image generation and editing".
+  const familyTask = (family, models) => {
+    if (family.task === 'chat') return null;
+    if (family.modality === 'video') return 'Video generation';
+    if (family.modality === 'image') {
+      const words = [...new Set(models.map(m => IMAGE_TASK_WORDS[m.task]).filter(Boolean))];
+      return words.length ? `Image ${listText(words)}` : TASK_LABELS[family.task] || null;
+    }
+    return TASK_LABELS[family.task] || null;
+  };
+
+  // Video prices are quote-derived at build time. A model page asks for a
+  // resolution, duration and audio setting; the closest supported option is
+  // used and flagged when it differs from the request.
+  const videoPrice = (model, lens) => {
+    const p = model.pricing || {};
+    if (p.status !== 'quoted') return { status: p.status || 'unavailable' };
+    const video = model.video || {};
+    const res = (video.resolutions || []).filter(r => r.height).sort((a, b) => a.height - b.height);
+    const pick = res.find(r => r.height === lens.h) || res.find(r => r.height > lens.h) || res[res.length - 1] || null;
+    const resKey = pick ? pick.value : '-';
+    const audioKey = video.audio === 'optional' ? (lens.a === 'on' ? 'on' : 'off') : (video.audio === 'native' ? 'on' : 'off');
+    const durs = (video.durations || []).map(d => d.seconds).filter(Boolean);
+    const dur = durs.includes(lens.s) ? lens.s : durs.reduce((best, d) => (Math.abs(d - lens.s) < Math.abs(best - lens.s) ? d : best), durs[0]);
+    const clip = p.quotes ? p.quotes[`${resKey}|${dur}s|${audioKey}`] : null;
+    let perSecond = p.perSecond ? p.perSecond[`${resKey}|${audioKey}`] : null;
+    if (perSecond == null && clip != null && dur) perSecond = clip / dur;
+    return {
+      status: 'quoted', perSecond, clip, seconds: dur, resolution: pick ? pick.label : null,
+      exactRes: !pick || pick.height === lens.h, exactDur: dur === lens.s,
+      audio: audioKey === 'on', forcedAudio: video.audio === 'native' && lens.a !== 'on', noAudio: video.audio === 'none' && lens.a === 'on'
+    };
+  };
   const tierLabel = t => (t.from === t.upTo ? `${t.upTo}s` : t.from ? `${t.from}–${t.upTo}s` : `Up to ${t.upTo}s`);
 
   // The explorer prices a model at its cheapest option, or, once the
@@ -241,6 +291,21 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (p.kind === 'tiered' && (p.tiers || []).length) return spread(p.tiers.map(t => [tierLabel(t), t.usd]), '/ track');
     return { value: model.headline ? model.headline.value : null, unit: headlineUnit(model) };
   };
+  // The unit a model is billed in, as the pricing section's note reads it.
+  const priceUnit = model => {
+    if (model.modality === 'text' || model.modality === 'embedding') return model.modality === 'embedding' ? 'per 1M input tokens' : 'per 1M tokens';
+    if (model.modality === 'video') return 'per clip';
+    if (model.task === 'tts') return 'per 1M characters';
+    if (model.task === 'stt') return 'per second of audio';
+    if (model.modality === 'audio') {
+      if (model.pricing && model.pricing.kind === 'tiered') return 'per track, by length';
+      return model.headline && model.headline.basis === 'track' ? 'per track' : 'per minute of audio';
+    }
+    if (model.task === 'image-edit') return 'per edit';
+    if (model.task === 'image-upscale') return 'per upscale';
+    return 'per image';
+  };
+
   const headlineUnit = model => {
     if (model.task === 'decision') return '/ 1M input tok';
     if (model.modality === 'video') return '/ sec';
@@ -254,6 +319,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (model.modality === 'image') return '/ image';
     return '';
   };
+
+  // The reference clips on a video model page.
+  const DRAFT_CLIP = { h: 720, s: 5, a: 'off' };
+  const PRODUCTION_CLIP = { h: 1080, s: 10, a: 'on' };
 
   const searchText = (family, models, providers) => [
     family.name, family.slug, providers[family.provider] && providers[family.provider].name, family.task,
@@ -375,6 +444,22 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
+  const ModelId = ({ id }) => {
+    const [done, setDone] = useState(false);
+    const copy = () => copyText(id).then(() => {
+      setDone(true);
+      setTimeout(() => setDone(false), 1400);
+    });
+    return (
+      <span className="vx-id">
+        <code title={id}>{id}</code>
+        <button type="button" className={cls('vx-id-copy', done && 'is-done')} onClick={copy} aria-label={`Copy model ID ${id}`}>
+          <span aria-live="polite">{done ? 'Copied' : 'Copy'}</span>
+        </button>
+      </span>
+    );
+  };
+
   const Segmented = ({ options, value, onChange, ariaLabel }) => (
     <div className="vx-seg" role="radiogroup" aria-label={ariaLabel}>
       {options.map(option => (
@@ -394,6 +479,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         <span key={cap.key} className="vx-cap" title={cap.label}><Icon name={cap.icon} size={15} /><span className="vx-sr-only">{cap.label}</span></span>
       ))}
     </span>
+  );
+
+  const Stat = ({ label, value, sub, last }) => (
+    <div className={cls('vx-stat', last && 'is-last')}>
+      <div className="vx-stat-label">{label}</div>
+      <div className="vx-stat-value">{value}</div>
+      {sub ? <div className="vx-stat-sub">{sub}</div> : null}
+    </div>
   );
 
   const Empty = ({ title, children }) => (
@@ -430,6 +523,69 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   const MediaFallback = ({ label = 'No reference render yet' }) => (
     <div className="vx-media-fallback"><span>{label}</span></div>
   );
+
+  const Lightbox = ({ item, onClose }) => {
+    const closeRef = useRef(null);
+    const onCloseRef = useRef(onClose);
+    onCloseRef.current = onClose;
+    useEffect(() => {
+      if (!item) return undefined;
+      const previous = document.activeElement;
+      if (closeRef.current) closeRef.current.focus();
+      const onKey = e => { if (e.key === 'Escape') onCloseRef.current(); };
+      window.addEventListener('keydown', onKey);
+      return () => {
+        window.removeEventListener('keydown', onKey);
+        if (previous && previous.focus) previous.focus();
+      };
+    }, [item]);
+    if (!item) return null;
+    return (
+      <div className="vx-lightbox" role="dialog" aria-modal="true" aria-label={item.title} onClick={onClose}>
+        <div className="vx-lightbox-inner" onClick={e => e.stopPropagation()}>
+          <button ref={closeRef} type="button" className="vx-icon-btn vx-lightbox-close" onClick={onClose} aria-label="Close"><Icon name="x" size={18} /></button>
+          <div className="vx-lightbox-media">
+            {item.type === 'video'
+              ? <video src={item.url} controls autoPlay loop playsInline />
+              : <img src={item.url} alt={item.caption || item.title} />}
+          </div>
+          <div className="vx-lightbox-meta">
+            <div className="vx-lightbox-title">{item.title}</div>
+            <p>{item.caption}</p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const MediaGallery = ({ model }) => {
+    const [open, setOpen] = useState(null);
+    const media = model.media || [];
+    const isVideo = model.modality === 'video';
+    if (!media.length) {
+      return <p className="vx-text">This variant has not been rendered on the reference prompts yet.</p>;
+    }
+    return (
+      <>
+        <div className={cls('vx-gallery', isVideo ? 'vx-gallery-video' : 'vx-gallery-image', !isVideo && media.length === 4 && 'is-four')}>
+          {media.map(item => (
+            <figure key={item.url} className="vx-shot">
+              <button type="button" className="vx-shot-media" onClick={() => setOpen(item)} aria-label={`Open ${item.title} sample`}>
+                {item.type === 'video'
+                  ? <HoverVideo src={item.url} className="vx-shot-el" />
+                  : <img className="vx-shot-el" src={item.url} alt={item.caption || item.title} loading="lazy" />}
+              </button>
+              <figcaption>
+                <span className="vx-shot-title">{item.title}</span>
+                {item.caption ? <span className="vx-shot-caption" title={item.caption}>{item.caption}</span> : null}
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+        <Lightbox item={open} onClose={() => setOpen(null)} />
+      </>
+    );
+  };
 
   /* ------------------------------------------------------------ explorer */
 
@@ -711,6 +867,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     <PriceCell value={offer.value} unit={offer.unit} note={offer.note} from={offer.from} breakdown={offer.breakdown} strong={strong} />
   );
 
+  const modelHref = (family, id) => `/models/${family.slug}${id !== family.primary ? `?v=${encodeURIComponent(id)}` : ''}`;
   const privacySummary = tiers => privacyTiers(tiers).map(tier => (PRIVACY[tier] ? PRIVACY[tier].label : tier)).join(', ');
 
   const ModelCell = ({ row, providers, now }) => {
@@ -722,7 +879,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         <ProviderLogo provider={provider} size={32} />
         <div className="vx-mcell-body">
           <div className="vx-mcell-top">
-            <span className="vx-mcell-name">{family.name}</span>
+            <a className="vx-mcell-name" href={modelHref(family, display.id)}>{family.name}</a>
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-mcell-sub">
@@ -887,17 +1044,18 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const media = sampleFor(display, isVideo ? 'cinematic-landscape' : 'photoreal') ||
       family.variants.map(id => catalog.models[id]).map(m => sampleFor(m, isVideo ? 'cinematic-landscape' : 'photoreal')).find(Boolean);
     const { offer } = row;
+    const href = modelHref(family, display.id);
     return (
       <article className="vx-card">
-        <div className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} aria-hidden="true">
+        <a className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} href={href} tabIndex={-1} aria-hidden="true">
           {media
             ? (media.type === 'video' ? <HoverVideo src={media.url} className="vx-card-el" /> : <img className="vx-card-el" src={media.url} alt="" loading="lazy" />)
             : <MediaFallback />}
           {isVideo && media ? <span className="vx-card-play"><Icon name="play" size={10} /></span> : null}
-        </div>
+        </a>
         <div className="vx-card-body">
           <div className="vx-card-top">
-            <span className="vx-card-name" title={family.name}>{family.name}</span>
+            <a className="vx-card-name" href={href} title={family.name}>{family.name}</a>
           </div>
           <div className="vx-card-meta">
             <span>{provider ? provider.name : family.provider}</span>
@@ -973,7 +1131,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           <li key={family.slug} className="vx-list-row">
             <div className="vx-list-top">
               <ProviderLogo provider={provider} size={24} />
-              <span className="vx-list-name">{family.name}</span>
+              <a className="vx-list-name" href={modelHref(family, display.id)}>{family.name}</a>
               <span className="vx-list-provider">{provider ? provider.name : family.provider}</span>
               <StatusTags item={family} now={now} />
               <span className="vx-list-price">{rowPrice(row)}</span>
@@ -1247,5 +1405,1193 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  return { ModelExplorer };
+  /* ------------------------------------------------------------ code samples */
+
+  const VARIANT_PROMPTS = {
+    chat: 'Explain TEE attestation in two sentences.',
+    image: 'A retro travel poster with the bold headline "VENICE" in large condensed serif type, sunset color palette',
+    video: 'Slow aerial drone shot over a misty mountain valley at golden hour',
+    music: 'Warm lo-fi hip hop beat with soft piano and vinyl crackle',
+    sfx: 'Heavy wooden door creaking open in a stone hallway'
+  };
+
+  const codeSamples = (model, endpointId) => {
+    const id = model.id;
+    const key = '$VENICE_API_KEY';
+    const auth = `-H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"`;
+    const pyHead = 'import os\nfrom openai import OpenAI\n\nclient = OpenAI(\n    api_key=os.environ["VENICE_API_KEY"],\n    base_url="https://api.venice.ai/api/v1",\n)\n';
+    const tsHead = 'import OpenAI from "openai";\n\nconst client = new OpenAI({\n  apiKey: process.env.VENICE_API_KEY,\n  baseURL: "https://api.venice.ai/api/v1",\n});\n';
+    const reqHead = 'import os, requests\n\nAPI = "https://api.venice.ai/api/v1"\nHEADERS = {"Authorization": f"Bearer {os.environ[\'VENICE_API_KEY\']}"}\n';
+    const fetchHead = 'const API = "https://api.venice.ai/api/v1";\nconst headers = {\n  Authorization: `Bearer ${process.env.VENICE_API_KEY}`,\n  "Content-Type": "application/json",\n};\n';
+    const text = model.text || {};
+    const effort = text.reasoning && text.reasoning.effort && text.reasoning.effort.length
+      ? (text.reasoning.defaultEffort && text.reasoning.effort.includes(text.reasoning.defaultEffort) ? text.reasoning.defaultEffort : text.reasoning.effort[text.reasoning.effort.length - 1])
+      : null;
+
+    if (model.task === 'chat' && endpointId === 'responses') {
+      return {
+        curl: `curl ${API}/responses \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    "input": "${VARIANT_PROMPTS.chat}"${effort ? `,\n    "reasoning": { "effort": "${effort}" }` : ''}\n  }'`,
+        python: `${pyHead}\nresponse = client.responses.create(\n    model="${id}",\n    input="${VARIANT_PROMPTS.chat}",${effort ? `\n    reasoning={"effort": "${effort}"},` : ''}\n)\nprint(response.output_text)`,
+        typescript: `${tsHead}\nconst response = await client.responses.create({\n  model: "${id}",\n  input: "${VARIANT_PROMPTS.chat}",${effort ? `\n  reasoning: { effort: "${effort}" },` : ''}\n});\nconsole.log(response.output_text);`
+      };
+    }
+    if (model.task === 'chat') {
+      const opts = effort ? `(${text.reasoning.effort.join(' | ')})` : '';
+      return {
+        curl: `curl ${API}/chat/completions \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    "messages": [{ "role": "user", "content": "${VARIANT_PROMPTS.chat}" }]${effort ? `,\n    "reasoning_effort": "${effort}"` : ''}\n  }'`,
+        python: `${pyHead}\nresponse = client.chat.completions.create(\n    model="${id}",\n    messages=[{"role": "user", "content": "${VARIANT_PROMPTS.chat}"}],${effort ? `\n    reasoning_effort="${effort}",  # ${opts}` : ''}\n)\nprint(response.choices[0].message.content)`,
+        typescript: `${tsHead}\nconst response = await client.chat.completions.create({\n  model: "${id}",\n  messages: [{ role: "user", content: "${VARIANT_PROMPTS.chat}" }],${effort ? `\n  reasoning_effort: "${effort}",` : ''}\n});\nconsole.log(response.choices[0].message.content);`
+      };
+    }
+    if (model.task === 'image-generation') {
+      const image = model.image || {};
+      const res = image.defaultResolution ? `,\n    "resolution": "${image.defaultResolution}"` : '';
+      const ar = image.aspectRatios && image.aspectRatios.length ? `,\n    "aspect_ratio": "${image.defaultAspectRatio || image.aspectRatios[0]}"` : '';
+      const body = `{\n    "model": "${id}",\n    "prompt": "${VARIANT_PROMPTS.image.replace(/"/g, '\\"')}"${res}${ar}\n  }`;
+      return {
+        curl: `curl ${API}/image/generate \\\n  ${auth} \\\n  -d '${body.replace(/'/g, "'\\''")}'`,
+        python: `import base64\n${reqHead}\nres = requests.post(f"{API}/image/generate", headers=HEADERS, json={\n    "model": "${id}",\n    "prompt": "A retro travel poster with the headline VENICE",${image.defaultResolution ? `\n    "resolution": "${image.defaultResolution}",` : ''}\n})\nres.raise_for_status()\nwith open("image.webp", "wb") as f:\n    f.write(base64.b64decode(res.json()["images"][0]))`,
+        typescript: `${fetchHead}\nconst res = await fetch(\`\${API}/image/generate\`, {\n  method: "POST",\n  headers,\n  body: JSON.stringify({\n    model: "${id}",\n    prompt: "A retro travel poster with the headline VENICE",${image.defaultResolution ? `\n    resolution: "${image.defaultResolution}",` : ''}\n  }),\n});\nconst { images } = await res.json(); // base64-encoded`
+      };
+    }
+    if (model.task === 'image-edit' || model.task === 'image-upscale' || model.task === 'background-removal') {
+      const path = model.task === 'image-edit' ? '/image/edit' : model.task === 'image-upscale' ? '/image/upscale' : '/image/background-remove';
+      const extra = model.task === 'image-edit' ? `,\n    "prompt": "Make it a rainy night scene"` : model.task === 'image-upscale' ? ',\n    "scale": 2' : '';
+      const pyExtra = model.task === 'image-edit' ? '\n    "prompt": "Make it a rainy night scene",' : model.task === 'image-upscale' ? '\n    "scale": 2,' : '';
+      return {
+        curl: `curl ${API}${path} \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    "image": "<base64-encoded image>"${extra}\n  }' --output result.png`,
+        python: `import base64\n${reqHead}\nwith open("photo.jpg", "rb") as f:\n    image = base64.b64encode(f.read()).decode()\n\nres = requests.post(f"{API}${path}", headers=HEADERS, json={\n    "model": "${id}",\n    "image": image,${pyExtra}\n})\nres.raise_for_status()\nwith open("result.png", "wb") as f:\n    f.write(res.content)`,
+        typescript: `${fetchHead}\nimport { readFile, writeFile } from "node:fs/promises";\n\nconst image = (await readFile("photo.jpg")).toString("base64");\nconst res = await fetch(\`\${API}${path}\`, {\n  method: "POST",\n  headers,\n  body: JSON.stringify({ model: "${id}", image${model.task === 'image-edit' ? ', prompt: "Make it a rainy night scene"' : model.task === 'image-upscale' ? ', scale: 2' : ''} }),\n});\nawait writeFile("result.png", Buffer.from(await res.arrayBuffer()));`
+      };
+    }
+    if (model.modality === 'video') {
+      const video = model.video || {};
+      const dur = (video.durations || []).find(d => d.seconds === 5) || (video.durations || [])[0];
+      const res = (video.resolutions || []).find(r => r.height === 720) || (video.resolutions || [])[0];
+      const fields = [
+        `"model": "${id}"`,
+        `"prompt": "${VARIANT_PROMPTS.video}"`,
+        dur ? `"duration": "${dur.value}"` : null,
+        res ? `"resolution": "${res.value}"` : null,
+        video.aspectRatios && video.aspectRatios.length ? `"aspect_ratio": "${video.aspectRatios[0]}"` : null,
+        video.audio === 'optional' ? '"audio": true' : null,
+        video.inputs && video.inputs.image ? '"image_url": "https://example.com/first-frame.jpg"' : null,
+        video.inputs && video.inputs.reference ? '"reference_image_urls": ["https://example.com/character.jpg"]' : null,
+        video.inputs && video.inputs.video ? '"video_url": "https://example.com/source.mp4"' : null
+      ].filter(Boolean);
+      const pyFields = fields.map(f => f.replace(/": true/, '": True'));
+      return {
+        curl: `# 1. Queue the job (returns a queue_id)\ncurl ${API}/video/queue \\\n  ${auth} \\\n  -d '{\n    ${fields.join(',\n    ')}\n  }'\n\n# 2. Poll until the MP4 is ready\ncurl ${API}/video/retrieve \\\n  ${auth} \\\n  -d '{ "model": "${id}", "queue_id": "<queue_id>" }' --output video.mp4`,
+        python: `import time\n${reqHead}\njob = requests.post(f"{API}/video/queue", headers=HEADERS, json={\n    ${pyFields.join(',\n    ')},\n}).json()\n\nwhile True:\n    res = requests.post(f"{API}/video/retrieve", headers=HEADERS,\n                        json={"model": "${id}", "queue_id": job["queue_id"]})\n    if res.headers.get("content-type", "").startswith("video/"):\n        open("video.mp4", "wb").write(res.content)\n        break\n    time.sleep(5)  # still processing`,
+        typescript: `${fetchHead}\nconst job = await fetch(\`\${API}/video/queue\`, {\n  method: "POST",\n  headers,\n  body: JSON.stringify({\n    ${fields.map(f => f.replace(/^"([a-z_]+)":/, '$1:')).join(',\n    ')},\n  }),\n}).then(r => r.json());\n\nlet res;\ndo {\n  await new Promise(r => setTimeout(r, 5000));\n  res = await fetch(\`\${API}/video/retrieve\`, {\n    method: "POST",\n    headers,\n    body: JSON.stringify({ model: "${id}", queue_id: job.queue_id }),\n  });\n} while (!res.headers.get("content-type")?.startsWith("video/"));`
+      };
+    }
+    if (model.task === 'tts' && !(model.audio && model.audio.async)) {
+      const voice = (model.audio && model.audio.voices && model.audio.voices[0]) || 'default';
+      return {
+        curl: `curl ${API}/audio/speech \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    "input": "Private AI for everyone.",\n    "voice": "${voice}",\n    "response_format": "mp3"\n  }' --output speech.mp3`,
+        python: `${pyHead}\nwith client.audio.speech.with_streaming_response.create(\n    model="${id}",\n    voice="${voice}",\n    input="Private AI for everyone.",\n) as response:\n    response.stream_to_file("speech.mp3")`,
+        typescript: `${tsHead}\nimport { writeFile } from "node:fs/promises";\n\nconst speech = await client.audio.speech.create({\n  model: "${id}",\n  voice: "${voice}",\n  input: "Private AI for everyone.",\n});\nawait writeFile("speech.mp3", Buffer.from(await speech.arrayBuffer()));`
+      };
+    }
+    if (model.task === 'stt') {
+      return {
+        curl: `curl ${API}/audio/transcriptions \\\n  -H "Authorization: Bearer ${key}" \\\n  -F model=${id} \\\n  -F file=@meeting.mp3`,
+        python: `${pyHead}\nwith open("meeting.mp3", "rb") as audio:\n    transcript = client.audio.transcriptions.create(model="${id}", file=audio)\nprint(transcript.text)`,
+        typescript: `${tsHead}\nimport fs from "node:fs";\n\nconst transcript = await client.audio.transcriptions.create({\n  model: "${id}",\n  file: fs.createReadStream("meeting.mp3"),\n});\nconsole.log(transcript.text);`
+      };
+    }
+    if (model.modality === 'audio') {
+      const prompt = model.task === 'sfx' ? VARIANT_PROMPTS.sfx : VARIANT_PROMPTS.music;
+      const isTts = model.task === 'tts';
+      const input = isTts ? '"prompt": "Private AI for everyone."' : `"prompt": "${prompt}"`;
+      const duration = !isTts && model.audio && model.audio.defaultDuration ? `,\n    "duration_seconds": ${Math.min(30, model.audio.defaultDuration)}` : '';
+      return {
+        curl: `# 1. Queue the job\ncurl ${API}/audio/queue \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    ${input}${duration}\n  }'\n\n# 2. Retrieve when ready\ncurl ${API}/audio/retrieve \\\n  ${auth} \\\n  -d '{ "model": "${id}", "queue_id": "<queue_id>" }' --output audio.mp3`,
+        python: `import time\n${reqHead}\njob = requests.post(f"{API}/audio/queue", headers=HEADERS, json={\n    "model": "${id}",\n    ${input}${duration.replace(/\n    /, '\n    ')},\n}).json()\n\nwhile True:\n    res = requests.post(f"{API}/audio/retrieve", headers=HEADERS,\n                        json={"model": "${id}", "queue_id": job["queue_id"]})\n    if res.headers.get("content-type", "").startswith("audio/"):\n        open("audio.mp3", "wb").write(res.content)\n        break\n    time.sleep(3)`,
+        typescript: `${fetchHead}\nconst job = await fetch(\`\${API}/audio/queue\`, {\n  method: "POST",\n  headers,\n  body: JSON.stringify({ model: "${id}", ${isTts ? 'prompt: "Private AI for everyone."' : `prompt: "${prompt}"`} }),\n}).then(r => r.json());\n// Poll POST /audio/retrieve with { model, queue_id: job.queue_id }`
+      };
+    }
+    if (model.modality === 'embedding') {
+      return {
+        curl: `curl ${API}/embeddings \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    "input": "Private AI for everyone."\n  }'`,
+        python: `${pyHead}\nresult = client.embeddings.create(model="${id}", input="Private AI for everyone.")\nvector = result.data[0].embedding  # ${model.embedding && model.embedding.dimensions ? `${model.embedding.dimensions} dimensions` : 'list of floats'}`,
+        typescript: `${tsHead}\nconst result = await client.embeddings.create({\n  model: "${id}",\n  input: "Private AI for everyone.",\n});\nconst vector = result.data[0].embedding;`
+      };
+    }
+    return {
+      curl: `curl ${API}/decisions \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    "state": "Help! My payouts have been failing for 3 days.",\n    "questions": {\n      "is_urgent": { "type": "noul", "instructions": "Does this need a reply within the hour?" }\n    }\n  }'`,
+      python: `${reqHead}\nres = requests.post(f"{API}/decisions", headers=HEADERS, json={\n    "model": "${id}",\n    "state": "Help! My payouts have been failing for 3 days.",\n    "questions": {\n        "is_urgent": {"type": "noul", "instructions": "Does this need a reply within the hour?"},\n    },\n})\nprint(res.json()["answers"]["is_urgent"]["noul"])  # 0 (no) to 1 (yes)`,
+      typescript: `${fetchHead}\nconst res = await fetch(\`\${API}/decisions\`, {\n  method: "POST",\n  headers,\n  body: JSON.stringify({\n    model: "${id}",\n    state: "Help! My payouts have been failing for 3 days.",\n    questions: { is_urgent: { type: "noul", instructions: "Does this need a reply within the hour?" } },\n  }),\n});\nconst { answers } = await res.json();`
+    };
+  };
+
+  const CodeTabs = ({ samples }) => {
+    const [lang, setLang] = useState('curl');
+    const langs = [['curl', 'cURL'], ['python', 'Python'], ['typescript', 'TypeScript']];
+    return (
+      <div className="vx-code">
+        <div className="vx-code-head">
+          <div className="vx-code-tabs" role="tablist">
+            {langs.map(([key, label]) => (
+              <button key={key} type="button" role="tab" aria-selected={lang === key} className={cls('vx-code-tab', lang === key && 'is-active')} onClick={() => setLang(key)}>{label}</button>
+            ))}
+          </div>
+          <CopyButton text={samples[lang]} label="Copy" small />
+        </div>
+        <pre className="vx-code-body"><code>{samples[lang]}</code></pre>
+      </div>
+    );
+  };
+
+  /* ------------------------------------------------------------ model page */
+
+  const pageSections = (model, { variants = 1, related = false, faq = false, examples = false, capabilities = false } = {}) => {
+    const list = [['overview', 'Overview'], ['pricing', 'Pricing']];
+    if (examples) list.push(['examples', 'Examples']);
+    if (model.task === 'tts' && model.audio && model.audio.voices && model.audio.voices.length) list.push(['voices', 'Voices']);
+    list.push(['api', 'API']);
+    if (hasCensorship(model)) list.push(['censorship', 'Censorship']);
+    if (capabilities) list.push(['capabilities', 'Capabilities']);
+    list.push(['specs', 'Specs']);
+    if (PRIVACY_TIERS.some(([tier]) => tier === model.privacy)) list.push(['privacy', 'Privacy']);
+    if (variants > 1) list.push(['variants', 'Variants']);
+    if (related) list.push(['related', 'Related models']);
+    if (faq) list.push(['faq', 'FAQ']);
+    return list;
+  };
+
+  // Generated FAQ answers mark code with backticks.
+  const RichText = ({ text }) => <>{String(text || '').split('`').map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part))}</>;
+
+  const useScrollSpy = ids => {
+    const [active, setActive] = useState(ids[0]);
+    const key = ids.join('|');
+    useEffect(() => {
+      if (typeof IntersectionObserver === 'undefined') return undefined;
+      const seen = new Map();
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => seen.set(entry.target.id, entry.isIntersecting));
+        const first = ids.find(id => seen.get(id));
+        if (first) setActive(first);
+      }, { rootMargin: '-96px 0px -55% 0px' });
+      ids.forEach(id => { const el = document.getElementById(id); if (el) observer.observe(el); });
+      return () => observer.disconnect();
+    }, [key]);
+    return active;
+  };
+
+  const Section = ({ id, title, note, actions, children }) => (
+    <section id={id} className="vx-section" aria-labelledby={`${id}-title`}>
+      <div className="vx-section-head">
+        <h2 id={`${id}-title`} className="vx-h2">{title}</h2>
+        {note ? <span className="vx-section-note">{note}</span> : null}
+        {actions ? <div className="vx-section-actions">{actions}</div> : null}
+      </div>
+      {children}
+    </section>
+  );
+
+  // Three cards a row, or four when a model has only four facts. Empty cells
+  // fill the last row so its hairlines stay unbroken.
+  const StatGrid = ({ items }) => {
+    const cells = items.filter(Boolean).slice(0, 6);
+    if (!cells.length) return null;
+    const cols = cells.length <= 4 ? cells.length : 3;
+    const empty = (cols - (cells.length % cols)) % cols;
+    return (
+      <div className={cls('vx-stats', cells.length % 2 && 'is-odd')} style={{ '--vx-cols': cols }}>
+        {cells.map((item, i) => <Stat key={item.label} {...item} last={i === cells.length - 1} />)}
+        {Array.from({ length: empty }, (_, i) => <span key={`empty-${i}`} className="vx-stat is-empty" aria-hidden="true" />)}
+      </div>
+    );
+  };
+
+  const KeyStats = ({ model, models }) => {
+    const p = model.pricing || {};
+    if (model.modality === 'text' && model.task === 'chat') {
+      const text = model.text || {};
+      const caps = text.caps || {};
+      const r = text.reasoning;
+      const levels = (r && r.effort) || [];
+      return (
+        <StatGrid items={[
+          { label: 'Input / output', value: `${usd(p.input)} / ${usd(p.output)}`, sub: 'per 1M tokens' },
+          { label: 'Context', value: tokens(text.context), sub: text.maxOutput ? `${tokens(text.maxOutput)} max output` : 'max output not published' },
+          {
+            label: 'Reasoning',
+            value: !r ? 'None' : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'Always on',
+            sub: !r ? 'answers directly' : r.defaultEffort ? `default ${r.defaultEffort}` : levels.length ? 'reasoning_effort' : 'not adjustable'
+          },
+          p.cacheRead != null
+            ? { label: 'Cached input', value: usd(p.cacheRead), sub: p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens' }
+            : { label: 'Cached input', value: '—', sub: 'no prompt caching' },
+          censorshipStat(model),
+          { label: 'Modalities', value: ['Text', caps.vision && 'image', caps.videoInput && 'video', caps.audioInput && 'audio'].filter(Boolean).join(', '), sub: 'out: text' }
+        ]} />
+      );
+    }
+    if (model.task === 'decision') {
+      const d = model.decision || {};
+      return (
+        <StatGrid items={[
+          { label: 'Input / output', value: `${usd(p.input)} / ${usd(p.output)}`, sub: 'per 1M tokens' },
+          d.maxStateTokens ? { label: 'Max state', value: tokens(d.maxStateTokens), sub: 'tokens' } : null,
+          d.maxTotalTokens ? { label: 'Max total', value: tokens(d.maxTotalTokens), sub: 'tokens per request' } : null
+        ]} />
+      );
+    }
+    if (model.modality === 'image') {
+      const image = model.image || {};
+      const prices = p.byResolution ? Object.values(p.byResolution).filter(v => v != null) : [];
+      const lo = prices.length ? Math.min(...prices) : p.perImage;
+      const hi = prices.length ? Math.max(...prices) : p.perImage;
+      const unit = model.task === 'image-edit' ? 'edit' : model.task === 'image-upscale' ? '2x upscale' : 'image';
+      const resolutions = image.resolutions || [];
+      const ratios = (image.aspectRatios || []).filter(a => a !== 'auto');
+      const editor = model.task === 'image-edit' ? model : models.find(m => m.task === 'image-edit');
+      const refs = editor && editor.image && editor.image.maxInputImages;
+      return (
+        <StatGrid items={[
+          { label: `Price per ${unit}`, value: lo === hi ? usd(lo) : `${usd(lo)} – ${usd(hi)}`, sub: resolutions.length > 1 ? `${resolutions[0]} to ${resolutions[resolutions.length - 1]}` : resolutions[0] || null },
+          model.task === 'image-upscale' && p.upscale && p.upscale['4x'] != null ? { label: '4x upscale', value: usd(p.upscale['4x']), sub: 'per image' } : null,
+          resolutions.length ? { label: 'Resolution', value: resolutions.join(' · '), sub: image.defaultResolution ? `default ${image.defaultResolution}` : null } : null,
+          ratios.length ? { label: 'Aspect ratios', value: plural(ratios.length, 'ratio'), sub: image.defaultAspectRatio ? `default ${image.defaultAspectRatio}` : null } : null,
+          refs ? { label: 'Reference images', value: `Up to ${refs}`, sub: editor.image.combineImages ? 'combined in one edit' : 'per edit' } : null,
+          censorshipStat(model),
+          image.promptLimit ? { label: 'Prompt limit', value: image.promptLimit.toLocaleString('en-US'), sub: 'characters' } : null,
+          p.extraInputImage != null ? { label: 'Extra input image', value: usd(p.extraInputImage), sub: 'per additional image' } : null
+        ]} />
+      );
+    }
+    if (model.modality === 'video') {
+      const draft = videoPrice(model, DRAFT_CLIP);
+      const prod = videoPrice(model, PRODUCTION_CLIP);
+      const video = model.video || {};
+      return (
+        <StatGrid items={[
+          { label: 'From', value: p.status === 'quoted' ? `${usd(p.fromPerSecond)} / sec` : 'By source', sub: p.status === 'quoted' ? `up to ${usd(p.toPerSecond)} / sec` : 'priced per second of input' },
+          { label: 'Draft clip', value: draft.status === 'quoted' ? usd(draft.clip) : '—', sub: draft.status === 'quoted' ? `${draft.seconds}s · ${draft.resolution || 'default'}${draft.audio ? ' · audio' : ''}` : null },
+          { label: 'Production clip', value: prod.status === 'quoted' ? usd(prod.clip) : '—', sub: prod.status === 'quoted' ? `${prod.seconds}s · ${prod.resolution || 'default'}${prod.audio ? ' · audio' : ''}` : null },
+          { label: 'Max resolution', value: heightLabel(maxVideoHeight(model)), sub: plural((video.resolutions || []).length || 1, 'option') },
+          { label: 'Duration', value: minVideoSeconds(model) ? `${minVideoSeconds(model)}–${maxVideoSeconds(model)}s` : 'Source length', sub: plural((video.durations || []).length, 'option') },
+          { label: 'Audio', value: video.audio === 'native' ? 'Native' : video.audio === 'optional' ? 'Optional' : 'None', sub: video.audio === 'optional' ? 'toggle with audio' : null }
+        ]} />
+      );
+    }
+    if (model.task === 'tts') {
+      const audio = model.audio || {};
+      return (
+        <StatGrid items={[
+          { label: 'Per 1M characters', value: usd(p.per1MChars) },
+          { label: 'Per minute', value: usd(p.perMinute), sub: '≈ 825 characters' },
+          { label: 'Per hour', value: usd(p.perHour), sub: 'of generated speech' },
+          { label: 'Voices', value: (audio.voices && audio.voices.length) || '—', sub: audio.customVoice ? 'plus custom voice IDs' : null },
+          { label: 'Formats', value: (audio.formats && audio.formats.length) || '—', sub: audio.formats ? audio.formats.slice(0, 4).join(', ') : null }
+        ]} />
+      );
+    }
+    if (model.task === 'stt') {
+      return (
+        <StatGrid items={[
+          { label: 'Per audio second', value: usd(p.perSecond) },
+          { label: 'Per minute', value: usd(p.perMinute) },
+          { label: 'Per hour', value: usd(p.perHour) },
+          { label: 'Per 1K minutes', value: usd(p.perMinute != null ? p.perMinute * 1000 : null), sub: 'for batch planning' }
+        ]} />
+      );
+    }
+    if (model.modality === 'audio') {
+      const audio = model.audio || {};
+      return (
+        <StatGrid items={[
+          { label: 'Price', value: p.perMinute != null ? usd(p.perMinute) : usd(p.perTrack), sub: p.perMinute != null ? 'per minute of audio' : 'per track' },
+          { label: 'Length', value: audio.maxDuration ? `${audio.minDuration || 1}s–${Math.round(audio.maxDuration / 60 * 10) / 10}m` : '—' },
+          { label: 'Lyrics', value: audio.lyrics ? 'Supported' : 'No' },
+          { label: 'Instrumental', value: audio.instrumental ? 'Forceable' : '—' }
+        ]} />
+      );
+    }
+    if (model.modality === 'embedding') {
+      const e = model.embedding || {};
+      return (
+        <StatGrid items={[
+          { label: 'Per 1M tokens', value: usd(p.input) },
+          { label: 'Dimensions', value: e.dimensions ? e.dimensions.toLocaleString('en-US') : '—' },
+          { label: 'Max input', value: tokens(e.maxInputTokens), sub: 'tokens per item' },
+          { label: '1M docs × 500 tokens', value: usd(p.input != null ? p.input * 500 : null), sub: 'to embed once' }
+        ]} />
+      );
+    }
+    return null;
+  };
+
+  // A ruled table of what a model takes and does: supported values read in
+  // the success color, the rest muted.
+  const CapTable = ({ title, rows }) => (
+    <div className="vx-captable">
+      <div className="vx-captable-head">{title}</div>
+      <dl>
+        {rows.map(([label, value]) => (
+          <div key={label} className="vx-captable-row">
+            <dt>{label}</dt>
+            <dd className={value ? 'is-on' : 'is-off'}>{value || 'Not supported'}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+
+  const hasCapabilities = (model, models) => model.task === 'chat' || (model.modality === 'image' && models.some(m => m.task === 'image-generation'));
+
+  const CapabilityMatrix = ({ model, models }) => {
+    if (model.modality === 'image') {
+      const image = model.image || {};
+      const editor = models.find(m => m.task === 'image-edit');
+      const refs = editor && editor.image && editor.image.maxInputImages;
+      const upscale = model.pricing && model.pricing.upscale ? Object.keys(model.pricing.upscale).filter(k => model.pricing.upscale[k] != null) : [];
+      return (
+        <div className="vx-capgrid">
+          <CapTable title="Modalities" rows={[
+            ['Text', 'Input'],
+            ['Image', editor ? 'Input and output' : 'Output']
+          ]} />
+          <CapTable title="Features" rows={[
+            ['Image editing', editor ? <code>{editor.id}</code> : null],
+            ['Multi-image editing', refs > 1 ? `up to ${refs} images` : null],
+            ['Web-grounded generation', image.webSearch ? 'Supported' : null],
+            ['Style references', image.styleReferences ? 'Supported' : null],
+            ['Upscale', upscale.length ? listText(upscale) : null]
+          ]} />
+        </div>
+      );
+    }
+    const text = model.text || {};
+    const caps = text.caps || {};
+    const r = text.reasoning;
+    const levels = (r && r.effort) || [];
+    const per = (on, n) => (on ? `Input only${n ? ` · up to ${n}` : ''}` : null);
+    return (
+      <div className="vx-capgrid">
+        <CapTable title="Modalities" rows={[
+          ['Text', 'Input and output'],
+          ['Image', per(caps.vision, caps.maxImages)],
+          ['Audio', per(caps.audioInput)],
+          ['Video', per(caps.videoInput, caps.maxVideos)]
+        ]} />
+        <CapTable title="Features" rows={[
+          ['Streaming (SSE)', 'Supported'],
+          ['Function calling', caps.tools ? 'Supported' : null],
+          ['Structured output (json_schema)', caps.structured ? 'Supported' : null],
+          ['Reasoning effort', !r ? null : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'Always on'],
+          ['Prompt caching', hasCap(model, 'caching') ? 'Supported' : null],
+          ['Web search', caps.webSearch ? 'venice_parameters' : null],
+          ['X search', caps.xSearch ? 'venice_parameters' : null],
+          ['Log probabilities', caps.logprobs ? 'Supported' : null],
+          ['Fine-tuning', null],
+          ['Image generation', null]
+        ]} />
+      </div>
+    );
+  };
+
+  const count = n => n.toLocaleString('en-US');
+  const ratioShapes = (ratios, active) => <span className="vx-ratios">{ratios.map(ar => <AspectShape key={ar} ratio={ar} active={ar === active} />)}</span>;
+
+  // The rows each modality adds to Specs, between the IDs and the dates.
+  const modalitySpecs = model => {
+    if (model.task === 'chat') {
+      const t = model.text || {};
+      const r = t.reasoning;
+      const levels = (r && r.effort) || [];
+      const q = t.quantization;
+      const sampling = t.sampling && Object.keys(t.sampling).length ? Object.entries(t.sampling).map(([k, v]) => `${k} ${v}`).join(' · ') : null;
+      return [
+        ['Context window', t.context ? `${count(t.context)} tokens` : 'Not published'],
+        ['Max output', t.maxOutput ? `${count(t.maxOutput)} tokens` : 'Not published'],
+        ['Reasoning effort', !r ? 'No separate reasoning phase' : levels.length
+          ? <><code>reasoning_effort: {levels.join(' | ')}</code>{r.defaultEffort ? <span className="vx-muted"> · default {r.defaultEffort}</span> : null} · <a href="/guides/features/reasoning-models#reasoning-effort">guide</a></>
+          : <>Always on; send <code>{'"reasoning": { "enabled": false }'}</code> to skip thinking · <a href="/guides/features/reasoning-models">guide</a></>],
+        ['Served precision', q ? QUANT_LABELS[q] || q : model.privacy === 'anonymized' ? 'Set by the upstream provider' : 'Not disclosed'],
+        sampling ? ['Default sampling', sampling] : null
+      ];
+    }
+    if (model.task === 'decision') {
+      const d = model.decision || {};
+      return [
+        d.maxStateTokens ? ['Max state', `${count(d.maxStateTokens)} tokens`] : null,
+        d.maxTotalTokens ? ['Max total', `${count(d.maxTotalTokens)} tokens`] : null
+      ];
+    }
+    if (model.modality === 'image') {
+      const image = model.image || {};
+      return [
+        image.resolutions && image.resolutions.length ? ['Resolutions', `${image.resolutions.join(', ')}${image.defaultResolution ? ` (default ${image.defaultResolution})` : ''}`] : null,
+        image.aspectRatios && image.aspectRatios.length ? ['Aspect ratios', ratioShapes(image.aspectRatios, image.defaultAspectRatio)] : null,
+        image.promptLimit ? ['Prompt limit', `${count(image.promptLimit)} characters`] : null,
+        image.steps ? ['Steps', `default ${image.steps.default}, max ${image.steps.max}`] : null,
+        image.maxInputImages ? ['Input images', `Up to ${image.maxInputImages}${image.combineImages ? ', combined into one edit' : ''}`] : null
+      ];
+    }
+    if (model.modality === 'video') {
+      const video = model.video || {};
+      const inputs = video.inputs || {};
+      return [
+        ['Mode', VARIANT_LABELS[model.variant] || model.variant],
+        ['Inputs', ['Prompt', inputs.image && 'image', inputs.reference && 'reference images', inputs.video && 'video', inputs.audio && 'audio'].filter(Boolean).join(', ')],
+        video.resolutions && video.resolutions.length ? ['Resolutions', video.resolutions.map(r => r.label).join(', ')] : null,
+        video.durations && video.durations.length ? ['Durations', video.durations.map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ')] : null,
+        video.aspectRatios && video.aspectRatios.length ? ['Aspect ratios', ratioShapes(video.aspectRatios)] : null,
+        ['Audio', video.audio === 'native' ? 'Always generated' : video.audio === 'optional' ? <>Optional; set <code>"audio": true</code></> : 'Silent output'],
+        video.promptLimit ? ['Prompt limit', `${count(video.promptLimit)} characters`] : null
+      ];
+    }
+    if (model.task === 'tts') {
+      const a = model.audio || {};
+      return [
+        a.voices && a.voices.length ? ['Voices', `${a.voices.length}${a.customVoice ? ', plus custom voice IDs' : ''}`] : null,
+        a.formats && a.formats.length ? ['Formats', `${a.formats.join(', ')}${a.defaultFormat ? ` (default ${a.defaultFormat})` : ''}`] : null
+      ];
+    }
+    if (model.modality === 'audio' && model.task !== 'stt') {
+      const a = model.audio || {};
+      return [
+        a.maxDuration ? ['Duration', `${a.minDuration || 1}–${a.maxDuration} seconds${a.defaultDuration ? ` (default ${a.defaultDuration})` : ''}`] : null,
+        ['Lyrics', a.lyricsRequired ? 'Required' : a.lyrics ? 'Supported' : 'Not supported'],
+        a.instrumental ? ['Instrumental', 'Can be forced'] : null,
+        a.loop ? ['Seamless loop', 'Supported'] : null,
+        a.formats && a.formats.length ? ['Formats', a.formats.join(', ')] : null,
+        a.promptLimit ? ['Prompt limit', `${count(a.promptLimit)} characters`] : null
+      ];
+    }
+    if (model.modality === 'embedding') {
+      const e = model.embedding || {};
+      return [
+        e.dimensions ? ['Dimensions', count(e.dimensions)] : null,
+        e.maxInputTokens ? ['Max input', `${count(e.maxInputTokens)} tokens per item`] : null
+      ];
+    }
+    return [];
+  };
+
+  const Specs = ({ model, models }) => {
+    const endpoint = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
+    const editor = model.task === 'image-generation' ? models.find(m => m.task === 'image-edit') : null;
+    const rows = [
+      ['Model ID', <code>{model.id}</code>],
+      editor ? ['Edit model ID', <code>{editor.id}</code>] : null,
+      endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+      ...modalitySpecs(model),
+      ['Added', fmtDate(model.created)],
+      model.openWeights ? ['Weights', `Open${model.license ? ` · ${model.license}` : ''}`] : null
+    ].filter(Boolean);
+    return (
+      <dl className="vx-kv vx-specs">
+        {rows.map(([label, value]) => (
+          <div key={label} className="vx-kv-row"><dt>{label}</dt><dd>{value}</dd></div>
+        ))}
+      </dl>
+    );
+  };
+
+  const CENSORSHIP_LEVELS = [['uncensored', 'Uncensored'], ['light', 'Lightly filtered'], ['censored', 'Censored']];
+  const hasCensorship = model => ['chat', 'image-generation', 'image-edit', 'video'].includes(model.task);
+  // Venice's uncensored flag first. Otherwise a provider's policies apply when
+  // Venice proxies the request or the weights are proprietary; overrides in
+  // data/model-overrides.json correct any model.
+  const censorshipLevel = model => (model.moderation && model.moderation.level) ||
+    (model.uncensored ? 'uncensored' : model.privacy === 'anonymized' || !model.openWeights ? 'censored' : 'light');
+  // The maker is the upstream for proprietary models; an open-weight model's
+  // host isn't known, so it isn't named.
+  const upstreamName = (model, provider) => (!model.openWeights && provider ? provider.name : null);
+  const CENSORSHIP_SUBS = { uncensored: 'no content filtering', light: 'model safeguards only', censored: 'provider safeguards' };
+  const censorshipStat = model => {
+    if (!hasCensorship(model)) return null;
+    const level = censorshipLevel(model);
+    return { label: 'Censorship', value: CENSORSHIP_LEVELS.find(([key]) => key === level)[1], sub: CENSORSHIP_SUBS[level] };
+  };
+  const Censorship = ({ model, family, provider }) => {
+    const level = censorshipLevel(model);
+    const by = upstreamName(model, provider);
+    const isText = model.modality === 'text';
+    const policy = {
+      uncensored: 'Responds to prompts without content-based refusals or filtering.',
+      light: "Venice adds no content filter. Refusals come from the model's own training.",
+      censored: `${by ? `${by}'s` : "The upstream provider's"} usage policies and safety ${isText ? 'training' : 'filters'} apply. Venice can't remove them.`
+    }[level];
+    const rows = [['Content policy', policy]];
+    if (isText) {
+      rows.push(['Venice system prompt', <>On by default. Send <code>venice_parameters.include_venice_system_prompt: false</code> to leave it out{level === 'censored' ? '; upstream filtering still applies' : ''}.</>]);
+    }
+    if (model.task === 'image-generation' || model.task === 'image-edit') {
+      rows.push(['Safe mode', <>On by default: images classified as adult content come back blurred. Send <code>safe_mode: false</code> to turn it off.</>]);
+    }
+    if (model.moderation && model.moderation.billedOnBlock) {
+      rows.push(['Blocked requests', "Requests the provider's filters block are still billed at the full rate."]);
+    }
+    const modality = MODALITIES.find(m => m.key === model.modality);
+    return (
+      <>
+        <div className="vx-scale">
+          {CENSORSHIP_LEVELS.map(([key, label]) => (
+            <div key={key} className={cls('vx-scale-step', key === level && `is-active is-${key}`)} aria-current={key === level ? 'true' : undefined}>
+              <span className="vx-scale-bar" aria-hidden="true" />
+              <span className="vx-scale-label">{label}{key === level ? ` · ${family.name}` : ''}</span>
+            </div>
+          ))}
+        </div>
+        <dl className="vx-kv">
+          {rows.map(([label, value]) => (
+            <div key={label} className="vx-kv-row"><dt>{label}</dt><dd>{value}</dd></div>
+          ))}
+        </dl>
+        {level !== 'uncensored' && modality ? (
+          <p className="vx-footnote">For unrestricted output, use one of Venice's <a href={`${modality.path}?flag=uncensored`}>uncensored {modality.label.toLowerCase()} models</a>.</p>
+        ) : null}
+      </>
+    );
+  };
+
+  // Venice's four privacy modes, weakest first. Each builds on the one before,
+  // so lower tiers are included in the current one.
+  const PRIVACY_TIERS = [['anonymized', 'Anonymized'], ['private', 'Private'], ['tee', 'TEE'], ['e2ee', 'End-to-end encrypted']];
+  const tierText = (tier, by) => ({
+    anonymized: `Venice hides your identity and stores no prompts. ${by || 'The provider'} still sees the content.`,
+    private: "Zero data retention, enforced by contract. Prompts and outputs aren't stored.",
+    tee: 'Hardware-isolated inference with remote attestation.',
+    e2ee: 'Your client encrypts the prompt, and only the verified enclave decrypts it.'
+  })[tier];
+
+  const PrivacyTiers = ({ model, models, provider, onSelect }) => {
+    const rank = PRIVACY_TIERS.findIndex(([tier]) => tier === model.privacy);
+    return (
+      <div className="vx-tiers">
+        {PRIVACY_TIERS.map(([tier, label], i) => {
+          const other = i > rank ? models.find(m => m.id !== model.id && offersTier(m, tier)) : null;
+          return (
+            <div key={tier} className={cls('vx-tier', i === rank && 'is-current')} aria-current={i === rank ? 'true' : undefined}>
+              <div className="vx-tier-num">Tier {i + 1}{i === rank ? ' · this model' : ''}</div>
+              <div className="vx-tier-name">{label}</div>
+              {i === rank ? <p className="vx-tier-text">{tierText(tier, upstreamName(model, provider))}</p>
+                : i < rank ? <p className="vx-tier-text">Included</p>
+                  : other ? <button type="button" className="vx-tier-link" onClick={() => onSelect(other.id)}>Available as <code>{other.id}</code></button>
+                    : <p className="vx-tier-text">Not available</p>}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // One card per billed unit, four a row, on the same hairline gaps as the
+  // key numbers.
+  const PriceCards = ({ items }) => {
+    const cells = items.filter(Boolean);
+    if (!cells.length) return null;
+    const cols = Math.min(cells.length, 4);
+    const empty = (cols - (cells.length % cols)) % cols;
+    return (
+      <div className={cls('vx-prices', cells.length % 2 && 'is-odd')} style={{ '--vx-cols': cols }}>
+        {cells.map((item, i) => (
+          <div key={item.label} className={cls('vx-price-card', i === cells.length - 1 && 'is-last')}>
+            <div className="vx-price-card-label">{item.label}{item.hint ? <span className="vx-muted"> {item.hint}</span> : null}</div>
+            <div className="vx-price-card-value">{item.value}</div>
+            {item.sub ? <div className="vx-price-card-sub">{item.sub}</div> : null}
+          </div>
+        ))}
+        {Array.from({ length: empty }, (_, i) => <span key={`empty-${i}`} className="vx-price-card is-empty" aria-hidden="true" />)}
+      </div>
+    );
+  };
+
+  // This model's prices against similar models on Venice. The bar scales one
+  // column across the rows; it repeats the figures, so it's hidden from
+  // assistive tech.
+  const SimilarPrices = ({ columns, bar, rows }) => {
+    const shown = rows.filter(row => row.current || columns.some(col => col.get(row) != null));
+    if (shown.length < 2) return null;
+    const values = shown.map(bar.get).filter(v => v != null && v > 0);
+    const max = values.length ? Math.max(...values) : 0;
+    return (
+      <div className="vx-table-wrap vx-ruled vx-ptable-wrap">
+        <table className="vx-ptable">
+          <thead>
+            <tr>
+              <th scope="col">Similar models</th>
+              {columns.map(col => <th key={col.label} scope="col" className="vx-al-right">{col.label}</th>)}
+              <th scope="col" className="vx-ptable-bar-head vx-hide-sm">{bar.label}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map(row => {
+              const value = bar.get(row);
+              return (
+                <tr key={row.key} className={cls(row.current && 'is-current')}>
+                  <th scope="row">{row.href ? <a href={row.href}>{row.name}</a> : row.name}</th>
+                  {columns.map(col => <td key={col.label} className="vx-al-right vx-num">{usd(col.get(row))}</td>)}
+                  <td className="vx-ptable-bar vx-hide-sm" aria-hidden="true">
+                    <span className="vx-ptable-track"><span style={{ width: value && max ? `${Math.max(1, (value / max) * 100)}%` : 0 }} /></span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const similarRows = (related, current) => [
+    current,
+    ...((related && related.similar) || []).filter(item => item.pricing).map(item => ({ key: item.slug, name: item.name, href: `/models/${item.slug}`, ...item.pricing }))
+  ];
+
+  const TextPricing = ({ model, family, related }) => {
+    const p = model.pricing || {};
+    const ext = p.extended;
+    const above = value => (ext && value != null ? `${usd(value)} above ${tokens(ext.threshold)}` : null);
+    return (
+      <>
+        <PriceCards items={[
+          { label: 'Input', value: usd(p.input), sub: above(ext && ext.input) },
+          p.cacheRead != null ? { label: 'Cached input', value: usd(p.cacheRead), sub: above(ext && ext.cacheRead) } : null,
+          p.cacheWrite != null ? { label: 'Cache write', value: usd(p.cacheWrite), sub: above(ext && ext.cacheWrite) } : null,
+          { label: 'Output', hint: model.text && model.text.reasoning ? 'incl. reasoning' : null, value: usd(p.output), sub: above(ext && ext.output) }
+        ]} />
+        <SimilarPrices
+          columns={[{ label: 'Input', get: row => row.input }, { label: 'Output', get: row => row.output }]}
+          bar={{ label: 'Output price, relative', get: row => row.output }}
+          rows={similarRows(related, { key: model.id, name: family.name, current: true, input: p.input, output: p.output })} />
+        {p.cacheRead != null ? <p className="vx-footnote">Prompt caching is automatic; see <a href="/guides/features/prompt-caching">Prompt caching</a>.</p> : null}
+      </>
+    );
+  };
+
+  const VideoCalculator = ({ model }) => {
+    const video = model.video || {};
+    const p = model.pricing || {};
+    const res = (video.resolutions || []).filter(r => r.height).sort((a, b) => a.height - b.height);
+    const durs = (video.durations || []).filter(d => d.seconds);
+    const [h, setH] = useState(() => ((res.find(r => r.height === 720) || res[0] || {}).height || 720));
+    const [s, setS] = useState(() => ((durs.find(d => d.seconds === 5) || durs[0] || {}).seconds || 5));
+    const [a, setA] = useState(video.audio === 'native' ? 'on' : 'off');
+    useEffect(() => {
+      setH((res.find(r => r.height === 720) || res[0] || {}).height || 720);
+      setS((durs.find(d => d.seconds === 5) || durs[0] || {}).seconds || 5);
+      setA(video.audio === 'native' ? 'on' : 'off');
+    }, [model.id]);
+    if (p.status === 'input-dependent') {
+      return <p className="vx-text">This mode bills by the length of the source video you upload. Call <code>POST /video/quote</code> with your <code>video_url</code> for an exact price before queueing.</p>;
+    }
+    if (p.status !== 'quoted') return <p className="vx-text">Use <code>POST /video/quote</code> for this model's price.</p>;
+    const vp = videoPrice(model, { h, s, a });
+    const audioKey = video.audio === 'optional' ? a : (video.audio === 'native' ? 'on' : 'off');
+    const resKeys = res.length ? res : [{ value: '-', label: 'Default', height: 0 }];
+    return (
+      <div className="vx-calc">
+        <div className="vx-calc-controls">
+          {res.length > 1 ? (
+            <div className="vx-control"><span className="vx-control-label">Resolution</span>
+              <Segmented ariaLabel="Resolution" value={h} onChange={setH} options={res.map(r => ({ value: r.height, label: r.label }))} />
+            </div>
+          ) : null}
+          {durs.length > 1 ? (
+            <div className="vx-control"><span className="vx-control-label">Duration</span>
+              <Segmented ariaLabel="Duration" value={s} onChange={setS} options={durs.map(d => ({ value: d.seconds, label: `${d.seconds}s` }))} />
+            </div>
+          ) : null}
+          {video.audio === 'optional' ? (
+            <div className="vx-control"><span className="vx-control-label">Audio</span>
+              <Segmented ariaLabel="Audio" value={a} onChange={setA} options={[{ value: 'off', label: 'Silent' }, { value: 'on', label: 'With audio' }]} />
+            </div>
+          ) : null}
+        </div>
+        <div className="vx-estimate" aria-live="polite">
+          <PriceCards items={[
+            { label: 'Per clip', value: usd(vp.clip), sub: `${vp.seconds}s${vp.resolution ? ` · ${vp.resolution}` : ''} · ${vp.audio ? 'with audio' : 'silent'}` },
+            { label: 'Per second', value: usd(vp.perSecond) },
+            { label: 'Per minute', value: usd(vp.perSecond != null ? vp.perSecond * 60 : null) }
+          ]} />
+        </div>
+        <div className="vx-table-wrap vx-ruled">
+          <table className="vx-dtable vx-matrix">
+            <caption className="vx-sr-only">Clip price by duration and resolution{video.audio === 'optional' ? (a === 'on' ? ', with audio' : ', silent') : ''}</caption>
+            <thead>
+              <tr><th>Duration</th>{resKeys.map(r => <th key={r.value} className="vx-al-right">{r.label}</th>)}</tr>
+            </thead>
+            <tbody>
+              {durs.map(d => (
+                <tr key={d.value}>
+                  <th scope="row">{d.seconds}s</th>
+                  {resKeys.map(r => {
+                    const q = p.quotes && p.quotes[`${r.value}|${d.value}|${audioKey}`];
+                    const active = d.seconds === s && (r.height === h || !res.length);
+                    return (
+                      <td key={r.value} className="vx-al-right">
+                        <button type="button" className={cls('vx-cell-btn', active && 'is-active')} aria-pressed={active} disabled={q == null}
+                          onClick={() => { setS(d.seconds); if (r.height) setH(r.height); }}>{usd(q)}</button>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="vx-footnote">Quoted from <code>POST /video/quote</code>{p.quotedAt ? ` on ${fmtDate(Math.floor(new Date(p.quotedAt).getTime() / 1000))}` : ''}.</p>
+      </div>
+    );
+  };
+
+  const ImagePricing = ({ model, models, family, related }) => {
+    const p = model.pricing || {};
+    const verb = model.task === 'image-edit' ? 'edit' : 'generation';
+    const editor = model.task === 'image-generation' ? models.find(m => m.task === 'image-edit') : null;
+    const editPrice = editor && editor.pricing ? (editor.pricing.edit != null ? editor.pricing.edit : editor.pricing.perImage) : null;
+    const upscale = p.upscale && model.task !== 'image-upscale' ? Object.entries(p.upscale).filter(([, v]) => v != null) : [];
+    const resolutions = p.byResolution ? Object.keys(p.byResolution) : [];
+    const top = resolutions[resolutions.length - 1];
+    const at = (row, res) => (row.byResolution ? row.byResolution[res] : res === resolutions[0] ? row.perImage : null);
+    return (
+      <>
+        <PriceCards items={[
+          ...(p.byResolution
+            ? Object.entries(p.byResolution).map(([res, value]) => ({ label: `${res} ${verb}`, value: usd(value) }))
+            : [{ label: model.task === 'image-edit' ? 'Edit' : model.task === 'image-upscale' ? '2x upscale' : 'Per image', value: usd(p.perImage) }]),
+          model.task === 'image-upscale' && p.upscale && p.upscale['4x'] != null ? { label: '4x upscale', value: usd(p.upscale['4x']) } : null,
+          editPrice != null ? { label: 'Edit', value: usd(editPrice) } : null,
+          p.extraInputImage != null ? { label: 'Extra input image', value: usd(p.extraInputImage) } : null
+        ]} />
+        {model.task === 'image-generation' && resolutions.length ? (
+          <SimilarPrices
+            columns={[...resolutions.map(res => ({ label: res, get: row => at(row, res) })), { label: 'Edit', get: row => row.edit }]}
+            bar={{ label: `${top}, relative`, get: row => at(row, top) }}
+            rows={similarRows(related, { key: model.id, name: family.name, current: true, byResolution: p.byResolution, perImage: p.perImage, edit: editPrice })} />
+        ) : null}
+        {upscale.length ? <p className="vx-footnote">Optional upscale: {listText(upscale.map(([k, v]) => `${usd(v)} at ${k}`))}.</p> : null}
+      </>
+    );
+  };
+
+  const AudioPricing = ({ model }) => {
+    const p = model.pricing || {};
+    if (model.task === 'tts') {
+      return (
+        <>
+          <PriceCards items={[
+            { label: '1M characters', hint: 'billed unit', value: usd(p.per1MChars) },
+            { label: '1 minute', value: usd(p.perMinute), sub: '≈ 825 characters' },
+            { label: '1 hour', value: usd(p.perHour) },
+            { label: '2,000-word article', value: usd(p.per1MChars != null ? p.per1MChars * 0.012 : null), sub: '≈ 12K characters' }
+          ]} />
+          <p className="vx-footnote">Minute and hour figures assume 150 words per minute.</p>
+        </>
+      );
+    }
+    if (model.task === 'stt') {
+      return (
+        <PriceCards items={[
+          { label: '1 second', hint: 'billed unit', value: usd(p.perSecond) },
+          { label: '1 minute', value: usd(p.perMinute) },
+          { label: '1 hour', value: usd(p.perHour) },
+          { label: '1,000 minutes', value: usd(p.perMinute != null ? p.perMinute * 1000 : null) }
+        ]} />
+      );
+    }
+    if (p.kind === 'tiered' && p.tiers) {
+      return (
+        <>
+          <div className="vx-table-wrap vx-ruled">
+            <table className="vx-dtable">
+              <thead><tr><th>Track length</th><th className="vx-al-right">Price</th></tr></thead>
+              <tbody>
+                {p.tiers.map(t => (
+                  <tr key={t.upTo}><td>{tierLabel(t)}</td><td className="vx-al-right vx-num">{usd(t.usd)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="vx-footnote">Billed by duration bucket. Use <code>POST /audio/quote</code> for an exact price.</p>
+        </>
+      );
+    }
+    return <p className="vx-text">{p.kind === 'per-second' ? `${usd(p.perSecond)} per second of generated audio.` : p.kind === 'per-track' ? `${usd(p.perTrack)} per generated track.` : 'Use POST /audio/quote for this model.'}</p>;
+  };
+
+  const AspectShape = ({ ratio, active }) => {
+    const [w, h] = String(ratio).split(':').map(Number);
+    if (!w || !h) return <span className="vx-ratio"><span>{ratio}</span></span>;
+    const scale = 22 / Math.max(w, h);
+    return (
+      <span className={cls('vx-ratio', active && 'is-active')} title={ratio}>
+        <span className="vx-ratio-shape" style={{ width: Math.max(6, w * scale), height: Math.max(6, h * scale) }} />
+        <span>{ratio}</span>
+      </span>
+    );
+  };
+
+  const VOICE_LIMIT = 48;
+
+  const Voices = ({ model }) => {
+    const [q, setQ] = useState('');
+    const [all, setAll] = useState(false);
+    const voices = (model.audio && model.audio.voices) || [];
+    const matches = voices.filter(v => v.toLowerCase().includes(q.toLowerCase()));
+    const shown = all || q ? matches : matches.slice(0, VOICE_LIMIT);
+    return (
+      <div className="vx-voices">
+        <div className="vx-voices-head">
+          <div className="vx-search vx-search-sm">
+            <Icon name="search" size={14} />
+            <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder={`Filter ${voices.length} voices`} aria-label="Filter voices" />
+          </div>
+        </div>
+        {shown.length ? (
+          <div className="vx-voice-grid">
+            {shown.map(v => <VoiceChip key={v} voice={v} />)}
+          </div>
+        ) : <p className="vx-muted">No voice matches “{q}”.</p>}
+        {!q && matches.length > VOICE_LIMIT ? (
+          <button type="button" className="vx-link-btn vx-more" onClick={() => setAll(!all)}>{all ? 'Show fewer' : `Show all ${matches.length} voices`}</button>
+        ) : null}
+      </div>
+    );
+  };
+
+  const VoiceChip = ({ voice }) => {
+    const [done, setDone] = useState(false);
+    return (
+      <button type="button" className={cls('vx-voice', done && 'is-done')} aria-label={`Copy voice ID ${voice}`}
+        onClick={() => copyText(voice).then(() => { setDone(true); setTimeout(() => setDone(false), 1200); })}>
+        {done ? <Icon name="check" size={12} /> : null}{voice}
+      </button>
+    );
+  };
+
+  const MethodPath = ({ method, path }) => (
+    <span className="vx-endpoint"><span className="vx-method">{method}</span><code>/api/v1{path}</code></span>
+  );
+
+  const Endpoints = ({ model, endpointId, setEndpointId }) => {
+    const list = model.endpoints || [];
+    const active = list.find(e => e.id === endpointId) || list[0];
+    if (!active) return null;
+    const isFlow = list.some(e => /-(retrieve|quote)$/.test(e.id));
+    return (
+      <div className="vx-endpoints">
+        {list.length > 1 ? (
+          <Segmented ariaLabel="Endpoint" value={active.id} onChange={setEndpointId}
+            options={list.map(e => ({ value: e.id, label: `${e.name}${e.status === 'alpha' ? ' (Alpha)' : ''}`, disabled: e.supported === false, title: e.supported === false ? (e.note || 'Not supported for this model') : undefined }))} />
+        ) : null}
+        <div className="vx-endpoint-line">
+          <MethodPath method={active.method} path={active.path} />
+          {active.recommended && list.length > 1 && !isFlow ? <Tag tone="accent">Recommended</Tag> : null}
+        </div>
+        {active.recommendation ? <p className="vx-endpoint-note">{active.recommendation}</p> : null}
+      </div>
+    );
+  };
+
+  const VariantsTable = ({ models, activeId, onSelect }) => {
+    const first = models[0];
+    const isText = first.modality === 'text' && first.task === 'chat';
+    const isVideo = first.modality === 'video';
+    const showEffort = isText && models.some(m => m.text && m.text.reasoning && m.text.reasoning.effort && m.text.reasoning.effort.length);
+    const showPrecision = isText && models.some(m => m.text && m.text.quantization);
+    return (
+      <div className="vx-table-wrap vx-ruled">
+        <table className="vx-dtable vx-variants-table">
+          <thead>
+            <tr>
+              <th>Variant</th><th>Model ID</th><th className="vx-hide-sm">Privacy</th>
+              {isText ? <><th className="vx-al-right vx-hide-sm">Context</th><th className="vx-al-right vx-hide-md">Max output</th><th className="vx-al-right">Input / output</th>{showEffort ? <th className="vx-hide-md">Effort</th> : null}{showPrecision ? <th className="vx-hide-lg">Precision</th> : null}</> : null}
+              {isVideo ? <><th className="vx-hide-md">Inputs</th><th className="vx-al-right">From</th><th className="vx-al-right vx-hide-sm">Max</th></> : null}
+              {!isText && !isVideo ? <th className="vx-al-right">Price</th> : null}
+              <th className="vx-al-right vx-hide-md">Added</th>
+            </tr>
+          </thead>
+          <tbody>
+            {models.map(m => (
+              <tr key={m.id} className={cls(m.id === activeId && 'is-current', 'is-clickable')} onClick={() => onSelect(m.id)}>
+                <td><button type="button" className="vx-row-btn" aria-pressed={m.id === activeId} onClick={e => { e.stopPropagation(); onSelect(m.id); }}>{VARIANT_LABELS[m.variant] || m.variant}</button></td>
+                <td><span className="vx-id vx-id-inline" title={m.id}><code>{m.id}</code><CopyButton text={m.id} iconOnly label={`Copy model ID ${m.id}`} /></span></td>
+                <td className="vx-hide-sm">{PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy}</td>
+                {isText ? (
+                  <>
+                    <td className="vx-al-right vx-num vx-hide-sm">{tokens(m.text && m.text.context)}</td>
+                    <td className="vx-al-right vx-num vx-hide-md">{tokens(m.text && m.text.maxOutput)}</td>
+                    <td className="vx-al-right vx-num">{usd(m.pricing && m.pricing.input)} / {usd(m.pricing && m.pricing.output)}</td>
+                    {showEffort ? <td className="vx-hide-md vx-wrap">{m.text && m.text.reasoning && m.text.reasoning.effort && m.text.reasoning.effort.length ? m.text.reasoning.effort.join(', ') : <span className="vx-muted">—</span>}</td> : null}
+                    {showPrecision ? <td className="vx-hide-lg">{m.text && m.text.quantization ? QUANT_LABELS[m.text.quantization] || m.text.quantization : <span className="vx-muted">Not disclosed</span>}</td> : null}
+                  </>
+                ) : null}
+                {isVideo ? (
+                  <>
+                    <td className="vx-hide-md">{['Prompt', ...['image', 'reference', 'video'].filter(k => m.video && m.video.inputs && m.video.inputs[k]).map(k => k[0].toUpperCase() + k.slice(1))].join(', ')}</td>
+                    <td className="vx-al-right vx-num">{m.pricing && m.pricing.status === 'quoted' ? `${usd(m.pricing.fromPerSecond)} / sec` : 'By source'}</td>
+                    <td className="vx-al-right vx-num vx-hide-sm">{heightLabel(maxVideoHeight(m))}</td>
+                  </>
+                ) : null}
+                {!isText && !isVideo ? <td className="vx-al-right vx-num">{usd(m.headline && m.headline.value)} <span className="vx-muted">{headlineUnit(m)}</span></td> : null}
+                <td className="vx-al-right vx-muted vx-hide-md">{shortDate(m.created)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  // Text lists input and output, as the price comparison does, rather than
+  // the blended figure the catalog sorts by.
+  const relatedPrice = item => {
+    const p = item.pricing;
+    if (p && p.input != null && p.output != null) return <>{usd(p.input)} / {usd(p.output)}<span className="vx-muted"> per 1M</span></>;
+    if (item.modality === 'video' && item.videoFrom != null) return <>from {usd(item.videoFrom)}<span className="vx-muted"> / sec</span></>;
+    if (item.headline && item.headline.value != null) return <>{usd(item.headline.value)}<span className="vx-muted"> {item.headline.unit}</span></>;
+    return null;
+  };
+
+  const RelatedList = ({ items, providers, title }) => {
+    if (!items || !items.length) return null;
+    return (
+      <div className="vx-related">
+        <h3 className="vx-related-head">{title}</h3>
+        <ul className="vx-related-list">
+          {items.map(item => (
+            <li key={item.slug}>
+              <ProviderLogo provider={providers[item.provider]} size={20} />
+              <span className="vx-related-name">
+                <a href={`/models/${item.slug}`}>{item.name}</a>
+                <span className="vx-muted">{(providers[item.provider] && providers[item.provider].name) || item.provider}</span>
+              </span>
+              <span className="vx-related-price">{relatedPrice(item)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  };
+
+  const modelMarkdown = (family, model, provider) => {
+    const p = model.pricing || {};
+    const lines = [`# ${family.name}${model.variant && !['standard', 'generate', 't2v'].includes(model.variant) ? ` (${VARIANT_LABELS[model.variant]})` : ''}`, ''];
+    lines.push(`- Model ID: \`${model.id}\``);
+    if (provider) lines.push(`- Provider: ${provider.name}`);
+    lines.push(`- Type: ${TASK_LABELS[model.task] || model.modality}`);
+    lines.push(`- Privacy: ${PRIVACY[model.privacy] ? PRIVACY[model.privacy].long : model.privacy}`);
+    if (model.text) {
+      lines.push(`- Context: ${tokens(model.text.context)} tokens; max output ${tokens(model.text.maxOutput)}`);
+      lines.push(`- Pricing per 1M tokens: input ${usd(p.input)}, output ${usd(p.output)}${p.cacheRead != null ? `, cached input ${usd(p.cacheRead)}` : ''}`);
+      lines.push(`- Capabilities: ${TEXT_CAPS.filter(c => hasCap(model, c.key)).map(c => c.label).join(', ') || 'text only'}`);
+      if (model.text.reasoning && model.text.reasoning.effort && model.text.reasoning.effort.length) lines.push(`- reasoning_effort: ${model.text.reasoning.effort.join(', ')} (default ${model.text.reasoning.defaultEffort || 'provider default'})`);
+      if (model.text.quantization) lines.push(`- Served precision: ${QUANT_LABELS[model.text.quantization] || model.text.quantization}`);
+    } else if (model.modality === 'video' && p.status === 'quoted') {
+      lines.push(`- Pricing: ${usd(p.fromPerSecond)}–${usd(p.toPerSecond)} per second of video (quote-derived)`);
+    } else if (model.headline && model.headline.value != null) {
+      lines.push(`- Pricing: ${usd(model.headline.value)} ${model.headline.unit}`);
+    }
+    const rec = (model.endpoints || []).find(e => e.recommended);
+    if (rec) lines.push(`- Endpoint: ${rec.method} https://api.venice.ai/api/v1${rec.path}`);
+    lines.push(`- Docs: https://docs.venice.ai/models/${family.slug}`);
+    if (model.description || family.description) lines.push('', model.description || family.description);
+    return lines.join('\n');
+  };
+
+  const ModelPage = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const [variantId, setVariantId] = useState(family.primary);
+    const [endpointId, setEndpointId] = useState(null);
+    const now = useNow();
+    const [copied, setCopied] = useState(false);
+
+    useEffect(() => {
+      const v = readParams().get('v');
+      if (v && models.some(m => m.id === v)) setVariantId(v);
+    }, []);
+
+    const model = models.find(m => m.id === variantId) || models[0];
+    const provider = providers[family.provider] || providers[model.provider];
+    const recommended = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
+    const activeEndpoint = (model.endpoints || []).find(e => e.id === endpointId && e.supported !== false) || recommended;
+    const hasRelated = Boolean(related && ((related.versions || []).length || (related.similar || []).length));
+    const faq = data.faq || [];
+    const hasExamples = (model.modality === 'image' || model.modality === 'video') && models.some(m => (m.media || []).length);
+    const sections = pageSections(model, { variants: models.length, related: hasRelated, faq: faq.length > 0, examples: hasExamples, capabilities: hasCapabilities(model, models) });
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const has = id => sections.some(([key]) => key === id);
+
+    const selectVariant = id => {
+      setVariantId(id);
+      setEndpointId(null);
+      writeParams({ v: id === family.primary ? null : id });
+    };
+
+    const copyForAgents = () => copyText(modelMarkdown(family, model, provider)).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+
+    const variantPrice = m => (m.modality === 'text' && m.pricing ? `${usd(m.pricing.input)} / ${usd(m.pricing.output)} per 1M`
+      : m.modality === 'video' ? (m.pricing && m.pricing.status === 'quoted' ? `from ${usd(m.pricing.fromPerSecond)} / sec` : 'priced by source')
+        : m.headline && m.headline.value != null ? `${usd(m.headline.value)} ${headlineUnit(m)}` : '');
+
+    return (
+      <div className="vx vx-page not-prose">
+        <div className="vx-page-grid">
+          <aside className="vx-side">
+            <div className="vx-side-inner">
+              <nav className="vx-crumbs" aria-label="Breadcrumb">
+                <a href="/models/overview">Models</a>
+                <span aria-hidden="true">/</span>
+                <span aria-current="page">{family.name}</span>
+              </nav>
+              <nav className="vx-side-nav" aria-label="On this page">
+                {sections.map(([id, label]) => (
+                  <a key={id} href={`#${id}`} className={cls(activeSection === id && 'is-active')} aria-current={activeSection === id ? 'location' : undefined}>{label}</a>
+                ))}
+              </nav>
+              <div className="vx-side-actions">
+                <button type="button" className="vx-side-link" onClick={copyForAgents} title="Copy a Markdown spec for an AI agent or README">
+                  <span aria-live="polite">{copied ? 'Copied' : 'Copy for AI'}</span>
+                </button>
+                {model.source ? <a className="vx-side-link" href={model.source} target="_blank" rel="noopener">Source<Icon name="external" size={12} /></a> : null}
+              </div>
+            </div>
+          </aside>
+
+          <div className="vx-page-main">
+            <header id="overview" className="vx-model-head">
+              <p className="vx-model-meta">
+                {[
+                  provider ? provider.name : family.provider,
+                  `Added ${fmtDate(model.created)}`,
+                  familyTask(family, models),
+                  PRIVACY[model.privacy] ? PRIVACY[model.privacy].label : null,
+                  model.openWeights ? 'Open weights' : null,
+                  model.license,
+                  model.uncensored ? 'Uncensored' : null,
+                  isNew(model.created, now) ? 'New' : null
+                ].filter(Boolean).map(item => <span key={item} className="vx-meta-item">{item}</span>)}
+                {model.beta ? <span className="vx-meta-item is-warn" title="Experimental. May change or be removed without notice.">Beta</span> : null}
+                {model.deprecation ? <span className="vx-meta-item is-warn" title="Scheduled for removal. See Deprecations.">Deprecated</span> : null}
+              </p>
+              <h1 className="vx-h1">{family.name}</h1>
+              {model.description || family.description ? <p className="vx-description">{model.description || family.description}</p> : null}
+
+              {models.length > 1 ? (
+                <div className="vx-variants" role="radiogroup" aria-label="Variant">
+                  {models.map(m => (
+                    <button key={m.id} type="button" role="radio" aria-checked={m.id === model.id} className={cls('vx-variant', m.id === model.id && 'is-active')} onClick={() => selectVariant(m.id)}>
+                      <span className="vx-variant-name">{VARIANT_LABELS[m.variant] || m.variant}</span>
+                      <span className="vx-variant-sub">{[m.privacy !== m.variant && PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : null, variantPrice(m)].filter(Boolean).join(' · ')}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="vx-idbar">
+                <ModelId id={model.id} />
+                {recommended ? <span className="vx-endpoint-url">{recommended.method} {API}{recommended.path}</span> : null}
+              </div>
+            </header>
+
+            <KeyStats model={model} models={models} />
+
+            <Section id="pricing" title="Pricing" note={`USD ${priceUnit(model)}`}>
+              {model.modality === 'text' && model.task === 'chat' ? <TextPricing model={model} family={family} related={related} /> : null}
+              {model.modality === 'image' ? <ImagePricing model={model} models={models} family={family} related={related} /> : null}
+              {model.modality === 'video' ? <VideoCalculator model={model} /> : null}
+              {model.modality === 'audio' ? <AudioPricing model={model} /> : null}
+              {model.modality === 'embedding' ? (
+                <PriceCards items={[
+                  { label: 'Input', value: usd(model.pricing && model.pricing.input) },
+                  { label: '1M documents', value: usd(model.pricing && model.pricing.input != null ? model.pricing.input * 500 : null), sub: '500 tokens each, embedded once' }
+                ]} />
+              ) : null}
+              {model.task === 'decision' ? (
+                <PriceCards items={[
+                  { label: 'State tokens in', value: usd(model.pricing && model.pricing.input) },
+                  { label: 'Decision tokens out', value: usd(model.pricing && model.pricing.output) }
+                ]} />
+              ) : null}
+            </Section>
+
+            {has('examples') ? (
+              <Section id="examples" title="Examples">
+                <MediaGallery model={model.media && model.media.length ? model : (models.find(m => m.media && m.media.length) || model)} />
+              </Section>
+            ) : null}
+
+            {has('voices') ? (
+              <Section id="voices" title="Voices">
+                <Voices model={model} />
+              </Section>
+            ) : null}
+
+            <Section id="api" title="API" actions={<a className="vx-link-btn" href="https://venice.ai/settings/api" target="_blank" rel="noopener">Get an API key</a>}>
+              <Endpoints model={model} endpointId={activeEndpoint && activeEndpoint.id} setEndpointId={setEndpointId} />
+              {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
+              <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
+            </Section>
+
+            {has('censorship') ? (
+              <Section id="censorship" title="Censorship">
+                <Censorship model={model} family={family} provider={provider} />
+              </Section>
+            ) : null}
+
+            {has('capabilities') ? (
+              <Section id="capabilities" title="Capabilities">
+                <CapabilityMatrix model={model} models={models} />
+              </Section>
+            ) : null}
+
+            <Section id="specs" title="Specs">
+              <Specs model={model} models={models} />
+            </Section>
+
+            {has('privacy') ? (
+              <Section id="privacy" title="Privacy">
+                <PrivacyTiers model={model} models={models} provider={provider} onSelect={selectVariant} />
+              </Section>
+            ) : null}
+
+            {has('variants') ? (
+              <Section id="variants" title="Variants">
+                <VariantsTable models={models} activeId={model.id} onSelect={selectVariant} />
+              </Section>
+            ) : null}
+
+            {has('related') ? (
+              <Section id="related" title="Related models">
+                <div className="vx-related-grid">
+                  <RelatedList title="Other versions" items={related.versions} providers={providers} />
+                  <RelatedList title="Similar price and capability" items={related.similar} providers={providers} />
+                </div>
+              </Section>
+            ) : null}
+
+            {has('faq') ? (
+              <Section id="faq" title="FAQ">
+                <div className="vx-faq">
+                  {faq.map((item, i) => (
+                    <details key={item.q} className="vx-faq-item" open={i === 0}>
+                      <summary>
+                        <h3 className="vx-faq-q"><RichText text={item.q} /></h3>
+                        <Icon name="chevronDown" className="vx-faq-icon" />
+                      </summary>
+                      <p className="vx-faq-a"><RichText text={item.a} /></p>
+                    </details>
+                  ))}
+                </div>
+              </Section>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return { ModelExplorer, ModelPage, codeSamples };
 };
