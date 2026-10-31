@@ -1,0 +1,222 @@
+---
+title: "Benchmarking Web Search Providers"
+description: "We compared Brave, Google, and Exa on Venice's web search API with 162 questions that need a search to answer, scoring both the results and the answers built from them."
+slug: search-provider-benchmark-venice
+"og:title": "Benchmarking Brave, Google, and Exa on Venice Web Search"
+"og:description": "How Venice's three web search providers compare on result relevance, answer accuracy, latency, and token cost, plus a harness to rerun the benchmark on your own questions."
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="30 October 2026"/>
+
+Hey there! Venice's [web search endpoint](/api-reference/endpoint/augment/search) lets you pick one of three search providers by changing a single field: `brave`, `google`, or `exa`. They all cost the same $0.01 per search, so the obvious question is which one you should actually use.
+
+In this article, we're gonna find out. We built a benchmark that sends the same 162 questions to each provider, has the same model answer from each provider's results, and grades both the results and the answers. We'll go through how we picked the questions, what we found, and how you can run it on your own.
+
+Interested in the full code? Check out [the GitHub repo](https://github.com/joshua-mo-143/venice-search-bench). It also has every answer and every provider's result list from this run, so you can check our working without paying for a run.
+
+## What We Measured
+
+There's two different things a search provider can be good at, and they don't always line up:
+
+- **Retrieval:** are the results relevant, and do they actually contain the answer?
+- **Answers:** when you hand those results to a model, does it answer correctly?
+
+For every question, the harness sends the question as written to `POST /augment/search` once per provider, with `limit` set to 10. Then `zai-org-glm-5-2` answers from each provider's results, and `grok-4-7` grades everything at temperature 0. The model also answers with no search at all, as a baseline.
+
+Note that the providers don't return the same amount of text, or even the same kind. In our run, Brave and Exa each returned 10 results made of passages matched to the question, at about 1,500 to 1,700 characters each. Google returned 5 results, each one the full text of the page, starting at the top: navigation, cookie banners, and all. That came to about 9,700 characters per result, or 48,000 per search, against about 14,000 for Brave and Exa. More text can mean better answers, but it also means more input tokens on every request. To see how much the volume matters, the model answers from each provider's results three ways:
+
+| Condition | What the model sees |
+| --- | --- |
+| Native | Every result, as the provider returned it |
+| Top 5, 2k tokens | The top 5 results, trimmed from the end to fit about 2,000 tokens |
+| Top 5, 8k tokens | The top 5 results, trimmed from the end to fit about 8,000 tokens |
+
+In the two budgeted conditions, every provider gets the same number of results and the same amount of room. Since the harness keeps the start of each result, they also test how well each provider's results hold up when you trim them, which is what plenty of real pipelines do.
+
+### The questions
+
+The first version of this benchmark had a problem: without search, the model already answered 72% of the questions we could grade, so all three providers looked about the same. If the model already knows the answer, search can't make much of a difference, and it can't tell you which provider is better either.
+
+So for this run, we put together 156 questions with gold answers, where the answer has to come from a search:
+
+| Set | Questions | What they ask |
+| --- | ---: | --- |
+| Release notes | 61 | Coding questions from recent release notes, one per project, from projects like Rust, Node.js, uv, and Helm |
+| Developer docs | 19 | Limits, quotas, and plan details, like function timeouts and rate limits |
+| Venice API | 11 | Questions about Venice's own API, answered from these docs |
+| Research | 19 | Questions that need two sources, like who supervised the PhD of the 2026 Knuth Prize winner |
+| News | 23 | Events from 17 to 28 October 2026 |
+| Sensitive topics | 23 | Factual questions on legal topics that some services filter, like drug law, abortion, firearms, surveillance, and internet shutdowns |
+
+The coding questions come in a few styles, from pasted error messages to version-pinned questions like "Which ripgrep version started respecting the GIT_CONFIG_GLOBAL environment variable?". That's on purpose: a search engine that's great with natural language can still fall over on an error string. There's also 6 general questions without a gold answer, like long conversational questions, which we'll come back to.
+
+Every question with a gold answer went through the same checks before it made the cut. We drafted each one with AI agents from a primary source, like a release note or an official press release, and a script fetched every source to confirm that the quote behind the gold answer was actually on the page. Then the model answered every question twice without search, and we dropped any question it got right either time.
+
+For the news and sensitive questions, we also gave the model the source quotes as its search results, and only kept a question if it answered correctly both times. This catches ambiguous questions, and checks that the model will answer a sensitive question when it has the source. Finally, another agent double-checked every question and gold answer against the sources, which led to 47 edits and 3 more drops, and every edited question went back through the no-search screen.
+
+Note that this makes the no-search baseline close to zero by design, so it doesn't tell you how often search helps in general. What it does tell you is that every question in the set needs a search, which is exactly what we want when we're comparing search providers.
+
+### The metrics
+
+| Metric | What it tells you |
+| --- | --- |
+| Accuracy | Share of gold-answer questions the judge grades correct |
+| nDCG@5 and P@5 | How relevant the text of the top 5 results is, from the judge's 0 to 3 score for each one after reading it in full |
+| Per-page nDCG@5 | The same score, but each page gets the best grade any provider's copy of it got, so it compares the pages each provider picked rather than the text it sent back |
+| Answer in top 5 | Whether the judge can read the gold answer from the top 5 results alone |
+| Gold URL hit@5 | How often a known-good source, like the official release page, shows up in the top 5 |
+| Latency | Client-side time for one search, through the Venice API |
+| Cost per 1,000 queries | The searches plus answer tokens at list prices |
+
+Accuracy comes with a 95% confidence interval, and differences between providers come from paired comparisons on the same questions: a bootstrap interval and an exact McNemar test. With 156 gold answers, each question is worth about 0.6 percentage points, and the intervals on accuracy are up to about ±7 points, so it's worth checking the paired comparisons before reading much into a small gap.
+
+## Results
+
+### Exa answered the most questions correctly
+
+| Provider | Native | Top 5, 2k tokens | Top 5, 8k tokens |
+| --- | ---: | ---: | ---: |
+| Brave | 78.2% | 76.9% | 77.6% |
+| Google | 75.6% | 44.2% | 72.4% |
+| Exa | 93.6% | 91.0% | 92.9% |
+| No search | 0.6% | — | — |
+
+With every result as returned, Exa answered 93.6% of the questions correctly, about 15 points ahead of Brave and 18 ahead of Google. This time, the gap is clear: Exa got 28 questions right that Brave missed, with only 4 going the other way, and 33 that Google missed, against 5 (McNemar p < 0.001 for both). Brave and Google, on the other hand, were level, at 22 questions to 18, which is well within the noise.
+
+The no-search answers are worth a look, too. Without search, the model told us to read a `Retry-After` header after a 429 instead of Venice's `x-ratelimit-reset-requests`, invented a `-web-search` suffix for turning on web search through the model name, and listed a `venice` search provider that doesn't exist. If your users ask about new or niche APIs, the model's own knowledge isn't going to cut it.
+
+The budgeted conditions are where Google falls over. At 2,000 tokens, its accuracy dropped to 44.2%, and the model couldn't find an answer for 30% of the questions, compared with 10% when it had Google's full results. Since Google's results start at the top of the page, trimming them to fit kept the navigation and banners and cut the part that answered the question. Brave's and Exa's results are already passages matched to the question, so trimming them barely made a difference. At 8,000 tokens, Google got most of the way back, to 72.4%.
+
+### Where Exa's lead comes from
+
+| Set | Questions | Brave | Google | Exa | No search |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Release notes | 61 | 65.6% | 62.3% | 91.8% | 1.6% |
+| Developer docs | 19 | 89.5% | 94.7% | 94.7% | 0.0% |
+| Venice API | 11 | 72.7% | 81.8% | 100.0% | 0.0% |
+| Research | 19 | 63.2% | 63.2% | 78.9% | 0.0% |
+| News | 23 | 100.0% | 95.7% | 100.0% | 0.0% |
+| Sensitive topics | 23 | 95.7% | 82.6% | 100.0% | 0.0% |
+
+Most of the gap comes from one place: release notes. Exa answered 56 of the 61 release questions correctly, compared with 40 for Brave and 38 for Google. The answer to these usually sits in a single line of a changelog, and Exa's results were much more likely to include it. On the release questions with a known identifier, like a flag or an environment variable, Exa's results contained 97% of them word for word, against 76% for Brave and 68% for Google. On version-pinned questions across all the coding sets, Exa got 95% right and the other two got 55%.
+
+The research questions were the hardest for everyone, since they need two facts from two different pages, and even Exa only got 15 of the 19. On news and developer docs, though, all three providers answered nearly everything. If those look like your users' questions, the provider you pick matters a lot less.
+
+### What about sensitive topics?
+
+Some search services filter or bury results on sensitive topics, so we added 23 questions to check whether any of the three providers did. They cover things like drug law, abortion, sex work, firearms, surveillance, and internet shutdowns, and each one has a factual answer from an official source, like a court ruling or a government notice.
+
+No provider came back empty or with an error on any of them, and the model never refused to answer one because of its topic. Exa answered all 23 correctly, Brave 22, and Google 19. The misses were ordinary search misses, where the results didn't have the fact or had a different date, apart from one Google answer that hedged but gave the right date, which the judge was too strict on. Note that 23 questions can only show that we didn't see any filtering, not that there's none anywhere.
+
+### Exa returned the most useful text
+
+| Provider | nDCG@5 | Per-page nDCG@5 | P@5 | Answer in top 5 | Gold URL hit@5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Brave | 0.60 | 0.68 | 0.63 | 73.1% | 49.4% |
+| Google | 0.43 | 0.48 | 0.39 | 69.2% | 27.6% |
+| Exa | 0.75 | 0.77 | 0.79 | 91.7% | 51.9% |
+
+Exa's results were also the most relevant. Its nDCG@5 was 0.15 higher than Brave's (95% CI 0.11 to 0.19) and 0.32 higher than Google's (95% CI 0.28 to 0.36), and Brave was 0.17 ahead of Google.
+
+That score covers the text each provider sent back, though, not just the pages it picked. When two providers returned the same page, the judge gave both copies the same score 71% of the time, and where the scores differed, the shorter copy scored lower in 69% of cases. To separate the two, the harness also scores each page by the best grade any provider's copy of it got. On that per-page measure, Exa's lead over Brave shrinks to 0.09 (95% CI 0.05 to 0.13), but it doesn't go away, and both picked better pages than Google. Note that this only evens things out for pages that more than one provider returned. Everything else is still scored on the provider's own text.
+
+The interesting part is the last two columns. Brave found a known-good source, like the official release page, about as often as Exa did, but the judge could read the gold answer from Exa's top 5 for 92% of the questions, against 73% for Brave. That suggests the difference is less about finding the right page and more about which part of it comes back.
+
+Note that the judge reads every result in full. If you only show a judge the start of each result, Google's results look much less relevant than they are, since the useful part is often further down the page. It's worth checking for this if you build your own evals.
+
+### Brave and Exa cost about the same, and Google costs the most
+
+| Provider | p50 latency | p90 latency | Answer prompt tokens | Cost per 1,000 queries |
+| --- | ---: | ---: | ---: | ---: |
+| Brave | 0.97 s | 1.14 s | 3,868 | $16.04 |
+| Google | 4.52 s | 7.02 s | 13,901 | $30.04 |
+| Exa | 0.71 s | 0.83 s | 4,027 | $16.32 |
+| No search | — | — | 40 | $1.56 |
+
+The search itself costs the same $10 per 1,000 queries on every provider, so the cost difference comes from the tokens you send to the model afterwards. Brave and Exa came out about the same, while Google's page text made answer prompts about 3.6 times the size of Brave's, which nearly doubled the cost per query. These costs use `zai-org-glm-5-2` list prices with no cache discount, so the exact figures depend on your model, but the ratios between providers hold up.
+
+Exa was the quickest at the median this time, at 0.71 seconds against 0.97 for Brave, but take that one with a grain of salt: in our first run, the day before, Exa's median was 1.73 seconds. Latency is measured from the client through the Venice API, so it includes network time and Venice's own overhead, and it moves around between runs. What did hold up across both runs is Google being the slowest, at about 4.5 seconds at the median.
+
+### The general questions
+
+The 6 general questions don't have a gold answer, so instead the judge compared each pair of providers' answers head to head, twice with the order swapped. Exa's answers beat Google's on 4 of them, but with only 6 questions, that's not something we'd lean on. The full breakdown is in the report.
+
+## So Which One Should You Use?
+
+Based on this run, here's how we'd choose:
+
+- **Exa**, for most workloads that pass results straight to a model, and especially coding assistants and research agents. It had the best or joint-best accuracy on every question set and the most relevant results, for about the same cost per query as Brave.
+- **Brave**, if your questions look more like our news and docs questions, where it was level with Exa, or if you mostly need to find the official page for something, which it did about as often as Exa. It's the default, and it's quick and cheap.
+- **Google**, if you want full page text straight from the search response, without a separate scrape. You'll need to budget for the extra tokens and latency, and if you trim the results, keep the passages that match the question rather than the start of each page.
+
+Whichever you pick, cap how many results go into your prompts and how much text each one contributes. Brave and Exa barely lost anything at a 2,000-token budget.
+
+Exa, Brave, and Google also differ on privacy: Brave and Exa run with Zero Data Retention, while Google queries are anonymized and proxied through Venice. [Web Search and Scraping](/guides/tools/web-retrieval) covers what each one means.
+
+## Caveats
+
+There's a few things to keep in mind before reading too much into these numbers:
+
+- **The questions were picked to need search.** We dropped every question the model could answer on its own, so the set is harder than everyday traffic.
+- **AI agents wrote the questions.** Every one was checked against its sources and reviewed, but a gold answer can still be wrong. If you spot one, open an issue on the repo.
+- **Release notes are a big chunk of the set.** They're 61 of the 156 gold answers, and they're where most of Exa's lead comes from, so compare the table by question set with your own workload.
+- **The grades come from a model.** We went through every answer the judge didn't mark correct with results as returned, 82 in all, plus 30 that it did. We'd change 6 of them, all from wrong to right: 3 for Brave, 2 for Google, and 1 for Exa. That would put Brave at 80.1%, Google at 76.9%, and Exa at 94.2%, so the ranking doesn't change, but the judge leans a little strict.
+- **Search results change.** These numbers are a snapshot from October 2026, and time-sensitive gold answers, especially the news ones, go stale.
+- **Every provider searched the question exactly as written.** If your application rewrites queries before searching, your results can differ.
+- **We tested the providers through Venice's API.** Each one comes back in its own format, so these numbers describe the three options as the API returns them, not the search engines in general.
+- **Relevance scores depend on how much text comes back.** A short extract can score lower than a longer copy of the same page. The per-page score corrects for that on pages more than one provider returned, but not on the rest.
+- **The budgeted conditions trim from the end.** A pipeline that picks passages by relevance instead would treat Google's results better than ours did.
+- **One model wrote every answer, and the same model screened the questions.** A different model could make better (or worse) use of long results, and might already know some of the answers.
+
+## Running It Yourself
+
+The harness is a small Bun and TypeScript project with no runtime dependencies. Once you've cloned the repo, install the dev dependencies and run the tests:
+
+```bash
+bun install
+bun test
+```
+
+You can try the whole pipeline offline first. The mock backend is deterministic and doesn't spend anything:
+
+```bash
+bun run bench run --mock
+```
+
+When you're ready for a live run, add your Venice API key to a `.env` file in the repo:
+
+```bash
+VENICE_API_KEY=your-key
+```
+
+Then run the full query set:
+
+```bash
+bun run bench run --budget 55
+```
+
+The harness prints a cost estimate before it starts and refuses to go over `--budget`, which defaults to $5. Our full run cost $36.10: $4.86 for 486 searches, plus answer and judge tokens. The estimate leaves out cache discounts, so it comes in higher, at about $50. Each run writes a `report.md` with the full tables behind this article, a `results.csv` with one row per question, provider, and condition, a `summary.json`, and two files with every answer and every provider's result list.
+
+If you just want to dig through our numbers, you don't need to run anything at all, since the repo's `results` folder has all of these from this run.
+
+The real value, though, is running it on your own questions. Write them as JSON Lines, with one object per question:
+
+```json
+{"id": "my-1", "slice": "coding", "query": "How do I pin a Python version with uv?", "goldAnswer": "Run uv python pin with the version, which writes a .python-version file"}
+```
+
+Then check the file and run it:
+
+```bash
+bun run bench validate --dataset my-questions.jsonl
+bun run bench run --dataset my-questions.jsonl
+```
+
+Questions without a `goldAnswer` still get retrieval scores, so you can start with a list of real queries from your logs and add gold answers later. Before you trust the accuracy numbers, though, check how many of your questions the model gets right with `--arms none`, since questions it already knows the answer to won't tell your providers apart.
+
+## Finishing Up
+
+Thanks for reading! Hopefully this has helped you pick a search provider, or at least given you a way to check the choice against your own workload.
+
+In a nutshell: on questions that really need a search, Exa's results were the most useful to hand to a model, especially for recent release notes and research questions, and they cost about the same as Brave's. Brave was level on news and docs and found the official page about as often, and Google's full page text costs more in tokens and time and needs more care when you trim it. Search quality depends heavily on the kind of questions you ask, though, so the most useful thing you can do is run the benchmark on yours.
