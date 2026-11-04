@@ -649,8 +649,8 @@ function endpointsFor(entry, overrides) {
   return list;
 }
 
-// Content moderation facts GET /models doesn't carry: a censorship level that
-// overrides the page's default, and whether blocked requests are billed.
+// Content moderation facts GET /models doesn't carry, such as whether blocked
+// requests are billed.
 function moderationFor(entry, overrides) {
   const rule = (overrides.moderationRules || []).find(r => matchesRule(entry, r.match || {}));
   const moderation = { ...rule?.moderation, ...overrides.models?.[entry.id]?.moderation };
@@ -1102,9 +1102,9 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   }
 
   const tierLabels = uniq(variants.map(v => privacyLabel(v.privacy))).join(', ');
-  const { censorshipLabel, statusText } = hub().helpers;
+  const { statusText } = hub().helpers;
   const specs = [['Provider', f.provider], ['Released', primary.created ? hub().helpers.fmtDate(primary.created) : null], ['Privacy', tierLabels],
-    ['Censorship', perVariant(variants, censorshipLabel)], ['Status', perVariant(variants, statusText)],
+    ['Status', perVariant(variants, statusText)],
     ['Open weights', family.openWeights ? 'Yes' : null], ['License', primary.license]];
   if (primary.text) {
     const t = primary.text;

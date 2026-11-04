@@ -1663,7 +1663,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (examples) list.push(['examples', 'Examples']);
     if (model.task === 'tts' && model.audio && model.audio.voices && model.audio.voices.length) list.push(['voices', 'Voices']);
     list.push(['api', 'API']);
-    if (hasCensorship(model)) list.push(['censorship', 'Censorship']);
     if (capabilities) list.push(['capabilities', 'Capabilities']);
     list.push(['specs', 'Specs']);
     if (PRIVACY_TIERS.some(([tier]) => tier === model.privacy)) list.push(['privacy', 'Privacy']);
@@ -1738,7 +1737,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           p.cacheRead != null
             ? { label: 'Cached input', value: usd(p.cacheRead), sub: p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens' }
             : { label: 'Cached input', value: '—', sub: 'no prompt caching' },
-          censorshipStat(model),
           { label: 'Modalities', value: ['Text', caps.vision && 'image', caps.videoInput && 'video', caps.audioInput && 'audio'].filter(Boolean).join(', '), sub: 'out: text' }
         ]} />
       );
@@ -1770,7 +1768,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           resolutions.length ? { label: 'Resolution', value: resolutions.join(' · '), sub: image.defaultResolution ? `default ${image.defaultResolution}` : null } : null,
           ratios.length ? { label: 'Aspect ratios', value: plural(ratios.length, 'ratio'), sub: image.defaultAspectRatio ? `default ${image.defaultAspectRatio}` : null } : null,
           refs ? { label: 'Reference images', value: `Up to ${refs}`, sub: editor.image.combineImages ? 'combined in one edit' : 'per edit' } : null,
-          censorshipStat(model),
           image.promptLimit ? { label: 'Prompt limit', value: image.promptLimit.toLocaleString('en-US'), sub: 'characters' } : null,
           p.extraInputImage != null ? { label: 'Extra input image', value: usd(p.extraInputImage), sub: 'per additional image' } : null
         ]} />
@@ -2006,23 +2003,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const CENSORSHIP_LEVELS = [['uncensored', 'Uncensored'], ['light', 'Lightly filtered'], ['censored', 'Censored']];
-  const hasCensorship = model => ['chat', 'image-generation', 'image-edit', 'video'].includes(model.task);
-  // Venice's uncensored flag first. Otherwise a provider's policies apply when
-  // Venice proxies the request or the weights are proprietary; overrides in
-  // data/model-overrides.json correct any model.
-  const censorshipLevel = model => (model.moderation && model.moderation.level) ||
-    (model.uncensored ? 'uncensored' : model.privacy === 'anonymized' || !model.openWeights ? 'censored' : 'light');
-  // The maker is the upstream for proprietary models; an open-weight model's
-  // host isn't known, so it isn't named.
-  const upstreamName = (model, provider) => (!model.openWeights && provider ? provider.name : null);
-  const CENSORSHIP_SUBS = { uncensored: 'no content filtering', light: 'model safeguards only', censored: 'provider safeguards' };
-  const censorshipStat = model => {
-    if (!hasCensorship(model)) return null;
-    const level = censorshipLevel(model);
-    return { label: 'Censorship', value: CENSORSHIP_LEVELS.find(([key]) => key === level)[1], sub: CENSORSHIP_SUBS[level] };
-  };
-  const censorshipLabel = model => (hasCensorship(model) ? CENSORSHIP_LEVELS.find(([key]) => key === censorshipLevel(model))[1] : null);
   // Lifecycle in words, for Copy for AI and the page's static text.
   const statusText = model => {
     const d = model.deprecation;
@@ -2032,47 +2012,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }
     return model.beta ? 'Beta' : 'Stable';
   };
-  const Censorship = ({ model, family, provider }) => {
-    const level = censorshipLevel(model);
-    const by = upstreamName(model, provider);
-    const isText = model.modality === 'text';
-    const policy = {
-      uncensored: 'Responds to prompts without content-based refusals or filtering.',
-      light: "Venice adds no content filter. Refusals come from the model's own training.",
-      censored: `${by ? `${by}'s` : "The upstream provider's"} usage policies and safety ${isText ? 'training' : 'filters'} apply. Venice can't remove them.`
-    }[level];
-    const rows = [['Content policy', policy]];
-    if (isText) {
-      rows.push(['Venice system prompt', <>On by default. Send <code>venice_parameters.include_venice_system_prompt: false</code> to leave it out{level === 'censored' ? '; upstream filtering still applies' : ''}.</>]);
-    }
-    if (model.task === 'image-generation' || model.task === 'image-edit') {
-      rows.push(['Safe mode', <>On by default: images classified as adult content come back blurred. Send <code>safe_mode: false</code> to turn it off.</>]);
-    }
-    if (model.moderation && model.moderation.billedOnBlock) {
-      rows.push(['Blocked requests', "Requests the provider's filters block are still billed at the full rate."]);
-    }
-    const modality = MODALITIES.find(m => m.key === model.modality);
-    return (
-      <>
-        <div className="vx-scale">
-          {CENSORSHIP_LEVELS.map(([key, label]) => (
-            <div key={key} className={cls('vx-scale-step', key === level && `is-active is-${key}`)} aria-current={key === level ? 'true' : undefined}>
-              <span className="vx-scale-bar" aria-hidden="true" />
-              <span className="vx-scale-label">{label}{key === level ? ` · ${family.name}` : ''}</span>
-            </div>
-          ))}
-        </div>
-        <dl className="vx-kv">
-          {rows.map(([label, value]) => (
-            <div key={label} className="vx-kv-row"><dt>{label}</dt><dd>{value}</dd></div>
-          ))}
-        </dl>
-        {level !== 'uncensored' && modality ? (
-          <p className="vx-footnote">For unrestricted output, use one of Venice's <a href={`${modality.path}?flag=uncensored`}>uncensored {modality.label.toLowerCase()} models</a>.</p>
-        ) : null}
-      </>
-    );
-  };
+  // The maker is the upstream for proprietary models; an open-weight model's
+  // host isn't known, so it isn't named.
+  const upstreamName = (model, provider) => (!model.openWeights && provider ? provider.name : null);
 
   // Venice's four privacy modes, weakest first. Each builds on the one before,
   // so lower tiers are included in the current one.
@@ -2553,10 +2495,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   };
 
   // Copy for AI: a self-contained brief of the selected variant, with every
-  // variant, its limits, privacy, censorship, status and a working request.
+  // variant, its limits, privacy, status and a working request.
   const modelMarkdown = (family, model, models, provider) => {
     const isPrimary = model.id === family.primary;
-    const censorship = censorshipLabel(model);
     const endpoint = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
     const sample = codeSamples(model, endpoint && endpoint.id);
     const lines = [`# ${family.name} API${isPrimary ? '' : ` (${VARIANT_LABELS[model.variant] || model.variant})`}`, ''];
@@ -2568,7 +2509,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       `- Type: ${TASK_LABELS[model.task] || model.modality}`,
       `- Status: ${statusText(model)}`,
       `- Privacy: ${PRIVACY[model.privacy] ? `${PRIVACY[model.privacy].long}. ${PRIVACY[model.privacy].desc}` : model.privacy}`,
-      censorship ? `- Censorship: ${censorship}` : null,
       `- Price: ${priceSummary(model) || 'use the quote endpoint'} (USD)`
     );
     lines.push('', '## Variants', '', '| Model ID | Variant | Privacy | Price | Status |', '|---|---|---|---|---|');
@@ -2727,12 +2667,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
             </Section>
 
-            {has('censorship') ? (
-              <Section id="censorship" title="Censorship">
-                <Censorship model={model} family={family} provider={provider} />
-              </Section>
-            ) : null}
-
             {has('capabilities') ? (
               <Section id="capabilities" title="Capabilities">
                 <CapabilityMatrix model={model} models={models} />
@@ -2787,7 +2721,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   // scripts/build-model-catalog.js writes each page's static text and FAQ
   // with these, so they read the same as the page.
-  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, censorshipLabel, statusText };
+  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText };
 
   return { ModelExplorer, ModelPage, codeSamples, helpers };
 };
