@@ -1047,11 +1047,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       setView(VIEWS.includes(params.get('view')) ? params.get('view') : defaultView(linked));
       setFilters({ ...EMPTY_FILTERS, ...filtersFromParams(params) });
       setHydrated(true);
+      // "/" jumps to the search unless the reader is typing somewhere or the
+      // filter drawer holds focus.
+      const typing = el => Boolean(el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)));
       const onKey = e => {
-        if (e.key === '/' && document.activeElement && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) {
-          e.preventDefault();
-          if (searchRef.current) searchRef.current.focus();
-        }
+        if (e.key !== '/' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+        if (typing(e.target) || typing(document.activeElement) || document.querySelector('#vx-filters[aria-modal]')) return;
+        e.preventDefault();
+        if (searchRef.current) searchRef.current.focus();
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
