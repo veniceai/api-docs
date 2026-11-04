@@ -57,6 +57,17 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     window.history.replaceState(window.history.state, '', `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`);
   };
 
+  // Links from API data open only as http(s); anything else, such as a
+  // javascript: URL, is dropped.
+  const safeUrl = value => {
+    try {
+      const url = new URL(String(value || ''));
+      return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
+    } catch {
+      return null;
+    }
+  };
+
   const copyText = text => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) return navigator.clipboard.writeText(text).catch(() => {});
     return Promise.resolve();
@@ -2523,7 +2534,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 <button type="button" className="vx-side-link" onClick={copyForAgents} title="Copy a Markdown spec for an AI agent or README">
                   <span aria-live="polite">{copied ? 'Copied' : 'Copy for AI'}</span>
                 </button>
-                {model.source ? <a className="vx-side-link" href={model.source} target="_blank" rel="noopener">Source<Icon name="external" size={12} /></a> : null}
+                {safeUrl(model.source) ? <a className="vx-side-link" href={safeUrl(model.source)} target="_blank" rel="noopener noreferrer">Source<Icon name="external" size={12} /></a> : null}
               </div>
             </div>
           </aside>
