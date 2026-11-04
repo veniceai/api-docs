@@ -3,6 +3,8 @@ name: Sync static model snapshot
 on:
   schedule:
     - cron: "17 * * * *"
+    # Daily: refresh the reference renders from venice.ai/models.
+    - cron: "41 4 * * *"
   workflow_dispatch:
   repository_dispatch:
     types: [outerface-deployed]
@@ -14,10 +16,29 @@ concurrency:
   group: sync-static-models
   cancel-in-progress: false
 
+env:
+  # Every file the sync scripts write. The change check and the commit both
+  # use this list, so nothing else in the checkout can be committed.
+  # models/*.mdx is a git pathspec: the /models tables plus any generated
+  # model pages, including ones a run deletes.
+  GENERATED_PATHS: >-
+    data/static-models.json
+    data/static-traits.json
+    data/removed-deprecations.json
+    data/video-pricing.json
+    data/model-media.json
+    data/model-catalog.json
+    overview/pricing.mdx
+    overview/about-venice.mdx
+    overview/deprecations.mdx
+    api-reference/endpoint/models/traits.mdx
+    models/*.mdx
+    docs.json
+
 jobs:
   sync-models:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - name: Check out main
@@ -30,28 +51,33 @@ jobs:
         with:
           node-version-file: ".nvmrc"
 
+      # The /models tables read data/model-catalog.json, so they are
+      # generated last, after the catalog build below.
       - name: Refresh static model-driven documentation
-        run: node scripts/update-static-models.js
+        run: node scripts/update-static-models.js --skip-models-static
 
+      # Incremental: only models whose constraints changed, plus a weekly refresh.
+      - name: Refresh video price matrix
+        run: node scripts/quote-video-pricing.js
+
+      - name: Refresh reference renders
+        if: github.event_name != 'schedule' || github.event.schedule == '41 4 * * *'
+        run: node scripts/sync-model-media.js
+
+      - name: Build model hub
+        run: node scripts/build-model-catalog.js
+
+      - name: Regenerate static model catalogs
+        run: node scripts/generate-models-static.js
+
+      # git status (not git diff) so new and deleted files count as changes.
+      # GENERATED_PATHS is unquoted on purpose, one pathspec per word, with
+      # globbing off (set -f) so git, not the shell, matches models/*.mdx.
       - name: Check for generated changes
         id: diff
         run: |
-          if git diff --quiet -- \
-            data/static-models.json \
-            data/static-traits.json \
-            data/removed-deprecations.json \
-            overview/pricing.mdx \
-            overview/about-venice.mdx \
-            overview/deprecations.mdx \
-            api-reference/endpoint/models/traits.mdx \
-            models/overview.mdx \
-            models/text.mdx \
-            models/image.mdx \
-            models/video.mdx \
-            models/text-to-speech.mdx \
-            models/speech-to-text.mdx \
-            models/music.mdx \
-            models/embeddings.mdx; then
+          set -f
+          if [ -z "$(git status --porcelain -- $GENERATED_PATHS)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -60,22 +86,8 @@ jobs:
       - name: Commit updated snapshot
         if: steps.diff.outputs.changed == 'true'
         run: |
-          git add \
-            data/static-models.json \
-            data/static-traits.json \
-            data/removed-deprecations.json \
-            overview/pricing.mdx \
-            overview/about-venice.mdx \
-            overview/deprecations.mdx \
-            api-reference/endpoint/models/traits.mdx \
-            models/overview.mdx \
-            models/text.mdx \
-            models/image.mdx \
-            models/video.mdx \
-            models/text-to-speech.mdx \
-            models/speech-to-text.mdx \
-            models/music.mdx \
-            models/embeddings.mdx
+          set -f
+          git add -A -- $GENERATED_PATHS
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
             commit -m "chore: sync static model snapshot"
 
