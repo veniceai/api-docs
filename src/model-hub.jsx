@@ -2189,6 +2189,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     // With per-second pricing the card shows the rate every length shares.
     const shared = table.rates ? table.rates[Math.max(0, resKeys.findIndex(r => r.height === h))] : null;
     const rate = shared != null ? shared : perSecond;
+    // Many evenly spaced lengths get a slider rather than a button each.
+    const lengths = durationSteps(durs);
+    const slider = durs.length > 6 && lengths.step ? lengths : null;
     return (
       <div className="vx-calc">
         <div className="vx-calc-controls">
@@ -2199,7 +2202,15 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           ) : null}
           {durs.length > 1 ? (
             <div className="vx-control"><span className="vx-control-label">Duration</span>
-              <Segmented ariaLabel="Duration" value={s} onChange={setS} options={durs.map(d => ({ value: d.seconds, label: `${d.seconds}s` }))} />
+              {slider ? (
+                <span className="vx-range">
+                  <input type="range" min={slider.secs[0]} max={slider.secs[slider.secs.length - 1]} step={slider.step} value={s}
+                    aria-label="Duration" aria-valuetext={`${s} seconds`} onChange={e => setS(Number(e.target.value))} />
+                  <span className="vx-range-value">{s}s</span>
+                </span>
+              ) : (
+                <Segmented ariaLabel="Duration" value={s} onChange={setS} options={durs.map(d => ({ value: d.seconds, label: `${d.seconds}s` }))} />
+              )}
             </div>
           ) : null}
           {video.audio === 'optional' ? (
