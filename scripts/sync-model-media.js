@@ -158,6 +158,7 @@ async function main() {
     }
   }));
 
+  const fromOwnPage = new Set();
   for (const { slug, html, failed } of pages) {
     if (failed) {
       failedPages.push(`${SITE}/models/${slug}`);
@@ -174,6 +175,9 @@ async function main() {
     for (const model of covered) {
       const relevant = samples.filter(s => (model.type === 'video') === (s.type === 'video'));
       if (!relevant.length) continue;
+      // A model's own page wins over another page that lists it, such as its family's.
+      if (fromOwnPage.has(model.id)) continue;
+      if (slug === model.id) fromOwnPage.add(model.id);
       byModel[model.id] = relevant.map(s => ({ ...s, page: `${SITE}/models/${slug}` }));
     }
   }
