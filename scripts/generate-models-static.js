@@ -31,12 +31,17 @@ const CATALOG_ID = 'model-catalog-static';
 
 const PRIVATE_TYPES = new Set(['upscale']);
 
-// Model ID → family page slug, from the catalog build-model-catalog.js writes.
-// Missing on a fresh checkout; names are then left unlinked.
-const FAMILY_BY_ID = (() => {
+// Model ID → its family page, opened on that variant, from the catalog
+// build-model-catalog.js writes. Missing on a fresh checkout; names are then
+// left unlinked.
+const PAGE_BY_ID = (() => {
   try {
     const catalog = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'model-catalog.json'), 'utf-8'));
-    return Object.fromEntries(Object.entries(catalog.models || {}).map(([id, model]) => [id, model.family]));
+    const primaries = Object.fromEntries((catalog.families || []).map(family => [family.slug, family.primary]));
+    return Object.fromEntries(Object.entries(catalog.models || {}).filter(([, model]) => model.family).map(([id, model]) => [
+      id,
+      `/models/${model.family}${primaries[model.family] && primaries[model.family] !== id ? `?v=${encodeURIComponent(id)}` : ''}`
+    ]));
   } catch {
     return {};
   }
@@ -152,9 +157,9 @@ function markdownTable(headers, rows) {
 
 function row(model, extraCols = []) {
   const name = tableCell(getModelName(model));
-  const slug = FAMILY_BY_ID[model.id];
+  const href = PAGE_BY_ID[model.id];
   return [
-    slug ? `[${name.replace(/[[\]]/g, '\\$&')}](/models/${slug})` : name,
+    href ? `[${name.replace(/[[\]]/g, '\\$&')}](${href})` : name,
     inlineCode(model.id),
     ...extraCols
   ];
