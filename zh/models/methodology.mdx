@@ -1,0 +1,142 @@
+---
+title: "模型目录的工作原理"
+sidebarTitle: "方法说明"
+description: "Venice 如何构建模型目录：模型系列与变体、各模态的标准化价格、隐私级别、参考提示词集，以及性能与基准测试的衡量方式。"
+"og:title": "Model catalog methodology | Venice API Docs"
+---
+
+[模型目录](/zh/models/overview)每小时根据 [`GET /models`](/zh/api-reference/endpoint/models/list) 生成一次。本页说明其中各项数字的计算方式，方便你自行复现，并了解这些数字代表什么、不代表什么。
+
+## 系列与变体 {#families-and-variants}
+
+许多模型 ID 实际上是同一个模型以不同方式提供。模型目录会将它们归入同一个系列页面：
+
+| 变体类型 | 示例 | 单独列出的原因 |
+|---|---|---|
+| 隐私 | `z-ai-glm-5-3` 和 `e2ee-glm-5-3-p` | E2EE 变体在经过证明的安全飞地中运行，限制可能不同 |
+| 速度 | `claude-opus-5-5` 和 `claude-opus-5-5-fast` | 以更高价格提供更快的服务 |
+| 模式 | `kling-v3-pro-text-to-video`、`-image-to-video`、`-motion-control` | 输入和价格不同 |
+| 任务 | `nano-banana-pro` 和 `nano-banana-pro-edit` | 分别对应生成与编辑端点 |
+
+每个变体都保留各自的模型 ID、价格和隐私级别。请将变体的 ID 作为 `model` 传入。带日期的快照（例如 `deepseek-v4-flash-0731`）仍作为独立系列，显示在**其他版本**下。
+
+## 标准化价格 {#normalized-prices}
+
+每种模态都有各自的计费单位。模型目录同时显示原生单位和一个参考价格，以便对模型进行排序和比较。
+
+| 模态 | 原生单位 | 参考价格 |
+|---|---|---|
+| 文本 | 每 100 万输入和输出 token | **混合价格**：`(3 × input + output) / 4`，即 Artificial Analysis 采用的 3:1 配比。缓存输入折扣为 `1 − cached ÷ input`。 |
+| 图像 | 每张图像，按分辨率档位 | 所选档位（1K、2K 或 4K）下的单张图像价格。编辑操作会对额外输入按每张图像收取附加费。 |
+| 视频 | 每个片段，按分辨率、时长和音频 | 所选设置下的每秒价格和每片段价格，来自完整的报价矩阵（见下文）。 |
+| 文本转语音 | 每 100 万字符 | 按每分钟 150 个单词（约 825 个字符）计算的每分钟语音价格。 |
+| 语音转文本 | 每音频秒 | 每音频小时及每 1,000 分钟的价格。 |
+| 音乐与音效 | 每首曲目、每秒或每个时长区间 | 在模型允许的情况下按每分钟音频计价；否则按每首曲目计价。 |
+| Embeddings | 每 100 万输入 token | 不变。 |
+
+<Note>
+在同一任务上，推理模型消耗的输出 token 可能远多于非推理模型，因此混合价格会低估其实际成本。我们计划基于基准测试运行来衡量每项任务的成本；参见[基准测试](#benchmarks)。
+</Note>
+
+### 视频定价 {#video-pricing}
+
+视频模型不会在 `GET /models` 中公布价格。在构建时，Venice 会针对每个模型支持的每一种分辨率 × 时长 × 音频组合调用 [`POST /video/quote`](/zh/api-reference/endpoint/video/quote)，并使用其列出的第一个宽高比（宽高比不影响价格）。模型目录会存储完整矩阵，并据此得出：
+
+- **每秒价格**：在给定分辨率和音频设置下，各时长的 `price ÷ seconds` 中位数。几乎所有模型的价格都与时长呈线性关系。
+- **草稿片段**：5 秒、720p、无声。
+- **成品片段**：10 秒、1080p、带音频。
+
+如果某个模型不提供所请求的设置，模型目录会使用它所支持的最接近的设置，并对该价格加以标注。编辑、运动控制和放大模式按源视频的时长计费，因此显示**按源视频**而非具体价格。如需获得准确金额，请务必在排队前调用 `POST /video/quote`。
+
+## 隐私级别 {#privacy-tiers}
+
+| 级别 | 含义 |
+|---|---|
+| **E2EE** | 提示词在你的设备上加密，仅在经过证明的硬件安全飞地内解密。参见 [TEE 与 E2EE 模型](/zh/guides/features/tee-e2ee-models)。 |
+| **TEE** | 推理在具备加密证明的硬件安全飞地中运行。 |
+| **Private** | 在 Venice 控制的基础设施上提供服务，零数据保留。 |
+| **Anonymized** | 以不暴露你身份的方式代理至上游实验室。该实验室可能会保留提示词。 |
+
+一个系列会列出其各变体提供的所有级别。按某一级别筛选时，会显示该级别下的变体及其各自的价格。
+
+## 参考提示词集 {#reference-prompt-suite}
+
+图像和视频模型会在一组固定的提示词集上以默认设置进行渲染，同一模态的所有模型使用相同的提示词。正因如此，浏览器中的图库才能在不同模型之间进行比较。
+
+| 模态 | 提示词 |
+|---|---|
+| 图像 | 图中文字、照片级写实、指令遵循、插画风格 |
+| 视频 | 电影感风景、无缝循环、城市电影感 |
+
+尚无渲染结果的模型会显示**参考渲染待生成**。
+
+## 性能 {#performance}
+
+<Info>
+尚未发布。本节介绍模型目录将来会显示的内容。
+</Info>
+
+Venice 将使用合成探测（绝不使用客户提示词）来衡量模型，并发布以下指标：
+
+| 模态 | 指标 |
+|---|---|
+| 文本 | 可用率、首 token 时间、每秒输出 token 数、生成 500 token 响应所需时间、缓存命中率、成功率 |
+| 图像 | 可用率、生成一张 1K 图像的时间（p50 和 p95）、成功率 |
+| 视频 | 可用率、5 秒 720p 片段的排队时间和生成时间（分别报告）、成功率 |
+| 音频 | 可用率、首段音频时间、速度系数、成功率 |
+| Embeddings | 可用率、1K token 输入的延迟、成功率 |
+
+每项数据都会注明其时间窗口（可用率为滚动 30 天，延迟为 7 天）、百分位、样本数量和探测区域。可用率不计入由请求本身导致的 4xx 错误。缓存命中率按全部流量计算，公式为 `cache_read ÷ (input + cache_read + cache_write)`。样本过少的模型将被标记为**初步**。
+
+## 基准测试 {#benchmarks}
+
+<Info>
+尚未发布。本节介绍模型目录将来会显示的内容。
+</Info>
+
+基准测试面向前沿模型进行选择：在顶端仍具区分度、能抵御数据污染，并且可以针对 Venice 实际提供的模型运行。每个分数都会带有一个来源标签，且不同来源的分数绝不会合并平均：
+
+- **Venice 验证**：在页面所示的 Venice 端点上运行。
+- **独立第三方**：由第三方运行，通常使用实验室自己的 API。
+- **实验室公布**：由模型开发者发布。
+
+每个分数还会注明基准测试和测试框架版本、推理强度、测试日期以及置信区间。超过 90 天或已被新版本基准测试取代的分数会被标记为过时。
+
+| 模态 | 计划采用的核心基准 |
+|---|---|
+| 文本 | Artificial Analysis Intelligence Index，以及 Humanity's Last Exam、Terminal-Bench、τ³-bench、AA-LCR、IFBench、AA-Omniscience 和 Venice 开放度评分（Venice Openness Score） |
+| 图像 | 来自 Artificial Analysis 和 LMArena 竞技场的人类偏好 Elo、GenEval 2 以及过度拒绝率 |
+| 视频 | Artificial Analysis 文本生成视频（含音频与不含音频）和图像生成视频 Elo、LMArena 文本生成视频 |
+| 文本转语音 | Artificial Analysis Speech Arena Elo、词错误率、首段音频时间 |
+| 语音转文本 | Artificial Analysis 词错误率、Open ASR Leaderboard、速度系数 |
+| 音乐 | Artificial Analysis Music Arena（纯音乐与人声） |
+| Embeddings | MTEB Multilingual、RTEB 以及 Venice 保留的检索测试集 |
+
+该基准集每季度审查一次。一旦前沿模型使某项基准测试达到饱和，或该基准未通过污染审计，它将不再作为核心基准，而仅作为底线检查。
+
+## 机器可读数据 {#machine-readable-data}
+
+这些页面背后的模型目录以 JSON 格式发布在 [`/data/model-catalog.json`](https://docs.venice.ai/data/model-catalog.json)，并随每小时同步重新构建。它适用于比较、分析和智能体；如需在运行时选择模型，请调用 [`GET /models`](/zh/api-reference/endpoint/models/list)。
+
+| 字段 | 内容 |
+|---|---|
+| `version` | Schema 版本，当前为 `1` |
+| `generatedAt` | 最近一次更改数据的构建时间，ISO 8601 格式 |
+| `counts` | 模型和系列的总数，包括整体总数和按模态统计的数量 |
+| `providers` | 以 slug 为键的模型开发者，包含 `name` 和 `logo` |
+| `families` | 系列数组：`slug`、`name`、`modality`、`task`、`provider`、`description`、`primary`（默认变体的 ID）、`variants`（模型 ID）、`created` 和 `updated`（Unix 秒）、`privacy`（提供的所有级别）、`uncensored` 和 `openWeights` |
+| `models` | 以模型 ID 为键的对象：`name`、`type`（与 `GET /models` 中一致）、`modality`、`task`、`variant`、`provider`、`family`（所属系列的 slug）、`privacy`、一个以模态命名的限制与能力数据块（`text`、`image`、`video`、`audio` 或 `embedding`）、以原生单位表示的 `pricing`、`headline`（上文所述的参考价格）以及 `media`（参考渲染） |
+| `benchmarks` | 基准测试定义；在基准测试发布前为 `null` |
+| `mediaSuite` | 按模态划分的参考提示词集 |
+
+没有值的字段会被省略。价格以美元计。
+
+## 数据来源 {#data-sources}
+
+模型目录基于你也可以自行调用的公开端点构建：
+
+- [`GET /models`](/zh/api-reference/endpoint/models/list)：规格、能力和价格。
+- [`POST /video/quote`](/zh/api-reference/endpoint/video/quote)：视频价格。
+- [`GET /models/traits`](/zh/api-reference/endpoint/models/traits)：默认值，例如 `default_code`。
+
+价格以美元计。DIEM 按等值计费。
