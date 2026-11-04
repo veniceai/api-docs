@@ -546,13 +546,13 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   const SORTS = {
     name: { label: 'Name A–Z', dir: 'ascending', fn: (a, b) => a.family.name.localeCompare(b.family.name) },
-    newest: { label: 'Newest', dir: 'descending', fn: (a, b) => (b.family.updated || 0) - (a.family.updated || 0) },
+    newest: { label: 'Newest', dir: 'descending', fn: (a, b) => (b.family.updated || 0) - (a.family.updated || 0) || a.family.name.localeCompare(b.family.name) },
     price: { label: 'Price, low to high', dir: 'ascending', fn: (a, b) => (a.price == null ? 1e9 : a.price) - (b.price == null ? 1e9 : b.price) },
     context: { label: 'Context, largest', dir: 'descending', fn: (a, b) => ((b.display.text && b.display.text.context) || 0) - ((a.display.text && a.display.text.context) || 0) },
     input: { label: 'Input price, low to high', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.input) || 1e9) - ((b.display.pricing && b.display.pricing.input) || 1e9) },
     output: { label: 'Output price, low to high', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.output) || 1e9) - ((b.display.pricing && b.display.pricing.output) || 1e9) }
   };
-  const DEFAULT_SORT = 'name';
+  const defaultSort = modality => (modality === 'all' ? 'newest' : 'name');
 
   const FilterGroup = ({ title, children, defaultOpen = true, role }) => {
     const [open, setOpen] = useState(defaultOpen);
@@ -1052,7 +1052,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const scope = scopes.length === 1 ? scopes[0] : null;
     const [query, setQuery] = useState('');
     const [filters, setFilters] = useState(EMPTY_FILTERS);
-    const [sort, setSort] = useState(DEFAULT_SORT);
+    const startSort = defaultSort(initialModality);
+    const [sort, setSort] = useState(startSort);
     const [view, setView] = useState(defaultView(initialModality));
     const [railOpen, setRailOpen] = useState(false);
     const [limit, setLimit] = useState(PAGE_SIZE);
@@ -1094,7 +1095,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       writeParams({
         m: sameScopes(scopes, startScopes) ? null : scopes.length ? scopes.join(',') : 'all',
         q: query || null,
-        sort: sort !== DEFAULT_SORT ? sort : null,
+        sort: sort !== startSort ? sort : null,
         view: view !== defaultView(modality) ? view : null,
         ...filtersToParams(filters)
       });
@@ -1146,7 +1147,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       setScopes(next);
       setFilters(prev => ({ ...EMPTY_FILTERS, providers: [], privacy: prev.privacy, flags: prev.flags }));
       setView(defaultView(key));
-      if (key !== 'text' && !['newest', 'name', 'price'].includes(sort)) setSort(DEFAULT_SORT);
+      if (key !== 'text' && !['newest', 'name', 'price'].includes(sort)) setSort(startSort);
     };
 
     const providers = catalog ? catalog.providers : {};
@@ -1187,7 +1188,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         const offer = listPrice(display, filters);
         list.push({ family, models, display, offer, price: offer.value });
       }
-      const sorter = SORTS[sort] || SORTS[DEFAULT_SORT];
+      const sorter = SORTS[sort] || SORTS[startSort];
       return list.sort(sorter.fn);
     }, [catalog, searched, filters, sort, now]);
 
