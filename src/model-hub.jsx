@@ -564,15 +564,30 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     <div className="vx-media-fallback"><span>{label}</span></div>
   );
 
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), video[controls], [tabindex]:not([tabindex="-1"])';
+
+  // Modal: focus moves to Close, Tab cycles inside the dialog, and focus
+  // returns to the opener when it closes.
   const Lightbox = ({ item, onClose }) => {
     const closeRef = useRef(null);
+    const dialogRef = useRef(null);
     const onCloseRef = useRef(onClose);
     onCloseRef.current = onClose;
     useEffect(() => {
       if (!item) return undefined;
       const previous = document.activeElement;
       if (closeRef.current) closeRef.current.focus();
-      const onKey = e => { if (e.key === 'Escape') onCloseRef.current(); };
+      const onKey = e => {
+        if (e.key === 'Escape') onCloseRef.current();
+        if (e.key !== 'Tab' || !dialogRef.current) return;
+        const items = [...dialogRef.current.querySelectorAll(FOCUSABLE)];
+        if (!items.length) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        const inside = dialogRef.current.contains(document.activeElement);
+        if (e.shiftKey && (document.activeElement === first || !inside)) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && (document.activeElement === last || !inside)) { e.preventDefault(); first.focus(); }
+      };
       window.addEventListener('keydown', onKey);
       return () => {
         window.removeEventListener('keydown', onKey);
@@ -581,7 +596,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }, [item]);
     if (!item) return null;
     return (
-      <div className="vx-lightbox" role="dialog" aria-modal="true" aria-label={item.title} onClick={onClose}>
+      <div ref={dialogRef} className="vx-lightbox" role="dialog" aria-modal="true" aria-label={item.title} onClick={onClose}>
         <div className="vx-lightbox-inner" onClick={e => e.stopPropagation()}>
           <button ref={closeRef} type="button" className="vx-icon-btn vx-lightbox-close" onClick={onClose} aria-label="Close"><Icon name="x" size={18} /></button>
           <div className="vx-lightbox-media">
@@ -745,7 +760,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   // The filter column; below 1024px it opens as a drawer from the toolbar.
   const DRAWER_MAX_WIDTH = 1024;
-  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
   const FilterRail = ({ modality, task, scopes, scopeCounts, onScope, filters, setFilters, facetCount, providerCounts, providers, onClear, open, onClose }) => {
     const toggleIn = (key, value) => setFilters(prev => ({ ...prev, [key]: prev[key].includes(value) ? prev[key].filter(v => v !== value) : [...prev[key], value] }));
     // An option nothing in scope matches is disabled unless already checked.
@@ -1605,20 +1619,34 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     };
   };
 
+  // Arrow keys, Home and End move between options in a tablist or radio
+  // group; only the selected option is in the tab order.
+  const rovingKeys = (keys, current, select) => e => {
+    const i = keys.indexOf(current);
+    const next = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: keys.length - 1 }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    const key = keys[(next + keys.length) % keys.length];
+    select(key);
+    const target = e.currentTarget.querySelector(`[data-key="${CSS.escape(String(key))}"]`);
+    if (target) target.focus();
+  };
+
   const CodeTabs = ({ samples }) => {
     const [lang, setLang] = useState('curl');
     const langs = [['curl', 'cURL'], ['python', 'Python'], ['typescript', 'TypeScript']];
     return (
       <div className="vx-code">
         <div className="vx-code-head">
-          <div className="vx-code-tabs" role="tablist">
+          <div className="vx-code-tabs" role="tablist" aria-label="Language" onKeyDown={rovingKeys(langs.map(([key]) => key), lang, setLang)}>
             {langs.map(([key, label]) => (
-              <button key={key} type="button" role="tab" aria-selected={lang === key} className={cls('vx-code-tab', lang === key && 'is-active')} onClick={() => setLang(key)}>{label}</button>
+              <button key={key} id={`vx-code-tab-${key}`} data-key={key} type="button" role="tab" aria-selected={lang === key} aria-controls="vx-code-panel"
+                tabIndex={lang === key ? 0 : -1} className={cls('vx-code-tab', lang === key && 'is-active')} onClick={() => setLang(key)}>{label}</button>
             ))}
           </div>
           <CopyButton text={samples[lang]} label="Copy" small />
         </div>
-        <pre className="vx-code-body"><code>{samples[lang]}</code></pre>
+        <pre id="vx-code-panel" className="vx-code-body" role="tabpanel" aria-labelledby={`vx-code-tab-${lang}`} tabIndex={0}><code>{samples[lang]}</code></pre>
       </div>
     );
   };
@@ -2661,7 +2689,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   {faq.map((item, i) => (
                     <details key={item.q} className="vx-faq-item" open={i === 0}>
                       <summary>
-                        <h3 className="vx-faq-q"><RichText text={item.q} /></h3>
+                        <span className="vx-faq-q"><RichText text={item.q} /></span>
                         <Icon name="chevronDown" className="vx-faq-icon" />
                       </summary>
                       <p className="vx-faq-a"><RichText text={item.a} /></p>
