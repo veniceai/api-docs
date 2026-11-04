@@ -199,6 +199,41 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const list = ((model.video && model.video.durations) || []).map(d => d.seconds).filter(Boolean);
     return list.length ? Math.min(...list) : 0;
   };
+  // Clip lengths in seconds, sorted, with the spacing between them when it's even.
+  const durationSteps = durations => {
+    const secs = (durations || []).map(d => d.seconds).filter(Boolean).sort((a, b) => a - b);
+    const step = secs.length > 2 ? secs[1] - secs[0] : null;
+    return { secs, step: step && secs.every((x, i) => i === 0 || x - secs[i - 1] === step) ? step : null };
+  };
+  // Price rows for the video calculator and the static text when a model has
+  // more than six lengths: the shortest, 5s, 10s and the longest, led by a
+  // per-second row when every length costs the same rate per second.
+  const clipTable = (model, cols, audioKey) => {
+    const p = model.pricing || {};
+    const quotes = p.quotes || {};
+    const durs = ((model.video && model.video.durations) || []).filter(d => d.seconds).sort((a, b) => a.seconds - b.seconds);
+    if (durs.length <= 6) return null;
+    const first = durs[0];
+    const last = durs[durs.length - 1];
+    const rates = cols.map(c => {
+      const points = durs.map(d => [d.seconds, quotes[`${c.value}|${d.value}|${audioKey}`]]).filter(([, q]) => q != null);
+      if (points.length < 2) return null;
+      const fitted = points.reduce((sum, [sec, q]) => sum + sec * q, 0) / points.reduce((sum, [sec]) => sum + sec * sec, 0);
+      // Quotes are rounded to the cent.
+      if (!points.every(([sec, q]) => Math.abs(q - fitted * sec) <= 0.01)) return null;
+      return (p.perSecond || {})[`${c.value}|${audioKey}`] || fitted;
+    });
+    const perSecond = rates.every(rate => rate != null) ? rates : null;
+    const { step } = durationSteps(durs);
+    const span = step
+      ? `Any length from ${first.seconds} to ${last.seconds} seconds${step > 1 ? ` in ${step}-second steps` : ''}`
+      : `${durs.length} lengths from ${first.seconds} to ${last.seconds} seconds`;
+    return {
+      rows: durs.filter(d => d === first || d === last || d.seconds === 5 || d.seconds === 10),
+      rates: perSecond,
+      note: `${span}${perSecond ? ', priced per second' : ''}.`
+    };
+  };
   const imageMaxRes = model => {
     const list = (model.image && model.image.resolutions) || [];
     if (list.includes('4K')) return '4K';
@@ -2150,6 +2185,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const clipNote = `${vp.seconds}s${vp.resolution ? ` · ${vp.resolution}` : ''} · ${vp.audio ? 'with audio' : 'silent'}`;
     const audioKey = video.audio === 'optional' ? a : (video.audio === 'native' ? 'on' : 'off');
     const resKeys = res.length ? res : [{ value: '-', label: 'Default', height: 0 }];
+    const table = clipTable(model, resKeys, audioKey) || { rows: durs, rates: null, note: null };
+    // With per-second pricing the card shows the rate every length shares.
+    const shared = table.rates ? table.rates[Math.max(0, resKeys.findIndex(r => r.height === h))] : null;
+    const rate = shared != null ? shared : perSecond;
     return (
       <div className="vx-calc">
         <div className="vx-calc-controls">
@@ -2172,9 +2211,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         <div className="vx-estimate" aria-live="polite">
           <PriceCards items={[
             { label: 'Per clip', value: usd(vp.clip), sub: clipNote },
-            { label: 'Per second', value: usd(perSecond), sub: 'this clip' },
+            { label: 'Per second', value: usd(rate), sub: shared != null ? 'any length' : 'this clip' },
             // A minute only means something when one clip can run that long.
-            maxVideoSeconds(model) >= 60 ? { label: 'Per minute', value: usd(perSecond != null ? perSecond * 60 : null), sub: 'at this rate' } : null
+            maxVideoSeconds(model) >= 60 ? { label: 'Per minute', value: usd(rate != null ? rate * 60 : null), sub: 'at this rate' } : null
           ]} />
         </div>
         <div className="vx-table-wrap vx-ruled">
@@ -2184,7 +2223,13 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               <tr><th>Duration</th>{resKeys.map(r => <th key={r.value} className="vx-al-right">{r.label}</th>)}</tr>
             </thead>
             <tbody>
-              {durs.map(d => (
+              {table.rates ? (
+                <tr className="vx-rate-row">
+                  <th scope="row">Per second</th>
+                  {table.rates.map((rate, i) => <td key={resKeys[i].value} className="vx-al-right">{usd(rate)}</td>)}
+                </tr>
+              ) : null}
+              {table.rows.map(d => (
                 <tr key={d.value}>
                   <th scope="row">{d.seconds}s</th>
                   {resKeys.map(r => {
@@ -2202,7 +2247,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             </tbody>
           </table>
         </div>
-        <p className="vx-footnote">Quoted from <code>POST /video/quote</code>{p.quotedAt ? ` on ${fmtDate(Math.floor(new Date(p.quotedAt).getTime() / 1000))}` : ''}.</p>
+        <p className="vx-footnote">{table.note ? `${table.note} ` : ''}Quoted from <code>POST /video/quote</code>{p.quotedAt ? ` on ${fmtDate(Math.floor(new Date(p.quotedAt).getTime() / 1000))}` : ''}.</p>
       </div>
     );
   };
@@ -2700,7 +2745,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   // scripts/build-model-catalog.js writes each page's static text with these,
   // so it reads the same as the page.
-  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText };
+  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable };
 
   return { ModelExplorer, ModelPage, codeSamples, helpers };
 };
