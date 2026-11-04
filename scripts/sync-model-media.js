@@ -158,6 +158,7 @@ async function main() {
     }
   }));
 
+  const fromOwnPage = new Set();
   for (const { slug, html, failed } of pages) {
     if (failed) {
       failedPages.push(`${SITE}/models/${slug}`);
@@ -174,15 +175,19 @@ async function main() {
     for (const model of covered) {
       const relevant = samples.filter(s => (model.type === 'video') === (s.type === 'video'));
       if (!relevant.length) continue;
+      // A model's own page wins over another page that lists it, such as its family's.
+      if (fromOwnPage.has(model.id)) continue;
+      if (slug === model.id) fromOwnPage.add(model.id);
       byModel[model.id] = relevant.map(s => ({ ...s, page: `${SITE}/models/${slug}` }));
     }
   }
 
-  // A page that failed keeps the samples its live models had last time.
+  // A page that failed keeps the samples its live models had last time. A
+  // model's own page keeps them even when another page lists the model.
   const liveIds = new Set(mediaModels.map(m => m.id));
   for (const page of failedPages) {
     const kept = Object.entries((previous && previous.models) || {})
-      .filter(([id, samples]) => liveIds.has(id) && !byModel[id] && samples.length && samples[0].page === page)
+      .filter(([id, samples]) => liveIds.has(id) && (!byModel[id] || page === `${SITE}/models/${id}`) && samples.length && samples[0].page === page)
       .map(([id, samples]) => [id, samples.filter(sample => trustedMediaUrl(sample.url) === sample.url)])
       .filter(([, samples]) => samples.length);
     if (!kept.length) continue;
