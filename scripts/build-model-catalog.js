@@ -18,6 +18,7 @@
  *
  * Usage: node scripts/build-model-catalog.js [--input=<dir with <type>.json files>] [--allow-drop]
  *                                            [--pages=<slug,...>]  generate only these pages (local preview)
+ *                                            [--offline]  re-render pages from the committed data, no fetch
  */
 
 const fs = require('fs');
@@ -1307,6 +1308,46 @@ function writeStamped(file, value, stampKey, serialize) {
   return true;
 }
 
+function writeSite(families, modelsById, providers, relatedBySlug) {
+  const removed = writePages(families, modelsById, providers, relatedBySlug);
+  updateDocsNavigation(families);
+  return removed;
+}
+
+// A page's inline data: the family and the full records of its variants.
+function readPageData(slug) {
+  const file = path.join(MODELS_DIR, `${slug}.mdx`);
+  if (!fs.existsSync(file)) return null;
+  const match = fs.readFileSync(file, 'utf-8').match(/^<HubMount view="ModelPage" data=\{(.*)\} \/>$/m);
+  return match ? JSON.parse(match[1]) : null;
+}
+
+// Re-renders pages and the nav group from committed data, for changes to
+// rendering only. The catalog lists the families; descriptions, sources and
+// voices aren't in it, so each family's full record is read back from its
+// page, which the last online build wrote from the same snapshot. Pages drop
+// false flags such as an endpoint's `supported: false`, so endpoints are
+// derived again.
+async function renderOffline() {
+  const catalog = readJson('model-catalog.json', null);
+  if (!catalog) throw new Error('--offline needs data/model-catalog.json');
+  const overrides = readJson('model-overrides.json', {});
+  const modelsById = {};
+  const families = catalog.families.map(entry => {
+    const page = readPageData(entry.slug);
+    if (!page) throw new Error(`--offline needs models/${entry.slug}.mdx; run the online build instead`);
+    page.models.forEach(model => {
+      model.endpoints = endpointsFor(model, overrides);
+      modelsById[model.id] = model;
+    });
+    return page.family;
+  });
+  const relatedBySlug = Object.fromEntries(families.map(f => [f.slug, relatedFor(f, families, modelsById)]));
+  const removed = writeSite(families, modelsById, catalog.providers, relatedBySlug);
+  console.log(`Rendered ${families.length} family pages from data/model-catalog.json`);
+  if (removed) console.log(`Removed ${removed} stale family pages`);
+}
+
 // ---------------------------------------------------------------- main
 
 async function main() {
@@ -1362,15 +1403,14 @@ async function main() {
   const committed = readJson('model-catalog.json', null);
   checkSnapshotDrop('Catalog model count', committed && committed.counts && committed.counts.models, models.length);
   writeStamped(path.join(DATA, 'model-catalog.json'), catalog, 'generatedAt', value => JSON.stringify(value));
-  const removed = writePages(families, modelsById, providers, relatedBySlug);
-  updateDocsNavigation(families);
+  const removed = writeSite(families, modelsById, providers, relatedBySlug);
 
   console.log(`Catalog: ${models.length} models in ${families.length} families`);
   Object.entries(counts.byModality).forEach(([modality, c]) => console.log(`  ${modality}: ${c.families} families / ${c.models} models`));
   if (removed) console.log(`Removed ${removed} stale family pages`);
 }
 
-main().catch(error => {
+(args.offline ? renderOffline : main)().catch(error => {
   console.error(error);
   process.exit(1);
 });
