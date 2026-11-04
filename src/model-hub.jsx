@@ -2511,14 +2511,24 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   const ModelPage = ({ data }) => {
     const { family, models, related, providers } = data;
-    const [variantId, setVariantId] = useState(family.primary);
+    // ?v= names the variant. It's read on the first render, so the primary
+    // never flashes, and again on Back and Forward.
+    const variantFromUrl = () => {
+      const v = readParams().get('v');
+      return v && models.some(m => m.id === v) ? v : family.primary;
+    };
+    const [variantId, setVariantId] = useState(variantFromUrl);
     const [endpointId, setEndpointId] = useState(null);
     const now = useNow();
     const [copied, setCopied] = useState(false);
 
     useEffect(() => {
-      const v = readParams().get('v');
-      if (v && models.some(m => m.id === v)) setVariantId(v);
+      const onPop = () => {
+        setVariantId(variantFromUrl());
+        setEndpointId(null);
+      };
+      window.addEventListener('popstate', onPop);
+      return () => window.removeEventListener('popstate', onPop);
     }, []);
 
     const model = models.find(m => m.id === variantId) || models[0];
