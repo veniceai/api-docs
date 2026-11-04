@@ -5,7 +5,8 @@
  * Outputs:
  *   data/model-catalog.json   normalized models + families for the explorer
  *   models/<family>.mdx       one generated page per model family (hidden, searchable)
- *   docs.json                 the hidden "Models" group in the English Models tab
+ *   docs.json                 the hidden "Models" group in the English Models tab, and
+ *                             redirects for the pages of families that were removed
  *
  * Optional inputs merged when present:
  *   data/video-pricing.json   quote matrix from scripts/quote-video-pricing.js
@@ -1262,20 +1263,47 @@ function writePages(families, modelsById, providers, relatedBySlug) {
   }
   // Remove pages for families that no longer exist. A --pages preview
   // renders a subset, so it leaves the other pages alone.
-  let removed = 0;
+  const removed = [];
   if (PAGE_FILTER) return removed;
   for (const name of fs.readdirSync(MODELS_DIR)) {
     const file = path.join(MODELS_DIR, name);
     if (!name.endsWith('.mdx') || expected.has(file)) continue;
     if (fs.readFileSync(file, 'utf-8').includes(GENERATED_MARKER)) {
+      const slug = name.replace(/\.mdx$/, '');
+      removed.push({ slug, data: readPageData(slug) });
       fs.unlinkSync(file);
-      removed++;
     }
   }
   return removed;
 }
 
-function updateDocsNavigation(families) {
+// Where a removed family's URL goes: the family that replaces it, when its
+// deprecation names a model that still has a page, else its modality's
+// catalog page.
+const CATALOG_PAGES = {
+  text: '/models/text', image: '/models/image', video: '/models/video', embedding: '/models/embeddings',
+  tts: '/models/text-to-speech', stt: '/models/speech-to-text', music: '/models/music', sfx: '/models/music'
+};
+
+function redirectFor({ slug, data }, families) {
+  const family = data?.family || {};
+  const replacements = (data?.models || []).map(m => m.deprecation?.replacement).filter(Boolean);
+  const successor = families.find(f => replacements.some(id => f.variants.includes(id)));
+  const destination = successor ? `/models/${successor.slug}`
+    : CATALOG_PAGES[family.modality === 'audio' ? family.task : family.modality] || '/models/overview';
+  return { source: `/models/${slug}`, destination };
+}
+
+// Indexed links to removed pages keep working. A redirect never shadows a
+// live page, so one is dropped when its slug gets a page again.
+function updateRedirects(docs, families, removed) {
+  const live = new Set(families.map(f => `/models/${f.slug}`));
+  const added = removed.map(page => redirectFor(page, families));
+  const sources = new Set(added.map(r => r.source));
+  docs.redirects = [...(docs.redirects || []).filter(r => !live.has(r.source) && !sources.has(r.source)), ...added];
+}
+
+function updateDocsNavigation(families, removed) {
   const file = path.join(ROOT, 'docs.json');
   const raw = fs.readFileSync(file, 'utf-8');
   const eol = raw.includes('\r\n') ? '\r\n' : '\n';
@@ -1292,6 +1320,7 @@ function updateDocsNavigation(families) {
   group.hidden = true;
   group.searchable = true;
   group.pages = families.map(f => `models/${f.slug}`).sort();
+  updateRedirects(docs, families, removed);
   const out = JSON.stringify(docs, null, 2).replace(/\n/g, eol) + eol;
   if (out !== raw) fs.writeFileSync(file, out, 'utf-8');
 }
@@ -1313,8 +1342,8 @@ function writeStamped(file, value, stampKey, serialize) {
 function writeSite(families, modelsById, providers, relatedBySlug) {
   const removed = writePages(families, modelsById, providers, relatedBySlug);
   // The site-wide lists need every page, which a --pages preview doesn't render.
-  if (!PAGE_FILTER) updateDocsNavigation(families);
-  return removed;
+  if (!PAGE_FILTER) updateDocsNavigation(families, removed);
+  return removed.length;
 }
 
 // A page's inline data: the family and the full records of its variants.
