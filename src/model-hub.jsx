@@ -205,6 +205,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const step = secs.length > 2 ? secs[1] - secs[0] : null;
     return { secs, step: step && secs.every((x, i) => i === 0 || x - secs[i - 1] === step) ? step : null };
   };
+  // A long, evenly spaced list of lengths reads as a range.
+  const durationText = durations => {
+    const { secs, step } = durationSteps(durations);
+    if (secs.length > 6 && step) return `${secs[0]}–${secs[secs.length - 1]}s, ${step === 1 ? 'any whole second' : `in ${step}s steps`}`;
+    return (durations || []).map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ');
+  };
   // Price rows for the video calculator and the static text when a model has
   // more than six lengths: the shortest, 5s, 10s and the longest, led by a
   // per-second row when every length costs the same rate per second.
@@ -1980,7 +1986,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         ['Mode', VARIANT_LABELS[model.variant] || model.variant],
         ['Inputs', ['Prompt', inputs.image && 'image', inputs.reference && 'reference images', inputs.video && 'video', inputs.audio && 'audio'].filter(Boolean).join(', ')],
         video.resolutions && video.resolutions.length ? ['Resolutions', video.resolutions.map(r => r.label).join(', ')] : null,
-        video.durations && video.durations.length ? ['Durations', video.durations.map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ')] : null,
+        video.durations && video.durations.length ? ['Durations', durationText(video.durations)] : null,
         video.aspectRatios && video.aspectRatios.length ? ['Aspect ratios', ratioShapes(video.aspectRatios)] : null,
         ['Audio', video.audio === 'native' ? 'Always generated' : video.audio === 'optional' ? <>Optional; set <code>"audio": true</code></> : 'Silent output'],
         video.promptLimit ? ['Prompt limit', `${count(video.promptLimit)} characters`] : null
@@ -2510,7 +2516,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (v) {
       return [
         v.resolutions && v.resolutions.length ? `Resolutions: ${v.resolutions.map(r => r.label).join(', ')}` : null,
-        v.durations && v.durations.length ? `Durations: ${v.durations.map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ')}` : null,
+        v.durations && v.durations.length ? `Durations: ${durationText(v.durations)}` : null,
         v.aspectRatios && v.aspectRatios.length ? `Aspect ratios: ${v.aspectRatios.join(', ')}` : null,
         `Audio: ${v.audio === 'native' ? 'always generated' : v.audio === 'optional' ? 'optional ("audio": true)' : 'none'}`,
         `Inputs: ${['prompt', ...['image', 'reference', 'video', 'audio'].filter(k => v.inputs && v.inputs[k])].join(', ')}`
@@ -2756,7 +2762,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   // scripts/build-model-catalog.js writes each page's static text with these,
   // so it reads the same as the page.
-  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable };
+  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable, durationText };
 
   return { ModelExplorer, ModelPage, codeSamples, helpers };
 };

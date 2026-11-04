@@ -1009,7 +1009,7 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   }
   if (primary.video) {
     const v = primary.video;
-    specs.push(['Modes', listPhrase(f.modes)], ['Resolutions', v.resolutions?.map(r => r.label).join(', ')], ['Durations', v.durations?.map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ')],
+    specs.push(['Modes', listPhrase(f.modes)], ['Resolutions', v.resolutions?.map(r => r.label).join(', ')], ['Durations', v.durations ? hub().helpers.durationText(v.durations) : undefined],
       ['Aspect ratios', v.aspectRatios?.join(', ')], ['Audio', v.audio === 'native' ? 'Always generated' : v.audio === 'optional' ? 'Optional' : 'None']);
   }
   if (primary.image) {
