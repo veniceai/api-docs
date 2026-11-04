@@ -142,32 +142,41 @@ async function main() {
     }
   };
 
+  // Pages are fetched concurrently but read in index order, so the result
+  // doesn't depend on which fetch finishes first.
+  const pages = new Array(slugs.length);
   await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
     while (index < slugs.length) {
-      const slug = slugs[index++];
-      let html;
+      const order = index++;
+      const slug = slugs[order];
       try {
-        html = await fetchText(`${SITE}/models/${slug}`);
+        pages[order] = { slug, html: await fetchText(`${SITE}/models/${slug}`) };
       } catch (error) {
         console.warn(`Could not fetch venice.ai/models/${slug}: ${error.message}`);
-        failedPages.push(`${SITE}/models/${slug}`);
-        continue;
-      }
-      if (!html) continue;
-      const samples = samplesFrom(html);
-      if (!samples.length) continue;
-      pagesWithSamples++;
-
-      // A page covers every API model ID it mentions (variants table, code samples).
-      const covered = mediaModels.filter(m => html.includes(`"${m.id}"`) || html.includes(`>${m.id}<`) || html.includes(`&quot;${m.id}&quot;`));
-      addToSuite(samples);
-      for (const model of covered) {
-        const relevant = samples.filter(s => (model.type === 'video') === (s.type === 'video'));
-        if (!relevant.length) continue;
-        byModel[model.id] = relevant.map(s => ({ ...s, page: `${SITE}/models/${slug}` }));
+        pages[order] = { slug, failed: true };
       }
     }
   }));
+
+  for (const { slug, html, failed } of pages) {
+    if (failed) {
+      failedPages.push(`${SITE}/models/${slug}`);
+      continue;
+    }
+    if (!html) continue;
+    const samples = samplesFrom(html);
+    if (!samples.length) continue;
+    pagesWithSamples++;
+
+    // A page covers every API model ID it mentions (variants table, code samples).
+    const covered = mediaModels.filter(m => html.includes(`"${m.id}"`) || html.includes(`>${m.id}<`) || html.includes(`&quot;${m.id}&quot;`));
+    addToSuite(samples);
+    for (const model of covered) {
+      const relevant = samples.filter(s => (model.type === 'video') === (s.type === 'video'));
+      if (!relevant.length) continue;
+      byModel[model.id] = relevant.map(s => ({ ...s, page: `${SITE}/models/${slug}` }));
+    }
+  }
 
   // A page that failed keeps the samples its live models had last time.
   const liveIds = new Set(mediaModels.map(m => m.id));
