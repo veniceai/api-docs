@@ -557,6 +557,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   );
 
   // The filter column; below 1024px it opens as a drawer from the toolbar.
+  const DRAWER_MAX_WIDTH = 1024;
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
   const FilterRail = ({ modality, task, scope, scopeCounts, onScope, filters, setFilters, facetCount, providerCounts, providers, onClear, open, onClose }) => {
     const toggleIn = (key, value) => setFilters(prev => ({ ...prev, [key]: prev[key].includes(value) ? prev[key].filter(v => v !== value) : [...prev[key], value] }));
     // An option nothing in scope matches is disabled unless already checked.
@@ -580,7 +582,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const visibleProviders = showAll ? providerList : providerList.filter(([slug, n], i) => (i < 10 && n > 0) || filters.providers.includes(slug));
     const count = activeFilterCount(filters);
     return (
-      <aside id="vx-filters" className={cls('vx-side vx-filters', open && 'is-open')} aria-label="Filters">
+      <aside id="vx-filters" className={cls('vx-side vx-filters', open && 'is-open')} aria-label="Filters"
+        role={open ? 'dialog' : undefined} aria-modal={open ? 'true' : undefined}>
         <div className="vx-side-inner">
           <div className="vx-rail-head">
             <span>Filters</span>
@@ -1069,15 +1072,35 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
     useEffect(() => {
       if (!railOpen) return undefined;
-      // The drawer comes before the results in the DOM, so focus moves into
-      // it on open and back to the toggle on close.
+      // The drawer is modal: focus moves into it on open and back to the
+      // toggle on close, Tab stays inside it and the page under it holds still.
       const drawer = document.getElementById('vx-filters');
       const done = drawer && drawer.querySelector('.vx-rail-done');
       if (done) done.focus();
-      const onKey = e => { if (e.key === 'Escape') setRailOpen(false); };
+      const root = document.documentElement;
+      const overflow = root.style.overflow;
+      root.style.overflow = 'hidden';
+      const tabbable = () => (drawer ? [...drawer.querySelectorAll(FOCUSABLE)].filter(el => el.offsetParent !== null) : []);
+      const onKey = e => {
+        if (e.key === 'Escape') { setRailOpen(false); return; }
+        if (e.key !== 'Tab') return;
+        const items = tabbable();
+        if (!items.length) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        const inside = drawer.contains(document.activeElement);
+        if (e.shiftKey && (!inside || document.activeElement === first)) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && (!inside || document.activeElement === last)) { e.preventDefault(); first.focus(); }
+      };
+      // Widening past the drawer breakpoint turns it back into the column.
+      const wide = window.matchMedia(`(min-width: ${DRAWER_MAX_WIDTH + 1}px)`);
+      const onWide = () => { if (wide.matches) setRailOpen(false); };
       window.addEventListener('keydown', onKey);
+      wide.addEventListener('change', onWide);
       return () => {
         window.removeEventListener('keydown', onKey);
+        wide.removeEventListener('change', onWide);
+        root.style.overflow = overflow;
         const toggle = document.querySelector('[aria-controls="vx-filters"]');
         if (toggle && drawer && drawer.contains(document.activeElement)) toggle.focus();
       };
@@ -1165,7 +1188,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               filters={filters} setFilters={setFilters} facetCount={facetCount} providerCounts={providerCounts} providers={providers}
               onClear={() => setFilters(EMPTY_FILTERS)} open={railOpen} onClose={() => setRailOpen(false)} />
           ) : <aside className="vx-side vx-filters" aria-hidden="true" />}
-          {railOpen ? <button type="button" className="vx-filters-backdrop" onClick={() => setRailOpen(false)} aria-label="Close filters" /> : null}
+          {railOpen ? <div className="vx-filters-backdrop" onClick={() => setRailOpen(false)} aria-hidden="true" /> : null}
 
           <div className="vx-page-main">
             <header className="vx-hero">
