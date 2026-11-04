@@ -2407,7 +2407,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       <div className="vx-endpoints">
         {list.length > 1 ? (
           <Segmented ariaLabel="Endpoint" value={active.id} onChange={setEndpointId}
-            options={list.map(e => ({ value: e.id, label: `${e.name}${e.status === 'alpha' ? ' (Alpha)' : ''}`, disabled: e.supported === false, title: e.supported === false ? (e.note || 'Not supported for this model') : undefined }))} />
+            options={list.map(e => ({ value: e.id, label: e.name, disabled: e.supported === false, title: e.supported === false ? (e.note || 'Not supported for this model') : undefined }))} />
         ) : null}
         <div className="vx-endpoint-line">
           <MethodPath method={active.method} path={active.path} />

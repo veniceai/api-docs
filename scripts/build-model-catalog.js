@@ -608,8 +608,8 @@ function endpointsFor(entry, overrides) {
   if (task === 'chat') {
     add('chat', 'POST', '/chat/completions', 'Chat Completions');
     add('responses', 'POST', '/responses', 'Responses', entry.privacy === 'e2ee'
-      ? { status: 'alpha', supported: false, note: 'E2EE models require /chat/completions with E2EE headers.' }
-      : { status: 'alpha' });
+      ? { supported: false, note: 'E2EE models require /chat/completions with E2EE headers.' }
+      : {});
   } else if (task === 'decision') {
     add('decisions', 'POST', '/decisions', 'Decisions');
   } else if (task === 'image-generation') {
