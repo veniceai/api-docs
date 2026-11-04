@@ -659,20 +659,26 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  // A "from" price lists its options on hover, focus or tap. The list is fixed
-  // to the viewport so table and card overflow can't clip it, and screen
-  // readers get the same list as text.
+  // A "from" price lists its options on hover, focus or tap. The trigger is a
+  // button described by the list, so screen readers announce the options with
+  // the price. The list is fixed to the viewport so table and card overflow
+  // can't clip it.
+  let tipCount = 0;
   const PriceTip = ({ breakdown, children }) => {
     const ref = useRef(null);
+    const [tipId] = useState(() => `vx-tip-${(tipCount += 1)}`);
     const [pos, setPos] = useState(null);
     useEffect(() => {
       if (!pos) return undefined;
       const close = () => setPos(null);
+      const closeOutside = e => { if (ref.current && !ref.current.contains(e.target)) close(); };
       window.addEventListener('scroll', close, true);
       window.addEventListener('resize', close);
+      document.addEventListener('pointerdown', closeOutside);
       return () => {
         window.removeEventListener('scroll', close, true);
         window.removeEventListener('resize', close);
+        document.removeEventListener('pointerdown', closeOutside);
       };
     }, [pos]);
     if (!breakdown) return children;
@@ -688,15 +694,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       });
     };
     return (
-      <span ref={ref} className="vx-tip-anchor" tabIndex={0} onMouseEnter={open} onMouseLeave={() => setPos(null)} onFocus={open} onBlur={() => setPos(null)}>
+      <button ref={ref} type="button" className="vx-tip-anchor" aria-describedby={tipId}
+        onMouseEnter={open} onMouseLeave={() => setPos(null)} onFocus={open} onBlur={() => setPos(null)} onClick={open}
+        onKeyDown={e => { if (e.key === 'Escape' && pos) { e.stopPropagation(); setPos(null); } }}>
         {children}
-        <span className="vx-sr-only">: {breakdown.map(([label, text]) => `${label} ${text}`).join('; ')}</span>
-        {pos ? (
-          <span className="vx-tip" style={pos} aria-hidden="true">
-            {breakdown.map(([label, text]) => <span key={label} className="vx-tip-row"><span>{label}</span><span>{text}</span></span>)}
-          </span>
-        ) : null}
-      </span>
+        <span id={tipId} role="tooltip" className="vx-tip" style={pos || undefined} hidden={!pos}>
+          {breakdown.map(([label, text]) => <span key={label} className="vx-tip-row"><span>{label}</span><span>{text}</span></span>)}
+        </span>
+      </button>
     );
   };
 
