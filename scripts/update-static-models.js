@@ -3,7 +3,11 @@
  * Fetch models and text traits from the Venice API, update their snapshots,
  * and regenerate model-driven static documentation.
  * 
- * Usage: node scripts/update-static-models.js
+ * Usage: node scripts/update-static-models.js [--skip-models-static]
+ *
+ * --skip-models-static leaves the /models tables to a later
+ * `node scripts/generate-models-static.js`, for runs that rebuild
+ * data/model-catalog.json first (the tables read it).
  */
 
 const fs = require('fs');
@@ -16,6 +20,7 @@ const SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-models.json');
 const TRAITS_SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-traits.json');
 const REMOVED_DEPRECATIONS_PATH = path.join(__dirname, '..', 'data', 'removed-deprecations.json');
 const REMOVED_RETENTION_DAYS = 30;
+const SKIP_MODELS_STATIC = process.argv.includes('--skip-models-static');
 
 async function fetchAllModels() {
   const results = await Promise.all(MODEL_TYPES.map(async type => {
@@ -164,8 +169,12 @@ async function main() {
   console.log('Regenerating traits and deprecations...');
   require('./generate-deprecations-static.js');
 
-  console.log('Regenerating static model catalogs...');
-  require('./generate-models-static.js');
+  if (SKIP_MODELS_STATIC) {
+    console.log('Skipping static model catalogs (--skip-models-static)');
+  } else {
+    console.log('Regenerating static model catalogs...');
+    require('./generate-models-static.js');
+  }
 
   console.log('Regenerating pricing.mdx...');
   require('./generate-pricing-static.js');
