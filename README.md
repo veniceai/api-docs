@@ -41,6 +41,24 @@ yarn dev
 
 The documentation will be available at `http://localhost:3000`.
 
+### Model catalog pages
+
+The pages under `models/` render an interactive explorer from `data/model-hub.bundle.json` and `data/model-catalog.json`. `mintlify dev` does not serve `.json` files, so when the docs run on `localhost` the explorer first loads them from a data server on port 3333. Start one from the repo root in a second terminal:
+
+```bash
+npx http-server . -p 3333 --cors -c-1
+```
+
+Without it, the pages show their static Markdown tables instead of the explorer.
+
+After editing `src/model-hub.jsx`, rebuild the bundle and commit both files:
+
+```bash
+node scripts/build-model-hub.js
+```
+
+The data files are refreshed hourly by `.github/workflows/sync-static-models.yml`; the scripts it runs live in `scripts/`.
+
 ### Making Changes
 
 - Edit `.mdx` files to modify the documentation content

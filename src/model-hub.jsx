@@ -3,28 +3,21 @@
 // Source for data/model-hub.bundle.json. Build with
 // `node scripts/build-model-hub.js`; pages render it through
 // <HubMount> (snippets/model-hub-mount.jsx), which loads the bundle once
-// and passes in React's element factory plus hooks. JSX compiles to
+// and passes in React's element factory, hooks and its JSON loader. JSX compiles to
 // __jsx()/__Fragment, names chosen so local variables can't shadow them.
 // Data comes from scripts/build-model-catalog.js: views fetch
 // data/model-catalog.json.
-export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEffect, useRef, useMemo }) => {
+export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEffect, useRef, useMemo, fetchData }) => {
   /* ------------------------------------------------------------ data */
 
-  const CATALOG_URL = '/data/model-catalog.json';
-  // `mintlify dev` does not serve .json files; a local data server fills in.
-  const DEV_CATALOG_URL = 'http://localhost:3333/data/model-catalog.json';
+  const CATALOG_PATH = '/data/model-catalog.json';
   const API = 'https://api.venice.ai/api/v1';
   const store = { catalog: null, promise: null };
 
   const loadCatalog = () => {
     if (store.catalog) return Promise.resolve(store.catalog);
     if (store.promise) return store.promise;
-    const local = typeof window !== 'undefined' && window.location.hostname === 'localhost';
-    const urls = local ? [DEV_CATALOG_URL, CATALOG_URL] : [CATALOG_URL];
-    const attempt = i => fetch(urls[i])
-      .then(res => { if (!res.ok) throw new Error(`catalog ${res.status}`); return res.json(); })
-      .catch(err => (i + 1 < urls.length ? attempt(i + 1) : Promise.reject(err)));
-    store.promise = attempt(0)
+    store.promise = fetchData(CATALOG_PATH)
       .then(catalog => { store.catalog = catalog; return catalog; })
       .catch(err => { store.promise = null; throw err; });
     return store.promise;
