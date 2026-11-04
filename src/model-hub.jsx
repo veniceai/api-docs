@@ -1658,7 +1658,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   /* ------------------------------------------------------------ model page */
 
-  const pageSections = (model, { variants = 1, related = false, faq = false, examples = false, capabilities = false } = {}) => {
+  const pageSections = (model, { variants = 1, related = false, examples = false, capabilities = false } = {}) => {
     const list = [['overview', 'Overview'], ['pricing', 'Pricing']];
     if (examples) list.push(['examples', 'Examples']);
     if (model.task === 'tts' && model.audio && model.audio.voices && model.audio.voices.length) list.push(['voices', 'Voices']);
@@ -1668,12 +1668,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (PRIVACY_TIERS.some(([tier]) => tier === model.privacy)) list.push(['privacy', 'Privacy']);
     if (variants > 1) list.push(['variants', 'Variants']);
     if (related) list.push(['related', 'Related models']);
-    if (faq) list.push(['faq', 'FAQ']);
     return list;
   };
-
-  // Generated FAQ answers mark code with backticks.
-  const RichText = ({ text }) => <>{String(text || '').split('`').map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part))}</>;
 
   const useScrollSpy = ids => {
     const [active, setActive] = useState(ids[0]);
@@ -2550,9 +2546,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const recommended = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
     const activeEndpoint = (model.endpoints || []).find(e => e.id === endpointId && e.supported !== false) || recommended;
     const hasRelated = Boolean(related && ((related.versions || []).length || (related.similar || []).length));
-    const faq = (data.variantFaq && data.variantFaq[model.id]) || data.faq || [];
     const hasExamples = (model.modality === 'image' || model.modality === 'video') && models.some(m => (m.media || []).length);
-    const sections = pageSections(model, { variants: models.length, related: hasRelated, faq: faq.length > 0, examples: hasExamples, capabilities: hasCapabilities(model, models) });
+    const sections = pageSections(model, { variants: models.length, related: hasRelated, examples: hasExamples, capabilities: hasCapabilities(model, models) });
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const has = id => sections.some(([key]) => key === id);
 
@@ -2697,30 +2692,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 </div>
               </Section>
             ) : null}
-
-            {has('faq') ? (
-              <Section id="faq" title="FAQ">
-                <div className="vx-faq">
-                  {faq.map((item, i) => (
-                    <details key={item.q} className="vx-faq-item" open={i === 0}>
-                      <summary>
-                        <span className="vx-faq-q"><RichText text={item.q} /></span>
-                        <Icon name="chevronDown" className="vx-faq-icon" />
-                      </summary>
-                      <p className="vx-faq-a"><RichText text={item.a} /></p>
-                    </details>
-                  ))}
-                </div>
-              </Section>
-            ) : null}
           </div>
         </div>
       </div>
     );
   };
 
-  // scripts/build-model-catalog.js writes each page's static text and FAQ
-  // with these, so they read the same as the page.
+  // scripts/build-model-catalog.js writes each page's static text with these,
+  // so it reads the same as the page.
   const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText };
 
   return { ModelExplorer, ModelPage, codeSamples, helpers };

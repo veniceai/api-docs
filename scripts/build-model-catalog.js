@@ -797,14 +797,9 @@ function mdxText(value) {
     .replace(/^([ \t]*)(import|export)\b/gm, (match, space, word) => `${space}&#${word.charCodeAt(0)};${word.slice(1)}`);
 }
 
-// Escapes prose but leaves `code spans` literal, since MDX doesn't parse inside them.
-function mdxInline(value) {
-  return String(value || '').split('`').map((part, i) => (i % 2 ? `\`${part}\`` : mdxText(part))).join('');
-}
-
 // ---------------------------------------------------------------- SEO copy
-// Every model page targets "<model> API". Titles, descriptions and FAQ answers
-// are generated from the same data as the page, so they can't contradict it.
+// Every model page targets "<model> API". Titles and descriptions are
+// generated from the same data as the page, so they can't contradict it.
 
 const TASK_PHRASES = {
   chat: 'large language', decision: 'decision', 'image-generation': 'image generation', 'image-edit': 'image editing',
@@ -815,16 +810,8 @@ const MODE_PHRASES = {
   t2v: 'text to video', i2v: 'image to video', r2v: 'reference to video', flf: 'first and last frame to video',
   v2v: 'video editing', motion: 'motion control', transition: 'video transitions', 'multi-angle': 'multi-angle video', upscale: 'video upscaling'
 };
-// [singular, plural] predicates for "<subject> ...".
-const PRIVACY_PREDICATES = {
-  e2ee: ['is end-to-end encrypted', 'are end-to-end encrypted'],
-  tee: ['runs in a trusted execution environment', 'run in a trusted execution environment'],
-  private: ['is private', 'are private'],
-  anonymized: ['is anonymized', 'are anonymized']
-};
-
 // The page's own formatters, from the compiled hub bundle, so the static
-// text and FAQ read exactly as the page does.
+// text reads exactly as the page does.
 let hubInstance;
 function hub() {
   if (!hubInstance) {
@@ -972,101 +959,6 @@ function withProvider(provider, name) {
   return `${provider} ${name}`;
 }
 
-// Answers for one variant, the primary unless `selected` is given, so the
-// FAQ matches the variant the page shows.
-function faqFor(family, variants, providers, selected) {
-  const name = family.name;
-  const primary = selected || variants.find(v => v.id === family.primary) || variants[0];
-  const p = primary.pricing || {};
-  const faq = [];
-  const variantName = variantLabel;
-
-  let cost;
-  if (family.modality === 'text' && primary.text) {
-    cost = `${money(p.input)} per 1M input tokens and ${money(p.output)} per 1M output tokens${p.cacheRead != null ? `, with cached input at ${money(p.cacheRead)} per 1M` : ''}.`;
-    const others = variants.filter(v => v !== primary && v.pricing && (v.pricing.input !== p.input || v.pricing.output !== p.output));
-    if (others.length) cost += ` ${others.map(v => `The ${variantName(v)} variant costs ${money(v.pricing.input)} input and ${money(v.pricing.output)} output.`).join(' ')}`;
-  } else if (family.modality === 'video') {
-    const draft = draftClip(primary);
-    cost = p.status === 'quoted' && p.fromPerSecond != null
-      ? `From ${money(p.fromPerSecond)} to ${money(p.toPerSecond)} per second of video, depending on resolution, duration and audio.${draft ? ` A ${draft.seconds}-second ${draft.resolution || ''} clip${draft.audio ? ' with audio' : ''} costs ${money(draft.price)}.` : ''} Call \`POST /video/quote\` for the exact price before queueing.`
-      : `Price depends on the input video. Call \`POST /video/quote\` for the exact price before queueing.`;
-  } else if (family.modality === 'image') {
-    const byRes = p.byResolution ? Object.entries(p.byResolution).map(([res, value]) => `${money(value)} at ${res}`) : [];
-    cost = byRes.length ? `${listPhrase(byRes)} per image.` : `${money(p.perImage)} ${primary.headline?.unit || 'per image'}.`;
-    const edit = variants.find(v => v.task === 'image-edit' && v !== primary);
-    if (edit && edit.pricing?.perImage != null) cost += ` Editing costs ${money(edit.pricing.perImage)} per edit.`;
-  } else if (primary.task === 'tts') {
-    cost = `${money(p.per1MChars)} per 1M characters of input text, about ${money(p.perMinute)} per minute of generated speech.`;
-  } else if (primary.task === 'stt') {
-    cost = `${money(p.perSecond)} per second of audio, which is ${money(p.perHour)} per hour.`;
-  } else if (family.modality === 'audio') {
-    cost = p.perMinute != null ? `${money(p.perMinute)} per minute of generated audio.` : p.perTrack != null ? `${money(p.perTrack)} per generated track.` : 'Call `POST /audio/quote` for the exact price.';
-  } else if (p.input != null) {
-    cost = `${money(p.input)} per 1M input tokens.`;
-  }
-  if (cost) faq.push({ q: `How much does the ${name} API cost?`, a: `${cost} Prices are in USD and can be paid in DIEM at parity.` });
-
-  const ids = variants.length > 1
-    ? `Use \`${primary.id}\` as the \`model\` parameter. Other variants: ${variants.filter(v => v !== primary).map(v => `\`${v.id}\` (${variantName(v)})`).join(', ')}.`
-    : `Use \`${primary.id}\` as the \`model\` parameter.`;
-  faq.push({ q: `What is the ${name} model ID?`, a: ids });
-
-  const tiers = uniq(variants.map(v => v.privacy));
-  const privacy = tiers.map(tier => {
-    const holders = variants.filter(v => v.privacy === tier);
-    const split = variants.length > 1 && tiers.length > 1;
-    const subject = split ? `The ${listPhrase(holders.map(variantName))} ${holders.length > 1 ? 'variants' : 'variant'}` : name;
-    const [one, many] = PRIVACY_PREDICATES[tier] || [`is ${tier}`, `are ${tier}`];
-    const detail = hub().helpers.PRIVACY[tier]?.desc;
-    return `${subject} ${split && holders.length > 1 ? many : one}.${detail ? ` ${detail}` : ''}`;
-  }).join(' ');
-  faq.push({ q: `Is the ${name} API private?`, a: privacy });
-
-  if (family.modality === 'text' && primary.text) {
-    const t = primary.text;
-    faq.push({ q: `What is the context window of ${name}?`, a: `${t.context ? `${fmtTokens(t.context)} tokens of context` : 'The context window is not published'}${t.maxOutput ? `, with up to ${fmtTokens(t.maxOutput)} output tokens per response` : ''}.` });
-    const on = [t.caps?.tools && 'function calling', t.caps?.structured && 'structured outputs', t.reasoning && 'reasoning', t.caps?.vision && 'image input', t.caps?.webSearch && 'web search', p.cacheRead != null && 'prompt caching'].filter(Boolean);
-    const effort = t.reasoning?.effort?.length ? ` Reasoning effort is adjustable with \`reasoning_effort\`: ${listPhrase(t.reasoning.effort)}${t.reasoning.defaultEffort ? ` (default ${t.reasoning.defaultEffort})` : ''}.` : '';
-    if (on.length) faq.push({ q: `What does ${name} support?`, a: `${name} supports ${listPhrase(on)}.${effort}` });
-  } else if (family.modality === 'video') {
-    const v = primary.video || {};
-    const parts = [
-      v.resolutions?.length ? `Resolutions: ${v.resolutions.map(r => r.label).join(', ')}.` : null,
-      v.durations?.length ? `Durations: ${v.durations.map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ')}.` : null,
-      v.aspectRatios?.length ? `Aspect ratios: ${v.aspectRatios.join(', ')}.` : null,
-      `Audio: ${v.audio === 'native' ? 'always generated' : v.audio === 'optional' ? 'optional, with `"audio": true`' : 'none'}.`
-    ].filter(Boolean);
-    faq.push({ q: `What resolutions and durations does ${name} support?`, a: parts.join(' ') });
-  } else if (family.modality === 'image') {
-    const i = primary.image || {};
-    const parts = [
-      i.resolutions?.length ? `Resolutions: ${i.resolutions.join(', ')}.` : null,
-      i.aspectRatios?.length ? `Aspect ratios: ${i.aspectRatios.filter(a => a !== 'auto').join(', ')}.` : null,
-      i.promptLimit ? `Prompts up to ${i.promptLimit.toLocaleString('en-US')} characters.` : null
-    ].filter(Boolean);
-    if (parts.length) faq.push({ q: `What resolutions does ${name} support?`, a: parts.join(' ') });
-  } else if (primary.task === 'tts' && primary.audio?.voices?.length) {
-    const voices = primary.audio.voices;
-    faq.push({ q: `How many voices does ${name} have?`, a: `${voices.length} voices, for example ${voices.slice(0, 3).map(v => `\`${v}\``).join(', ')}.${primary.audio.formats?.length ? ` Output formats: ${primary.audio.formats.join(', ')}.` : ''}` });
-  } else if (family.modality === 'embedding' && primary.embedding) {
-    const e = primary.embedding;
-    faq.push({ q: `How many dimensions do ${name} embeddings have?`, a: `${e.dimensions ? `${e.dimensions.toLocaleString('en-US')} dimensions` : 'Dimensions are not published'}${e.maxInputTokens ? `, with up to ${fmtTokens(e.maxInputTokens)} input tokens per item` : ''}.` });
-  }
-
-  const endpoints = primary.endpoints || [];
-  const recommended = endpoints.find(e => e.recommended) || endpoints[0];
-  if (recommended) {
-    const flow = endpoints.some(e => /-(retrieve|quote)$/.test(e.id));
-    const alternatives = endpoints.filter(e => e !== recommended && e.supported !== false && !flow);
-    const answer = flow
-      ? `Queue a job with \`${recommended.method} ${recommended.path}\`, then poll \`${(endpoints.find(e => /-retrieve$/.test(e.id)) || recommended).path}\` for the result.`
-      : `Call \`${recommended.method} ${recommended.path}\`.${alternatives.length ? ` ${listPhrase(alternatives.map(e => `\`${e.path}\`${e.status === 'alpha' ? ' (Alpha)' : ''}`))} ${alternatives.length > 1 ? 'are' : 'is'} also supported.` : ''}${recommended.recommendation ? ` ${recommended.recommendation}` : ''}`;
-    faq.push({ q: `Which endpoint does the ${name} API use?`, a: answer });
-  }
-  return faq;
-}
-
 // One value for the family, or each variant's when they differ.
 function perVariant(variants, valueOf) {
   const values = variants.map(v => valueOf(v));
@@ -1076,7 +968,7 @@ function perVariant(variants, valueOf) {
 
 // The page's server-rendered text: what crawlers and readers without
 // JavaScript get, and what "Plain-text specification" shows.
-function specMarkdown(family, variants, providers, related, familiesBySlug, modelsById, faq, samples) {
+function specMarkdown(family, variants, providers, related, familiesBySlug, modelsById, samples) {
   const f = familyFacts(family, variants, providers);
   const primary = f.primary;
   const name = mdxText(family.name);
@@ -1135,11 +1027,6 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
     lines.push('```bash', samples.curl, '```');
   }
 
-  if (faq.length) {
-    lines.push('', `### ${name} API FAQ`);
-    faq.forEach(item => lines.push('', `#### ${mdxInline(item.q)}`, '', mdxInline(item.a)));
-  }
-
   const links = [...(related.versions || []), ...(related.similar || [])]
     .filter((slug, i, all) => all.indexOf(slug) === i && familiesBySlug[slug])
     .map(slug => {
@@ -1195,7 +1082,6 @@ function relatedSummary(slugs, familiesBySlug, modelsById) {
 
 function renderPage(family, variants, related, providers, familiesBySlug, modelsById) {
   const primary = variants.find(v => v.id === family.primary) || variants[0];
-  const faq = faqFor(family, variants, providers);
   const pageData = {
     family: compactFamily(family),
     models: variants.map(stripForPage),
@@ -1204,12 +1090,7 @@ function renderPage(family, variants, related, providers, familiesBySlug, models
       versions: relatedSummary(related.versions, familiesBySlug, modelsById)
     },
     providers: Object.fromEntries([...new Set([family.provider, ...related.similar.concat(related.versions).map(s => familiesBySlug[s].provider)])]
-      .filter(slug => providers[slug]).map(slug => [slug, providers[slug]])),
-    faq,
-    // The other variants' answers; the page swaps them in with the variant.
-    variantFaq: variants.length > 1
-      ? Object.fromEntries(variants.filter(v => v !== primary).map(v => [v.id, faqFor(family, variants, providers, v)]))
-      : undefined
+      .filter(slug => providers[slug]).map(slug => [slug, providers[slug]]))
   };
   return [
     '---',
@@ -1234,7 +1115,7 @@ function renderPage(family, variants, related, providers, familiesBySlug, models
     '',
     '<Accordion title="Plain-text specification">',
     '',
-    specMarkdown(family, variants, providers, related, familiesBySlug, modelsById, faq, codeSamplesFor(primary)),
+    specMarkdown(family, variants, providers, related, familiesBySlug, modelsById, codeSamplesFor(primary)),
     '',
     '</Accordion>',
     '',
