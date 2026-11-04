@@ -1260,8 +1260,10 @@ function writePages(families, modelsById, providers, relatedBySlug) {
     }
     if (current !== contents) fs.writeFileSync(file, contents, 'utf-8');
   }
-  // Remove pages for families that no longer exist.
+  // Remove pages for families that no longer exist. A --pages preview
+  // renders a subset, so it leaves the other pages alone.
   let removed = 0;
+  if (PAGE_FILTER) return removed;
   for (const name of fs.readdirSync(MODELS_DIR)) {
     const file = path.join(MODELS_DIR, name);
     if (!name.endsWith('.mdx') || expected.has(file)) continue;
@@ -1289,7 +1291,7 @@ function updateDocsNavigation(families) {
   group.group = NAV_GROUP;
   group.hidden = true;
   group.searchable = true;
-  group.pages = families.filter(f => !PAGE_FILTER || PAGE_FILTER.has(f.slug)).map(f => `models/${f.slug}`).sort();
+  group.pages = families.map(f => `models/${f.slug}`).sort();
   const out = JSON.stringify(docs, null, 2).replace(/\n/g, eol) + eol;
   if (out !== raw) fs.writeFileSync(file, out, 'utf-8');
 }
@@ -1310,7 +1312,8 @@ function writeStamped(file, value, stampKey, serialize) {
 
 function writeSite(families, modelsById, providers, relatedBySlug) {
   const removed = writePages(families, modelsById, providers, relatedBySlug);
-  updateDocsNavigation(families);
+  // The site-wide lists need every page, which a --pages preview doesn't render.
+  if (!PAGE_FILTER) updateDocsNavigation(families);
   return removed;
 }
 
@@ -1344,7 +1347,7 @@ async function renderOffline() {
   });
   const relatedBySlug = Object.fromEntries(families.map(f => [f.slug, relatedFor(f, families, modelsById)]));
   const removed = writeSite(families, modelsById, catalog.providers, relatedBySlug);
-  console.log(`Rendered ${families.length} family pages from data/model-catalog.json`);
+  console.log(`Rendered ${PAGE_FILTER ? PAGE_FILTER.size : families.length} family pages from data/model-catalog.json`);
   if (removed) console.log(`Removed ${removed} stale family pages`);
 }
 
