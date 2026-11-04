@@ -86,6 +86,8 @@ Feature suffixes also work on model IDs as `key=value` pairs, e.g. `venice-uncen
 - Reasoning models: https://docs.venice.ai/guides/features/reasoning-models.md
 - File inputs (PDF/Office/code in chat): https://docs.venice.ai/guides/features/file-inputs.md
 - Prompt caching: https://docs.venice.ai/guides/features/prompt-caching.md
+- Model catalog methodology (families, normalized prices, privacy tiers): https://docs.venice.ai/models/methodology.md
+- Machine-readable model catalog: https://docs.venice.ai/data/model-catalog.json, a JSON object with `families` (array of model families), `models` (keyed by model ID), `providers`, `counts` and `generatedAt`, rebuilt hourly from `GET /models`. Still call `GET /models` at runtime to pick a model.
 
 ## Documentation repo (this project)
 
