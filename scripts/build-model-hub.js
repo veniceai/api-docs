@@ -9,8 +9,8 @@
  * and instantiates it with React. JSX compiles to __jsx()/__Fragment, which
  * the source binds from the `h` and `Fragment` that HubMount supplies.
  *
- * Run after editing src/model-hub.jsx. Uses sucrase, installed with the
- * Mintlify CLI (`yarn install`).
+ * Run after editing src/model-hub.jsx. Uses sucrase, a devDependency
+ * (`yarn install`).
  *
  * Usage: node scripts/build-model-hub.js
  */
