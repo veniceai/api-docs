@@ -416,16 +416,48 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return media.find(m => m.prompt === preferred) || media[0] || null;
   };
 
+  // Sources attach only as a tile nears the viewport, so a gallery doesn't
+  // open dozens of video requests at once; a skeleton holds the tile until
+  // the first frame paints.
   const HoverVideo = ({ src, poster, className, autoPlay }) => {
     const ref = useRef(null);
-    const play = () => { if (ref.current) ref.current.play().catch(() => {}); };
+    const [near, setNear] = useState(false);
+    const [ready, setReady] = useState(false);
+    useEffect(() => {
+      const el = ref.current;
+      if (!el || near) return undefined;
+      if (typeof IntersectionObserver === 'undefined') { setNear(true); return undefined; }
+      const observer = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) { setNear(true); observer.disconnect(); }
+      }, { rootMargin: '300px 0px' });
+      observer.observe(el);
+      return () => observer.disconnect();
+    }, [near]);
+    const play = () => { if (ref.current && near) ref.current.play().catch(() => {}); };
     const stop = () => { if (ref.current && !autoPlay) { ref.current.pause(); } };
+    const show = () => setReady(true);
     // Without a poster, the #t fragment makes browsers seek and paint a first frame.
+    const url = poster || /#t=/.test(src) ? src : `${src}#t=0.1`;
     return (
-      <video ref={ref} className={className} src={poster || /#t=/.test(src) ? src : `${src}#t=0.1`} poster={poster} muted loop playsInline preload="metadata"
-        autoPlay={autoPlay} onMouseEnter={play} onMouseLeave={stop} onFocus={play} onBlur={stop} />
+      <>
+        {ready ? null : <span className="vx-media-skeleton" aria-hidden="true" />}
+        <video ref={ref} className={cls(className, !ready && 'is-loading')} src={near ? url : undefined} poster={poster} muted loop playsInline preload="metadata"
+          autoPlay={autoPlay} onLoadedData={show} onError={show} onMouseEnter={play} onMouseLeave={stop} onFocus={play} onBlur={stop} />
+      </>
     );
   };
+
+  // venice.ai serves its samples through its image optimizer at these widths.
+  const SAMPLE_WIDTHS = [256, 384, 640, 828];
+  const SAMPLE_PATH = /^https:\/\/venice\.ai(\/samples\/[^?#]+)$/;
+  const sampleSrcSet = url => {
+    const match = SAMPLE_PATH.exec(url);
+    if (!match) return undefined;
+    const path = encodeURIComponent(match[1]);
+    return SAMPLE_WIDTHS.map(w => `https://venice.ai/_next/image?url=${path}&w=${w}&q=75 ${w}w`).join(', ');
+  };
+  // Tiles run two to a row on phones and about 280px wide elsewhere.
+  const CARD_SIZES = '(max-width: 700px) calc(50vw - 22px), 280px';
 
   const MediaFallback = ({ label = 'No reference render yet' }) => (
     <div className="vx-media-fallback"><span>{label}</span></div>
@@ -899,7 +931,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       <article className="vx-card">
         <div className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} aria-hidden="true">
           {media
-            ? (media.type === 'video' ? <HoverVideo src={media.url} className="vx-card-el" /> : <img className="vx-card-el" src={media.url} alt="" loading="lazy" />)
+            ? (media.type === 'video' ? <HoverVideo src={media.url} className="vx-card-el" /> : <img className="vx-card-el" src={media.url} srcSet={sampleSrcSet(media.url)} sizes={CARD_SIZES} alt="" loading="lazy" decoding="async" />)
             : <MediaFallback />}
           {isVideo && media ? <span className="vx-card-play"><Icon name="play" size={10} /></span> : null}
         </div>
