@@ -2164,6 +2164,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }
     if (p.status !== 'quoted') return <p className="vx-text">Use <code>POST /video/quote</code> for this model's price.</p>;
     const vp = videoPrice(model, { h, s, a });
+    // The selected clip's own rate, not the median across lengths.
+    const perSecond = vp.clip != null && vp.seconds ? vp.clip / vp.seconds : null;
+    const clipNote = `${vp.seconds}s${vp.resolution ? ` · ${vp.resolution}` : ''} · ${vp.audio ? 'with audio' : 'silent'}`;
     const audioKey = video.audio === 'optional' ? a : (video.audio === 'native' ? 'on' : 'off');
     const resKeys = res.length ? res : [{ value: '-', label: 'Default', height: 0 }];
     return (
@@ -2187,9 +2190,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         </div>
         <div className="vx-estimate" aria-live="polite">
           <PriceCards items={[
-            { label: 'Per clip', value: usd(vp.clip), sub: `${vp.seconds}s${vp.resolution ? ` · ${vp.resolution}` : ''} · ${vp.audio ? 'with audio' : 'silent'}` },
-            { label: 'Per second', value: usd(vp.perSecond) },
-            { label: 'Per minute', value: usd(vp.perSecond != null ? vp.perSecond * 60 : null) }
+            { label: 'Per clip', value: usd(vp.clip), sub: clipNote },
+            { label: 'Per second', value: usd(perSecond), sub: 'this clip' },
+            // A minute only means something when one clip can run that long.
+            maxVideoSeconds(model) >= 60 ? { label: 'Per minute', value: usd(perSecond != null ? perSecond * 60 : null), sub: 'at this rate' } : null
           ]} />
         </div>
         <div className="vx-table-wrap vx-ruled">
