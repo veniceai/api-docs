@@ -1771,7 +1771,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           { label: 'Context', value: tokens(text.context), sub: text.maxOutput ? `${tokens(text.maxOutput)} max output` : 'max output not published' },
           {
             label: 'Reasoning',
-            value: !r ? 'None' : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'On',
+            value: !r ? 'None' : levels.length ? levels.join(', ') : 'On',
             sub: !r ? 'answers directly' : r.defaultEffort ? `default ${r.defaultEffort}` : levels.length ? 'reasoning_effort' : 'fixed effort'
           },
           p.cacheRead != null
@@ -1932,7 +1932,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           ['Streaming (SSE)', 'Supported'],
           ['Function calling', caps.tools ? 'Supported' : null],
           ['Structured output (json_schema)', caps.structured ? 'Supported' : null],
-          ['Reasoning effort', !r ? null : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'Not adjustable'],
+          ['Reasoning effort', !r ? null : levels.length ? levels.join(', ') : 'Not adjustable'],
           ['Prompt caching', hasCap(model, 'caching') ? 'Supported' : null],
           ['Web search', caps.webSearch ? 'venice_parameters' : null],
           ['X search', caps.xSearch ? 'venice_parameters' : null],
