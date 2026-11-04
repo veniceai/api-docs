@@ -31,6 +31,22 @@ const CATALOG_ID = 'model-catalog-static';
 
 const PRIVATE_TYPES = new Set(['upscale']);
 
+// Model ID → its family page, opened on that variant, from the catalog
+// build-model-catalog.js writes. Missing on a fresh checkout; names are then
+// left unlinked.
+const PAGE_BY_ID = (() => {
+  try {
+    const catalog = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'model-catalog.json'), 'utf-8'));
+    const primaries = Object.fromEntries((catalog.families || []).map(family => [family.slug, family.primary]));
+    return Object.fromEntries(Object.entries(catalog.models || {}).filter(([, model]) => model.family).map(([id, model]) => [
+      id,
+      `/models/${model.family}${primaries[model.family] && primaries[model.family] !== id ? `?v=${encodeURIComponent(id)}` : ''}`
+    ]));
+  } catch {
+    return {};
+  }
+})();
+
 function readModels() {
   if (!fs.existsSync(SNAPSHOT_PATH)) {
     throw new Error('Missing data/static-models.json');
@@ -140,8 +156,10 @@ function markdownTable(headers, rows) {
 }
 
 function row(model, extraCols = []) {
+  const name = tableCell(getModelName(model));
+  const href = PAGE_BY_ID[model.id];
   return [
-    tableCell(getModelName(model)),
+    href ? `[${name.replace(/[[\]]/g, '\\$&')}](${href})` : name,
     inlineCode(model.id),
     ...extraCols
   ];
