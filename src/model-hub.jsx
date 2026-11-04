@@ -1703,9 +1703,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const list = [['overview', 'Overview'], ['pricing', 'Pricing']];
     if (examples) list.push(['examples', 'Examples']);
     if (model.task === 'tts' && model.audio && model.audio.voices && model.audio.voices.length) list.push(['voices', 'Voices']);
-    list.push(['api', 'API']);
-    if (capabilities) list.push(['capabilities', 'Capabilities']);
     list.push(['specs', 'Specs']);
+    if (capabilities) list.push(['capabilities', 'Capabilities']);
+    list.push(['api', 'API']);
     if (PRIVACY_TIERS.some(([tier]) => tier === model.privacy)) list.push(['privacy', 'Privacy']);
     if (variants > 1) list.push(['variants', 'Variants']);
     if (related) list.push(['related', 'Related models']);
@@ -2718,10 +2718,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               </Section>
             ) : null}
 
-            <Section id="api" title="API" actions={<a className="vx-link-btn" href="https://venice.ai/settings/api" target="_blank" rel="noopener">Get an API key</a>}>
-              <Endpoints model={model} endpointId={activeEndpoint && activeEndpoint.id} setEndpointId={setEndpointId} />
-              {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
-              <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
+            <Section id="specs" title="Specs">
+              <Specs model={model} models={models} />
             </Section>
 
             {has('capabilities') ? (
@@ -2730,8 +2728,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               </Section>
             ) : null}
 
-            <Section id="specs" title="Specs">
-              <Specs model={model} models={models} />
+            <Section id="api" title="API" actions={<a className="vx-link-btn" href="https://venice.ai/settings/api" target="_blank" rel="noopener">Get an API key</a>}>
+              <Endpoints model={model} endpointId={activeEndpoint && activeEndpoint.id} setEndpointId={setEndpointId} />
+              {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
+              <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
             </Section>
 
             {has('privacy') ? (
