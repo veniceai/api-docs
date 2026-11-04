@@ -76,12 +76,11 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   /* ------------------------------------------------------------ vocabulary */
 
   const MODALITIES = [
-    { key: 'all', label: 'All models', short: 'All', path: '/models/overview' },
-    { key: 'text', label: 'Text', short: 'Text', path: '/models/text', icon: 'text', blurb: 'Chat, reasoning, coding and agents' },
-    { key: 'image', label: 'Image', short: 'Image', path: '/models/image', icon: 'image', blurb: 'Generate, edit and upscale' },
-    { key: 'video', label: 'Video', short: 'Video', path: '/models/video', icon: 'video', blurb: 'Text, image and reference to video' },
-    { key: 'audio', label: 'Audio', short: 'Audio', path: '/models/text-to-speech', icon: 'music', blurb: 'Speech, transcription, music and sound' },
-    { key: 'embedding', label: 'Embeddings', short: 'Embeddings', path: '/models/embeddings', icon: 'layers', blurb: 'Vectors for search and RAG' }
+    { key: 'text', label: 'Text', path: '/models/text' },
+    { key: 'image', label: 'Image', path: '/models/image' },
+    { key: 'video', label: 'Video', path: '/models/video' },
+    { key: 'audio', label: 'Audio', path: '/models/text-to-speech' },
+    { key: 'embedding', label: 'Embeddings', path: '/models/embeddings' }
   ];
   // The explorer's modality facet, checkboxes as in Gordon's design; none
   // checked shows every modality. Each family has one key: audio splits by
@@ -154,8 +153,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const a = Math.abs(n);
     if (a >= 1000) return `$${Math.round(n).toLocaleString('en-US')}`;
     if (a >= 100) return `$${n.toFixed(0)}`;
-    if (a >= 0.1) return `$${n.toFixed(2)}`;
-    if (a >= 0.01) return `$${n.toFixed(3).replace(/0$/, '')}`;
+    if (a >= 1) return `$${n.toFixed(2)}`;
+    // Sub-dollar prices keep up to four decimals, so $0.1725 isn't shown as $0.17.
+    if (a >= 0.0001) return `$${n.toFixed(4).replace(/0+$/, '').replace(/\.(\d?)$/, (m, d) => `.${d.padEnd(2, '0')}`)}`;
     return `$${Number(n.toPrecision(2))}`;
   };
   // 128,000 is a multiple of 1024 too, so decimal sizes are checked first.
@@ -327,6 +327,11 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (model.modality === 'image') return '/ image';
     return '';
   };
+
+  // One line per variant, as the variant chips and the page's static text show it.
+  const priceSummary = m => (m.modality === 'text' && m.pricing ? `${usd(m.pricing.input)} / ${usd(m.pricing.output)} per 1M`
+    : m.modality === 'video' ? (m.pricing && m.pricing.status === 'quoted' ? `from ${usd(m.pricing.fromPerSecond)} / sec` : 'priced by source')
+      : m.headline && m.headline.value != null ? `${usd(m.headline.value)} ${headlineUnit(m)}` : '');
 
   // The reference clips on a video model page.
   const DRAFT_CLIP = { h: 720, s: 5, a: 'off' };
@@ -2017,6 +2022,16 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const level = censorshipLevel(model);
     return { label: 'Censorship', value: CENSORSHIP_LEVELS.find(([key]) => key === level)[1], sub: CENSORSHIP_SUBS[level] };
   };
+  const censorshipLabel = model => (hasCensorship(model) ? CENSORSHIP_LEVELS.find(([key]) => key === censorshipLevel(model))[1] : null);
+  // Lifecycle in words, for Copy for AI and the page's static text.
+  const statusText = model => {
+    const d = model.deprecation;
+    if (d) {
+      const date = d.removesAt && Number.isFinite(Date.parse(d.removesAt)) ? fmtDate(Math.floor(Date.parse(d.removesAt) / 1000)) : null;
+      return `Deprecated${date ? `, retiring ${date}` : ''}${d.replacement ? `; use ${d.replacement}` : ''}`;
+    }
+    return model.beta ? 'Beta' : 'Stable';
+  };
   const Censorship = ({ model, family, provider }) => {
     const level = censorshipLevel(model);
     const by = upstreamName(model, provider);
@@ -2484,29 +2499,88 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const modelMarkdown = (family, model, provider) => {
-    const p = model.pricing || {};
-    const lines = [`# ${family.name}${model.variant && !['standard', 'generate', 't2v'].includes(model.variant) ? ` (${VARIANT_LABELS[model.variant]})` : ''}`, ''];
-    lines.push(`- Model ID: \`${model.id}\``);
-    if (provider) lines.push(`- Provider: ${provider.name}`);
-    lines.push(`- Type: ${TASK_LABELS[model.task] || model.modality}`);
-    lines.push(`- Privacy: ${PRIVACY[model.privacy] ? PRIVACY[model.privacy].long : model.privacy}`);
-    if (model.text) {
-      lines.push(`- Context: ${tokens(model.text.context)} tokens; max output ${tokens(model.text.maxOutput)}`);
-      lines.push(`- Pricing per 1M tokens: input ${usd(p.input)}, output ${usd(p.output)}${p.cacheRead != null ? `, cached input ${usd(p.cacheRead)}` : ''}`);
-      lines.push(`- Capabilities: ${TEXT_CAPS.filter(c => hasCap(model, c.key)).map(c => c.label).join(', ') || 'text only'}`);
-      if (model.text.reasoning && model.text.reasoning.effort && model.text.reasoning.effort.length) lines.push(`- reasoning_effort: ${model.text.reasoning.effort.join(', ')} (default ${model.text.reasoning.defaultEffort || 'provider default'})`);
-      if (model.text.quantization) lines.push(`- Served precision: ${QUANT_LABELS[model.text.quantization] || model.text.quantization}`);
-    } else if (model.modality === 'video' && p.status === 'quoted') {
-      lines.push(`- Pricing: ${usd(p.fromPerSecond)}–${usd(p.toPerSecond)} per second of video (quote-derived)`);
-    } else if (model.headline && model.headline.value != null) {
-      lines.push(`- Pricing: ${usd(model.headline.value)} ${model.headline.unit}`);
+  // Plain-text key parameters for Copy for AI.
+  const briefParams = model => {
+    const t = model.text;
+    if (t) {
+      const r = t.reasoning;
+      return [
+        `Context window: ${t.context ? `${count(t.context)} tokens` : 'not published'}`,
+        `Max output: ${t.maxOutput ? `${count(t.maxOutput)} tokens` : 'not published'}`,
+        `Capabilities: ${TEXT_CAPS.filter(c => hasCap(model, c.key)).map(c => c.label).join(', ') || 'text only'}`,
+        r && r.effort && r.effort.length ? `reasoning_effort: ${r.effort.join(', ')}${r.defaultEffort ? ` (default ${r.defaultEffort})` : ''}` : null,
+        t.quantization ? `Served precision: ${QUANT_LABELS[t.quantization] || t.quantization}` : null
+      ];
     }
-    const rec = (model.endpoints || []).find(e => e.recommended);
-    if (rec) lines.push(`- Endpoint: ${rec.method} https://api.venice.ai/api/v1${rec.path}`);
-    lines.push(`- Docs: https://docs.venice.ai/models/${family.slug}`);
-    if (model.description || family.description) lines.push('', model.description || family.description);
-    return lines.join('\n');
+    const v = model.video;
+    if (v) {
+      return [
+        v.resolutions && v.resolutions.length ? `Resolutions: ${v.resolutions.map(r => r.label).join(', ')}` : null,
+        v.durations && v.durations.length ? `Durations: ${v.durations.map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ')}` : null,
+        v.aspectRatios && v.aspectRatios.length ? `Aspect ratios: ${v.aspectRatios.join(', ')}` : null,
+        `Audio: ${v.audio === 'native' ? 'always generated' : v.audio === 'optional' ? 'optional ("audio": true)' : 'none'}`,
+        `Inputs: ${['prompt', ...['image', 'reference', 'video', 'audio'].filter(k => v.inputs && v.inputs[k])].join(', ')}`
+      ];
+    }
+    const i = model.image;
+    if (i) {
+      return [
+        i.resolutions && i.resolutions.length ? `Resolutions: ${i.resolutions.join(', ')}${i.defaultResolution ? ` (default ${i.defaultResolution})` : ''}` : null,
+        i.aspectRatios && i.aspectRatios.length ? `Aspect ratios: ${i.aspectRatios.join(', ')}` : null,
+        i.promptLimit ? `Prompt limit: ${count(i.promptLimit)} characters` : null,
+        i.maxInputImages ? `Max input images: ${i.maxInputImages}` : null
+      ];
+    }
+    const a = model.audio || {};
+    if (model.task === 'tts') {
+      return [
+        a.voices && a.voices.length ? `Voices: ${a.voices.length}, e.g. ${a.voices.slice(0, 5).join(', ')}` : null,
+        a.formats && a.formats.length ? `Formats: ${a.formats.join(', ')}` : null
+      ];
+    }
+    if (model.modality === 'audio') {
+      return [
+        a.maxDuration ? `Duration: ${a.minDuration ? `${a.minDuration}-${a.maxDuration}s` : `up to ${a.maxDuration}s`}${a.defaultDuration ? ` (default ${a.defaultDuration}s)` : ''}` : null,
+        a.lyrics ? `Lyrics: ${a.lyricsRequired ? 'required' : 'supported'}` : null,
+        a.formats && a.formats.length ? `Formats: ${a.formats.join(', ')}` : null
+      ];
+    }
+    const e = model.embedding;
+    if (e) return [e.dimensions ? `Dimensions: ${count(e.dimensions)}` : null, e.maxInputTokens ? `Max input: ${count(e.maxInputTokens)} tokens` : null];
+    const d = model.decision;
+    if (d) return [d.maxStateTokens ? `Max state: ${count(d.maxStateTokens)} tokens` : null];
+    return [];
+  };
+
+  // Copy for AI: a self-contained brief of the selected variant, with every
+  // variant, its limits, privacy, censorship, status and a working request.
+  const modelMarkdown = (family, model, models, provider) => {
+    const isPrimary = model.id === family.primary;
+    const censorship = censorshipLabel(model);
+    const endpoint = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
+    const sample = codeSamples(model, endpoint && endpoint.id);
+    const lines = [`# ${family.name} API${isPrimary ? '' : ` (${VARIANT_LABELS[model.variant] || model.variant})`}`, ''];
+    if (model.description || family.description) lines.push(model.description || family.description, '');
+    lines.push(
+      `- Docs: https://docs.venice.ai${modelHref(family, model.id)}`,
+      `- Model ID: \`${model.id}\``,
+      provider ? `- Provider: ${provider.name}` : null,
+      `- Type: ${TASK_LABELS[model.task] || model.modality}`,
+      `- Status: ${statusText(model)}`,
+      `- Privacy: ${PRIVACY[model.privacy] ? `${PRIVACY[model.privacy].long}. ${PRIVACY[model.privacy].desc}` : model.privacy}`,
+      censorship ? `- Censorship: ${censorship}` : null,
+      `- Price: ${priceSummary(model) || 'use the quote endpoint'} (USD)`
+    );
+    lines.push('', '## Variants', '', '| Model ID | Variant | Privacy | Price | Status |', '|---|---|---|---|---|');
+    models.forEach(m => lines.push(`| \`${m.id}\`${m.id === model.id ? ' (this one)' : ''} | ${VARIANT_LABELS[m.variant] || m.variant} | ${PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy} | ${priceSummary(m) || '-'} | ${statusText(m)} |`));
+    const params = briefParams(model).filter(Boolean);
+    if (params.length) lines.push('', '## Key parameters', '', ...params.map(line => `- ${line}`));
+    if (endpoint) {
+      const flow = (model.endpoints || []).some(e => /-retrieve$/.test(e.id));
+      lines.push('', '## Request', '', `${endpoint.method} ${API}${endpoint.path}${flow ? ', then poll the retrieve endpoint with the returned queue_id' : ''}. Authenticate with \`Authorization: Bearer $VENICE_API_KEY\`.`);
+      if (sample && sample.curl) lines.push('', '```bash', sample.curl, '```');
+    }
+    return lines.filter(line => line != null).join('\n');
   };
 
   const ModelPage = ({ data }) => {
@@ -2536,7 +2610,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const recommended = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
     const activeEndpoint = (model.endpoints || []).find(e => e.id === endpointId && e.supported !== false) || recommended;
     const hasRelated = Boolean(related && ((related.versions || []).length || (related.similar || []).length));
-    const faq = data.faq || [];
+    const faq = (data.variantFaq && data.variantFaq[model.id]) || data.faq || [];
     const hasExamples = (model.modality === 'image' || model.modality === 'video') && models.some(m => (m.media || []).length);
     const sections = pageSections(model, { variants: models.length, related: hasRelated, faq: faq.length > 0, examples: hasExamples, capabilities: hasCapabilities(model, models) });
     const activeSection = useScrollSpy(sections.map(([id]) => id));
@@ -2548,14 +2622,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       writeParams({ v: id === family.primary ? null : id });
     };
 
-    const copyForAgents = () => copyText(modelMarkdown(family, model, provider)).then(() => {
+    const copyForAgents = () => copyText(modelMarkdown(family, model, models, provider)).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
-
-    const variantPrice = m => (m.modality === 'text' && m.pricing ? `${usd(m.pricing.input)} / ${usd(m.pricing.output)} per 1M`
-      : m.modality === 'video' ? (m.pricing && m.pricing.status === 'quoted' ? `from ${usd(m.pricing.fromPerSecond)} / sec` : 'priced by source')
-        : m.headline && m.headline.value != null ? `${usd(m.headline.value)} ${headlineUnit(m)}` : '');
 
     return (
       <div className="vx vx-page not-prose">
@@ -2601,11 +2671,12 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               {model.description || family.description ? <p className="vx-description">{model.description || family.description}</p> : null}
 
               {models.length > 1 ? (
-                <div className="vx-variants" role="radiogroup" aria-label="Variant">
+                <div className="vx-variants" role="radiogroup" aria-label="Variant" onKeyDown={rovingKeys(models.map(m => m.id), model.id, selectVariant)}>
                   {models.map(m => (
-                    <button key={m.id} type="button" role="radio" aria-checked={m.id === model.id} className={cls('vx-variant', m.id === model.id && 'is-active')} onClick={() => selectVariant(m.id)}>
+                    <button key={m.id} data-key={m.id} type="button" role="radio" aria-checked={m.id === model.id} tabIndex={m.id === model.id ? 0 : -1}
+                      className={cls('vx-variant', m.id === model.id && 'is-active')} onClick={() => selectVariant(m.id)}>
                       <span className="vx-variant-name">{VARIANT_LABELS[m.variant] || m.variant}</span>
-                      <span className="vx-variant-sub">{[m.privacy !== m.variant && PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : null, variantPrice(m)].filter(Boolean).join(' · ')}</span>
+                      <span className="vx-variant-sub">{[m.privacy !== m.variant && PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : null, priceSummary(m)].filter(Boolean).join(' · ')}</span>
                     </button>
                   ))}
                 </div>
@@ -2714,5 +2785,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  return { ModelExplorer, ModelPage, codeSamples };
+  // scripts/build-model-catalog.js writes each page's static text and FAQ
+  // with these, so they read the same as the page.
+  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, censorshipLabel, statusText };
+
+  return { ModelExplorer, ModelPage, codeSamples, helpers };
 };
