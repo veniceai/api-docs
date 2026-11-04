@@ -214,6 +214,9 @@ function detectProvider(model) {
 
 // Drops null, false, empty strings, arrays and objects. Consumers treat a
 // missing flag as false, which keeps the catalog small enough to fetch eagerly.
+// `supported` is the exception: it defaults to true, so its false is kept,
+// or an endpoint a model can't use (Responses for E2EE) would read as usable.
+const KEEP_FALSE = new Set(['supported']);
 function compact(value) {
   if (Array.isArray(value)) {
     const list = value.map(compact).filter(item => item !== undefined);
@@ -221,7 +224,7 @@ function compact(value) {
   }
   if (value && typeof value === 'object') {
     const entries = Object.entries(value)
-      .map(([key, child]) => [key, compact(child)])
+      .map(([key, child]) => [key, KEEP_FALSE.has(key) && child === false ? false : compact(child)])
       .filter(([, child]) => child !== undefined);
     return entries.length ? Object.fromEntries(entries) : undefined;
   }
@@ -1378,9 +1381,9 @@ function readPageData(slug) {
 // Re-renders pages and the nav group from committed data, for changes to
 // rendering only. The catalog lists the families; descriptions, sources and
 // voices aren't in it, so each family's full record is read back from its
-// page, which the last online build wrote from the same snapshot. Pages drop
-// false flags such as an endpoint's `supported: false`, so endpoints are
-// derived again.
+// page, which the last online build wrote from the same snapshot. Endpoints
+// are derived again, since pages written before `supported: false` was kept
+// lack it.
 async function renderOffline() {
   const catalog = readJson('model-catalog.json', null);
   if (!catalog) throw new Error('--offline needs data/model-catalog.json');
