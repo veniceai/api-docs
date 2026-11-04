@@ -57,7 +57,23 @@ function getQualityGrid(pricing) {
   };
 }
 
+// Sync scripts refuse to replace a committed snapshot with one that lost more
+// than this share of its entries: a partial API or site response looks like
+// mass removal. `--allow-drop` accepts a real one.
+const MAX_SNAPSHOT_DROP = 0.2;
+
+function checkSnapshotDrop(label, previous, next, { allowDrop = process.argv.includes('--allow-drop') } = {}) {
+  if (!previous || next >= previous * (1 - MAX_SNAPSHOT_DROP)) return;
+  const message = `${label} dropped from ${previous} to ${next}, more than ${MAX_SNAPSHOT_DROP * 100}%`;
+  if (allowDrop) {
+    console.warn(`${message}; writing anyway (--allow-drop)`);
+    return;
+  }
+  throw new Error(`${message}. Refusing to overwrite; rerun with --allow-drop if the drop is real.`);
+}
+
 module.exports = {
+  checkSnapshotDrop,
   getRemovalDate,
   isDeprecatedModel,
   isRemovedModel,

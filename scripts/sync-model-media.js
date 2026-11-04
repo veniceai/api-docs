@@ -10,11 +10,15 @@
  *
  * Interim source: the long-term plan is a published samples manifest.
  *
- * Usage: node scripts/sync-model-media.js [--input=<dir with <type>.json files>]
+ * A model page that can't be fetched keeps its models' previous samples, and
+ * the run refuses to write if the sample count drops by more than 20%.
+ *
+ * Usage: node scripts/sync-model-media.js [--input=<dir with <type>.json files>] [--allow-drop]
  */
 
 const fs = require('fs');
 const path = require('path');
+const { checkSnapshotDrop } = require('./model-helpers');
 
 const ROOT = path.join(__dirname, '..');
 const OUTPUT_PATH = path.join(ROOT, 'data', 'model-media.json');
@@ -35,6 +39,7 @@ async function loadMediaModelIds() {
       data = JSON.parse(fs.readFileSync(path.resolve(String(args.input), `${type}.json`), 'utf-8'));
     } else {
       const res = await fetch(`https://api.venice.ai/api/v1/models?type=${type}`);
+      if (!res.ok) throw new Error(`GET /models?type=${type} returned ${res.status}`);
       data = await res.json();
     }
     (data.data || []).forEach(model => ids.push({ id: model.id, type }));
@@ -42,16 +47,32 @@ async function loadMediaModelIds() {
   return ids;
 }
 
+// Resolves to the page text, or null for a 404; throws once retries run out.
 async function fetchText(url) {
+  let failure;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const res = await fetch(url, { headers: { 'user-agent': 'venice-docs-model-media-sync' } });
       if (res.ok) return await res.text();
       if (res.status === 404) return null;
-    } catch {}
+      failure = new Error(`${url} returned ${res.status}`);
+    } catch (error) {
+      failure = error;
+    }
     await new Promise(resolve => setTimeout(resolve, 600 * (attempt + 1)));
   }
-  return null;
+  throw failure;
+}
+
+// Samples must be https and served by venice.ai, since the explorer embeds them.
+function trustedMediaUrl(raw) {
+  try {
+    const url = new URL(raw, SITE);
+    const host = url.hostname;
+    return url.protocol === 'https:' && (host === 'venice.ai' || host.endsWith('.venice.ai')) ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function jsonLdBlocks(html) {
@@ -70,8 +91,9 @@ function jsonLdBlocks(html) {
 function samplesFrom(html) {
   return jsonLdBlocks(html)
     .filter(item => (item['@type'] === 'ImageObject' || item['@type'] === 'VideoObject') && /\/samples\//.test(item.contentUrl || ''))
-    .map(item => {
-      const url = item.contentUrl.startsWith('http') ? item.contentUrl : `${SITE}${item.contentUrl}`;
+    .map(item => ({ item, url: trustedMediaUrl(item.contentUrl) }))
+    .filter(({ url }) => url)
+    .map(({ item, url }) => {
       const file = url.split('/').pop();
       const title = String(item.name || '').split(/\s+[—–-]\s+/).pop() || file;
       const prompt = String(item.description || '').replace(/^.*?Prompt:\s*/, '').trim();
@@ -86,7 +108,19 @@ function samplesFrom(html) {
     });
 }
 
+function readPrevious() {
+  if (!fs.existsSync(OUTPUT_PATH)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(OUTPUT_PATH, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+const sampleCount = models => Object.values(models || {}).reduce((n, samples) => n + samples.length, 0);
+
 async function main() {
+  const previous = readPrevious();
   const mediaModels = await loadMediaModelIds();
   const indexHtml = await fetchText(`${SITE}/models`);
   if (!indexHtml) throw new Error('Could not fetch venice.ai/models');
@@ -95,13 +129,30 @@ async function main() {
 
   const byModel = {};
   const suite = { image: {}, video: {} };
+  const failedPages = [];
   let pagesWithSamples = 0;
   let index = 0;
+
+  // Counts one page's prompts toward the suite.
+  const addToSuite = samples => {
+    for (const sample of samples) {
+      const bucket = suite[sample.type];
+      if (!bucket[sample.prompt]) bucket[sample.prompt] = { id: sample.prompt, title: sample.title, prompt: sample.caption, models: 0 };
+      bucket[sample.prompt].models++;
+    }
+  };
 
   await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
     while (index < slugs.length) {
       const slug = slugs[index++];
-      const html = await fetchText(`${SITE}/models/${slug}`);
+      let html;
+      try {
+        html = await fetchText(`${SITE}/models/${slug}`);
+      } catch (error) {
+        console.warn(`Could not fetch venice.ai/models/${slug}: ${error.message}`);
+        failedPages.push(`${SITE}/models/${slug}`);
+        continue;
+      }
       if (!html) continue;
       const samples = samplesFrom(html);
       if (!samples.length) continue;
@@ -109,11 +160,7 @@ async function main() {
 
       // A page covers every API model ID it mentions (variants table, code samples).
       const covered = mediaModels.filter(m => html.includes(`"${m.id}"`) || html.includes(`>${m.id}<`) || html.includes(`&quot;${m.id}&quot;`));
-      for (const sample of samples) {
-        const bucket = suite[sample.type];
-        if (!bucket[sample.prompt]) bucket[sample.prompt] = { id: sample.prompt, title: sample.title, prompt: sample.caption, models: 0 };
-        bucket[sample.prompt].models++;
-      }
+      addToSuite(samples);
       for (const model of covered) {
         const relevant = samples.filter(s => (model.type === 'video') === (s.type === 'video'));
         if (!relevant.length) continue;
@@ -122,6 +169,21 @@ async function main() {
     }
   }));
 
+  // A page that failed keeps the samples its live models had last time.
+  const liveIds = new Set(mediaModels.map(m => m.id));
+  for (const page of failedPages) {
+    const kept = Object.entries((previous && previous.models) || {})
+      .filter(([id, samples]) => liveIds.has(id) && !byModel[id] && samples.length && samples[0].page === page)
+      .map(([id, samples]) => [id, samples.filter(sample => trustedMediaUrl(sample.url) === sample.url)])
+      .filter(([, samples]) => samples.length);
+    if (!kept.length) continue;
+    kept.forEach(([id, samples]) => { byModel[id] = samples; });
+    const pageSamples = [...new Map(kept.flatMap(([, samples]) => samples).map(s => [`${s.type}:${s.prompt}`, s])).values()];
+    addToSuite(pageSamples);
+    pagesWithSamples++;
+    console.warn(`Kept previous samples for ${kept.map(([id]) => id).join(', ')}`);
+  }
+
   const sortSuite = list => Object.values(list).sort((a, b) => b.models - a.models || a.id.localeCompare(b.id));
   const output = {
     source: `${SITE}/models`,
@@ -129,13 +191,9 @@ async function main() {
     suite: { image: sortSuite(suite.image), video: sortSuite(suite.video) },
     models: Object.fromEntries(Object.keys(byModel).sort().map(id => [id, byModel[id]]))
   };
+  checkSnapshotDrop('Reference sample count', sampleCount(previous && previous.models), sampleCount(output.models));
   // Keep the previous timestamp when nothing changed, so scheduled syncs only commit real changes.
-  if (fs.existsSync(OUTPUT_PATH)) {
-    try {
-      const previous = JSON.parse(fs.readFileSync(OUTPUT_PATH, 'utf-8'));
-      if (JSON.stringify({ ...previous, syncedAt: null }) === JSON.stringify({ ...output, syncedAt: null })) output.syncedAt = previous.syncedAt;
-    } catch {}
-  }
+  if (previous && JSON.stringify({ ...previous, syncedAt: null }) === JSON.stringify({ ...output, syncedAt: null })) output.syncedAt = previous.syncedAt;
   fs.writeFileSync(OUTPUT_PATH, JSON.stringify(output, null, 1) + '\n', 'utf-8');
   console.log(`Pages with samples: ${pagesWithSamples}; models with media: ${Object.keys(byModel).length}`);
   console.log(`Image prompts: ${output.suite.image.map(p => `${p.id}(${p.models})`).join(', ')}`);

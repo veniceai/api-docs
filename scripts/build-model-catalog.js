@@ -11,11 +11,15 @@
  *   data/model-media.json     reference outputs for image and video models
  *   data/model-benchmarks.json, data/model-telemetry.json   future data feeds
  *
- * Usage: node scripts/build-model-catalog.js [--input=<dir with <type>.json files>]
+ * Refuses to overwrite the catalog if the model count drops by more than 20%
+ * against the committed one; --allow-drop accepts a real drop.
+ *
+ * Usage: node scripts/build-model-catalog.js [--input=<dir with <type>.json files>] [--allow-drop]
  */
 
 const fs = require('fs');
 const path = require('path');
+const { checkSnapshotDrop } = require('./model-helpers');
 
 const ROOT = path.join(__dirname, '..');
 const DATA = path.join(ROOT, 'data');
@@ -767,6 +771,8 @@ async function main() {
     mediaSuite: ctx.media.suite || null
   };
 
+  const committed = readJson('model-catalog.json', null);
+  checkSnapshotDrop('Catalog model count', committed && committed.counts && committed.counts.models, models.length);
   writeStamped(path.join(DATA, 'model-catalog.json'), catalog, 'generatedAt', value => JSON.stringify(value));
 
   console.log(`Catalog: ${models.length} models in ${families.length} families`);
