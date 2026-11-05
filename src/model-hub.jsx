@@ -2499,85 +2499,296 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  // Plain-text key parameters for Copy for AI.
-  const briefParams = model => {
+  // Copy for AI: instructions an AI agent can follow to call the selected
+  // variant through the Venice API, built from the same data as the page.
+  const DOCS = 'https://docs.venice.ai';
+  const OPENAI_PATHS = ['/chat/completions', '/responses', '/embeddings', '/audio/speech', '/audio/transcriptions', '/images/generations'];
+  const REFERENCE_PAGES = { '/responses': '/responses/create', '/embeddings': '/embeddings/generate', '/decisions': '/decisions/create', '/images/generations': '/image/generations' };
+  const code = value => `\`${value}\``;
+  const orList = items => (items.length > 1 ? `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}` : items[0] || '');
+  const codeList = values => orList(values.map(code));
+  const whenLeftOut = value => (value != null ? `, ${code(value)} when left out` : '');
+
+  // "3s" to "30s" in 1-second steps reads better than 28 values.
+  const lengthsText = durations => {
+    const { secs, step } = durationSteps(durations);
+    return secs.length > 6 && step
+      ? `${code(`${secs[0]}s`)} to ${code(`${secs[secs.length - 1]}s`)} in ${step}-second steps`
+      : codeList(durations.map(d => d.value));
+  };
+
+  // What an agent needs to call this model: its parameters, the rules that
+  // trip integrations up, and the guides that cover them.
+  const usageNotes = (model, endpointId) => {
     const t = model.text;
     if (t) {
+      const caps = t.caps || {};
       const r = t.reasoning;
-      return [
-        `Context window: ${t.context ? `${count(t.context)} tokens` : 'not published'}`,
-        `Max output: ${t.maxOutput ? `${count(t.maxOutput)} tokens` : 'not published'}`,
-        `Capabilities: ${TEXT_CAPS.filter(c => hasCap(model, c.key)).map(c => c.label).join(', ') || 'text only'}`,
-        r && r.effort && r.effort.length ? `reasoning_effort: ${r.effort.join(', ')}${r.defaultEffort ? ` (default ${r.defaultEffort})` : ''}` : null,
-        t.quantization ? `Served precision: ${QUANT_LABELS[t.quantization] || t.quantization}` : null
-      ];
+      const levels = (r && r.effort) || [];
+      const caching = hasCap(model, 'caching');
+      const context = `Context window: ${t.context ? `${count(t.context)} tokens` : 'not published'}.`;
+      const systemPrompt = `Venice prepends its own system prompt to yours. Send ${code('"venice_parameters": {"include_venice_system_prompt": false}')} to use only yours.`;
+      const cachingRule = caching ? 'Prompt caching is automatic: a repeated prefix bills at the cached input price.' : null;
+      if (endpointId === 'responses') {
+        return {
+          params: [
+            `${code('input')}: a string, or an array of message items with ${code('input_text')}${caps.vision ? ` and ${code('input_image')}` : ''} parts. Put system instructions in the array, not in ${code('instructions')}. ${context}`,
+            t.maxOutput ? `${code('max_output_tokens')}: up to ${count(t.maxOutput)}, reasoning included.` : null,
+            !r ? null : levels.length
+              ? `${code('reasoning')}: ${code('{"effort": "..."}')} with ${codeList(levels)}${whenLeftOut(r.defaultEffort)}.`
+              : 'Reasoning is always on.',
+            caps.tools ? `${code('tools')}: function tools as ${code('{"type": "function", "name": "...", "parameters": {...}}')}.` : 'No function calling, so leave out function tools.',
+            caps.webSearch ? `Web search: the tool ${code('{"type": "web_search"}')} always searches, and ${code('"venice_parameters": {"enable_web_search": "auto"}')} lets the model decide.` : null,
+            `${code('stream')}: ${code('true')} streams typed events.`
+          ],
+          rules: [
+            'This endpoint is stateless: send the whole conversation on every call.',
+            caps.structured ? `For structured output, call ${code('/chat/completions')} with ${code('response_format')}; this endpoint drops it.` : null,
+            systemPrompt,
+            cachingRule
+          ],
+          guides: ['features/responses-api', r && 'features/reasoning-models', caps.tools && 'features/function-calling', caching && 'features/prompt-caching']
+        };
+      }
+      const inputs = [
+        'text',
+        caps.vision ? `images as ${code('image_url')} parts${caps.maxImages ? ` (up to ${caps.maxImages} per message)` : ''}` : null,
+        caps.audioInput ? `audio as ${code('input_audio')} parts` : null,
+        caps.videoInput ? `video as ${code('video_url')} parts` : null
+      ].filter(Boolean);
+      return {
+        params: [
+          `${code('messages')} in the OpenAI format. Input: ${listText(inputs)}. ${context}`,
+          t.maxOutput ? `${code('max_completion_tokens')}: up to ${count(t.maxOutput)}, reasoning included.` : null,
+          !r ? null : levels.length
+            ? `${code('reasoning_effort')}: ${codeList(levels)}${whenLeftOut(r.defaultEffort)}.`
+            : `Reasoning is always on. Send ${code('"reasoning": {"enabled": false}')} to skip it.`,
+          caps.tools ? `${code('tools')} and ${code('tool_choice')} for function calling, in the OpenAI format.` : `No function calling, so leave out ${code('tools')}.`,
+          caps.structured ? `${code('response_format')}: ${code('{"type": "json_schema", "json_schema": {...}}')} for structured output.` : null,
+          caps.webSearch ? `Web search: ${code('"venice_parameters": {"enable_web_search": "auto"}')}, or ${code('"on"')} to always search. Add ${code('"enable_web_citations": true')} to cite sources.` : null,
+          caps.xSearch ? `X search: ${code('"venice_parameters": {"enable_x_search": true}')}.` : null,
+          caps.logprobs ? `${code('logprobs')} and ${code('top_logprobs')} return token probabilities.` : null,
+          `${code('stream')}: ${code('true')} streams server-sent events.`
+        ],
+        rules: [
+          `With an OpenAI SDK, pass ${code('venice_parameters')} through ${code('extra_body')} in Python, or as an extra field of the request in TypeScript.`,
+          systemPrompt,
+          cachingRule,
+          model.privacy === 'e2ee' ? `E2EE requests encrypt the prompt on the client and send attestation headers, on ${code('/chat/completions')} only.` : null
+        ],
+        guides: [r && 'features/reasoning-models', caps.tools && 'features/function-calling', caps.structured && 'features/structured-responses',
+          caps.vision && 'features/vision', caching && 'features/prompt-caching', ['e2ee', 'tee'].includes(model.privacy) && 'features/tee-e2ee-models']
+      };
+    }
+    const i = model.image || {};
+    const blurred = `${code('safe_mode')} is on by default and blurs adult content, flagged by ${code('x-venice-is-blurred')}.`;
+    if (model.task === 'image-generation') {
+      return {
+        params: [
+          `${code('prompt')}${i.promptLimit ? `: up to ${count(i.promptLimit)} characters` : ''}.`,
+          i.aspectRatios && i.aspectRatios.length
+            ? `${code('aspect_ratio')}: ${codeList(i.aspectRatios)}. Send it on every request.`
+            : `${code('width')} and ${code('height')}: up to 1280 each, 1024 when left out.`,
+          i.resolutions && i.resolutions.length ? `${code('resolution')}: ${codeList(i.resolutions)}${whenLeftOut(i.defaultResolution)}.` : null,
+          `${code('format')}: ${codeList(['webp', 'png', 'jpeg'])}. ${code('variants')}: up to 4 images per call.`
+        ],
+        rules: [
+          `The response is JSON with base64 strings in ${code('images')}. Send ${code('"return_binary": true')} for the bytes of a single image instead.`,
+          `A blocked image still returns ${code('200')}, so check ${code('x-venice-is-content-violation')}. Blocked images aren't charged.`,
+          blurred,
+          `${code('POST /images/generations')} serves the same model to an OpenAI SDK, with fewer options.`
+        ],
+        guides: ['media/image-generation']
+      };
+    }
+    if (model.task === 'image-edit') {
+      return {
+        params: [
+          `${code('image')}: the picture to edit, as an http(s) URL, base64 or a data URI. JPEG, PNG, WebP, HEIC or AVIF, under 25 MB.`,
+          `${code('prompt')}: the instruction${i.promptLimit ? `, up to ${count(i.promptLimit)} characters` : ''}. Short and specific works best.`,
+          i.aspectRatios && i.aspectRatios.length ? `${code('aspect_ratio')}: ${codeList(i.aspectRatios)}${i.aspectRatios.includes('auto') ? `, where ${code('auto')} keeps the input's shape` : ''}.` : null,
+          i.resolutions && i.resolutions.length ? `${code('resolution')}: ${codeList(i.resolutions)}.` : null,
+          `${code('output_format')}: ${codeList(['png', 'jpeg', 'webp'])}.`,
+          (i.maxInputImages || 0) > 1 ? `To combine up to ${i.maxInputImages} images, call ${code('POST /image/multi-edit')} with ${code('modelId')} and ${code('images')}, base image first.` : null
+        ],
+        rules: [
+          'The response body is the edited image, not JSON.',
+          `A prompt that breaks the content policy returns ${code('422')} and isn't charged.`,
+          blurred
+        ],
+        guides: ['media/image-editing']
+      };
+    }
+    if (model.task === 'image-upscale') {
+      return {
+        params: [
+          `${code('image')}: raw base64 without a ${code('data:')} prefix; URLs aren't accepted. At least 65,536 pixels and under 25 MB.`,
+          `${code('scale')}: 2 to 4, 2 when left out. The output stays within 4096×4096, so a large input gets a lower scale.`,
+          `${code('creativity')}: 0 to 0.02, how much detail the upscaler adds.`
+        ],
+        rules: ['The response body is a PNG.', 'A scale above 2 bills at the 4x rate.'],
+        guides: ['media/image-upscaling']
+      };
     }
     const v = model.video;
     if (v) {
-      return [
-        v.resolutions && v.resolutions.length ? `Resolutions: ${v.resolutions.map(r => r.label).join(', ')}` : null,
-        v.durations && v.durations.length ? `Durations: ${durationText(v.durations)}` : null,
-        v.aspectRatios && v.aspectRatios.length ? `Aspect ratios: ${v.aspectRatios.join(', ')}` : null,
-        `Audio: ${v.audio === 'native' ? 'always generated' : v.audio === 'optional' ? 'optional ("audio": true)' : 'none'}`,
-        `Inputs: ${['prompt', ...['image', 'reference', 'video', 'audio'].filter(k => v.inputs && v.inputs[k])].join(', ')}`
-      ];
-    }
-    const i = model.image;
-    if (i) {
-      return [
-        i.resolutions && i.resolutions.length ? `Resolutions: ${i.resolutions.join(', ')}${i.defaultResolution ? ` (default ${i.defaultResolution})` : ''}` : null,
-        i.aspectRatios && i.aspectRatios.length ? `Aspect ratios: ${i.aspectRatios.join(', ')}` : null,
-        i.promptLimit ? `Prompt limit: ${count(i.promptLimit)} characters` : null,
-        i.maxInputImages ? `Max input images: ${i.maxInputImages}` : null
-      ];
+      const inputs = v.inputs || {};
+      const timed = (v.durations || []).filter(d => d.seconds);
+      return {
+        params: [
+          `${code('prompt')}: what to generate${inputs.video ? ' or change' : ''}.`,
+          timed.length ? `${code('duration')}: ${lengthsText(timed)}.` : (v.durations || []).length ? `Leave out ${code('duration')}: the length follows the source.` : null,
+          v.mode === 'upscale' ? `${code('upscale_factor')}: ${codeList(['1', '2', '4'])}, where 1 only enhances.`
+            : v.resolutions && v.resolutions.length ? `${code('resolution')}: ${codeList(v.resolutions.map(res => res.value))}.` : null,
+          v.aspectRatios && v.aspectRatios.length ? `${code('aspect_ratio')}: ${codeList(v.aspectRatios)}.` : null,
+          v.audio === 'native' ? 'Audio is always generated.' : v.audio === 'optional' ? `${code('audio')}: ${code('true')} adds generated audio.` : null,
+          !inputs.image ? null : ['flf', 'transition'].includes(v.mode)
+            ? `${code('image_url')} and ${code('end_image_url')}: the first and last frames, as http(s) or data URLs.`
+            : `${code('image_url')}: the first frame, as an http(s) or data URL.`,
+          inputs.reference ? `${code('reference_image_urls')}: images of the subjects or style to keep.` : null,
+          inputs.video ? `${code('video_url')}: the source video.` : null,
+          inputs.audio ? `${code('audio_url')}: audio for the video to follow.` : null
+        ],
+        rules: [
+          `Generation is asynchronous. ${code('POST /video/quote')} with the same body returns the price without charging, and ${code('POST /video/queue')} charges and returns a ${code('queue_id')}.`,
+          `Poll ${code('POST /video/retrieve')} with ${code('model')} and ${code('queue_id')} every few seconds. It returns JSON with ${code('"status": "PROCESSING"')} while the job runs and the MP4 when it's done. If the queue response has a ${code('download_url')}, download the video from there once the status is ${code('COMPLETED')}.`,
+          `A job can still fail after it's queued: ${code('/video/retrieve')} then returns an error, and the charge is normally refunded. A ${code('429')} while polling is transient.`,
+          `Send ${code('"delete_media_on_completion": true')} with the last retrieve to delete the stored video. Queue IDs expire after 24 hours.`
+        ],
+        guides: ['media/video-generation', inputs.reference && 'media/reference-to-video', v.mode === 'upscale' && 'media/video-upscaling']
+      };
     }
     const a = model.audio || {};
-    if (model.task === 'tts') {
-      return [
-        a.voices && a.voices.length ? `Voices: ${a.voices.length}, e.g. ${a.voices.slice(0, 5).join(', ')}` : null,
-        a.formats && a.formats.length ? `Formats: ${a.formats.join(', ')}` : null
-      ];
+    if (model.task === 'tts' && !a.async) {
+      const voices = a.voices || [];
+      const voiceCount = voices.length || a.voiceCount;
+      return {
+        params: [
+          `${code('input')}: the text to speak.`,
+          voiceCount ? `${code('voice')}: one of ${count(voiceCount)} voices${voices.length ? `, such as ${listText(voices.slice(0, 4).map(code))}` : ''}. The model page lists them all.` : null,
+          a.formats && a.formats.length ? `${code('response_format')}: ${codeList(a.formats)}${whenLeftOut(a.defaultFormat)}.` : null
+        ],
+        rules: ['The response body is the audio.'],
+        guides: ['media/text-to-speech']
+      };
+    }
+    if (model.task === 'stt') {
+      return {
+        params: [
+          `${code('file')}: the recording, as multipart form data. WAV, FLAC, M4A, AAC, MP4, MP3, OGG or WebM, up to 25 MB.`,
+          `${code('response_format')}: ${codeList(['json', 'text'])}.`
+        ],
+        rules: ['Billed per second of audio.'],
+        guides: ['media/speech-to-text']
+      };
     }
     if (model.modality === 'audio') {
-      return [
-        a.maxDuration ? `Duration: ${a.minDuration ? `${a.minDuration}-${a.maxDuration}s` : `up to ${a.maxDuration}s`}${a.defaultDuration ? ` (default ${a.defaultDuration}s)` : ''}` : null,
-        a.lyrics ? `Lyrics: ${a.lyricsRequired ? 'required' : 'supported'}` : null,
-        a.formats && a.formats.length ? `Formats: ${a.formats.join(', ')}` : null
-      ];
+      return {
+        params: [
+          `${code('prompt')}${a.promptLimit ? `: up to ${count(a.promptLimit)} characters` : ''}.`,
+          a.maxDuration ? `${code('duration_seconds')}: ${a.minDuration || 1} to ${a.maxDuration}${a.defaultDuration ? `, ${a.defaultDuration} when left out` : ''}.` : null,
+          a.lyrics ? `${code('lyrics_prompt')}: the lyrics${a.lyricsRequired ? ', required' : ''}.` : null,
+          a.formats && a.formats.length ? `Output: ${codeList(a.formats)}.` : null
+        ],
+        rules: [`Generation is asynchronous. ${code('POST /audio/quote')} returns the price, ${code('POST /audio/queue')} returns a ${code('queue_id')}, and ${code('POST /audio/retrieve')} with ${code('model')} and ${code('queue_id')} returns the audio once it's ready.`],
+        guides: [model.task === 'tts' ? 'media/text-to-speech' : 'media/music-and-sound-effects']
+      };
     }
     const e = model.embedding;
-    if (e) return [e.dimensions ? `Dimensions: ${count(e.dimensions)}` : null, e.maxInputTokens ? `Max input: ${count(e.maxInputTokens)} tokens` : null];
+    if (e) {
+      return {
+        params: [
+          `${code('input')}: a string or an array of strings${e.maxInputTokens ? `, up to ${count(e.maxInputTokens)} tokens each` : ''}.`,
+          e.dimensions ? `Vectors have ${count(e.dimensions)} dimensions.` : null,
+          `${code('encoding_format')}: ${codeList(['float', 'base64'])}.`
+        ],
+        rules: [],
+        guides: ['features/embeddings']
+      };
+    }
     const d = model.decision;
-    if (d) return [d.maxStateTokens ? `Max state: ${count(d.maxStateTokens)} tokens` : null];
-    return [];
+    if (d) {
+      return {
+        params: [
+          `${code('state')}: the text to judge${d.maxStateTokens ? `, up to ${count(d.maxStateTokens)} tokens` : ''}.`,
+          `${code('questions')}: named questions, each typed ${codeList(['noul', 'choice', 'score'])}: a yes/no probability, a pick from options, or a score on a rubric.`,
+          d.maxTotalTokens ? `State and questions together: up to ${count(d.maxTotalTokens)} tokens.` : null
+        ],
+        rules: [],
+        guides: ['features/decisions']
+      };
+    }
+    return { params: [], rules: [], guides: [] };
   };
 
-  // Copy for AI: a self-contained brief of the selected variant, with every
-  // variant, its limits, privacy, status and a working request.
-  const modelMarkdown = (family, model, models, provider) => {
-    const isPrimary = model.id === family.primary;
-    const endpoint = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
-    const sample = codeSamples(model, endpoint && endpoint.id);
-    const lines = [`# ${family.name} API${isPrimary ? '' : ` (${VARIANT_LABELS[model.variant] || model.variant})`}`, ''];
-    if (model.description || family.description) lines.push(model.description || family.description, '');
-    lines.push(
-      `- Docs: https://docs.venice.ai${modelHref(family, model.id)}`,
-      `- Model ID: \`${model.id}\``,
-      provider ? `- Provider: ${provider.name}` : null,
-      `- Type: ${TASK_LABELS[model.task] || model.modality}`,
-      `- Status: ${statusText(model)}`,
-      `- Privacy: ${PRIVACY[model.privacy] ? `${PRIVACY[model.privacy].long}. ${PRIVACY[model.privacy].desc}` : model.privacy}`,
-      `- Price: ${priceSummary(model) || 'use the quote endpoint'} (USD)`
-    );
-    lines.push('', '## Variants', '', '| Model ID | Variant | Privacy | Price | Status |', '|---|---|---|---|---|');
-    models.forEach(m => lines.push(`| \`${m.id}\`${m.id === model.id ? ' (this one)' : ''} | ${VARIANT_LABELS[m.variant] || m.variant} | ${PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy} | ${priceSummary(m) || '-'} | ${statusText(m)} |`));
-    const params = briefParams(model).filter(Boolean);
-    if (params.length) lines.push('', '## Key parameters', '', ...params.map(line => `- ${line}`));
-    if (endpoint) {
-      const flow = (model.endpoints || []).some(e => /-retrieve$/.test(e.id));
-      lines.push('', '## Request', '', `${endpoint.method} ${API}${endpoint.path}${flow ? ', then poll the retrieve endpoint with the returned queue_id' : ''}. Authenticate with \`Authorization: Bearer $VENICE_API_KEY\`.`);
-      if (sample && sample.curl) lines.push('', '```bash', sample.curl, '```');
+  const priceText = model => {
+    const p = model.pricing || {};
+    if (model.modality === 'text') {
+      return `${usd(p.input)} per 1M input tokens and ${usd(p.output)} per 1M output tokens${p.cacheRead != null ? `, ${usd(p.cacheRead)} per 1M cached input tokens` : ''}${
+        p.extended ? `. Above ${tokens(p.extended.threshold)} tokens of context: ${usd(p.extended.input)} and ${usd(p.extended.output)}` : ''}.`;
     }
+    const summary = priceSummary(model);
+    const sentence = summary.charAt(0).toUpperCase() + summary.slice(1);
+    if (model.modality === 'video') {
+      return p.status === 'quoted'
+        ? `${sentence}, set by resolution, length and audio. ${code('POST /video/quote')} returns the exact price of a request.`
+        : `Set by the source video's length. ${code('POST /video/quote')} returns the price of a request.`;
+    }
+    return summary ? `${sentence}.` : 'See the model page.';
+  };
+
+  const recommendedEndpoint = m => (m.endpoints || []).find(e => e.recommended) || (m.endpoints || [])[0];
+
+  // How another variant of the family differs from the one being copied.
+  const variantNote = (m, model) => {
+    const endpoint = recommendedEndpoint(m);
+    const current = recommendedEndpoint(model);
+    const takes = key => m.video && m.video.inputs && m.video.inputs[key] && !(model.video && model.video.inputs && model.video.inputs[key]);
+    const labels = [...new Set([VARIANT_LABELS[m.variant] || m.variant, PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy])];
+    return [
+      `${labels.join(', ')}, ${priceSummary(m) || 'priced on request'}.`,
+      endpoint && (!current || endpoint.path !== current.path) ? `Endpoint: ${code(`${endpoint.method} ${endpoint.path}`)}.` : null,
+      m.privacy === 'e2ee' ? `Needs the E2EE flow on ${code('/chat/completions')}.` : null,
+      takes('image') ? `Takes ${code('image_url')}.` : null,
+      takes('reference') ? `Takes ${code('reference_image_urls')}.` : null,
+      takes('video') ? `Takes ${code('video_url')}.` : null
+    ].filter(Boolean).join(' ');
+  };
+
+  const usageBrief = (family, model, models) => {
+    const endpoint = recommendedEndpoint(model);
+    const sample = endpoint ? codeSamples(model, endpoint.id) : null;
+    const notes = usageNotes(model, endpoint && endpoint.id);
+    const status = statusText(model);
+    const others = models.filter(m => m.id !== model.id);
+    const lines = [`# Use ${family.name} through the Venice API`, '', `Instructions an AI agent or a developer can follow to call ${code(model.id)}.`];
+    if (model.description || family.description) lines.push('', model.description || family.description);
+    lines.push(
+      '', '## Request', '',
+      `- Model ID: ${code(model.id)}${models.length > 1 ? `, the ${VARIANT_LABELS[model.variant] || model.variant} variant` : ''}`,
+      endpoint ? `- Endpoint: ${code(`${endpoint.method} ${API}${endpoint.path}`)}${OPENAI_PATHS.includes(endpoint.path) ? `. It's OpenAI-compatible: an OpenAI SDK works with the base URL ${code(API)}.` : ''}` : null,
+      endpoint && endpoint.recommendation ? `- ${endpoint.recommendation}` : null,
+      `- Auth: ${code('Authorization: Bearer $VENICE_API_KEY')}, with a key from https://venice.ai/settings/api`
+    );
+    if (sample && sample.python) lines.push('', '```python', sample.python, '```');
+    const params = notes.params.filter(Boolean);
+    if (params.length) lines.push('', '## Parameters', '', ...params.map(line => `- ${line}`));
+    const rules = [
+      ...notes.rules,
+      PRIVACY[model.privacy] ? `Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      status !== 'Stable' ? `Status: ${status}.` : null,
+      `Retry ${code('429')} and ${code('503')} with exponential backoff, honoring ${code('Retry-After')}. Any other ${code('4xx')} means the request needs fixing.`
+    ].filter(Boolean);
+    lines.push('', '## Rules', '', ...rules.map(line => `- ${line}`));
+    lines.push('', '## Price', '', `- ${priceText(model)}`);
+    if (others.length) lines.push('', '## Other variants', '', ...others.map(m => `- ${code(m.id)}: ${variantNote(m, model)}`));
+    lines.push(
+      '', '## Reference', '',
+      `- Model page: ${DOCS}${modelHref(family, model.id)}`,
+      endpoint ? `- API reference: ${DOCS}/api-reference/endpoint${REFERENCE_PAGES[endpoint.path] || endpoint.path}` : null,
+      ...[...new Set(notes.guides.filter(Boolean))].map(guide => `- Guide: ${DOCS}/guides/${guide}`),
+      `- Live limits and prices: ${code(`GET ${API}/models?type=${model.type}`)}, the entry with ${code(`"id": "${model.id}"`)}`
+    );
     return lines.filter(line => line != null).join('\n');
   };
 
@@ -2619,7 +2830,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       writeParams({ v: id === family.primary ? null : id });
     };
 
-    const copyForAgents = () => copyText(modelMarkdown(family, model, models, provider)).then(() => {
+    const copyForAgents = () => copyText(usageBrief(family, model, models)).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -2640,7 +2851,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 ))}
               </nav>
               <div className="vx-side-actions">
-                <button type="button" className="vx-side-link" onClick={copyForAgents} title="Copy a Markdown spec for an AI agent or README">
+                <button type="button" className="vx-side-link" onClick={copyForAgents} title="Copy instructions for an AI agent to call this model through the Venice API">
                   <span aria-live="polite">{copied ? 'Copied' : 'Copy for AI'}</span>
                 </button>
                 {safeUrl(model.source) ? <a className="vx-side-link" href={safeUrl(model.source)} target="_blank" rel="noopener noreferrer">Source<Icon name="external" size={12} /></a> : null}
