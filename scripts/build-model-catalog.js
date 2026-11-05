@@ -133,6 +133,7 @@ const RESOLUTION_HEIGHTS = {
 
 // 150 words per minute ~ 825 characters, the conversion Artificial Analysis uses.
 const TTS_CHARS_PER_MINUTE = 825;
+const QUALITY_ORDER = ['low', 'medium', 'high'];
 
 // ---------------------------------------------------------------- inputs
 
@@ -369,8 +370,14 @@ function textPricing(pricing) {
 }
 
 function imagePricing(pricing, constraints, task) {
+  const byQuality = pricing.quality
+    ? Object.fromEntries(Object.entries(pricing.quality).map(([res, levels]) => [res, Object.fromEntries(Object.entries(levels).map(([level, node]) => [level, usd(node)]))]))
+    : null;
+  const defaultQuality = byQuality ? constraints.defaultQuality || null : null;
+  // A request without a quality bills the default tier, even where
+  // pricing.resolutions lists another price (GPT Image 2's is a cent higher).
   const byResolution = pricing.resolutions
-    ? Object.fromEntries(Object.entries(pricing.resolutions).map(([res, node]) => [res, usd(node)]))
+    ? Object.fromEntries(Object.entries(pricing.resolutions).map(([res, node]) => [res, byQuality?.[res]?.[defaultQuality] ?? usd(node)]))
     : null;
   const defaultResolution = constraints.defaultResolution || (byResolution ? Object.keys(byResolution)[0] : null);
   const upscale = pricing.upscale || (task === 'image-upscale' ? pricing : null);
@@ -382,6 +389,8 @@ function imagePricing(pricing, constraints, task) {
     defaultResolution,
     byResolution,
     edit: usd(pricing.inpaint),
+    byQuality,
+    defaultQuality,
     extraInputImage: usd(pricing.inputImages?.additional),
     upscale: upscale && (upscale['2x'] || upscale['4x']) ? { '2x': usd(upscale['2x']), '4x': usd(upscale['4x']) } : null
   };
@@ -995,6 +1004,14 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
       lines.push(`| ${d.seconds ? `${d.seconds}s` : d.value} | ${res.map(r => money(quotes[`${r.value}|${d.value}|${audio}`]) || '—').join(' | ')} |`);
     }
     if (table.note) lines.push('', table.note);
+  }
+  const byQuality = primary.pricing?.byQuality;
+  if (byQuality) {
+    const resolutions = Object.keys(byQuality);
+    const levels = QUALITY_ORDER.filter(level => resolutions.some(res => byQuality[res][level] != null));
+    const fallback = primary.pricing.defaultQuality ? `, \`${primary.pricing.defaultQuality}\` when left out` : '';
+    lines.push('', `Prices by \`quality\` for \`${primary.id}\`${fallback}:`, '', `| Quality | ${resolutions.join(' | ')} |`, `|---|${resolutions.map(() => '---').join('|')}|`);
+    for (const level of levels) lines.push(`| ${level} | ${resolutions.map(res => money(byQuality[res][level]) || '—').join(' | ')} |`);
   }
 
   const tierLabels = uniq(variants.map(v => privacyLabel(v.privacy))).join(', ');
