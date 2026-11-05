@@ -7,7 +7,8 @@
  * to "Variable" when that failed. This script moves the work to build time:
  * every resolution x duration x audio combination is quoted once and cached in
  * data/video-pricing.json, keyed by a fingerprint of the model's constraints.
- * Unchanged models are only re-quoted after --max-age-days.
+ * Each run also checks two prices per model and quotes a model again when they
+ * have moved; otherwise unchanged models are re-quoted after --max-age-days.
  *
  * Usage:
  *   node scripts/quote-video-pricing.js [--force] [--max-age-days=7]
@@ -185,6 +186,23 @@ async function quoteModel(model) {
   };
 }
 
+// A price can change while a model's options stay the same, so each run
+// quotes the cheapest and priciest resolution at the shortest length, and a
+// model is quoted again in full when either has moved.
+async function priceMoved(model, entry) {
+  const c = model.model_spec?.constraints || {};
+  const resolutions = Array.isArray(c.resolutions) && c.resolutions.length ? c.resolutions : [null];
+  const duration = (Array.isArray(c.durations) ? c.durations : []).find(d => /^\d+s$/.test(String(d))) || null;
+  const audio = c.audio_configurable ? false : undefined;
+  for (const resolution of [...new Set([resolutions[0], resolutions[resolutions.length - 1]])]) {
+    const key = [resolution || '-', duration || '-', audio === undefined ? (c.audio ? 'on' : 'off') : 'off'].join('|');
+    if (entry.quotes?.[key] == null) continue;
+    const result = await quoteOnce(model, { resolution, duration, audio, aspectRatio: entry.aspectRatio });
+    if (typeof result.quote === 'number' && Math.abs(result.quote - entry.quotes[key]) > 1e-9) return true;
+  }
+  return false;
+}
+
 async function runPool(items, worker) {
   let index = 0;
   const runners = Array.from({ length: Math.min(CONCURRENCY, items.length) }, async () => {
@@ -213,6 +231,14 @@ async function main() {
     if (entry.errorCount) return true;
     return now - new Date(entry.quotedAt).getTime() > MAX_AGE_MS;
   });
+
+  const current = models.filter(model => !stale.includes(model) && !next[model.id].inputDependent);
+  const moved = [];
+  await runPool(current, async model => {
+    if (await priceMoved(model, next[model.id])) moved.push(model);
+  });
+  if (moved.length) console.log(`Prices moved for ${moved.map(m => m.id).join(', ')}`);
+  stale.push(...moved);
 
   console.log(`Video models: ${models.length}, quoting ${stale.length}`);
   let done = 0;

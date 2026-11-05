@@ -1034,7 +1034,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         filters.dur ? { key: 'clip', label: `${filters.dur}s clip`, align: 'right', hide: 'sm', render: row => (row.offer.clip != null
           ? <PriceCell value={row.offer.clip} unit={row.offer.seconds !== Number(filters.dur) ? `${row.offer.seconds}s` : null} />
           : <span className="vx-muted">—</span>) } : null,
-        { key: 'max', label: 'Max', align: 'right', hide: 'lg', render: row => <span className="vx-num">{heightLabel(maxVideoHeight(row.display))} · {maxVideoSeconds(row.display) || '—'}s</span> },
+        { key: 'max', label: 'Max', align: 'right', hide: 'lg', render: row => <span className="vx-num">{heightLabel(maxVideoHeight(row.display))} · {maxVideoSeconds(row.display) ? `${maxVideoSeconds(row.display)}s` : 'source'}</span> },
         { key: 'audio', label: 'Audio', hide: 'md', render: row => {
           const a = row.display.video && row.display.video.audio;
           return <span className={a === 'native' || a === 'optional' ? undefined : 'vx-muted'}>{a === 'native' ? 'Native' : a === 'optional' ? 'Optional' : 'None'}</span>;
@@ -1085,7 +1085,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   const keySpec = model => {
     if (model.modality === 'text' && model.text) return `${tokens(model.text.context)} context`;
     if (model.modality === 'image') return imageMaxRes(model) ? `Up to ${imageMaxRes(model)}` : VARIANT_LABELS[model.variant] || '';
-    if (model.modality === 'video') return `${heightLabel(maxVideoHeight(model))} · up to ${maxVideoSeconds(model)}s`;
+    if (model.modality === 'video') return `${heightLabel(maxVideoHeight(model))} · ${maxVideoSeconds(model) ? `up to ${maxVideoSeconds(model)}s` : 'source length'}`;
     if (model.task === 'tts') return `${(model.audio && model.audio.voiceCount) || 0} voices`;
     if (model.modality === 'embedding' && model.embedding) return `${model.embedding.dimensions || '—'} dims`;
     return TASK_LABELS[model.task] || '';
@@ -2278,16 +2278,43 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const resolutions = p.byResolution ? Object.keys(p.byResolution) : [];
     const top = resolutions[resolutions.length - 1];
     const at = (row, res) => (row.byResolution ? row.byResolution[res] : res === resolutions[0] ? row.perImage : null);
+    const qualityRes = p.byQuality ? Object.keys(p.byQuality) : [];
+    const levels = ['low', 'medium', 'high'].filter(level => qualityRes.some(res => p.byQuality[res][level] != null));
     return (
       <>
         <PriceCards items={[
           ...(p.byResolution
-            ? Object.entries(p.byResolution).map(([res, value]) => ({ label: `${res} ${verb}`, value: usd(value) }))
+            ? Object.entries(p.byResolution).map(([res, value]) => ({ label: `${res} ${verb}`, value: usd(value), sub: p.defaultQuality ? `${p.defaultQuality} quality` : null }))
             : [{ label: model.task === 'image-edit' ? 'Edit' : model.task === 'image-upscale' ? '2x upscale' : 'Per image', value: usd(p.perImage) }]),
           model.task === 'image-upscale' && p.upscale && p.upscale['4x'] != null ? { label: '4x upscale', value: usd(p.upscale['4x']) } : null,
           editPrice != null ? { label: 'Edit', value: usd(editPrice) } : null,
           p.extraInputImage != null ? { label: 'Extra input image', value: usd(p.extraInputImage) } : null
         ]} />
+        {levels.length ? (
+          <>
+            <div className="vx-table-wrap vx-ruled">
+              <table className="vx-dtable">
+                <caption className="vx-sr-only">Price per {verb === 'edit' ? 'edit' : 'image'} by quality and resolution</caption>
+                <thead>
+                  <tr><th>Quality</th>{qualityRes.map(res => <th key={res} className="vx-al-right">{res}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {levels.map(level => (
+                    <tr key={level}>
+                      <th scope="row">{level.charAt(0).toUpperCase() + level.slice(1)}{level === p.defaultQuality ? <span className="vx-muted"> · default</span> : null}</th>
+                      {qualityRes.map(res => <td key={res} className="vx-al-right vx-num">{usd(p.byQuality[res][level])}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="vx-footnote">
+              {model.task === 'image-edit'
+                ? <><code>POST /image/edit</code> runs at the default quality. To pick another, send <code>quality</code> to <code>POST /image/multi-edit</code>.</>
+                : <>Send <code>quality</code> to pick a tier{p.defaultQuality ? `; requests without it run at ${p.defaultQuality}` : ''}.</>}
+            </p>
+          </>
+        ) : null}
         {model.task === 'image-generation' && resolutions.length ? (
           <SimilarPrices
             columns={[...resolutions.map(res => ({ label: res, get: row => at(row, res) })), { label: 'Edit', get: row => row.edit }]}
