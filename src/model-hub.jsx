@@ -211,6 +211,20 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (secs.length > 6 && step) return `${secs[0]}–${secs[secs.length - 1]}s, ${step === 1 ? 'any whole second' : `in ${step}s steps`}`;
     return (durations || []).map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ');
   };
+  const upperFirst = text => text.charAt(0).toUpperCase() + text.slice(1);
+  // Upscalers take no prompt. Seedance's edit model reads its source clip
+  // from reference_video_urls instead of video_url.
+  const videoInputList = video => {
+    const inputs = (video && video.inputs) || {};
+    return [
+      video && video.mode !== 'upscale' && 'prompt',
+      inputs.image && 'image',
+      inputs.endImage && 'end frame',
+      inputs.reference && 'reference images',
+      (inputs.video || inputs.referenceVideo) && 'video',
+      inputs.audio && 'audio'
+    ].filter(Boolean);
+  };
   // Price rows for the video calculator and the static text when a model has
   // more than six lengths: the shortest, 5s, 10s and the longest, led by a
   // per-second row when every length costs the same rate per second.
@@ -1605,6 +1619,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }
     if (model.modality === 'video') {
       const video = model.video || {};
+      const inputs = video.inputs || {};
       const dur = (video.durations || []).find(d => d.seconds === 5) || (video.durations || [])[0];
       const res = (video.resolutions || []).find(r => r.height === 720) || (video.resolutions || [])[0];
       const fields = [
@@ -1614,9 +1629,11 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         res ? `"resolution": "${res.value}"` : null,
         video.aspectRatios && video.aspectRatios.length ? `"aspect_ratio": "${video.aspectRatios[0]}"` : null,
         video.audio === 'optional' ? '"audio": true' : null,
-        video.inputs && video.inputs.image ? '"image_url": "https://example.com/first-frame.jpg"' : null,
-        video.inputs && video.inputs.reference ? '"reference_image_urls": ["https://example.com/character.jpg"]' : null,
-        video.inputs && video.inputs.video ? '"video_url": "https://example.com/source.mp4"' : null
+        inputs.image ? `"image_url": "https://example.com/${video.mode === 'motion' ? 'character' : 'first-frame'}.jpg"` : null,
+        inputs.endImage ? '"end_image_url": "https://example.com/last-frame.jpg"' : null,
+        inputs.reference ? '"reference_image_urls": ["https://example.com/character.jpg"]' : null,
+        inputs.video ? '"video_url": "https://example.com/source.mp4"' : null,
+        inputs.referenceVideo ? '"reference_video_urls": ["https://example.com/source.mp4"]' : null
       ].filter(Boolean);
       const pyFields = fields.map(f => f.replace(/": true/, '": True'));
       return {
@@ -1981,10 +1998,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }
     if (model.modality === 'video') {
       const video = model.video || {};
-      const inputs = video.inputs || {};
       return [
         ['Mode', VARIANT_LABELS[model.variant] || model.variant],
-        ['Inputs', ['Prompt', inputs.image && 'image', inputs.reference && 'reference images', inputs.video && 'video', inputs.audio && 'audio'].filter(Boolean).join(', ')],
+        ['Inputs', upperFirst(videoInputList(video).join(', '))],
         video.resolutions && video.resolutions.length ? ['Resolutions', video.resolutions.map(r => r.label).join(', ')] : null,
         video.durations && video.durations.length ? ['Durations', durationText(video.durations)] : null,
         video.aspectRatios && video.aspectRatios.length ? ['Aspect ratios', ratioShapes(video.aspectRatios)] : null,
@@ -2480,7 +2496,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 ) : null}
                 {isVideo ? (
                   <>
-                    <td className="vx-hide-md">{['Prompt', ...['image', 'reference', 'video'].filter(k => m.video && m.video.inputs && m.video.inputs[k]).map(k => k[0].toUpperCase() + k.slice(1))].join(', ')}</td>
+                    <td className="vx-hide-md">{videoInputList(m.video).map(upperFirst).join(', ')}</td>
                     <td className="vx-al-right vx-num">{m.pricing && m.pricing.status === 'quoted' ? `${usd(m.pricing.fromPerSecond)} / sec` : 'By source'}</td>
                     <td className="vx-al-right vx-num vx-hide-sm">{heightLabel(maxVideoHeight(m))}</td>
                   </>
@@ -2546,7 +2562,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         v.durations && v.durations.length ? `Durations: ${durationText(v.durations)}` : null,
         v.aspectRatios && v.aspectRatios.length ? `Aspect ratios: ${v.aspectRatios.join(', ')}` : null,
         `Audio: ${v.audio === 'native' ? 'always generated' : v.audio === 'optional' ? 'optional ("audio": true)' : 'none'}`,
-        `Inputs: ${['prompt', ...['image', 'reference', 'video', 'audio'].filter(k => v.inputs && v.inputs[k])].join(', ')}`
+        `Inputs: ${videoInputList(v).join(', ')}`
       ];
     }
     const i = model.image;
