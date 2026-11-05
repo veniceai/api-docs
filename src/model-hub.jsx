@@ -1567,6 +1567,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     chat: 'Explain TEE attestation in two sentences.',
     image: 'A retro travel poster with the bold headline "VENICE" in large condensed serif type, sunset color palette',
     video: 'Slow aerial drone shot over a misty mountain valley at golden hour',
+    videoEdit: 'Turn the scene into a snowy winter morning',
+    videoExtend: 'Continue the drone shot as it rises above the clouds into clear sky',
+    videoRecast: 'Recast the person in the video as the person in the reference image',
+    videoMotion: 'The character follows the movements in the source video',
     music: 'Warm lo-fi hip hop beat with soft piano and vinyl crackle',
     sfx: 'Heavy wooden door creaking open in a stone hallway'
   };
@@ -1623,13 +1627,23 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (model.modality === 'video') {
       const video = model.video || {};
       const inputs = video.inputs || {};
-      const dur = (video.durations || []).find(d => d.seconds === 5) || (video.durations || [])[0];
-      const res = (video.resolutions || []).find(r => r.height === 720) || (video.resolutions || [])[0];
+      const upscale = video.mode === 'upscale';
+      // Source-length models list only "Auto", which /video/queue rejects; they take no duration.
+      const timed = (video.durations || []).filter(d => d.seconds);
+      const dur = timed.find(d => d.seconds === 5) || timed[0];
+      const res = upscale ? null : (video.resolutions || []).find(r => r.height === 720) || (video.resolutions || [])[0];
+      const prompt = upscale ? null
+        : video.mode === 'motion' ? VARIANT_PROMPTS.videoMotion
+        : video.mode !== 'v2v' ? VARIANT_PROMPTS.video
+        : inputs.reference ? VARIANT_PROMPTS.videoRecast
+        : /extend/.test(id) ? VARIANT_PROMPTS.videoExtend
+        : VARIANT_PROMPTS.videoEdit;
       const fields = [
         `"model": "${id}"`,
-        `"prompt": "${VARIANT_PROMPTS.video}"`,
+        prompt ? `"prompt": "${prompt}"` : null,
         dur ? `"duration": "${dur.value}"` : null,
         res ? `"resolution": "${res.value}"` : null,
+        upscale ? '"upscale_factor": 2' : null,
         video.aspectRatios && video.aspectRatios.length ? `"aspect_ratio": "${video.aspectRatios[0]}"` : null,
         video.audio === 'optional' ? '"audio": true' : null,
         inputs.image ? `"image_url": "https://example.com/${video.mode === 'motion' ? 'character' : 'first-frame'}.jpg"` : null,
