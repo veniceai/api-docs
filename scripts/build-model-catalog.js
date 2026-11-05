@@ -987,10 +987,13 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   if (family.modality === 'video' && quotes && primary.video?.resolutions?.length && primary.video?.durations?.length) {
     const res = primary.video.resolutions.filter(r => r.height).sort((a, b) => a.height - b.height);
     const audio = primary.video.audio === 'native' ? 'on' : 'off';
+    const table = hub().helpers.clipTable(primary, res, audio) || { rows: primary.video.durations, rates: null, note: null };
     lines.push('', `Clip prices for \`${primary.id}\`${audio === 'on' ? ' with audio' : ', silent'}:`, '', `| Duration | ${res.map(r => r.label).join(' | ')} |`, `|---|${res.map(() => '---').join('|')}|`);
-    for (const d of primary.video.durations) {
+    if (table.rates) lines.push(`| Per second | ${table.rates.map(money).join(' | ')} |`);
+    for (const d of table.rows) {
       lines.push(`| ${d.seconds ? `${d.seconds}s` : d.value} | ${res.map(r => money(quotes[`${r.value}|${d.value}|${audio}`]) || '—').join(' | ')} |`);
     }
+    if (table.note) lines.push('', table.note);
   }
 
   const tierLabels = uniq(variants.map(v => privacyLabel(v.privacy))).join(', ');
@@ -1006,7 +1009,7 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   }
   if (primary.video) {
     const v = primary.video;
-    specs.push(['Modes', listPhrase(f.modes)], ['Resolutions', v.resolutions?.map(r => r.label).join(', ')], ['Durations', v.durations?.map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ')],
+    specs.push(['Modes', listPhrase(f.modes)], ['Resolutions', v.resolutions?.map(r => r.label).join(', ')], ['Durations', v.durations ? hub().helpers.durationText(v.durations) : undefined],
       ['Aspect ratios', v.aspectRatios?.join(', ')], ['Audio', v.audio === 'native' ? 'Always generated' : v.audio === 'optional' ? 'Optional' : 'None']);
   }
   if (primary.image) {
