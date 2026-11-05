@@ -1034,7 +1034,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         filters.dur ? { key: 'clip', label: `${filters.dur}s clip`, align: 'right', hide: 'sm', render: row => (row.offer.clip != null
           ? <PriceCell value={row.offer.clip} unit={row.offer.seconds !== Number(filters.dur) ? `${row.offer.seconds}s` : null} />
           : <span className="vx-muted">—</span>) } : null,
-        { key: 'max', label: 'Max', align: 'right', hide: 'lg', render: row => <span className="vx-num">{heightLabel(maxVideoHeight(row.display))} · {maxVideoSeconds(row.display) || '—'}s</span> },
+        { key: 'max', label: 'Max', align: 'right', hide: 'lg', render: row => <span className="vx-num">{heightLabel(maxVideoHeight(row.display))} · {maxVideoSeconds(row.display) ? `${maxVideoSeconds(row.display)}s` : 'source'}</span> },
         { key: 'audio', label: 'Audio', hide: 'md', render: row => {
           const a = row.display.video && row.display.video.audio;
           return <span className={a === 'native' || a === 'optional' ? undefined : 'vx-muted'}>{a === 'native' ? 'Native' : a === 'optional' ? 'Optional' : 'None'}</span>;
@@ -1085,7 +1085,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   const keySpec = model => {
     if (model.modality === 'text' && model.text) return `${tokens(model.text.context)} context`;
     if (model.modality === 'image') return imageMaxRes(model) ? `Up to ${imageMaxRes(model)}` : VARIANT_LABELS[model.variant] || '';
-    if (model.modality === 'video') return `${heightLabel(maxVideoHeight(model))} · up to ${maxVideoSeconds(model)}s`;
+    if (model.modality === 'video') return `${heightLabel(maxVideoHeight(model))} · ${maxVideoSeconds(model) ? `up to ${maxVideoSeconds(model)}s` : 'source length'}`;
     if (model.task === 'tts') return `${(model.audio && model.audio.voiceCount) || 0} voices`;
     if (model.modality === 'embedding' && model.embedding) return `${model.embedding.dimensions || '—'} dims`;
     return TASK_LABELS[model.task] || '';
