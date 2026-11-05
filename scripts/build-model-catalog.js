@@ -160,7 +160,8 @@ function readJson(file, fallback) {
 
 // ---------------------------------------------------------------- helpers
 
-const usd = node => (node && typeof node.usd === 'number' ? round(node.usd) : null);
+// Ten decimals keep per-second prices such as $0.00003148 whole.
+const usd = node => (node && typeof node.usd === 'number' ? round(node.usd, 10) : null);
 
 function round(value, digits = 6) {
   if (value == null || !Number.isFinite(value)) return null;
