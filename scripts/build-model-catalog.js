@@ -13,6 +13,7 @@
  *   data/video-pricing.json   quote matrix from scripts/quote-video-pricing.js
  *   data/model-overrides.json curated metadata the API does not expose yet
  *   data/model-media.json     reference outputs for image and video models
+ *   data/model-renders.json   the docs' own renders, for models venice.ai has none for
  *   data/model-benchmarks.json, data/model-telemetry.json   future data feeds
  *
  * Refuses to overwrite the catalog if the model count drops by more than 20%
@@ -594,7 +595,7 @@ function normalizeModel(model, ctx) {
 
   entry.endpoints = endpointsFor(entry, ctx.overrides);
   entry.moderation = moderationFor(entry, ctx.overrides);
-  entry.media = (ctx.media.models?.[model.id] || []).slice(0, 12);
+  entry.media = (ctx.media.models?.[model.id] || ctx.renders.models?.[model.id] || []).slice(0, 12);
   entry.benchmarks = ctx.benchmarks.results?.[model.id] || null;
   entry.telemetry = ctx.telemetry.models?.[model.id] || null;
   return entry;
@@ -1295,6 +1296,7 @@ async function main() {
     videoPricing: readJson('video-pricing.json', { models: {} }),
     overrides: readJson('model-overrides.json', {}),
     media: readJson('model-media.json', { models: {} }),
+    renders: readJson('model-renders.json', { models: {} }),
     benchmarks: readJson('model-benchmarks.json', { results: {} }),
     telemetry: readJson('model-telemetry.json', { models: {} })
   };
