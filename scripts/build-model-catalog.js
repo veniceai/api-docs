@@ -304,6 +304,8 @@ function videoMode(model) {
   if (id.includes('video-to-video')) return 'v2v';
   if (id.includes('upscale')) return 'upscale';
   if (type === 'image-to-video') return 'i2v';
+  // GET /models types source-video models as "video": recasts, extensions, edits.
+  if (type === 'video') return 'v2v';
   return 't2v';
 }
 
