@@ -125,8 +125,8 @@ need `enable_x_search` or the thinking controls.
 
 OpenAI models run natively on `/responses` (instructions, structured outputs,
 custom and Codex tools, encrypted reasoning replay). Other models are
-translated through Chat Completions, which ignores `text.format` and hosted
-tools. Guide: https://docs.venice.ai/guides/features/responses-api
+translated through Chat Completions, which supports `text.format` structured
+outputs (400 on models without them) and ignores hosted tools. Guide: https://docs.venice.ai/guides/features/responses-api
 
 ## Authentication
 
