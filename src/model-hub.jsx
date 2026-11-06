@@ -767,6 +767,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   const familyMatches = (family, models, f, now) => {
     if (f.providers.length && !f.providers.includes(family.provider)) return false;
+    if (f.flags.includes('app-default') && !family.appDefault) return false;
     if (f.flags.includes('new') && !isNew(family.updated || family.created, now)) return false;
     if (f.flags.includes('open') && !family.openWeights) return false;
     if (f.flags.includes('uncensored') && !family.uncensored) return false;
@@ -887,6 +888,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           ) : null}
 
           <FilterGroup title="Attributes">
+            {option('flags', 'app-default', 'App Default', 'The default model used by the Venice app.')}
             {option('flags', 'open', 'Open weights')}
             {option('flags', 'uncensored', 'Uncensored')}
             {option('flags', 'new', 'Added in the last 30 days')}
