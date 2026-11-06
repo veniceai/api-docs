@@ -446,6 +446,7 @@ function generatePricingMdx(models) {
   const sections = [];
   sections.push('---');
   sections.push('title: API Pricing');
+  sections.push('description: "Venice API prices in USD for chat, embedding, image, audio, music and video models, plus web search and scraping fees, payment options and paid plans."');
   sections.push('"og:title": "Pricing | Venice API Docs"');
   sections.push('"og:description": "Learn about pricing for Venice\'s API."');
   sections.push('---');
