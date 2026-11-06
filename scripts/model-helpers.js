@@ -3,6 +3,9 @@
  * browser copy of the same logic, so change both together.
  */
 
+const fs = require('fs');
+const path = require('path');
+
 function getRemovalDate(model) {
   const deprecation = model.model_spec?.deprecation;
   return deprecation?.removesAt || deprecation?.date || null;
@@ -72,8 +75,19 @@ function checkSnapshotDrop(label, previous, next, { allowDrop = process.argv.inc
   throw new Error(`${message}. Refusing to overwrite; rerun with --allow-drop if the drop is real.`);
 }
 
+const OVERRIDES_PATH = path.join(__dirname, '..', 'data', 'model-overrides.json');
+let overrideModels;
+
+function isAppDefaultModel(model) {
+  if (!overrideModels) {
+    overrideModels = JSON.parse(fs.readFileSync(OVERRIDES_PATH, 'utf-8')).models || {};
+  }
+  return overrideModels[model.id]?.appDefault === true;
+}
+
 module.exports = {
   checkSnapshotDrop,
+  isAppDefaultModel,
   getRemovalDate,
   isDeprecatedModel,
   isRemovedModel,

@@ -474,6 +474,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   const StatusTags = ({ item, now }) => (
     <>
+      {item.appDefault ? <Tag tone="app-default" title="The default model used by the Venice app.">App Default</Tag> : null}
       {isNew(item.created, now) ? <Tag tone="new">New</Tag> : null}
       {item.beta ? <Tag tone="beta" title="Experimental. May change or be removed without notice.">Beta</Tag> : null}
       {item.deprecated || item.deprecation ? <Tag tone="deprecated" title="Scheduled for removal. See Deprecations.">Deprecated</Tag> : null}
@@ -766,6 +767,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
   const familyMatches = (family, models, f, now) => {
     if (f.providers.length && !f.providers.includes(family.provider)) return false;
+    if (f.flags.includes('app-default') && !family.appDefault) return false;
     if (f.flags.includes('new') && !isNew(family.updated || family.created, now)) return false;
     if (f.flags.includes('open') && !family.openWeights) return false;
     if (f.flags.includes('uncensored') && !family.uncensored) return false;
@@ -886,6 +888,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           ) : null}
 
           <FilterGroup title="Attributes">
+            {option('flags', 'app-default', 'App Default', 'The default model used by the Venice app.')}
             {option('flags', 'open', 'Open weights')}
             {option('flags', 'uncensored', 'Uncensored')}
             {option('flags', 'new', 'Added in the last 30 days')}
@@ -2661,6 +2664,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   model.uncensored ? 'Uncensored' : null,
                   isNew(model.created, now) ? 'New' : null
                 ].filter(Boolean).map(item => <span key={item} className="vx-meta-item">{item}</span>)}
+                {model.appDefault ? <span className="vx-meta-item" title="The default model used by the Venice app.">App Default</span> : null}
                 {model.beta ? <span className="vx-meta-item is-warn" title="Experimental. May change or be removed without notice.">Beta</span> : null}
                 {model.deprecation ? <span className="vx-meta-item is-warn" title="Scheduled for removal. See Deprecations.">Deprecated</span> : null}
               </p>
