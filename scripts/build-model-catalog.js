@@ -472,6 +472,7 @@ function normalizeModel(model, ctx) {
     privacy: tier,
     uncensored: isUncensored(model),
     beta: spec.betaModel === true,
+    appDefault: override.appDefault === true,
     offline: spec.offline === true,
     deprecation: spec.deprecation ? {
       removesAt: spec.deprecation.removesAt || spec.deprecation.date || null,
@@ -696,6 +697,7 @@ function buildFamilies(models) {
       privacy: [...new Set(variants.map(v => v.privacy))],
       uncensored: variants.some(v => v.uncensored),
       beta: variants.every(v => v.beta),
+      appDefault: variants.some(v => v.appDefault),
       deprecated: variants.every(v => v.deprecation),
       openWeights: variants.some(v => v.openWeights === true),
       traits: [...new Set(variants.flatMap(v => v.traits))],

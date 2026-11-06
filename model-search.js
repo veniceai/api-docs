@@ -685,6 +685,7 @@
     deprecated: 'This model is scheduled for removal. See the deprecations page for timeline and migration guide.',
     uncensored: 'Responds to all prompts without content-based refusals or filtering.',
     upgraded: 'A newer version of this model is available with improved performance.',
+    app_default: 'The default model used by the Venice app.',
     content_moderation: 'This model applies upstream content moderation. Requests blocked by the provider\u2019s filters are still billed at the full rate.'
   };
 
@@ -1309,6 +1310,13 @@
     return UPGRADED_MODELS.has(model.id);
   }
 
+  // Browser copy of the appDefault flags in data/model-overrides.json; change both together.
+  const APP_DEFAULT_MODELS = new Set(['deepseek-v4-1-flash-1017-uncensored']);
+
+  function isAppDefaultModel(model) {
+    return APP_DEFAULT_MODELS.has(model.id);
+  }
+
   function matchesCodeFilter(model) {
     const spec = model.model_spec || {};
     const modelId = model.id.toLowerCase();
@@ -1399,6 +1407,7 @@
       const capTags = getCapabilityTags(spec.capabilities, isUncensoredModel(model));
       const betaTag = isBetaModel(model) ? '<span class="vpt-badge vpt-beta vpt-tooltip" data-tooltip="Experimental model that may change or be removed without notice.">Beta</span>' : '';
       const upgradedTag = isUpgradedModel(model) ? '<span class="vpt-badge vpt-upgraded vpt-tooltip" data-tooltip="A newer version of this model is available with improved performance.">Upgraded</span>' : '';
+      const appDefaultTag = isAppDefaultModel(model) ? `<span class="vpt-badge vpt-app-default vpt-tooltip" data-tooltip="${TOOLTIPS.app_default}">App Default</span>` : '';
       const moderationTag = hasContentModeration(model.id) ? `<span class="vpt-badge vpt-moderation vpt-tooltip" data-tooltip="${TOOLTIPS.content_moderation}">Moderated</span>` : '';
       const privacyTag = getPrivacyTag(model, 'vpt');
 
@@ -1432,7 +1441,7 @@
       return `<div class="vpt-row${isBetaModel(model) ? ' vpt-beta-row' : ''}${isUpgradedModel(model) ? ' vpt-upgraded-row' : ''}">
         <div class="vpt-row-top">
           <div class="vpt-row-left">
-            <span class="vpt-model-name">${name}</span>${betaTag}${upgradedTag}${retiringTag(model)}
+            <span class="vpt-model-name">${name}</span>${appDefaultTag}${betaTag}${upgradedTag}${retiringTag(model)}
             <code class="vpt-model-id">${modelId}</code>${pricingCopyBtn(modelId)}
           </div>
           <div class="vpt-row-right">${moderationTag}${privacyTag}${capTags}</div>
