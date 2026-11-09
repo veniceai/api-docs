@@ -2043,7 +2043,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  // Lifecycle in words, for Copy for AI and the page's static text.
+  // Lifecycle in words, for the page's static text.
   const statusText = model => {
     const d = model.deprecation;
     if (d) {
@@ -2502,88 +2502,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  // Plain-text key parameters for Copy for AI.
-  const briefParams = model => {
-    const t = model.text;
-    if (t) {
-      const r = t.reasoning;
-      return [
-        `Context window: ${t.context ? `${count(t.context)} tokens` : 'not published'}`,
-        `Max output: ${t.maxOutput ? `${count(t.maxOutput)} tokens` : 'not published'}`,
-        `Capabilities: ${TEXT_CAPS.filter(c => hasCap(model, c.key)).map(c => c.label).join(', ') || 'text only'}`,
-        r && r.effort && r.effort.length ? `reasoning_effort: ${r.effort.join(', ')}${r.defaultEffort ? ` (default ${r.defaultEffort})` : ''}` : null,
-        t.quantization ? `Served precision: ${QUANT_LABELS[t.quantization] || t.quantization}` : null
-      ];
-    }
-    const v = model.video;
-    if (v) {
-      return [
-        v.resolutions && v.resolutions.length ? `Resolutions: ${v.resolutions.map(r => r.label).join(', ')}` : null,
-        v.durations && v.durations.length ? `Durations: ${durationText(v.durations)}` : null,
-        v.aspectRatios && v.aspectRatios.length ? `Aspect ratios: ${v.aspectRatios.join(', ')}` : null,
-        `Audio: ${v.audio === 'native' ? 'always generated' : v.audio === 'optional' ? 'optional ("audio": true)' : 'none'}`,
-        `Inputs: ${['prompt', ...['image', 'reference', 'video', 'audio'].filter(k => v.inputs && v.inputs[k])].join(', ')}`
-      ];
-    }
-    const i = model.image;
-    if (i) {
-      return [
-        i.resolutions && i.resolutions.length ? `Resolutions: ${i.resolutions.join(', ')}${i.defaultResolution ? ` (default ${i.defaultResolution})` : ''}` : null,
-        i.aspectRatios && i.aspectRatios.length ? `Aspect ratios: ${i.aspectRatios.join(', ')}` : null,
-        i.promptLimit ? `Prompt limit: ${count(i.promptLimit)} characters` : null,
-        i.maxInputImages ? `Max input images: ${i.maxInputImages}` : null
-      ];
-    }
-    const a = model.audio || {};
-    if (model.task === 'tts') {
-      return [
-        a.voices && a.voices.length ? `Voices: ${a.voices.length}, e.g. ${a.voices.slice(0, 5).join(', ')}` : null,
-        a.formats && a.formats.length ? `Formats: ${a.formats.join(', ')}` : null
-      ];
-    }
-    if (model.modality === 'audio') {
-      return [
-        a.maxDuration ? `Duration: ${a.minDuration ? `${a.minDuration}-${a.maxDuration}s` : `up to ${a.maxDuration}s`}${a.defaultDuration ? ` (default ${a.defaultDuration}s)` : ''}` : null,
-        a.lyrics ? `Lyrics: ${a.lyricsRequired ? 'required' : 'supported'}` : null,
-        a.formats && a.formats.length ? `Formats: ${a.formats.join(', ')}` : null
-      ];
-    }
-    const e = model.embedding;
-    if (e) return [e.dimensions ? `Dimensions: ${count(e.dimensions)}` : null, e.maxInputTokens ? `Max input: ${count(e.maxInputTokens)} tokens` : null];
-    const d = model.decision;
-    if (d) return [d.maxStateTokens ? `Max state: ${count(d.maxStateTokens)} tokens` : null];
-    return [];
-  };
-
-  // Copy for AI: a self-contained brief of the selected variant, with every
-  // variant, its limits, privacy, status and a working request.
-  const modelMarkdown = (family, model, models, provider) => {
-    const isPrimary = model.id === family.primary;
-    const endpoint = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
-    const sample = codeSamples(model, endpoint && endpoint.id);
-    const lines = [`# ${family.name} API${isPrimary ? '' : ` (${VARIANT_LABELS[model.variant] || model.variant})`}`, ''];
-    if (model.description || family.description) lines.push(model.description || family.description, '');
-    lines.push(
-      `- Docs: https://docs.venice.ai${modelHref(family, model.id)}`,
-      `- Model ID: \`${model.id}\``,
-      provider ? `- Provider: ${provider.name}` : null,
-      `- Type: ${TASK_LABELS[model.task] || model.modality}`,
-      `- Status: ${statusText(model)}`,
-      `- Privacy: ${PRIVACY[model.privacy] ? `${PRIVACY[model.privacy].long}. ${PRIVACY[model.privacy].desc}` : model.privacy}`,
-      `- Price: ${priceSummary(model) || 'use the quote endpoint'} (USD)`
-    );
-    lines.push('', '## Variants', '', '| Model ID | Variant | Privacy | Price | Status |', '|---|---|---|---|---|');
-    models.forEach(m => lines.push(`| \`${m.id}\`${m.id === model.id ? ' (this one)' : ''} | ${VARIANT_LABELS[m.variant] || m.variant} | ${PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy} | ${priceSummary(m) || '-'} | ${statusText(m)} |`));
-    const params = briefParams(model).filter(Boolean);
-    if (params.length) lines.push('', '## Key parameters', '', ...params.map(line => `- ${line}`));
-    if (endpoint) {
-      const flow = (model.endpoints || []).some(e => /-retrieve$/.test(e.id));
-      lines.push('', '## Request', '', `${endpoint.method} ${API}${endpoint.path}${flow ? ', then poll the retrieve endpoint with the returned queue_id' : ''}. Authenticate with \`Authorization: Bearer $VENICE_API_KEY\`.`);
-      if (sample && sample.curl) lines.push('', '```bash', sample.curl, '```');
-    }
-    return lines.filter(line => line != null).join('\n');
-  };
-
   const ModelPage = ({ data }) => {
     const { family, models, related, providers } = data;
     // ?v= names the variant. It's read on the first render, so the primary
@@ -2595,7 +2513,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const [variantId, setVariantId] = useState(variantFromUrl);
     const [endpointId, setEndpointId] = useState(null);
     const now = useNow();
-    const [copied, setCopied] = useState(false);
 
     useEffect(() => {
       const onPop = () => {
@@ -2622,11 +2539,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       writeParams({ v: id === family.primary ? null : id });
     };
 
-    const copyForAgents = () => copyText(modelMarkdown(family, model, models, provider)).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-
     return (
       <div className="vx vx-page not-prose">
         <div className="vx-page-grid">
@@ -2642,12 +2554,11 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                   <a key={id} href={`#${id}`} className={cls(activeSection === id && 'is-active')} aria-current={activeSection === id ? 'location' : undefined}>{label}</a>
                 ))}
               </nav>
-              <div className="vx-side-actions">
-                <button type="button" className="vx-side-link" onClick={copyForAgents} title="Copy a Markdown spec for an AI agent or README">
-                  <span aria-live="polite">{copied ? 'Copied' : 'Copy for AI'}</span>
-                </button>
-                {safeUrl(model.source) ? <a className="vx-side-link" href={safeUrl(model.source)} target="_blank" rel="noopener noreferrer">Source<Icon name="external" size={12} /></a> : null}
-              </div>
+              {safeUrl(model.source) ? (
+                <div className="vx-side-actions">
+                  <a className="vx-side-link" href={safeUrl(model.source)} target="_blank" rel="noopener noreferrer">Source<Icon name="external" size={12} /></a>
+                </div>
+              ) : null}
             </div>
           </aside>
 
