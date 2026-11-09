@@ -5,9 +5,10 @@
  * 
  * Usage: node scripts/update-static-models.js [--skip-models-static]
  *
- * --skip-models-static leaves the /models tables to a later
- * `node scripts/generate-models-static.js`, for runs that rebuild
- * data/model-catalog.json first (the tables read it).
+ * --skip-models-static leaves the /models tables and pricing.md to later
+ * runs of `node scripts/generate-models-static.js` and
+ * `node scripts/generate-pricing-md.js`, for runs that rebuild
+ * data/model-catalog.json first (both read it).
  */
 
 const fs = require('fs');
@@ -170,10 +171,12 @@ async function main() {
   require('./generate-deprecations-static.js');
 
   if (SKIP_MODELS_STATIC) {
-    console.log('Skipping static model catalogs (--skip-models-static)');
+    console.log('Skipping static model catalogs and pricing.md (--skip-models-static)');
   } else {
     console.log('Regenerating static model catalogs...');
     require('./generate-models-static.js');
+    console.log('Regenerating pricing.md...');
+    require('./generate-pricing-md.js');
   }
 
   console.log('Regenerating pricing.mdx...');
