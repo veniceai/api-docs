@@ -12,6 +12,7 @@
 - **Prices:** every model's price per token or per unit, plus web search and tool fees, at https://docs.venice.ai/pricing.md
 - **OpenAPI spec:** https://docs.venice.ai/swagger.yaml
 - **Full docs index:** https://docs.venice.ai/llms.txt (one-line-per-page) and https://docs.venice.ai/llms-full.txt (entire docs in one file)
+- **Changelog:** https://docs.venice.ai/changelog.md lists each month's API changes and every model added, deprecated, removed or repriced; RSS at https://docs.venice.ai/changelog/rss.xml
 - **Markdown pages:** append `.md` to any docs URL for the raw Markdown version, e.g. `https://docs.venice.ai/getting-started/quick-start.md`
 - **Agent skill file:** https://docs.venice.ai/skill.md — install with `npx skills add docs.venice.ai`
 - **Canonical Agent Skills repo:** https://github.com/veniceai/skills

@@ -41,3 +41,4 @@
 - Pricing: https://docs.venice.ai/pricing.md
 - Error codes: https://docs.venice.ai/api-reference/error-codes.md
 - Rate limiting: https://docs.venice.ai/api-reference/rate-limiting.md
+- Changelog: https://docs.venice.ai/changelog.md
