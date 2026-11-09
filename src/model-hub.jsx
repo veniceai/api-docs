@@ -999,12 +999,11 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-mcell-sub">
-            <span className="vx-mcell-provider">{provider ? provider.name : family.provider}</span>
             <code className="vx-mcell-id" title={display.id}>{display.id}</code>
             <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} />
             {extra > 0 ? <span className="vx-mcell-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
           </div>
-          <div className="vx-mcell-mobile">{[provider ? provider.name : family.provider, keySpec(display), privacySummary(family.privacy)].filter(Boolean).join(' · ')}</div>
+          <div className="vx-mcell-mobile">{[keySpec(display), privacySummary(family.privacy)].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
     );
@@ -1153,9 +1152,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     </div>
   );
 
-  const ExplorerCard = ({ row, providers, now, catalog }) => {
+  const ExplorerCard = ({ row, now, catalog }) => {
     const { family, display } = row;
-    const provider = providers[family.provider];
     const isVideo = family.modality === 'video';
     const media = sampleFor(display, isVideo ? 'cinematic-landscape' : 'photoreal') ||
       family.variants.map(id => catalog.models[id]).map(m => sampleFor(m, isVideo ? 'cinematic-landscape' : 'photoreal')).find(Boolean);
@@ -1172,9 +1170,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         <div className="vx-card-body">
           <div className="vx-card-top">
             <a className="vx-card-name" href={href} title={family.name}>{family.name}</a>
-          </div>
-          <div className="vx-card-meta">
-            <span>{provider ? provider.name : family.provider}</span>
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-card-foot">
@@ -1194,7 +1189,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  // List view: logo, name, provider and price; the description when the
+  // List view: logo, name and price; the description when the
   // catalog has one; then the model ID, type (when the results mix types),
   // privacy and key specs on one line. Capabilities are left to the filters
   // and the table.
@@ -1248,7 +1243,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             <div className="vx-list-top">
               <ProviderLogo provider={provider} size={24} />
               <a className="vx-list-name" href={modelHref(family, display.id)}>{family.name}</a>
-              <span className="vx-list-provider">{provider ? provider.name : family.provider}</span>
               <StatusTags item={family} now={now} />
               <span className="vx-list-price">{rowPrice(row)}</span>
             </div>
@@ -1275,7 +1269,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       <>
         {rendered.length ? (
           <div className={cls('vx-cards', modality === 'video' && 'is-video')}>
-            {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} providers={providers} now={now} catalog={catalog} />)}
+            {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} now={now} catalog={catalog} />)}
           </div>
         ) : null}
         {pending.length ? (
