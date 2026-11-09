@@ -16,6 +16,7 @@
 - **Agent skill file:** https://docs.venice.ai/skill.md — install with `npx skills add docs.venice.ai`
 - **Canonical Agent Skills repo:** https://github.com/veniceai/skills
 - **MCP server:** https://github.com/veniceai/venice-mcp-server (45 tools incl. billing, API keys, and TEE attestation, any MCP host)
+- **Docs MCP server:** `https://docs.venice.ai/mcp` searches and reads these docs from any MCP client, with no API key
 
 ## Quick example
 

@@ -213,4 +213,5 @@ ln -s ~/src/venice-skills/skills ~/.claude/skills/venice
 - Pricing: https://docs.venice.ai/pricing.md
 - Rate limiting: https://docs.venice.ai/api-reference/rate-limiting.md
 - Docs index for LLMs: https://docs.venice.ai/llms.txt
+- Docs MCP server, to search these docs with no API key: https://docs.venice.ai/mcp
 - Any docs page as raw markdown: append `.md` to its URL
