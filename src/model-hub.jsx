@@ -1706,9 +1706,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const list = [['overview', 'Overview'], ['pricing', 'Pricing']];
     if (examples) list.push(['examples', 'Examples']);
     if (model.task === 'tts' && model.audio && model.audio.voices && model.audio.voices.length) list.push(['voices', 'Voices']);
-    list.push(['api', 'API']);
-    if (capabilities) list.push(['capabilities', 'Capabilities']);
     list.push(['specs', 'Specs']);
+    if (capabilities) list.push(['capabilities', 'Capabilities']);
+    list.push(['api', 'API']);
     if (PRIVACY_TIERS.some(([tier]) => tier === model.privacy)) list.push(['privacy', 'Privacy']);
     if (variants > 1) list.push(['variants', 'Variants']);
     if (related) list.push(['related', 'Related models']);
@@ -1771,8 +1771,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           { label: 'Context', value: tokens(text.context), sub: text.maxOutput ? `${tokens(text.maxOutput)} max output` : 'max output not published' },
           {
             label: 'Reasoning',
-            value: !r ? 'None' : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'Always on',
-            sub: !r ? 'answers directly' : r.defaultEffort ? `default ${r.defaultEffort}` : levels.length ? 'reasoning_effort' : 'not adjustable'
+            value: !r ? 'None' : levels.length ? levels.join(', ') : 'On',
+            sub: !r ? 'answers directly' : r.defaultEffort ? `default ${r.defaultEffort}` : levels.length ? 'reasoning_effort' : 'fixed effort'
           },
           p.cacheRead != null
             ? { label: 'Cached input', value: usd(p.cacheRead), sub: p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens' }
@@ -1932,7 +1932,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           ['Streaming (SSE)', 'Supported'],
           ['Function calling', caps.tools ? 'Supported' : null],
           ['Structured output (json_schema)', caps.structured ? 'Supported' : null],
-          ['Reasoning effort', !r ? null : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'Always on'],
+          ['Reasoning effort', !r ? null : levels.length ? levels.join(', ') : 'Not adjustable'],
           ['Prompt caching', hasCap(model, 'caching') ? 'Supported' : null],
           ['Web search', caps.webSearch ? 'venice_parameters' : null],
           ['X search', caps.xSearch ? 'venice_parameters' : null],
@@ -1960,7 +1960,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         ['Max output', t.maxOutput ? `${count(t.maxOutput)} tokens` : 'Not published'],
         ['Reasoning effort', !r ? 'No separate reasoning phase' : levels.length
           ? <><code>reasoning_effort: {levels.join(' | ')}</code>{r.defaultEffort ? <span className="vx-muted"> · default {r.defaultEffort}</span> : null} · <a href="/guides/features/reasoning-models#reasoning-effort">guide</a></>
-          : <>Always on; send <code>{'"reasoning": { "enabled": false }'}</code> to skip thinking · <a href="/guides/features/reasoning-models">guide</a></>],
+          : <>On at a fixed effort; send <code>{'"reasoning": { "enabled": false }'}</code> to turn it off where the model allows · <a href="/guides/features/reasoning-models">guide</a></>],
         ['Served precision', q ? QUANT_LABELS[q] || q : model.privacy === 'anonymized' ? 'Set by the upstream provider' : 'Not disclosed'],
         sampling ? ['Default sampling', sampling] : null
       ];
@@ -2410,7 +2410,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       <div className="vx-endpoints">
         {list.length > 1 ? (
           <Segmented ariaLabel="Endpoint" value={active.id} onChange={setEndpointId}
-            options={list.map(e => ({ value: e.id, label: `${e.name}${e.status === 'alpha' ? ' (Alpha)' : ''}`, disabled: e.supported === false, title: e.supported === false ? (e.note || 'Not supported for this model') : undefined }))} />
+            options={list.map(e => ({ value: e.id, label: e.name, disabled: e.supported === false, title: e.supported === false ? (e.note || 'Not supported for this model') : undefined }))} />
         ) : null}
         <div className="vx-endpoint-line">
           <MethodPath method={active.method} path={active.path} />
@@ -2722,10 +2722,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               </Section>
             ) : null}
 
-            <Section id="api" title="API" actions={<a className="vx-link-btn" href="https://venice.ai/settings/api" target="_blank" rel="noopener">Get an API key</a>}>
-              <Endpoints model={model} endpointId={activeEndpoint && activeEndpoint.id} setEndpointId={setEndpointId} />
-              {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
-              <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
+            <Section id="specs" title="Specs">
+              <Specs model={model} models={models} />
             </Section>
 
             {has('capabilities') ? (
@@ -2734,8 +2732,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               </Section>
             ) : null}
 
-            <Section id="specs" title="Specs">
-              <Specs model={model} models={models} />
+            <Section id="api" title="API" actions={<a className="vx-link-btn" href="https://venice.ai/settings/api" target="_blank" rel="noopener">Get an API key</a>}>
+              <Endpoints model={model} endpointId={activeEndpoint && activeEndpoint.id} setEndpointId={setEndpointId} />
+              {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
+              <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
             </Section>
 
             {has('privacy') ? (
