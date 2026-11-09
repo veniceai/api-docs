@@ -211,6 +211,20 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (secs.length > 6 && step) return `${secs[0]}–${secs[secs.length - 1]}s, ${step === 1 ? 'any whole second' : `in ${step}s steps`}`;
     return (durations || []).map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ');
   };
+  const upperFirst = text => text.charAt(0).toUpperCase() + text.slice(1);
+  // Upscalers take no prompt. Seedance's edit model reads its source clip
+  // from reference_video_urls instead of video_url.
+  const videoInputList = video => {
+    const inputs = (video && video.inputs) || {};
+    return [
+      video && video.mode !== 'upscale' && 'prompt',
+      inputs.image && 'image',
+      inputs.endImage && 'end frame',
+      inputs.reference && 'reference images',
+      (inputs.video || inputs.referenceVideo) && 'video',
+      inputs.audio && 'audio'
+    ].filter(Boolean);
+  };
   // Price rows for the video calculator and the static text when a model has
   // more than six lengths: the shortest, 5s, 10s and the longest, led by a
   // per-second row when every length costs the same rate per second.
@@ -284,7 +298,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       audio: audioKey === 'on', forcedAudio: video.audio === 'native' && lens.a !== 'on', noAudio: video.audio === 'none' && lens.a === 'on'
     };
   };
-  const tierLabel = t => (t.from === t.upTo ? `${t.upTo}s` : t.from ? `${t.from}–${t.upTo}s` : `Up to ${t.upTo}s`);
+  // A model with duration options accepts only those lengths, one per tier.
+  const tierLabel = (t, fixed) => (fixed || t.from === t.upTo ? `${t.upTo}s` : t.from ? `${t.from}–${t.upTo}s` : `Up to ${t.upTo}s`);
 
   // The explorer prices a model at its cheapest option, or, once the
   // resolution, length or audio filter is set, at that setting. `from` marks
@@ -337,7 +352,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       if (f.res && p.byResolution[f.res] != null) return { value: p.byResolution[f.res], unit: '/ image' };
       return spread(IMAGE_RESOLUTIONS.filter(r => p.byResolution[r] != null).map(r => [r, p.byResolution[r]]), '/ image');
     }
-    if (p.kind === 'tiered' && (p.tiers || []).length) return spread(p.tiers.map(t => [tierLabel(t), t.usd]), '/ track');
+    if (p.kind === 'tiered' && (p.tiers || []).length) return spread(p.tiers.map(t => [tierLabel(t, model.audio && model.audio.durationOptions), t.usd]), '/ track');
     return { value: model.headline ? model.headline.value : null, unit: headlineUnit(model) };
   };
   // The unit a model is billed in, as the pricing section's note reads it.
@@ -1037,7 +1052,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         filters.dur ? { key: 'clip', label: `${filters.dur}s clip`, align: 'right', hide: 'sm', render: row => (row.offer.clip != null
           ? <PriceCell value={row.offer.clip} unit={row.offer.seconds !== Number(filters.dur) ? `${row.offer.seconds}s` : null} />
           : <span className="vx-muted">—</span>) } : null,
-        { key: 'max', label: 'Max', align: 'right', hide: 'lg', render: row => <span className="vx-num">{heightLabel(maxVideoHeight(row.display))} · {maxVideoSeconds(row.display) || '—'}s</span> },
+        { key: 'max', label: 'Max', align: 'right', hide: 'lg', render: row => <span className="vx-num">{heightLabel(maxVideoHeight(row.display))} · {maxVideoSeconds(row.display) ? `${maxVideoSeconds(row.display)}s` : 'source'}</span> },
         { key: 'audio', label: 'Audio', hide: 'md', render: row => {
           const a = row.display.video && row.display.video.audio;
           return <span className={a === 'native' || a === 'optional' ? undefined : 'vx-muted'}>{a === 'native' ? 'Native' : a === 'optional' ? 'Optional' : 'None'}</span>;
@@ -1088,7 +1103,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   const keySpec = model => {
     if (model.modality === 'text' && model.text) return `${tokens(model.text.context)} context`;
     if (model.modality === 'image') return imageMaxRes(model) ? `Up to ${imageMaxRes(model)}` : VARIANT_LABELS[model.variant] || '';
-    if (model.modality === 'video') return `${heightLabel(maxVideoHeight(model))} · up to ${maxVideoSeconds(model)}s`;
+    if (model.modality === 'video') return `${heightLabel(maxVideoHeight(model))} · ${maxVideoSeconds(model) ? `up to ${maxVideoSeconds(model)}s` : 'source length'}`;
     if (model.task === 'tts') return `${(model.audio && model.audio.voiceCount) || 0} voices`;
     if (model.modality === 'embedding' && model.embedding) return `${model.embedding.dimensions || '—'} dims`;
     return TASK_LABELS[model.task] || '';
@@ -1553,6 +1568,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     chat: 'Explain TEE attestation in two sentences.',
     image: 'A retro travel poster with the bold headline "VENICE" in large condensed serif type, sunset color palette',
     video: 'Slow aerial drone shot over a misty mountain valley at golden hour',
+    videoEdit: 'Turn the scene into a snowy winter morning',
+    videoExtend: 'Continue the drone shot as it rises above the clouds into clear sky',
+    videoRecast: 'Recast the person in the video as the person in the reference image',
+    videoMotion: 'The character follows the movements in the source video',
     music: 'Warm lo-fi hip hop beat with soft piano and vinyl crackle',
     sfx: 'Heavy wooden door creaking open in a stone hallway'
   };
@@ -1608,18 +1627,31 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }
     if (model.modality === 'video') {
       const video = model.video || {};
-      const dur = (video.durations || []).find(d => d.seconds === 5) || (video.durations || [])[0];
-      const res = (video.resolutions || []).find(r => r.height === 720) || (video.resolutions || [])[0];
+      const inputs = video.inputs || {};
+      const upscale = video.mode === 'upscale';
+      // Source-length models list only "Auto", which /video/queue rejects; they take no duration.
+      const timed = (video.durations || []).filter(d => d.seconds);
+      const dur = timed.find(d => d.seconds === 5) || timed[0];
+      const res = upscale ? null : (video.resolutions || []).find(r => r.height === 720) || (video.resolutions || [])[0];
+      const prompt = upscale ? null
+        : video.mode === 'motion' ? VARIANT_PROMPTS.videoMotion
+        : video.mode !== 'v2v' ? VARIANT_PROMPTS.video
+        : inputs.reference ? VARIANT_PROMPTS.videoRecast
+        : /extend/.test(id) ? VARIANT_PROMPTS.videoExtend
+        : VARIANT_PROMPTS.videoEdit;
       const fields = [
         `"model": "${id}"`,
-        `"prompt": "${VARIANT_PROMPTS.video}"`,
+        prompt ? `"prompt": "${prompt}"` : null,
         dur ? `"duration": "${dur.value}"` : null,
         res ? `"resolution": "${res.value}"` : null,
+        upscale ? '"upscale_factor": 2' : null,
         video.aspectRatios && video.aspectRatios.length ? `"aspect_ratio": "${video.aspectRatios[0]}"` : null,
         video.audio === 'optional' ? '"audio": true' : null,
-        video.inputs && video.inputs.image ? '"image_url": "https://example.com/first-frame.jpg"' : null,
-        video.inputs && video.inputs.reference ? '"reference_image_urls": ["https://example.com/character.jpg"]' : null,
-        video.inputs && video.inputs.video ? '"video_url": "https://example.com/source.mp4"' : null
+        inputs.image ? `"image_url": "https://example.com/${video.mode === 'motion' ? 'character' : 'first-frame'}.jpg"` : null,
+        inputs.endImage ? '"end_image_url": "https://example.com/last-frame.jpg"' : null,
+        inputs.reference ? '"reference_image_urls": ["https://example.com/character.jpg"]' : null,
+        inputs.video ? '"video_url": "https://example.com/source.mp4"' : null,
+        inputs.referenceVideo ? '"reference_video_urls": ["https://example.com/source.mp4"]' : null
       ].filter(Boolean);
       const pyFields = fields.map(f => f.replace(/": true/, '": True'));
       return {
@@ -1647,7 +1679,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       const prompt = model.task === 'sfx' ? VARIANT_PROMPTS.sfx : VARIANT_PROMPTS.music;
       const isTts = model.task === 'tts';
       const input = isTts ? '"prompt": "Private AI for everyone."' : `"prompt": "${prompt}"`;
-      const duration = !isTts && model.audio && model.audio.defaultDuration ? `,\n    "duration_seconds": ${Math.min(30, model.audio.defaultDuration)}` : '';
+      const a = model.audio || {};
+      const seconds = a.durationOptions ? a.durationOptions[0] : a.defaultDuration ? Math.max(a.minDuration || 1, Math.min(30, a.defaultDuration)) : null;
+      const duration = !isTts && seconds ? `,\n    "duration_seconds": ${seconds}` : '';
       return {
         curl: `# 1. Queue the job\ncurl ${API}/audio/queue \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    ${input}${duration}\n  }'\n\n# 2. Retrieve when ready\ncurl ${API}/audio/retrieve \\\n  ${auth} \\\n  -d '{ "model": "${id}", "queue_id": "<queue_id>" }' --output audio.mp3`,
         python: `import time\n${reqHead}\njob = requests.post(f"{API}/audio/queue", headers=HEADERS, json={\n    "model": "${id}",\n    ${input}${duration.replace(/\n    /, '\n    ')},\n}).json()\n\nwhile True:\n    res = requests.post(f"{API}/audio/retrieve", headers=HEADERS,\n                        json={"model": "${id}", "queue_id": job["queue_id"]})\n    if res.headers.get("content-type", "").startswith("audio/"):\n        open("audio.mp3", "wb").write(res.content)\n        break\n    time.sleep(3)`,
@@ -1984,10 +2018,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }
     if (model.modality === 'video') {
       const video = model.video || {};
-      const inputs = video.inputs || {};
       return [
         ['Mode', VARIANT_LABELS[model.variant] || model.variant],
-        ['Inputs', ['Prompt', inputs.image && 'image', inputs.reference && 'reference images', inputs.video && 'video', inputs.audio && 'audio'].filter(Boolean).join(', ')],
+        ['Inputs', upperFirst(videoInputList(video).join(', '))],
         video.resolutions && video.resolutions.length ? ['Resolutions', video.resolutions.map(r => r.label).join(', ')] : null,
         video.durations && video.durations.length ? ['Durations', durationText(video.durations)] : null,
         video.aspectRatios && video.aspectRatios.length ? ['Aspect ratios', ratioShapes(video.aspectRatios)] : null,
@@ -2005,7 +2038,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (model.modality === 'audio' && model.task !== 'stt') {
       const a = model.audio || {};
       return [
-        a.maxDuration ? ['Duration', `${a.minDuration || 1}–${a.maxDuration} seconds${a.defaultDuration ? ` (default ${a.defaultDuration})` : ''}`] : null,
+        a.durationOptions ? ['Duration', `${a.durationOptions.join(', ')} seconds${a.defaultDuration ? ` (default ${a.defaultDuration})` : ''}`]
+          : a.maxDuration ? ['Duration', `${a.minDuration || 1}–${a.maxDuration} seconds${a.defaultDuration ? ` (default ${a.defaultDuration})` : ''}`] : null,
         ['Lyrics', a.lyricsRequired ? 'Required' : a.lyrics ? 'Supported' : 'Not supported'],
         a.instrumental ? ['Instrumental', 'Can be forced'] : null,
         a.loop ? ['Seamless loop', 'Supported'] : null,
@@ -2281,16 +2315,43 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const resolutions = p.byResolution ? Object.keys(p.byResolution) : [];
     const top = resolutions[resolutions.length - 1];
     const at = (row, res) => (row.byResolution ? row.byResolution[res] : res === resolutions[0] ? row.perImage : null);
+    const qualityRes = p.byQuality ? Object.keys(p.byQuality) : [];
+    const levels = ['low', 'medium', 'high'].filter(level => qualityRes.some(res => p.byQuality[res][level] != null));
     return (
       <>
         <PriceCards items={[
           ...(p.byResolution
-            ? Object.entries(p.byResolution).map(([res, value]) => ({ label: `${res} ${verb}`, value: usd(value) }))
+            ? Object.entries(p.byResolution).map(([res, value]) => ({ label: `${res} ${verb}`, value: usd(value), sub: p.defaultQuality ? `${p.defaultQuality} quality` : null }))
             : [{ label: model.task === 'image-edit' ? 'Edit' : model.task === 'image-upscale' ? '2x upscale' : 'Per image', value: usd(p.perImage) }]),
           model.task === 'image-upscale' && p.upscale && p.upscale['4x'] != null ? { label: '4x upscale', value: usd(p.upscale['4x']) } : null,
           editPrice != null ? { label: 'Edit', value: usd(editPrice) } : null,
           p.extraInputImage != null ? { label: 'Extra input image', value: usd(p.extraInputImage) } : null
         ]} />
+        {levels.length ? (
+          <>
+            <div className="vx-table-wrap vx-ruled">
+              <table className="vx-dtable">
+                <caption className="vx-sr-only">Price per {verb === 'edit' ? 'edit' : 'image'} by quality and resolution</caption>
+                <thead>
+                  <tr><th>Quality</th>{qualityRes.map(res => <th key={res} className="vx-al-right">{res}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {levels.map(level => (
+                    <tr key={level}>
+                      <th scope="row">{upperFirst(level)}{level === p.defaultQuality ? <span className="vx-muted"> · default</span> : null}</th>
+                      {qualityRes.map(res => <td key={res} className="vx-al-right vx-num">{usd(p.byQuality[res][level])}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="vx-footnote">
+              {model.task === 'image-edit'
+                ? <><code>POST /image/edit</code> runs at the default quality. To pick another, send <code>quality</code> to <code>POST /image/multi-edit</code>.</>
+                : <>Send <code>quality</code> to pick a tier{p.defaultQuality ? `; requests without it run at ${p.defaultQuality}` : ''}.</>}
+            </p>
+          </>
+        ) : null}
         {model.task === 'image-generation' && resolutions.length ? (
           <SimilarPrices
             columns={[...resolutions.map(res => ({ label: res, get: row => at(row, res) })), { label: 'Edit', get: row => row.edit }]}
@@ -2328,6 +2389,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       );
     }
     if (p.kind === 'tiered' && p.tiers) {
+      const fixed = model.audio && model.audio.durationOptions;
       return (
         <>
           <div className="vx-table-wrap vx-ruled">
@@ -2335,12 +2397,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               <thead><tr><th>Track length</th><th className="vx-al-right">Price</th></tr></thead>
               <tbody>
                 {p.tiers.map(t => (
-                  <tr key={t.upTo}><td>{tierLabel(t)}</td><td className="vx-al-right vx-num">{usd(t.usd)}</td></tr>
+                  <tr key={t.upTo}><td>{tierLabel(t, fixed)}</td><td className="vx-al-right vx-num">{usd(t.usd)}</td></tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="vx-footnote">Billed by duration bucket. Use <code>POST /audio/quote</code> for an exact price.</p>
+          <p className="vx-footnote">{fixed
+            ? <>Send one of these lengths as <code>duration_seconds</code>.</>
+            : <>Billed by duration bucket. Use <code>POST /audio/quote</code> for an exact price.</>}</p>
         </>
       );
     }
@@ -2456,7 +2520,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
                 ) : null}
                 {isVideo ? (
                   <>
-                    <td className="vx-hide-md">{['Prompt', ...['image', 'reference', 'video'].filter(k => m.video && m.video.inputs && m.video.inputs[k]).map(k => k[0].toUpperCase() + k.slice(1))].join(', ')}</td>
+                    <td className="vx-hide-md">{videoInputList(m.video).map(upperFirst).join(', ')}</td>
                     <td className="vx-al-right vx-num">{m.pricing && m.pricing.status === 'quoted' ? `${usd(m.pricing.fromPerSecond)} / sec` : 'By source'}</td>
                     <td className="vx-al-right vx-num vx-hide-sm">{heightLabel(maxVideoHeight(m))}</td>
                   </>
