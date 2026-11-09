@@ -549,10 +549,12 @@ function normalizeModel(model, ctx) {
       aspectRatios: Array.isArray(constraints.aspect_ratios) ? constraints.aspect_ratios : (constraints.aspect_ratios ? [constraints.aspect_ratios] : []),
       audio: constraints.audio ? (constraints.audio_configurable ? 'optional' : 'native') : 'none',
       inputs: {
-        image: mode === 'i2v' || mode === 'flf' || mode === 'transition',
+        image: ['i2v', 'flf', 'transition', 'multi-angle', 'motion'].includes(mode),
+        endImage: mode === 'flf' || mode === 'transition',
         video: Boolean(constraints.video_input),
         audio: Boolean(constraints.audio_input),
-        reference: mode === 'r2v'
+        reference: mode === 'r2v',
+        ...override.videoInputs
       },
       promptLimit: constraints.prompt_character_limit || null
     };
