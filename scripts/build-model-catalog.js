@@ -575,6 +575,7 @@ function normalizeModel(model, ctx) {
         minDuration: spec.min_duration || null,
         maxDuration: spec.max_duration || null,
         defaultDuration: spec.default_duration || null,
+        durationOptions: Array.isArray(spec.duration_options) && spec.duration_options.length ? spec.duration_options : null,
         lyrics: Boolean(spec.supports_lyrics),
         lyricsRequired: Boolean(spec.lyrics_required),
         instrumental: Boolean(spec.supports_force_instrumental),

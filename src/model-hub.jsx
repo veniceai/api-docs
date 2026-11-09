@@ -298,7 +298,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       audio: audioKey === 'on', forcedAudio: video.audio === 'native' && lens.a !== 'on', noAudio: video.audio === 'none' && lens.a === 'on'
     };
   };
-  const tierLabel = t => (t.from === t.upTo ? `${t.upTo}s` : t.from ? `${t.from}–${t.upTo}s` : `Up to ${t.upTo}s`);
+  // A model with duration options accepts only those lengths, one per tier.
+  const tierLabel = (t, fixed) => (fixed || t.from === t.upTo ? `${t.upTo}s` : t.from ? `${t.from}–${t.upTo}s` : `Up to ${t.upTo}s`);
 
   // The explorer prices a model at its cheapest option, or, once the
   // resolution, length or audio filter is set, at that setting. `from` marks
@@ -351,7 +352,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       if (f.res && p.byResolution[f.res] != null) return { value: p.byResolution[f.res], unit: '/ image' };
       return spread(IMAGE_RESOLUTIONS.filter(r => p.byResolution[r] != null).map(r => [r, p.byResolution[r]]), '/ image');
     }
-    if (p.kind === 'tiered' && (p.tiers || []).length) return spread(p.tiers.map(t => [tierLabel(t), t.usd]), '/ track');
+    if (p.kind === 'tiered' && (p.tiers || []).length) return spread(p.tiers.map(t => [tierLabel(t, model.audio && model.audio.durationOptions), t.usd]), '/ track');
     return { value: model.headline ? model.headline.value : null, unit: headlineUnit(model) };
   };
   // The unit a model is billed in, as the pricing section's note reads it.
@@ -1678,7 +1679,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       const prompt = model.task === 'sfx' ? VARIANT_PROMPTS.sfx : VARIANT_PROMPTS.music;
       const isTts = model.task === 'tts';
       const input = isTts ? '"prompt": "Private AI for everyone."' : `"prompt": "${prompt}"`;
-      const duration = !isTts && model.audio && model.audio.defaultDuration ? `,\n    "duration_seconds": ${Math.min(30, model.audio.defaultDuration)}` : '';
+      const a = model.audio || {};
+      const seconds = a.durationOptions ? a.durationOptions[0] : a.defaultDuration ? Math.max(a.minDuration || 1, Math.min(30, a.defaultDuration)) : null;
+      const duration = !isTts && seconds ? `,\n    "duration_seconds": ${seconds}` : '';
       return {
         curl: `# 1. Queue the job\ncurl ${API}/audio/queue \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    ${input}${duration}\n  }'\n\n# 2. Retrieve when ready\ncurl ${API}/audio/retrieve \\\n  ${auth} \\\n  -d '{ "model": "${id}", "queue_id": "<queue_id>" }' --output audio.mp3`,
         python: `import time\n${reqHead}\njob = requests.post(f"{API}/audio/queue", headers=HEADERS, json={\n    "model": "${id}",\n    ${input}${duration.replace(/\n    /, '\n    ')},\n}).json()\n\nwhile True:\n    res = requests.post(f"{API}/audio/retrieve", headers=HEADERS,\n                        json={"model": "${id}", "queue_id": job["queue_id"]})\n    if res.headers.get("content-type", "").startswith("audio/"):\n        open("audio.mp3", "wb").write(res.content)\n        break\n    time.sleep(3)`,
@@ -2035,7 +2038,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     if (model.modality === 'audio' && model.task !== 'stt') {
       const a = model.audio || {};
       return [
-        a.maxDuration ? ['Duration', `${a.minDuration || 1}–${a.maxDuration} seconds${a.defaultDuration ? ` (default ${a.defaultDuration})` : ''}`] : null,
+        a.durationOptions ? ['Duration', `${a.durationOptions.join(', ')} seconds${a.defaultDuration ? ` (default ${a.defaultDuration})` : ''}`]
+          : a.maxDuration ? ['Duration', `${a.minDuration || 1}–${a.maxDuration} seconds${a.defaultDuration ? ` (default ${a.defaultDuration})` : ''}`] : null,
         ['Lyrics', a.lyricsRequired ? 'Required' : a.lyrics ? 'Supported' : 'Not supported'],
         a.instrumental ? ['Instrumental', 'Can be forced'] : null,
         a.loop ? ['Seamless loop', 'Supported'] : null,
@@ -2358,6 +2362,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       );
     }
     if (p.kind === 'tiered' && p.tiers) {
+      const fixed = model.audio && model.audio.durationOptions;
       return (
         <>
           <div className="vx-table-wrap vx-ruled">
@@ -2365,12 +2370,14 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
               <thead><tr><th>Track length</th><th className="vx-al-right">Price</th></tr></thead>
               <tbody>
                 {p.tiers.map(t => (
-                  <tr key={t.upTo}><td>{tierLabel(t)}</td><td className="vx-al-right vx-num">{usd(t.usd)}</td></tr>
+                  <tr key={t.upTo}><td>{tierLabel(t, fixed)}</td><td className="vx-al-right vx-num">{usd(t.usd)}</td></tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="vx-footnote">Billed by duration bucket. Use <code>POST /audio/quote</code> for an exact price.</p>
+          <p className="vx-footnote">{fixed
+            ? <>Send one of these lengths as <code>duration_seconds</code>.</>
+            : <>Billed by duration bucket. Use <code>POST /audio/quote</code> for an exact price.</>}</p>
         </>
       );
     }
