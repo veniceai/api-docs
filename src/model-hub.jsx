@@ -1771,8 +1771,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           { label: 'Context', value: tokens(text.context), sub: text.maxOutput ? `${tokens(text.maxOutput)} max output` : 'max output not published' },
           {
             label: 'Reasoning',
-            value: !r ? 'None' : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'Always on',
-            sub: !r ? 'answers directly' : r.defaultEffort ? `default ${r.defaultEffort}` : levels.length ? 'reasoning_effort' : 'not adjustable'
+            value: !r ? 'None' : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'On',
+            sub: !r ? 'answers directly' : r.defaultEffort ? `default ${r.defaultEffort}` : levels.length ? 'reasoning_effort' : 'fixed effort'
           },
           p.cacheRead != null
             ? { label: 'Cached input', value: usd(p.cacheRead), sub: p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens' }
@@ -1932,7 +1932,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           ['Streaming (SSE)', 'Supported'],
           ['Function calling', caps.tools ? 'Supported' : null],
           ['Structured output (json_schema)', caps.structured ? 'Supported' : null],
-          ['Reasoning effort', !r ? null : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'Always on'],
+          ['Reasoning effort', !r ? null : levels.length > 1 ? `${levels[0]} → ${levels[levels.length - 1]}` : levels[0] || 'Not adjustable'],
           ['Prompt caching', hasCap(model, 'caching') ? 'Supported' : null],
           ['Web search', caps.webSearch ? 'venice_parameters' : null],
           ['X search', caps.xSearch ? 'venice_parameters' : null],
@@ -1960,7 +1960,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         ['Max output', t.maxOutput ? `${count(t.maxOutput)} tokens` : 'Not published'],
         ['Reasoning effort', !r ? 'No separate reasoning phase' : levels.length
           ? <><code>reasoning_effort: {levels.join(' | ')}</code>{r.defaultEffort ? <span className="vx-muted"> · default {r.defaultEffort}</span> : null} · <a href="/guides/features/reasoning-models#reasoning-effort">guide</a></>
-          : <>Always on; send <code>{'"reasoning": { "enabled": false }'}</code> to skip thinking · <a href="/guides/features/reasoning-models">guide</a></>],
+          : <>On at a fixed effort; send <code>{'"reasoning": { "enabled": false }'}</code> to turn it off where the model allows · <a href="/guides/features/reasoning-models">guide</a></>],
         ['Served precision', q ? QUANT_LABELS[q] || q : model.privacy === 'anonymized' ? 'Set by the upstream provider' : 'Not disclosed'],
         sampling ? ['Default sampling', sampling] : null
       ];
