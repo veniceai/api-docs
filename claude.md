@@ -34,6 +34,6 @@
 
 - Quick start: https://docs.venice.ai/getting-started/quick-start.md
 - Privacy tiers (Anonymized / Private / TEE / E2EE): https://docs.venice.ai/overview/privacy.md
-- Pricing: https://docs.venice.ai/overview/pricing.md
+- Pricing: https://docs.venice.ai/pricing.md
 - Error codes: https://docs.venice.ai/api-reference/error-codes.md
 - Rate limiting: https://docs.venice.ai/api-reference/rate-limiting.md

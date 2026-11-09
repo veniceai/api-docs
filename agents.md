@@ -9,6 +9,7 @@
 - **OpenAI-compatible:** Use any OpenAI SDK; only change `base_url` and the model ID
 - **Discover models at runtime:** `GET /models` (text), `GET /models?type=image|video|tts|asr|music|embedding` (or `?type=all`) — never hardcode model lists; they change frequently
 - **Model traits:** `GET /models/traits?type=text` maps trait names such as `default`, `default_code`, and `most_uncensored` to current model IDs; `?type=image` returns traits such as `default`, `fastest`, and `highest_quality`
+- **Prices:** every model's price per token or per unit, plus web search and tool fees, at https://docs.venice.ai/pricing.md
 - **OpenAPI spec:** https://docs.venice.ai/swagger.yaml
 - **Full docs index:** https://docs.venice.ai/llms.txt (one-line-per-page) and https://docs.venice.ai/llms-full.txt (entire docs in one file)
 - **Markdown pages:** append `.md` to any docs URL for the raw Markdown version, e.g. `https://docs.venice.ai/getting-started/quick-start.md`
