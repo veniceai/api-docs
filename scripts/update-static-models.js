@@ -178,9 +178,6 @@ async function main() {
     console.log('Regenerating pricing.md...');
     require('./generate-pricing-md.js');
   }
-
-  console.log('Regenerating pricing.mdx...');
-  require('./generate-pricing-static.js');
 }
 
 function writeIfChanged(filePath, contents, label) {

@@ -87,8 +87,8 @@ function escapeJsxText(value) {
     .replace(/\}/g, '&#125;');
 }
 
-// Privacy tier logic mirrors generate-pricing-static.js so the landing page and
-// the pricing page never disagree about a model's tier.
+// Privacy tier logic mirrors generate-models-static.js so the landing page and
+// the /models tables never disagree about a model's tier.
 function isE2EE(model) {
   const caps = model.model_spec?.capabilities || {};
   return caps.supportsE2EE === true || (model.id || '').toLowerCase().startsWith('e2ee-');
