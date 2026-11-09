@@ -97,10 +97,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return family.modality;
   };
   const initialScope = (modality, task) => (modality === 'all' ? null : modality === 'audio' ? task || 'tts' : modality);
-  // `m` lists the checked modalities, comma separated; `all` or nothing valid
-  // means none checked.
-  const parseScopes = value => [...new Set(String(value || '').split(','))].filter(key => SCOPES.some(s => s.key === key));
-  const sameScopes = (a, b) => a.length === b.length && a.every(key => b.includes(key));
+  // `m` names the chosen modality; `all` or nothing valid means All. Links from
+  // when several could be checked open on the first one they list.
+  const parseScope = value => String(value || '').split(',').find(key => SCOPES.some(s => s.key === key)) || null;
   const VIEWS = ['list', 'table', 'grid'];
   const PAGE_SIZE = 60;
   const defaultView = modality => (modality === 'image' || modality === 'video' ? 'grid' : 'list');
@@ -821,9 +820,18 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     </label>
   );
 
+  const Radio = ({ name, checked, onChange, label, count }) => (
+    <label className={cls('vx-check vx-radio', checked && 'is-checked')}>
+      <input type="radio" name={name} checked={checked} onChange={onChange} />
+      <span className="vx-check-box" />
+      <span className="vx-check-label">{label}</span>
+      <span className="vx-check-count">{count}</span>
+    </label>
+  );
+
   // The filter column; below 1024px it opens as a drawer from the toolbar.
   const DRAWER_MAX_WIDTH = 1024;
-  const FilterRail = ({ modality, task, scopes, scopeCounts, onScope, filters, setFilters, facetCount, providerCounts, providers, onClear, open, onClose }) => {
+  const FilterRail = ({ modality, task, scope, scopeCounts, onScope, filters, setFilters, facetCount, providerCounts, providers, onClear, open, onClose }) => {
     const toggleIn = (key, value) => setFilters(prev => ({ ...prev, [key]: prev[key].includes(value) ? prev[key].filter(v => v !== value) : [...prev[key], value] }));
     // An option nothing in scope matches is disabled unless already checked.
     const option = (key, value, label, title) => {
@@ -855,9 +863,10 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             <button type="button" className="vx-btn vx-btn-sm vx-rail-done" onClick={onClose}>Done</button>
           </div>
 
-          <FilterGroup title="Modality">
+          <FilterGroup title="Modality" role="radiogroup">
+            <Radio name="vx-modality" checked={!scope} onChange={() => onScope(null)} label="All" count={Object.values(scopeCounts).reduce((n, c) => n + c, 0)} />
             {SCOPES.filter(s => scopeCounts[s.key]).map(s => (
-              <Check key={s.key} checked={scopes.includes(s.key)} onChange={() => onScope(s.key)} label={s.label} count={scopeCounts[s.key]} />
+              <Radio key={s.key} name="vx-modality" checked={scope === s.key} onChange={() => onScope(s.key)} label={s.label} count={scopeCounts[s.key]} />
             ))}
           </FilterGroup>
 
@@ -1286,11 +1295,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const { catalog, error } = useCatalog();
     const now = useNow();
     const startScope = initialScope(initialModality, initialTask);
-    const startScopes = startScope ? [startScope] : [];
-    const [scopes, setScopes] = useState(startScopes);
-    // One checked modality brings its own view; none or several show the
-    // cross-modality one.
-    const scope = scopes.length === 1 ? scopes[0] : null;
+    const [scope, setScope] = useState(startScope);
     const [query, setQuery] = useState('');
     const [filters, setFilters] = useState(EMPTY_FILTERS);
     const startSort = defaultSort(initialModality);
@@ -1309,9 +1314,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       const params = readParams();
       // `m=audio&t=stt` is the shape of links from before the facet.
       const m = params.get('m') === 'audio' ? params.get('t') || 'tts' : params.get('m') || (initialModality === 'audio' && params.get('t'));
-      const linkedScopes = m === 'all' ? [] : m && parseScopes(m).length ? parseScopes(m) : startScopes;
-      const linked = linkedScopes.length === 1 ? linkedScopes[0] : null;
-      setScopes(linkedScopes);
+      const linked = m === 'all' ? null : parseScope(m) || startScope;
+      setScope(linked);
       if (params.get('q')) setQuery(params.get('q'));
       if (params.get('sort') && SORTS[params.get('sort')]) setSort(params.get('sort'));
       // Links leave the view out when it is the modality's default.
@@ -1334,15 +1338,15 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     useEffect(() => {
       if (!hydrated) return;
       writeParams({
-        m: sameScopes(scopes, startScopes) ? null : scopes.length ? scopes.join(',') : 'all',
+        m: scope === startScope ? null : scope || 'all',
         q: query || null,
         sort: sort !== startSort ? sort : null,
         view: view !== defaultView(modality) ? view : null,
         ...filtersToParams(filters)
       });
-    }, [hydrated, scopes, query, sort, view, filters]);
+    }, [hydrated, scope, query, sort, view, filters]);
 
-    useEffect(() => { setLimit(PAGE_SIZE); }, [scopes, filters, query, sort, view]);
+    useEffect(() => { setLimit(PAGE_SIZE); }, [scope, filters, query, sort, view]);
 
     useEffect(() => {
       if (!railOpen) return undefined;
@@ -1382,10 +1386,8 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
     // Filters for one modality and the provider list reset with the facet,
     // so no checked filter is left out of view.
-    const chooseScope = toggled => {
-      const next = scopes.includes(toggled) ? scopes.filter(k => k !== toggled) : [...scopes, toggled];
-      const key = next.length === 1 ? next[0] : null;
-      setScopes(next);
+    const chooseScope = key => {
+      setScope(key);
       setFilters(prev => ({ ...EMPTY_FILTERS, providers: [], privacy: prev.privacy, flags: prev.flags }));
       setView(defaultView(key));
       if (key !== 'text' && !['newest', 'name', 'price'].includes(sort)) setSort(startSort);
@@ -1393,7 +1395,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
     const providers = catalog ? catalog.providers : {};
 
-    const scoped = useMemo(() => (catalog ? catalog.families.filter(family => !scopes.length || scopes.includes(familyScope(family))) : []), [catalog, scopes]);
+    const scoped = useMemo(() => (catalog ? catalog.families.filter(family => !scope || familyScope(family) === scope) : []), [catalog, scope]);
 
     const scopeCounts = useMemo(() => {
       const out = {};
@@ -1463,7 +1465,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
       <div className="vx vx-page vx-explorer not-prose">
         <div className="vx-page-grid">
           {catalog ? (
-            <FilterRail modality={modality} task={task} scopes={scopes} scopeCounts={scopeCounts} onScope={chooseScope}
+            <FilterRail modality={modality} task={task} scope={scope} scopeCounts={scopeCounts} onScope={chooseScope}
               filters={filters} setFilters={setFilters} facetCount={facetCount} providerCounts={providerCounts} providers={providers}
               onClear={() => setFilters(EMPTY_FILTERS)} open={railOpen} onClose={() => setRailOpen(false)} />
           ) : <aside className="vx-side vx-filters" aria-hidden="true" />}
