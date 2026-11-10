@@ -8,7 +8,21 @@
 // Data comes from scripts/build-model-catalog.js: views fetch
 // data/model-catalog.json, except model pages, which receive their
 // family inline. `now` is the clock a view's first render reads.
-export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEffect, useRef, useMemo, fetchData, now: clock = Date.now }) => {
+export const createModelHub = ({ h: createElement, Fragment: __Fragment, useState, useEffect, useRef, useMemo, fetchData, now: clock = Date.now }) => {
+  // Text sets its quotes and apostrophes as curly ones, the way Mintlify sets
+  // page text. Code keeps them as typed.
+  const AS_TYPED = new Set(['code', 'pre', 'kbd', 'samp', 'textarea']);
+  const typeset = text => text
+    .replace(/(\w)'(?=\w)/g, '$1\u2019')
+    .replace(/(s)'(?=$|[\s.,;:!?)\]])/g, '$1\u2019')
+    .replace(/(^|[\s([{\u2013\u2014])'/g, '$1\u2018')
+    .replace(/'/g, '\u2019')
+    .replace(/(^|[\s([{\u2013\u2014])"/g, '$1\u201c')
+    .replace(/"/g, '\u201d');
+  const __jsx = (type, props, ...kids) => (type === __Fragment || (typeof type === 'string' && !AS_TYPED.has(type))
+    ? createElement(type, props, ...kids.map(kid => (typeof kid === 'string' && /['"]/.test(kid) ? typeset(kid) : kid)))
+    : createElement(type, props, ...kids));
+
   /* ------------------------------------------------------------ data */
 
   const CATALOG_PATH = '/data/model-catalog.json';
