@@ -3,6 +3,9 @@
  * browser copy of the same logic, so change both together.
  */
 
+const fs = require('fs');
+const path = require('path');
+
 function getRemovalDate(model) {
   const deprecation = model.model_spec?.deprecation;
   return deprecation?.removesAt || deprecation?.date || null;
@@ -72,8 +75,22 @@ function checkSnapshotDrop(label, previous, next, { allowDrop = process.argv.inc
   throw new Error(`${message}. Refusing to overwrite; rerun with --allow-drop if the drop is real.`);
 }
 
+// A provider's logo from images/providers/. A mark drawn only in
+// currentColor is single-color and takes the page's text color, since an
+// image would draw it black on the dark theme; the rest keep their colors.
+function providerLogo(file, root = path.join(__dirname, '..')) {
+  if (!file) return {};
+  const logo = { logo: `/images/providers/${file}` };
+  if (!file.endsWith('.svg')) return logo;
+  const svg = fs.readFileSync(path.join(root, 'images', 'providers', file), 'utf-8');
+  const colors = svg.match(/(?:fill|stroke|stop-color)="[^"]*"/g) || [];
+  const mono = svg.includes('currentColor') && colors.every(color => /"(currentColor|none)"$/.test(color));
+  return mono ? { ...logo, mono: true } : logo;
+}
+
 module.exports = {
   checkSnapshotDrop,
+  providerLogo,
   getRemovalDate,
   isDeprecatedModel,
   isRemovedModel,
