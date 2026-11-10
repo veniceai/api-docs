@@ -5,6 +5,7 @@
  * Outputs:
  *   data/model-catalog.json   normalized models + families for the explorer
  *   models/<family>.mdx       one generated page per model family (hidden, searchable)
+ *   snippets/model-hub/<family>.mdx   each page's first screen, rendered at build time
  *   docs.json                 the hidden "Models" group in the English Models tab, and
  *                             redirects for the pages of families that were removed
  *   llms.txt                  the "Model pages" block listing every page
@@ -27,6 +28,7 @@
 const fs = require('fs');
 const path = require('path');
 const { checkSnapshotDrop } = require('./model-helpers');
+const { createPrerenderer, writeSnippet, snippetImport, SNIPPETS } = require('./model-hub-prerender');
 
 const ROOT = path.join(__dirname, '..');
 const DATA = path.join(ROOT, 'data');
@@ -1109,9 +1111,9 @@ function relatedSummary(slugs, familiesBySlug, modelsById) {
   });
 }
 
-function renderPage(family, variants, related, providers, familiesBySlug, modelsById) {
-  const primary = variants.find(v => v.id === family.primary) || variants[0];
-  const pageData = {
+// The family data the page passes to <HubMount>, and its snippet renders.
+function pageDataFor(family, variants, related, providers, familiesBySlug, modelsById) {
+  return {
     family: compactFamily(family),
     models: variants.map(stripForPage),
     related: {
@@ -1121,6 +1123,10 @@ function renderPage(family, variants, related, providers, familiesBySlug, models
     providers: Object.fromEntries([...new Set([family.provider, ...related.similar.concat(related.versions).map(s => familiesBySlug[s].provider)])]
       .filter(slug => providers[slug]).map(slug => [slug, providers[slug]]))
   };
+}
+
+function renderPage(family, variants, related, providers, familiesBySlug, modelsById, pageData) {
+  const primary = variants.find(v => v.id === family.primary) || variants[0];
   return [
     '---',
     GENERATED_MARKER,
@@ -1134,21 +1140,17 @@ function renderPage(family, variants, related, providers, familiesBySlug, models
     '---',
     '',
     'import { HubMount } from "/snippets/model-hub-mount.jsx"',
+    snippetImport(family.slug),
     '',
-    `<HubMount view="ModelPage" data={${JSON.stringify(pageData)}} />`,
+    '<Prerender />',
     '',
-    // Outside <HubMount>: Mintlify server-renders page MDX, but not snippet
-    // component children, raw <details> or <noscript>. This is the text
-    // crawlers without JavaScript read; <Accordion> keeps it collapsed.
-    '<div className="vx-static">',
+    `<HubMount view="ModelPage" data={${JSON.stringify(pageData)}}>`,
     '',
-    '<Accordion title="Plain-text specification">',
-    '',
+    // <HubMount>'s children reach the .md export agents read, and the web
+    // never renders them. Readers without JavaScript get <Prerender />.
     specMarkdown(family, variants, providers, related, familiesBySlug, modelsById, codeSamplesFor(primary)),
     '',
-    '</Accordion>',
-    '',
-    '</div>',
+    '</HubMount>',
     ''
   ].join('\n');
 }
@@ -1161,17 +1163,20 @@ function stripForPage(model) {
 function writePages(families, modelsById, providers, relatedBySlug) {
   const expected = new Set();
   const familiesBySlug = Object.fromEntries(families.map(f => [f.slug, f]));
+  const prerender = createPrerenderer();
   for (const family of families.filter(f => !PAGE_FILTER || PAGE_FILTER.has(f.slug))) {
     const file = path.join(MODELS_DIR, `${family.slug}.mdx`);
     expected.add(file);
     const variants = family.variants.map(id => modelsById[id]);
     const related = relatedBySlug[family.slug];
-    const contents = renderPage(family, variants, related, providers, familiesBySlug, modelsById);
+    const pageData = pageDataFor(family, variants, related, providers, familiesBySlug, modelsById);
+    const contents = renderPage(family, variants, related, providers, familiesBySlug, modelsById, pageData);
     const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : null;
     if (current !== null && !isGenerated(current)) {
       throw new Error(`Refusing to overwrite hand-authored page models/${family.slug}.mdx`);
     }
     if (current !== contents) fs.writeFileSync(file, contents, 'utf-8');
+    writeSnippet(family.slug, prerender.modelPage(pageData));
   }
   // Remove pages for families that no longer exist. A --pages preview
   // renders a subset, so it leaves the other pages alone.
@@ -1184,6 +1189,7 @@ function writePages(families, modelsById, providers, relatedBySlug) {
       const slug = name.replace(/\.mdx$/, '');
       removed.push({ slug, data: readPageData(slug) });
       fs.unlinkSync(file);
+      fs.rmSync(path.join(SNIPPETS, `${slug}.mdx`), { force: true });
     }
   }
   return removed;
@@ -1284,7 +1290,7 @@ function updateLlmsIndex(families) {
 function readPageData(slug) {
   const file = path.join(MODELS_DIR, `${slug}.mdx`);
   if (!fs.existsSync(file)) return null;
-  const match = fs.readFileSync(file, 'utf-8').match(/^<HubMount view="ModelPage" data=\{(.*)\} \/>$/m);
+  const match = fs.readFileSync(file, 'utf-8').match(/^<HubMount view="ModelPage" data=\{(.*)\}( \/)?>$/m);
   return match ? JSON.parse(match[1]) : null;
 }
 

@@ -49,12 +49,14 @@ The pages under `models/` render an interactive explorer from `data/model-hub.bu
 npx http-server . -p 3333 --cors -c-1
 ```
 
-Without it, the pages show their static Markdown tables instead of the explorer.
+Without it, the pages keep showing their first screen, which isn't interactive.
 
-After editing `src/model-hub.jsx`, rebuild the bundle and commit both files:
+Mintlify renders custom components only in the browser, so each page's first screen is its view rendered at build time into `snippets/model-hub/<page>.mdx` (`scripts/model-hub-prerender.js`). The explorer replaces it once it loads. After editing `src/model-hub.jsx`, rebuild the bundle and those snippets, and commit the results:
 
 ```bash
 node scripts/build-model-hub.js
+node scripts/build-model-catalog.js --offline
+node scripts/generate-models-static.js
 ```
 
 The data files are refreshed hourly by `.github/workflows/sync-static-models.yml`; the scripts it runs live in `scripts/`.

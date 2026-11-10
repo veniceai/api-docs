@@ -7,8 +7,22 @@
 // __jsx()/__Fragment, names chosen so local variables can't shadow them.
 // Data comes from scripts/build-model-catalog.js: views fetch
 // data/model-catalog.json, except model pages, which receive their
-// family inline.
-export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEffect, useRef, useMemo, fetchData }) => {
+// family inline. `now` is the clock a view's first render reads.
+export const createModelHub = ({ h: createElement, Fragment: __Fragment, useState, useEffect, useRef, useMemo, fetchData, now: clock = Date.now }) => {
+  // Text sets its quotes and apostrophes as curly ones, the way Mintlify sets
+  // page text. Code keeps them as typed.
+  const AS_TYPED = new Set(['code', 'pre', 'kbd', 'samp', 'textarea']);
+  const typeset = text => text
+    .replace(/(\w)'(?=\w)/g, '$1\u2019')
+    .replace(/(s)'(?=$|[\s.,;:!?)\]])/g, '$1\u2019')
+    .replace(/(^|[\s([{\u2013\u2014])'/g, '$1\u2018')
+    .replace(/'/g, '\u2019')
+    .replace(/(^|[\s([{\u2013\u2014])"/g, '$1\u201c')
+    .replace(/"/g, '\u201d');
+  const __jsx = (type, props, ...kids) => (type === __Fragment || (typeof type === 'string' && !AS_TYPED.has(type))
+    ? createElement(type, props, ...kids.map(kid => (typeof kid === 'string' && /['"]/.test(kid) ? typeset(kid) : kid)))
+    : createElement(type, props, ...kids));
+
   /* ------------------------------------------------------------ data */
 
   const CATALOG_PATH = '/data/model-catalog.json';
@@ -37,11 +51,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return state;
   };
 
-  const useNow = () => {
-    const [now, setNow] = useState(null);
-    useEffect(() => setNow(Date.now()), []);
-    return now;
-  };
+  const useNow = () => useState(() => (typeof clock === 'function' ? clock() : clock))[0];
 
   const readParams = () => (typeof window === 'undefined' ? new URLSearchParams() : new URLSearchParams(window.location.search));
   const listParam = (params, key) => (params.get(key) ? params.get(key).split(',').filter(Boolean) : []);
@@ -1291,19 +1301,34 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const ModelExplorer = ({ modality: initialModality = 'all', task: initialTask, children }) => {
+  const ModelExplorer = ({ modality: initialModality = 'all', task: initialTask }) => {
     const { catalog, error } = useCatalog();
     const now = useNow();
     const startScope = initialScope(initialModality, initialTask);
-    const [scope, setScope] = useState(startScope);
-    const [query, setQuery] = useState('');
-    const [filters, setFilters] = useState(EMPTY_FILTERS);
     const startSort = defaultSort(initialModality);
-    const [sort, setSort] = useState(startSort);
-    const [view, setView] = useState(defaultView(initialModality));
+    // A link's state applies on the first render, so a shared view opens as
+    // it was.
+    const [linked] = useState(() => {
+      const params = readParams();
+      // `m=audio&t=stt` is the shape of links from before the facet.
+      const m = params.get('m') === 'audio' ? params.get('t') || 'tts' : params.get('m') || (initialModality === 'audio' && params.get('t'));
+      const scope = m === 'all' ? null : parseScope(m) || startScope;
+      return {
+        scope,
+        query: params.get('q') || '',
+        sort: params.get('sort') && SORTS[params.get('sort')] ? params.get('sort') : startSort,
+        // Links leave the view out when it is the modality's default.
+        view: VIEWS.includes(params.get('view')) ? params.get('view') : defaultView(scope),
+        filters: { ...EMPTY_FILTERS, ...filtersFromParams(params) }
+      };
+    });
+    const [scope, setScope] = useState(linked.scope);
+    const [query, setQuery] = useState(linked.query);
+    const [filters, setFilters] = useState(linked.filters);
+    const [sort, setSort] = useState(linked.sort);
+    const [view, setView] = useState(linked.view);
     const [railOpen, setRailOpen] = useState(false);
     const [limit, setLimit] = useState(PAGE_SIZE);
-    const [hydrated, setHydrated] = useState(false);
     const searchRef = useRef(null);
     // A chosen modality brings its columns, filters and price lenses; All
     // shows the cross-modality view.
@@ -1311,17 +1336,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const task = AUDIO_SCOPES.includes(scope) ? scope : 'tts';
 
     useEffect(() => {
-      const params = readParams();
-      // `m=audio&t=stt` is the shape of links from before the facet.
-      const m = params.get('m') === 'audio' ? params.get('t') || 'tts' : params.get('m') || (initialModality === 'audio' && params.get('t'));
-      const linked = m === 'all' ? null : parseScope(m) || startScope;
-      setScope(linked);
-      if (params.get('q')) setQuery(params.get('q'));
-      if (params.get('sort') && SORTS[params.get('sort')]) setSort(params.get('sort'));
-      // Links leave the view out when it is the modality's default.
-      setView(VIEWS.includes(params.get('view')) ? params.get('view') : defaultView(linked));
-      setFilters({ ...EMPTY_FILTERS, ...filtersFromParams(params) });
-      setHydrated(true);
       // "/" jumps to the search unless the reader is typing somewhere or the
       // filter drawer holds focus.
       const typing = el => Boolean(el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)));
@@ -1336,7 +1350,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }, []);
 
     useEffect(() => {
-      if (!hydrated) return;
       writeParams({
         m: scope === startScope ? null : scope || 'all',
         q: query || null,
@@ -1344,7 +1357,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         view: view !== defaultView(modality) ? view : null,
         ...filtersToParams(filters)
       });
-    }, [hydrated, scope, query, sort, view, filters]);
+    }, [scope, query, sort, view, filters]);
 
     useEffect(() => { setLimit(PAGE_SIZE); }, [scope, filters, query, sort, view]);
 
@@ -1458,10 +1471,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
     const updated = catalog && catalog.generatedAt ? fmtDate(Math.floor(new Date(catalog.generatedAt).getTime() / 1000)) : null;
 
-    // The page's static tables stay in the DOM under the explorer, collapsed,
-    // so crawlers and agents see every model, not just the first page of rows.
     return (
-      <>
       <div className="vx vx-page vx-explorer not-prose">
         <div className="vx-page-grid">
           {catalog ? (
@@ -1500,12 +1510,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             </div>
 
             {!catalog ? (
-              <>
-                {error
-                  ? <div className="vx-error" role="alert">The interactive catalog could not load. The full model list is below.</div>
-                  : <><span className="vx-sr-only" role="status">Loading models</span><CatalogSkeleton /></>}
-                <div className={error ? 'vx-fallback' : 'vx-fallback vx-sr-only'}>{children}</div>
-              </>
+              error
+                ? <div className="vx-error" role="alert">The model catalog could not load. Reload the page to try again.</div>
+                : <><span className="vx-sr-only" role="status">Loading models</span><CatalogSkeleton /></>
             ) : (
               <section className="vx-results" aria-label="Models">
                 <div className="vx-countline">
@@ -1548,13 +1555,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           </div>
         </div>
       </div>
-      {catalog && children ? (
-        <details className="vx-static">
-          <summary>Full model table</summary>
-          {children}
-        </details>
-      ) : null}
-      </>
     );
   };
 
@@ -2739,5 +2739,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   // so it reads the same as the page.
   const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable, durationText };
 
-  return { ModelExplorer, ModelPage, codeSamples, helpers };
+  // Hands over a catalog that loaded before the explorer's first render, so
+  // the view opens on its results instead of a loading skeleton.
+  const setCatalog = catalog => { store.catalog = catalog; };
+
+  return { ModelExplorer, ModelPage, codeSamples, helpers, setCatalog };
 };
