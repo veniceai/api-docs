@@ -5,23 +5,30 @@
 // Mintlify compiles an imported snippet into every page that imports it, so
 // pages import only this mount; the bundle is fetched once per session and
 // cached by the browser. Snippet exports are evaluated in isolation, so all
-// helpers live inside the component. The explorer's catalog loads alongside
-// the bundle, so the view starts with its results. Children are the page's
-// static Markdown, kept for the .md export agents read; they show only if the
-// bundle fails.
+// helpers live inside the component.
+//
+// Mintlify renders custom components only in the browser, so a page's first
+// screen is the same view rendered at build time (scripts/model-hub-prerender.js)
+// into a .vx-prerender element that names the versioned bundle and catalog.
+// Once both load, the live view takes its place in the same frame. Children
+// are the page's static Markdown, kept for the .md export agents read; they
+// show only if the bundle fails on a page without a prerender.
 export const HubMount = ({ view, children, ...props }) => {
-  const [state, setState] = useState({ status: 'loading' });
+  const [state, setState] = useState({ status: 'loading', prerendered: true });
 
   useEffect(() => {
     let alive = true;
     const w = window;
-    const bundleUrl = '/data/model-hub.bundle.json';
-    const catalogUrl = view === 'ModelExplorer' ? '/data/model-catalog.json' : null;
+    const prerender = document.querySelector('.vx-prerender');
+    if (!prerender) setState({ status: 'loading', prerendered: false });
+    const bundleUrl = (prerender && prerender.dataset.bundle) || '/data/model-hub.bundle.json';
+    const catalogUrl = view === 'ModelExplorer' ? (prerender && prerender.dataset.catalog) || '/data/model-catalog.json' : null;
     const cache = w.__veniceModelHubCache || (w.__veniceModelHubCache = { bundles: {}, catalogs: {} });
     // `mintlify dev` does not serve .json files, so on localhost a data
-    // server on port 3333 is tried first (see README.md).
+    // server on port 3333 is tried first (see README.md). Versioned URLs may
+    // come from the HTTP cache, which also holds the page's preloads.
     const origins = w.location.hostname === 'localhost' ? ['http://localhost:3333', ''] : [''];
-    const fetchData = (path, init = { cache: 'no-cache' }) => {
+    const fetchData = (path, init = { cache: /[?&]v=/.test(path) ? 'default' : 'no-cache' }) => {
       const attempt = i => fetch(`${origins[i]}${path}`, init)
         .then(res => { if (!res.ok) throw new Error(`${path} ${res.status}`); return res.json(); })
         .catch(err => (i + 1 < origins.length ? attempt(i + 1) : Promise.reject(err)));
@@ -48,13 +55,25 @@ export const HubMount = ({ view, children, ...props }) => {
       .catch(() => {
         delete cache.bundles[bundleUrl];
         if (catalogUrl) delete cache.catalogs[catalogUrl];
-        if (alive) setState({ status: 'failed' });
+        if (alive) setState({ status: 'failed', prerendered: Boolean(prerender) });
       });
     return () => { alive = false; };
   }, []);
 
+  // Runs as the live view commits, before the browser paints: the build-time
+  // copy hides and gives up its IDs, so anchors and lookups find the live view.
+  const takeOver = useCallback(el => {
+    if (!el) return;
+    document.querySelectorAll('.vx-prerender').forEach(copy => {
+      copy.hidden = true;
+      copy.querySelectorAll('[id]').forEach(node => node.removeAttribute('id'));
+    });
+  }, []);
+
   const View = state.status === 'ready' ? state.hub[view] : null;
-  if (View) return <View {...props} />;
+  if (View) return <div className="vx-live" ref={takeOver}><View {...props} /></div>;
+  // The build-time copy stays in place while loading, and if loading fails.
+  if (state.prerendered) return null;
   if (state.status === 'failed') {
     return (
       <div className="vx-mount is-failed">
