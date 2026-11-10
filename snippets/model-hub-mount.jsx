@@ -16,6 +16,9 @@
 export const HubMount = ({ view, children, ...props }) => {
   const [state, setState] = useState({ status: 'loading', prerendered: true });
   const faces = ['16px "Venice Aeonik"', '16px "Venice Aeonik Fono"'];
+  // Fono's zero is a face of its own, which loads, and counts as loaded, only
+  // for text that has a 0 in it.
+  const text = '0';
 
   useEffect(() => {
     let alive = true;
@@ -50,7 +53,7 @@ export const HubMount = ({ view, children, ...props }) => {
     const catalog = catalogUrl ? cache.catalogs[catalogUrl] || (cache.catalogs[catalogUrl] = fetchData(catalogUrl)) : null;
     // Without a first screen, the live view waits up to a second for Aeonik,
     // so it can start in it.
-    const fonts = !prerender && document.fonts ? Promise.all(faces.map(font => document.fonts.load(font))).catch(() => null) : null;
+    const fonts = !prerender && document.fonts ? Promise.all(faces.map(font => document.fonts.load(font, text))).catch(() => null) : null;
     Promise.all([hub, catalog])
       .then(([instance, data]) => {
         if (data && instance.setCatalog) instance.setCatalog(data);
@@ -61,7 +64,7 @@ export const HubMount = ({ view, children, ...props }) => {
         // never swap in late, so the swap and the fonts' arrival move nothing.
         const firstScreenFaces = prerender
           ? !document.documentElement.classList.contains('vx-fonts-ready')
-          : !(document.fonts && faces.every(font => document.fonts.check(font)));
+          : !(document.fonts && faces.every(font => document.fonts.check(font, text)));
         if (alive) setState({ status: 'ready', hub: instance, firstScreenFaces });
       })
       .catch(() => {
@@ -83,7 +86,7 @@ export const HubMount = ({ view, children, ...props }) => {
       copy.querySelectorAll('[id]').forEach(node => node.removeAttribute('id'));
     });
     if (!document.fonts) return;
-    Promise.all(faces.map(font => document.fonts.load(font))).then(() => {
+    Promise.all(faces.map(font => document.fonts.load(font, text))).then(() => {
       if ([...document.querySelectorAll('.vx-prerender')].every(copy => copy.hidden)) document.documentElement.classList.add('vx-fonts-ready');
     }, () => {});
   }, []);
