@@ -1287,7 +1287,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     );
   };
 
-  const ModelExplorer = ({ modality: initialModality = 'all', task: initialTask, children }) => {
+  const ModelExplorer = ({ modality: initialModality = 'all', task: initialTask }) => {
     const { catalog, error } = useCatalog();
     const now = useNow();
     const startScope = initialScope(initialModality, initialTask);
@@ -1457,10 +1457,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
 
     const updated = catalog && catalog.generatedAt ? fmtDate(Math.floor(new Date(catalog.generatedAt).getTime() / 1000)) : null;
 
-    // The page's static tables stay in the DOM under the explorer, collapsed,
-    // so crawlers and agents see every model, not just the first page of rows.
     return (
-      <>
       <div className="vx vx-page vx-explorer not-prose">
         <div className="vx-page-grid">
           {catalog ? (
@@ -1499,12 +1496,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
             </div>
 
             {!catalog ? (
-              <>
-                {error
-                  ? <div className="vx-error" role="alert">The interactive catalog could not load. The full model list is below.</div>
-                  : <><span className="vx-sr-only" role="status">Loading models</span><CatalogSkeleton /></>}
-                <div className={error ? 'vx-fallback' : 'vx-fallback vx-sr-only'}>{children}</div>
-              </>
+              error
+                ? <div className="vx-error" role="alert">The model catalog could not load. Reload the page to try again.</div>
+                : <><span className="vx-sr-only" role="status">Loading models</span><CatalogSkeleton /></>
             ) : (
               <section className="vx-results" aria-label="Models">
                 <div className="vx-countline">
@@ -1547,13 +1541,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
           </div>
         </div>
       </div>
-      {catalog && children ? (
-        <details className="vx-static">
-          <summary>Full model table</summary>
-          {children}
-        </details>
-      ) : null}
-      </>
     );
   };
 

@@ -1135,20 +1135,13 @@ function renderPage(family, variants, related, providers, familiesBySlug, models
     '',
     'import { HubMount } from "/snippets/model-hub-mount.jsx"',
     '',
-    `<HubMount view="ModelPage" data={${JSON.stringify(pageData)}} />`,
+    `<HubMount view="ModelPage" data={${JSON.stringify(pageData)}}>`,
     '',
-    // Outside <HubMount>: Mintlify server-renders page MDX, but not snippet
-    // component children, raw <details> or <noscript>. This is the text
-    // crawlers without JavaScript read; <Accordion> keeps it collapsed.
-    '<div className="vx-static">',
-    '',
-    '<Accordion title="Plain-text specification">',
-    '',
+    // <HubMount>'s children reach the .md export agents read, and the web
+    // never renders them.
     specMarkdown(family, variants, providers, related, familiesBySlug, modelsById, codeSamplesFor(primary)),
     '',
-    '</Accordion>',
-    '',
-    '</div>',
+    '</HubMount>',
     ''
   ].join('\n');
 }
@@ -1284,7 +1277,7 @@ function updateLlmsIndex(families) {
 function readPageData(slug) {
   const file = path.join(MODELS_DIR, `${slug}.mdx`);
   if (!fs.existsSync(file)) return null;
-  const match = fs.readFileSync(file, 'utf-8').match(/^<HubMount view="ModelPage" data=\{(.*)\} \/>$/m);
+  const match = fs.readFileSync(file, 'utf-8').match(/^<HubMount view="ModelPage" data=\{(.*)\}( \/)?>$/m);
   return match ? JSON.parse(match[1]) : null;
 }
 

@@ -6,7 +6,8 @@
 // pages import only this mount; the bundle is fetched once per session and
 // cached by the browser. Snippet exports are evaluated in isolation, so all
 // helpers live inside the component. Children are the page's static
-// Markdown: indexed for search and agents, shown if the bundle fails.
+// Markdown, kept for the .md export agents read; they show only if the
+// bundle fails.
 export const HubMount = ({ view, children, ...props }) => {
   const [hub, setHub] = useState(null);
   const [failed, setFailed] = useState(false);
@@ -45,7 +46,7 @@ export const HubMount = ({ view, children, ...props }) => {
   }, []);
 
   const View = hub ? hub[view] : null;
-  if (View) return <View {...props}>{children}</View>;
+  if (View) return <View {...props} />;
   if (failed) {
     return (
       <div className="vx-mount is-failed">
@@ -57,7 +58,6 @@ export const HubMount = ({ view, children, ...props }) => {
   return (
     <div className="vx-mount" aria-busy="true">
       <div className="vx-mount-skeleton" aria-hidden="true"><span /><span /><span /></div>
-      <div className="vx-mount-source">{children}</div>
     </div>
   );
 };
