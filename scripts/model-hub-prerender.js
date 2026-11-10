@@ -117,8 +117,10 @@ function digest(content) {
 // would land after the first paint; preloaded, they usually arrive first.
 function fontPreloads() {
   const css = fs.readFileSync(path.join(ROOT, 'model-hub.css'), 'utf-8');
-  return [...css.matchAll(/@font-face\s*\{[^}]*?src:\s*url\("([^"]+\.(woff2|woff|otf|ttf))"\)/g)]
-    .map(([, url, format]) => `<link rel="preload" href="${url}" as="font" type="font/${format}" crossOrigin="anonymous" />`)
+  // The first screen's faces share their files with the live view's.
+  const files = new Map([...css.matchAll(/@font-face\s*\{[^}]*?src:\s*url\("([^"]+\.(woff2|woff|otf|ttf))"\)/g)].map(([, url, format]) => [url, format]));
+  return [...files]
+    .map(([url, format]) => `<link rel="preload" href="${url}" as="font" type="font/${format}" crossOrigin="anonymous" />`)
     .join('');
 }
 

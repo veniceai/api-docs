@@ -15,6 +15,7 @@
 // show only if the bundle fails on a page without a prerender.
 export const HubMount = ({ view, children, ...props }) => {
   const [state, setState] = useState({ status: 'loading', prerendered: true });
+  const faces = ['16px "Venice Aeonik"', '16px "Venice Aeonik Fono"'];
 
   useEffect(() => {
     let alive = true;
@@ -47,10 +48,21 @@ export const HubMount = ({ view, children, ...props }) => {
     const hub = cache.bundles[bundleUrl] || (cache.bundles[bundleUrl] = fetchData(bundleUrl).then(bundle =>
       new Function(`return (${bundle.code})`)()({ h, Fragment: Frag, useState, useEffect, useRef, useMemo, fetchData })));
     const catalog = catalogUrl ? cache.catalogs[catalogUrl] || (cache.catalogs[catalogUrl] = fetchData(catalogUrl)) : null;
+    // Without a first screen, the live view waits up to a second for Aeonik,
+    // so it can start in it.
+    const fonts = !prerender && document.fonts ? Promise.all(faces.map(font => document.fonts.load(font))).catch(() => null) : null;
     Promise.all([hub, catalog])
       .then(([instance, data]) => {
         if (data && instance.setCatalog) instance.setCatalog(data);
-        if (alive) setState({ status: 'ready', hub: instance });
+        return Promise.race([fonts, new Promise(resolve => setTimeout(resolve, 1000))]).then(() => instance);
+      })
+      .then(instance => {
+        // The live view draws in the faces its first screen drew in, which
+        // never swap in late, so the swap and the fonts' arrival move nothing.
+        const firstScreenFaces = prerender
+          ? !document.documentElement.classList.contains('vx-fonts-ready')
+          : !(document.fonts && faces.every(font => document.fonts.check(font)));
+        if (alive) setState({ status: 'ready', hub: instance, firstScreenFaces });
       })
       .catch(() => {
         delete cache.bundles[bundleUrl];
@@ -62,16 +74,22 @@ export const HubMount = ({ view, children, ...props }) => {
 
   // Runs as the live view commits, before the browser paints: the build-time
   // copy hides and gives up its IDs, so anchors and lookups find the live view.
+  // Once Aeonik has loaded, and while no first screen is showing, later views
+  // may start in it (model-hub.css).
   const takeOver = useCallback(el => {
     if (!el) return;
     document.querySelectorAll('.vx-prerender').forEach(copy => {
       copy.hidden = true;
       copy.querySelectorAll('[id]').forEach(node => node.removeAttribute('id'));
     });
+    if (!document.fonts) return;
+    Promise.all(faces.map(font => document.fonts.load(font))).then(() => {
+      if ([...document.querySelectorAll('.vx-prerender')].every(copy => copy.hidden)) document.documentElement.classList.add('vx-fonts-ready');
+    }, () => {});
   }, []);
 
   const View = state.status === 'ready' ? state.hub[view] : null;
-  if (View) return <div className="vx-live" ref={takeOver}><View {...props} /></div>;
+  if (View) return <div className={state.firstScreenFaces ? 'vx-live first-screen-faces' : 'vx-live'} ref={takeOver}><View {...props} /></div>;
   // The build-time copy stays in place while loading, and if loading fails.
   if (state.prerendered) return null;
   if (state.status === 'failed') {
