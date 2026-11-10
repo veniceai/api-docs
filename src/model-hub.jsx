@@ -2725,5 +2725,9 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
   // so it reads the same as the page.
   const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable, durationText };
 
-  return { ModelExplorer, ModelPage, codeSamples, helpers };
+  // Hands over a catalog that loaded before the explorer's first render, so
+  // the view opens on its results instead of a loading skeleton.
+  const setCatalog = catalog => { store.catalog = catalog; };
+
+  return { ModelExplorer, ModelPage, codeSamples, helpers, setCatalog };
 };
