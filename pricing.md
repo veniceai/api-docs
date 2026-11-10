@@ -263,6 +263,7 @@ Prices per image. Models with resolution options list a price for each resolutio
 | Lustify SDXL | `lustify-sdxl` | $0.01 | Private |
 | Lustify v7 | `lustify-v7` | $0.01 | Private |
 | Lustify v8 | `lustify-v8` | $0.01 | Private |
+| MiniMax H3 Image | `minimax-h3-image` | 1K: $0.04, 2K: $0.04, 4K: $0.10 | Anonymized |
 | Muse Image | `muse-image` | $0.02 | Anonymized |
 | Nano Banana 2 | `nano-banana-2` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | Anonymized |
 | Nano Banana 2 Lite | `nano-banana-2-lite` | $0.06 | Anonymized |
@@ -336,6 +337,7 @@ Prices per edit. The edit price covers the first input image. Models with an ext
 | Krea 3 | `krea-3-edit` | 1K: $0.07, 2K: $0.10, 4K: $0.15 | $0.02499985 | Anonymized |
 | Luma Uni-1 | `luma-uni-1-edit` | $0.06 | — | Anonymized |
 | Luma Uni-1 Max | `luma-uni-1-max-edit` | $0.13 | — | Anonymized |
+| MiniMax H3 Image | `minimax-h3-image-edit` | 1K: $0.06, 2K: $0.06, 4K: $0.12 | $0.01937405 | Anonymized |
 | Muse Image | `muse-image-edit` | $0.02 | — | Anonymized |
 | Nano Banana 2 | `nano-banana-2-edit` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | — | Anonymized |
 | Nano Banana 2 Lite | `nano-banana-2-lite-edit` | $0.06 | — | Anonymized |
