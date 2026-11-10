@@ -280,7 +280,7 @@ Prices per image. Models with resolution options list a price for each resolutio
 | Seedream V4.5 | `seedream-v4` | $0.05 | Anonymized |
 | Seedream V5 Lite | `seedream-v5-lite` | $0.05 | Anonymized |
 | Seedream V5 Pro | `seedream-v5-pro` | 1K: $0.06, 2K: $0.11 | Anonymized |
-| Seedream V5.5 | `seedream-v5-5` | 1K: $0.03, 1.5K: $0.03, 2K: $0.05 | Anonymized |
+| Seedream V5.5 | `seedream-v5-5` | 1K: $0.0255, 1.5K: $0.0255, 2K: $0.051 | Anonymized |
 | Venice SD35 | `venice-sd35` | $0.01 | Private |
 | Wan 2.7 | `wan-2-7-text-to-image` | $0.0375 | Anonymized |
 | Wan 2.7 Pro | `wan-2-7-pro-text-to-image` | $0.09375 | Anonymized |
@@ -351,7 +351,7 @@ Prices per edit. The edit price covers the first input image. Models with an ext
 | Seedream V4.5 | `seedream-v4-edit` | $0.05 | — | Anonymized |
 | Seedream V5 Lite | `seedream-v5-lite-edit` | $0.05 | — | Anonymized |
 | Seedream V5 Pro | `seedream-v5-pro-edit` | 1K: $0.06, 2K: $0.11 | $0.00345 | Anonymized |
-| Seedream V5.5 | `seedream-v5-5-edit` | 1K: $0.03, 1.5K: $0.03, 2K: $0.05 | $0.010695 | Anonymized |
+| Seedream V5.5 | `seedream-v5-5-edit` | 1K: $0.0255, 1.5K: $0.0255, 2K: $0.051 | $0.01019923 | Anonymized |
 | Wan 2.7 Pro | `wan-2-7-pro-edit` | $0.094 | — | Anonymized |
 
 ### Editing price by quality
