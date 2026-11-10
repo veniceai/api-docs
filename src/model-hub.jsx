@@ -496,6 +496,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     <span className={cls('vx-badge', tone && `vx-badge-${tone}`)} title={title}>{children}</span>
   );
 
+  const TypeBadge = ({ family }) => {
+    const scope = SCOPES.find(s => s.key === familyScope(family));
+    return scope ? <span className={`vx-type vx-type-${scope.key}`} role="img" aria-label={scope.label} title={scope.label} /> : null;
+  };
+
   const StatusTags = ({ item, now }) => (
     <>
       {isNew(item.created, now) ? <Tag tone="new">New</Tag> : null}
@@ -1012,6 +1017,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <div className="vx-mcell-body">
           <div className="vx-mcell-top">
             <a className="vx-mcell-name" href={modelHref(family, display.id)}>{family.name}</a>
+            <TypeBadge family={family} />
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-mcell-sub">
@@ -1186,6 +1192,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <div className="vx-card-body">
           <div className="vx-card-top">
             <a className="vx-card-name" href={href} title={family.name}>{family.name}</a>
+            <TypeBadge family={family} />
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-card-foot">
@@ -1259,6 +1266,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <div className="vx-list-top">
               <ProviderLogo provider={provider} size={24} />
               <a className="vx-list-name" href={modelHref(family, display.id)}>{family.name}</a>
+              <TypeBadge family={family} />
               <StatusTags item={family} now={now} />
               <span className="vx-list-price">{rowPrice(row)}</span>
             </div>
