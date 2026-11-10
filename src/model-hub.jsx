@@ -476,16 +476,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   const ProviderLogo = ({ provider, size = 32 }) => {
     const box = { width: size, height: size };
+    const name = (provider && provider.name) || undefined;
     if (!provider || !provider.logo) {
-      const initial = ((provider && provider.name) || '?').charAt(0);
-      return <span className="vx-logo vx-logo-initial" style={{ ...box, fontSize: Math.round(size * 0.5) }} aria-hidden="true">{initial}</span>;
+      const initial = (name || '?').charAt(0);
+      return <span className="vx-logo vx-logo-initial" style={{ ...box, fontSize: Math.round(size * 0.5) }} title={name} aria-hidden="true">{initial}</span>;
     }
     // Translated pages keep the page data of their last sync, which can still
     // name the old single-color icons; those draw only as masks.
     if (provider.mono || provider.logo.startsWith('/images/icons/models/')) {
-      return <span className="vx-logo vx-logo-mono" style={{ ...box, '--vx-logo': `url('${provider.logo}')` }} aria-hidden="true" />;
+      return <span className="vx-logo vx-logo-mono" style={{ ...box, '--vx-logo': `url('${provider.logo}')` }} title={name} aria-hidden="true" />;
     }
-    return <img className="vx-logo" src={provider.logo} width={size} height={size} alt="" aria-hidden="true" loading="lazy" decoding="async" />;
+    return <img className="vx-logo" src={provider.logo} width={size} height={size} alt="" title={name} aria-hidden="true" loading="lazy" decoding="async" />;
   };
 
   const PrivacyBadge = ({ tier }) => {
@@ -511,7 +512,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   const StatusTags = ({ item, now }) => (
     <>
-      {isNew(item.created, now) ? <Tag tone="new">New</Tag> : null}
+      {isNew(item.created, now) ? <Tag tone="new" title="Added in the last 30 days.">New</Tag> : null}
       {item.beta ? <Tag tone="beta" title="Experimental. May change or be removed without notice.">Beta</Tag> : null}
       {item.deprecated || item.deprecation ? <Tag tone="deprecated" title="Scheduled for removal. See Deprecations.">Deprecated</Tag> : null}
     </>
