@@ -89,7 +89,7 @@ const PROVIDERS = [
   ['hexgrad', 'hexgrad', 'music.svg', ['kokoro']],
   ['canopy', 'Canopy Labs', 'music.svg', ['orpheus']],
   ['nvidia', 'NVIDIA', 'nvidia.svg', ['nvidia', 'nemotron', 'parakeet']],
-  ['meta', 'Meta', 'meta.svg', ['llama', 'muse-spark', 'muse-wonder']],
+  ['meta', 'Meta', 'meta.svg', ['llama', 'muse-spark', 'muse-wonder', 'muse-image']],
   ['mistral', 'Mistral AI', 'mistral.svg', ['mistral']],
   ['inception', 'Inception', 'inception.svg', ['mercury']],
   ['xiaomi', 'Xiaomi', 'xiaomimimo.svg', ['mimo', 'xiaomi']],
