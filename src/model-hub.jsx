@@ -491,7 +491,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const PrivacyBadge = ({ tier }) => {
     const meta = PRIVACY[tier];
     if (!meta) return null;
-    return <span className={cls('vx-badge', `vx-privacy-${tier}`)} title={`${meta.long}. ${meta.desc}`}>{meta.label}</span>;
+    return <span className={cls('vx-badge', `vx-privacy-${tier}`)} title={`${meta.long}. ${meta.desc}`} data-tip-label={meta.long} data-tip={meta.desc}>{meta.label}</span>;
   };
 
   const PrivacyStack = ({ tiers }) => (
@@ -506,7 +506,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   const TypeBadge = ({ family }) => {
     const scope = SCOPES.find(s => s.key === familyScope(family));
-    return scope ? <span className={`vx-type vx-type-${scope.key}`} role="img" aria-label={scope.label} title={scope.label} /> : null;
+    return scope ? <span className={`vx-type vx-type-${scope.key}`} role="img" aria-label={scope.label} data-tip-label={scope.label} title={SCOPE_BLURBS[scope.key]} /> : null;
   };
 
   const StatusTags = ({ item, now }) => (
@@ -567,7 +567,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const CapIcons = ({ model }) => (
     <span className="vx-caps">
       {TEXT_CAPS.filter(cap => ['tools', 'reasoning', 'vision', 'structured', 'webSearch'].includes(cap.key) && hasCap(model, cap.key)).map(cap => (
-        <span key={cap.key} className="vx-cap" title={cap.label}><Icon name={cap.icon} size={15} /><span className="vx-sr-only">{cap.label}</span></span>
+        <span key={cap.key} className="vx-cap" data-tip-label={cap.label} title={cap.desc}><Icon name={cap.icon} size={15} /><span className="vx-sr-only">{cap.label}</span></span>
       ))}
     </span>
   );
