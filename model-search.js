@@ -347,10 +347,6 @@
 
   const FREE_LABEL = 'Free';
 
-  function formatModelPrice(model, price) {
-    return isFreeModel(model) ? FREE_LABEL : formatPrice(price);
-  }
-
   function isDeprecatedModel(model) {
     const dep = model.model_spec?.deprecation;
     return dep != null && (dep.date != null || dep.removesAt != null);
@@ -360,23 +356,6 @@
     const dep = model.model_spec?.deprecation;
     if (!dep) return null;
     return dep.removesAt || dep.date || null;
-  }
-
-  // Deprecated models stay in the price tables (tagged Retiring) until removal.
-  function isRemovedModel(model) {
-    const removalDate = getModelRemovalDate(model);
-    if (!removalDate) return false;
-    const removal = new Date(removalDate);
-    return !Number.isNaN(removal.getTime()) && removal <= new Date();
-  }
-
-  function isListedModel(model) {
-    return !isRemovedModel(model);
-  }
-
-  function retiringTag(model) {
-    if (!isDeprecatedModel(model)) return '';
-    return `<span class="vpt-badge vpt-retiring vpt-tooltip" data-tooltip="Scheduled for removal on ${formatDeprecationDate(getModelRemovalDate(model))}. See the deprecations page for details.">Retiring</span>`;
   }
 
   // Cache helpers
@@ -498,71 +477,6 @@
     return `<table class="vpt-table vpt-deprecation-table"><thead><tr>
       <th>Model</th><th>Model ID</th><th>Removal Date</th><th>Status</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
-  }
-
-  // Cache pricing table for prompt caching guide
-  function renderCachePricingTable(models) {
-    const cacheModels = models
-      .filter(m => m.type === 'text' && m.model_spec?.pricing?.cache_input)
-      .filter(isListedModel)
-      .sort((a, b) => {
-        const pA = a.model_spec?.pricing?.input?.usd ?? 999;
-        const pB = b.model_spec?.pricing?.input?.usd ?? 999;
-        return pB - pA; // Sort by input price descending (premium models first)
-      });
-
-    if (cacheModels.length === 0) return '<p>No models with cache pricing available.</p>';
-
-    const rows = cacheModels.map(model => {
-      const pricing = model.model_spec?.pricing || {};
-      const modelId = escapeHtml(model.id);
-      const input = pricing.input?.usd;
-      const cacheRead = pricing.cache_input?.usd;
-      const cacheWrite = pricing.cache_write?.usd;
-      const output = pricing.output?.usd;
-      const discount = input && cacheRead ? Math.round((1 - cacheRead / input) * 100) : null;
-
-      return `<tr>
-        <td><code>${modelId}</code>${pricingCopyBtn(modelId)}${retiringTag(model)}</td>
-        <td class="vpt-price">${formatModelPrice(model, input)}</td>
-        <td class="vpt-price">${formatModelPrice(model, cacheRead)}</td>
-        <td class="vpt-price">${cacheWrite != null ? formatModelPrice(model, cacheWrite) : '—'}</td>
-        <td class="vpt-price">${formatModelPrice(model, output)}</td>
-        <td>${discount ? discount + '%' : '—'}</td>
-      </tr>`;
-    }).join('');
-
-    return `<table class="vpt-table"><thead><tr>
-      <th>Model</th><th class="vpt-price">Input</th><th class="vpt-price">Cache Read</th><th class="vpt-price">Cache Write</th><th class="vpt-price">Output</th><th>Read Discount</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
-  }
-
-  function renderCachePricingContent(models) {
-    return `<div class="vpt-cache-pricing">
-      <p>Prices per 1M tokens. A dash means that cache read or write isn't billed separately from input.</p>
-      ${renderCachePricingTable(models)}
-    </div>`;
-  }
-
-  async function initCachePricing() {
-    const el = document.getElementById('cache-pricing-placeholder');
-    if (!el) return;
-
-    // Prefer the session cache, otherwise fall back to the static snapshot
-    const cachedModels = getCachedModels();
-    const initialModels = cachedModels && cachedModels.length > 0
-      ? cachedModels
-      : await ensureStaticModels();
-    el.innerHTML = renderCachePricingContent(initialModels);
-    ensurePlaceholderVisible(el);
-
-    // Fetch fresh data in background and update
-    fetchModelsFromAPI().then(freshModels => {
-      if (freshModels.length > 0) {
-        el.innerHTML = renderCachePricingContent(freshModels);
-        ensurePlaceholderVisible(el);
-      }
-    }).catch(() => {});
   }
 
   function ensurePlaceholderVisible(el) {
@@ -1036,7 +950,6 @@
     deprecations: { initialized: false, rendered: false, promise: null },
     traitsList: { initialized: false, rendered: false, promise: null },
     betaModels: { initialized: false, rendered: false, promise: null },
-    cachePricing: { initialized: false, rendered: false, promise: null },
     reasoningModels: { initialized: false, rendered: false, promise: null },
     voicePicker: { initialized: false, rendered: false, promise: null }
   };
@@ -1115,14 +1028,6 @@
     resetCheck: el => el.innerHTML === ''
   });
 
-  const tryInitCachePricing = createPageInitializer({
-    name: 'cachePricing',
-    pathMatch: 'prompt-caching',
-    elementId: 'cache-pricing-placeholder',
-    initFn: initCachePricing,
-    resetCheck: el => !el.querySelector('.vpt-cache-pricing')
-  });
-
   const tryInitReasoningModels = createPageInitializer({
     name: 'reasoningModels',
     pathMatch: 'reasoning-models',
@@ -1153,7 +1058,6 @@
     tryInitDeprecations();
     tryInitTraitsList();
     tryInitBetaModels();
-    tryInitCachePricing();
     tryInitReasoningModels();
     tryInitVoicePicker();
   }
@@ -1197,7 +1101,6 @@
     retryInit('deprecation', () => pageInitializers.traitsList.initialized, tryInitTraitsList);
     retryInit('models/traits', () => pageInitializers.traitsList.initialized, tryInitTraitsList);
     retryInit('beta-models', () => pageInitializers.betaModels.initialized, tryInitBetaModels);
-    retryInit('prompt-caching', () => pageInitializers.cachePricing.initialized, tryInitCachePricing);
     retryInit('reasoning-models', () => pageInitializers.reasoningModels.initialized, tryInitReasoningModels);
     retryInit('text-to-speech', () => pageInitializers.voicePicker.initialized, tryInitVoicePicker);
   }
