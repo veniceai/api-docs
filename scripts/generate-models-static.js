@@ -367,8 +367,8 @@ function escapeRegExp(value) {
 }
 
 // Mintlify's .md export keeps markdown tables inside a plain placeholder
-// <div> (same pattern as overview/pricing.mdx). Visibility-for-agents
-// dropped the model catalogs on the published export.
+// <div>. Visibility-for-agents dropped the model catalogs on the published
+// export.
 function upsertCatalogBlock(page, { id, startMarker, endMarker, content }) {
   const attrMatch = page.match(new RegExp(`<div id="${escapeRegExp(id)}"([^>]*)>`));
   const attrs = attrMatch ? attrMatch[1] : '';
