@@ -952,6 +952,110 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
+  // Titles in a view show as tooltips: after a beat on hover, and at once on
+  // keyboard focus. The pointer test looks beneath a row's link, so a logo or
+  // badge under it shows its tooltip while a click still opens the row. The
+  // title is set aside while its tooltip shows, so the browser's own stays
+  // hidden. data-tip-label adds a heading, and data-tip replaces the title as
+  // the text. A title that only repeats text in full view shows nothing.
+  const TIP_DELAY = 150;
+  const HoverTips = () => {
+    const anchor = useRef(null);
+    const [tip, setTip] = useState(null);
+    useEffect(() => {
+      const root = anchor.current && anchor.current.parentElement;
+      if (!root) return undefined;
+      let target = null;
+      let pending = null;
+      let timer = 0;
+      let frame = 0;
+      const tippable = el => el.nodeType === 1 && root.contains(el) && !el.closest('.vx-tip-anchor')
+        && (el.hasAttribute('title') || el.hasAttribute('data-tip-label'));
+      const restore = () => {
+        if (!target) return;
+        if (target.hasAttribute('data-tip-title')) {
+          target.setAttribute('title', target.getAttribute('data-tip-title'));
+          target.removeAttribute('data-tip-title');
+        }
+        target.classList.remove('is-tipped');
+        target = null;
+      };
+      const hide = () => {
+        clearTimeout(timer);
+        pending = null;
+        restore();
+        setTip(null);
+      };
+      const show = el => {
+        const title = el.getAttribute('title');
+        const label = el.getAttribute('data-tip-label');
+        const text = el.getAttribute('data-tip') || title;
+        const repeats = !label && text && text === el.textContent.trim() && el.scrollWidth <= el.clientWidth;
+        if ((!label && !text) || repeats) return;
+        if (title != null) {
+          el.setAttribute('data-tip-title', title);
+          el.removeAttribute('title');
+        }
+        el.classList.add('is-tipped');
+        target = el;
+        const r = el.getBoundingClientRect();
+        const lines = (text ? text.split('\n').length : 0) + (label ? 1 : 0);
+        const above = r.top > lines * 17 + 32;
+        const x = Math.min(Math.max(r.left + r.width / 2, 148), window.innerWidth - 148);
+        setTip({ label, text: text === label ? null : text, above, style: { left: x, top: above ? r.top - 8 : r.bottom + 8 } });
+      };
+      const over = el => {
+        if (el ? el === target || el === pending : !target && !pending) return;
+        hide();
+        if (!el) return;
+        pending = el;
+        timer = setTimeout(() => { pending = null; show(el); }, TIP_DELAY);
+      };
+      const onMove = e => {
+        if (e.pointerType === 'touch') return;
+        const { clientX, clientY } = e;
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => over(document.elementsFromPoint(clientX, clientY).find(tippable) || null));
+      };
+      const onFocus = e => {
+        if (!tippable(e.target) || !e.target.matches(':focus-visible')) return;
+        hide();
+        show(e.target);
+      };
+      const onKey = e => { if (e.key === 'Escape') hide(); };
+      root.addEventListener('pointermove', onMove);
+      root.addEventListener('pointerleave', hide);
+      root.addEventListener('focusin', onFocus);
+      root.addEventListener('focusout', hide);
+      document.addEventListener('pointerdown', hide, true);
+      document.addEventListener('keydown', onKey);
+      window.addEventListener('scroll', hide, true);
+      return () => {
+        cancelAnimationFrame(frame);
+        root.removeEventListener('pointermove', onMove);
+        root.removeEventListener('pointerleave', hide);
+        root.removeEventListener('focusin', onFocus);
+        root.removeEventListener('focusout', hide);
+        document.removeEventListener('pointerdown', hide, true);
+        document.removeEventListener('keydown', onKey);
+        window.removeEventListener('scroll', hide, true);
+        clearTimeout(timer);
+        restore();
+      };
+    }, []);
+    return (
+      <>
+        <span ref={anchor} hidden />
+        {tip ? (
+          <span className={cls('vx-hovertip', !tip.above && 'is-below')} role="tooltip" style={tip.style}>
+            {tip.label ? <strong>{tip.label}</strong> : null}
+            {tip.text ? <span>{tip.text}</span> : null}
+          </span>
+        ) : null}
+      </>
+    );
+  };
+
   // A "from" price lists its options on hover, focus or tap. The trigger is a
   // button described by the list, so screen readers announce the options with
   // the price. The list is fixed to the viewport so table and card overflow
@@ -1486,6 +1590,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
     return (
       <div className="vx vx-page vx-explorer not-prose">
+        <HoverTips />
         <div className="vx-page-grid">
           {catalog ? (
             <FilterRail modality={modality} task={task} scope={scope} scopeCounts={scopeCounts} onScope={chooseScope}
@@ -2614,6 +2719,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
     return (
       <div className="vx vx-page not-prose">
+        <HoverTips />
         <div className="vx-page-grid">
           <aside className="vx-side">
             <div className="vx-side-inner">
