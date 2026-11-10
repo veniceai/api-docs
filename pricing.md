@@ -263,6 +263,7 @@ Prices per image. Models with resolution options list a price for each resolutio
 | Lustify SDXL | `lustify-sdxl` | $0.01 | Private |
 | Lustify v7 | `lustify-v7` | $0.01 | Private |
 | Lustify v8 | `lustify-v8` | $0.01 | Private |
+| MiniMax H3 Image | `minimax-h3-image` | 1K: $0.04, 2K: $0.04, 4K: $0.10 | Anonymized |
 | Muse Image | `muse-image` | $0.02 | Anonymized |
 | Nano Banana 2 | `nano-banana-2` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | Anonymized |
 | Nano Banana 2 Lite | `nano-banana-2-lite` | $0.06 | Anonymized |
@@ -280,7 +281,7 @@ Prices per image. Models with resolution options list a price for each resolutio
 | Seedream V4.5 | `seedream-v4` | $0.05 | Anonymized |
 | Seedream V5 Lite | `seedream-v5-lite` | $0.05 | Anonymized |
 | Seedream V5 Pro | `seedream-v5-pro` | 1K: $0.06, 2K: $0.11 | Anonymized |
-| Seedream V5.5 | `seedream-v5-5` | 1K: $0.0255, 1.5K: $0.0255, 2K: $0.051 | Anonymized |
+| Seedream V5.5 | `seedream-v5-5` | 1K: $0.0255, 1.5K: $0.034, 2K: $0.051 | Anonymized |
 | Venice SD35 | `venice-sd35` | $0.01 | Private |
 | Wan 2.7 | `wan-2-7-text-to-image` | $0.0375 | Anonymized |
 | Wan 2.7 Pro | `wan-2-7-pro-text-to-image` | $0.09375 | Anonymized |
@@ -336,6 +337,7 @@ Prices per edit. The edit price covers the first input image. Models with an ext
 | Krea 3 | `krea-3-edit` | 1K: $0.07, 2K: $0.10, 4K: $0.15 | $0.02499985 | Anonymized |
 | Luma Uni-1 | `luma-uni-1-edit` | $0.06 | — | Anonymized |
 | Luma Uni-1 Max | `luma-uni-1-max-edit` | $0.13 | — | Anonymized |
+| MiniMax H3 Image | `minimax-h3-image-edit` | 1K: $0.06, 2K: $0.06, 4K: $0.12 | $0.01937405 | Anonymized |
 | Muse Image | `muse-image-edit` | $0.02 | — | Anonymized |
 | Nano Banana 2 | `nano-banana-2-edit` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | — | Anonymized |
 | Nano Banana 2 Lite | `nano-banana-2-lite-edit` | $0.06 | — | Anonymized |
@@ -351,7 +353,7 @@ Prices per edit. The edit price covers the first input image. Models with an ext
 | Seedream V4.5 | `seedream-v4-edit` | $0.05 | — | Anonymized |
 | Seedream V5 Lite | `seedream-v5-lite-edit` | $0.05 | — | Anonymized |
 | Seedream V5 Pro | `seedream-v5-pro-edit` | 1K: $0.06, 2K: $0.11 | $0.00345 | Anonymized |
-| Seedream V5.5 | `seedream-v5-5-edit` | 1K: $0.0255, 1.5K: $0.0255, 2K: $0.051 | $0.01019923 | Anonymized |
+| Seedream V5.5 | `seedream-v5-5-edit` | 1K: $0.0255, 1.5K: $0.034, 2K: $0.051 | $0.01019923 | Anonymized |
 | Wan 2.7 Pro | `wan-2-7-pro-edit` | $0.094 | — | Anonymized |
 
 ### Editing price by quality

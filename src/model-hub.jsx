@@ -474,11 +474,19 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   /* ------------------------------------------------------------ atoms */
 
-  const ProviderLogo = ({ provider, size = 32 }) => (
-    <span className={cls('vx-logo', size <= 24 && 'vx-logo-sm')} style={{ width: size, height: size }} aria-hidden="true">
-      <span className="vx-logo-mask" style={{ '--vx-logo': `url('${(provider && provider.logo) || '/images/icons/models/text.svg'}')` }} />
-    </span>
-  );
+  const ProviderLogo = ({ provider, size = 32 }) => {
+    const box = { width: size, height: size };
+    if (!provider || !provider.logo) {
+      const initial = ((provider && provider.name) || '?').charAt(0);
+      return <span className="vx-logo vx-logo-initial" style={{ ...box, fontSize: Math.round(size * 0.5) }} aria-hidden="true">{initial}</span>;
+    }
+    // Translated pages keep the page data of their last sync, which can still
+    // name the old single-color icons; those draw only as masks.
+    if (provider.mono || provider.logo.startsWith('/images/icons/models/')) {
+      return <span className="vx-logo vx-logo-mono" style={{ ...box, '--vx-logo': `url('${provider.logo}')` }} aria-hidden="true" />;
+    }
+    return <img className="vx-logo" src={provider.logo} width={size} height={size} alt="" aria-hidden="true" loading="lazy" decoding="async" />;
+  };
 
   const PrivacyBadge = ({ tier }) => {
     const meta = PRIVACY[tier];
@@ -495,6 +503,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const Tag = ({ tone, children, title }) => (
     <span className={cls('vx-badge', tone && `vx-badge-${tone}`)} title={title}>{children}</span>
   );
+
+  const TypeBadge = ({ family }) => {
+    const scope = SCOPES.find(s => s.key === familyScope(family));
+    return scope ? <span className={`vx-type vx-type-${scope.key}`} role="img" aria-label={scope.label} title={scope.label} /> : null;
+  };
 
   const StatusTags = ({ item, now }) => (
     <>
@@ -1008,10 +1021,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const extra = family.variants.length - 1;
     return (
       <div className="vx-mcell">
-        <ProviderLogo provider={provider} size={32} />
+        <ProviderLogo provider={provider} size={28} />
         <div className="vx-mcell-body">
           <div className="vx-mcell-top">
             <a className="vx-mcell-name" href={modelHref(family, display.id)}>{family.name}</a>
+            <TypeBadge family={family} />
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-mcell-sub">
@@ -1186,6 +1200,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <div className="vx-card-body">
           <div className="vx-card-top">
             <a className="vx-card-name" href={href} title={family.name}>{family.name}</a>
+            <TypeBadge family={family} />
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-card-foot">
@@ -1257,8 +1272,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         return (
           <li key={family.slug} className="vx-list-row">
             <div className="vx-list-top">
-              <ProviderLogo provider={provider} size={24} />
+              <ProviderLogo provider={provider} size={22} />
               <a className="vx-list-name" href={modelHref(family, display.id)}>{family.name}</a>
+              <TypeBadge family={family} />
               <StatusTags item={family} now={now} />
               <span className="vx-list-price">{rowPrice(row)}</span>
             </div>

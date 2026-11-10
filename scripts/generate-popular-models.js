@@ -18,11 +18,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const { isDeprecatedModel: isDeprecated } = require('./model-helpers');
+const { isDeprecatedModel: isDeprecated, providerLogo } = require('./model-helpers');
 
 const SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-models.json');
 const PAGE_PATH = path.join(__dirname, '..', 'overview', 'about-venice.mdx');
-const ICON_BASE_PATH = '/images/icons/models/';
 const CATALOG_HREF = '/models/overview';
 
 const START_MARKER = '{/* popular-models:start */}';
@@ -45,27 +44,27 @@ const FEATURED = [
   { id: 'zai-org-glm-5-2', patterns: ['glm', 'zai-org', 'z-ai'] }
 ];
 
-// Provider label and logo, matched against (id + name) lowercased. Icon
-// filenames mirror SYNTHETIC_PROVIDER_ASSET_RULES in model-search.js, which
-// stays the source of truth for logo matching across the docs. Order matters:
-// broad provider prefixes go ahead of narrower ones so 'google' wins 'gemma'.
+// Provider label and logo, matched against (id + name) lowercased. Logos are
+// the files in images/providers/ that the model catalog uses for the same
+// providers. Order matters: broad provider prefixes go ahead of narrower
+// ones so 'google' wins 'gemma'.
 const PROVIDERS = [
   { label: 'OpenAI', icon: 'openai.svg', patterns: ['openai', 'gpt-'] },
-  { label: 'xAI', icon: 'grok.svg', patterns: ['grok', 'x.ai', 'xai'] },
-  { label: 'Alibaba', icon: 'qwen.svg', patterns: ['qwen', 'tongyi'] },
+  { label: 'xAI', icon: 'xai.svg', patterns: ['grok', 'x.ai', 'xai'] },
+  { label: 'Alibaba', icon: 'alibaba.svg', patterns: ['qwen', 'tongyi'] },
   { label: 'Google', icon: 'google.svg', patterns: ['google', 'gemini'] },
-  { label: 'Google', icon: 'gemma.svg', patterns: ['gemma'] },
-  { label: 'Z.ai', icon: 'Zhipu.svg', patterns: ['zai-org', 'z-ai', 'glm', 'zhipu'] },
+  { label: 'Google', icon: 'google.svg', patterns: ['gemma'] },
+  { label: 'Z.ai', icon: 'zai.svg', patterns: ['zai-org', 'z-ai', 'glm', 'zhipu'] },
   { label: 'NVIDIA', icon: 'nvidia.svg', patterns: ['nvidia', 'nemotron'] },
   { label: 'MiniMax', icon: 'minimax.svg', patterns: ['minimax'] },
-  { label: 'Moonshot AI', icon: 'kimi.svg', patterns: ['moonshot', 'kimi'] },
+  { label: 'Moonshot AI', icon: 'moonshot.svg', patterns: ['moonshot', 'kimi'] },
   { label: 'DeepSeek', icon: 'deepseek.svg', patterns: ['deepseek'] },
-  { label: 'AionLabs', icon: 'aionlabs.svg', patterns: ['aionlabs', 'aion-labs'] },
-  { label: 'Anthropic', icon: 'opus.svg', patterns: ['claude', 'anthropic'] },
+  { label: 'AionLabs', icon: 'aion.svg', patterns: ['aionlabs', 'aion-labs'] },
+  { label: 'Anthropic', icon: 'anthropic.svg', patterns: ['claude', 'anthropic'] },
   { label: 'Mistral AI', icon: 'mistral.svg', patterns: ['mistral'] },
   { label: 'Meta', icon: 'meta.svg', patterns: ['llama', 'meta-llama'] },
   { label: 'Inception', icon: 'inception.svg', patterns: ['mercury', 'inception'] },
-  { label: 'Venice', icon: 'venice-keys.svg', patterns: ['venice'] }
+  { label: 'Venice', icon: 'venice.svg', patterns: ['venice'] }
 ];
 
 function loadSnapshot() {
@@ -146,21 +145,30 @@ function resolveFeatured(models) {
   }).filter(Boolean);
 }
 
-// Icon paths are case-sensitive once deployed, so resolve them against disk
-// here rather than shipping a card with an empty logo box.
-function resolveIcon(fileName) {
-  const onDisk = path.join(__dirname, '..', 'images', 'icons', 'models', fileName);
+// Logo paths are case-sensitive once deployed, so resolve them against disk
+// here rather than shipping a card with a missing logo.
+function resolveLogo(fileName) {
+  const onDisk = path.join(__dirname, '..', 'images', 'providers', fileName);
   if (!fs.existsSync(onDisk)) {
-    throw new Error(`Provider icon "${fileName}" does not exist in images/icons/models/`);
+    throw new Error(`Provider logo "${fileName}" does not exist in images/providers/`);
   }
 
-  return `${ICON_BASE_PATH}${fileName}`;
+  return providerLogo(fileName);
+}
+
+// Single-color marks take the card's text color through a mask; the rest are
+// images in their own colors.
+function renderLogo({ logo, mono }) {
+  if (mono) {
+    return `      <span className="venice-model-card-logo is-mono" aria-hidden="true" style={{ maskImage: "url('${logo}')", WebkitMaskImage: "url('${logo}')" }} />`;
+  }
+  return `      <img noZoom className="venice-model-card-logo" src="${logo}" width="28" height="28" alt="" aria-hidden="true" />`;
 }
 
 function renderCard(model) {
   const spec = model.model_spec || {};
   const provider = findProvider(model);
-  const iconUrl = resolveIcon(provider ? provider.icon : 'text.svg');
+  const logo = resolveLogo(provider ? provider.icon : 'venice.svg');
   const contextLabel = formatContext(spec.availableContextTokens);
 
   const privacy = getPrivacyLabel(model);
@@ -177,9 +185,7 @@ function renderCard(model) {
   return [
     `  <a className="venice-model-card" href="${CATALOG_HREF}">`,
     `    <span className="venice-model-card-top">`,
-    `      <span className="venice-model-card-logo" aria-hidden="true">`,
-    `        <span className="venice-model-card-logo-mask" style={{ maskImage: "url('${iconUrl}')", WebkitMaskImage: "url('${iconUrl}')" }} />`,
-    `      </span>`,
+    renderLogo(logo),
     `      <span className="venice-model-card-head">`,
     `        <span className="venice-model-card-name">${escapeJsxText(spec.name || model.id)}</span>`,
     `        <span className="venice-model-card-maker">${escapeJsxText(provider ? provider.label : 'Venice')}</span>`,
