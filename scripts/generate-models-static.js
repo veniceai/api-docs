@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /**
  * Bake snapshot-backed model catalogs into /models MDX placeholders so
- * Mintlify's assistant can index the lists. Browser JavaScript still replaces
- * the same placeholders with the interactive UI.
+ * Mintlify's assistant can index the lists, and render each page's explorer
+ * into snippets/model-hub/<page>.mdx as its first screen. Browser JavaScript
+ * replaces that screen with the interactive explorer.
  *
  * Usage: node scripts/generate-models-static.js
  */
 
 const fs = require('fs');
 const path = require('path');
+const { createPrerenderer, writeSnippet } = require('./model-hub-prerender');
 const {
   isAppDefaultModel,
   isDeprecatedModel,
@@ -365,8 +367,8 @@ function escapeRegExp(value) {
 }
 
 // Mintlify's .md export keeps markdown tables inside a plain placeholder
-// <div> (same pattern as overview/pricing.mdx). Visibility-for-agents
-// dropped the model catalogs on the published export.
+// <div>. Visibility-for-agents dropped the model catalogs on the published
+// export.
 function upsertCatalogBlock(page, { id, startMarker, endMarker, content }) {
   const attrMatch = page.match(new RegExp(`<div id="${escapeRegExp(id)}"([^>]*)>`));
   const attrs = attrMatch ? attrMatch[1] : '';
@@ -482,6 +484,20 @@ function main() {
     MODELS_END,
     withIntro(live.filter(m => m.type === 'embedding').length, renderEmbeddingTable(models))
   );
+  writeExplorerSnippets();
+}
+
+const EXPLORER_PAGES = ['overview', 'text', 'image', 'video', 'text-to-speech', 'speech-to-text', 'music', 'embeddings'];
+
+// Each page's <HubMount> line names the explorer it shows.
+function writeExplorerSnippets() {
+  const prerender = createPrerenderer();
+  for (const page of EXPLORER_PAGES) {
+    const source = fs.readFileSync(path.join(ROOT, 'models', `${page}.mdx`), 'utf-8');
+    const mount = source.match(/^<HubMount view="ModelExplorer" modality="([^"]+)"(?: task="([^"]+)")?>$/m);
+    if (!mount) throw new Error(`models/${page}.mdx has no <HubMount view="ModelExplorer"> line`);
+    writeSnippet(page, prerender.explorer({ modality: mount[1], task: mount[2] }));
+  }
 }
 
 try {

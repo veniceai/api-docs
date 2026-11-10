@@ -210,7 +210,7 @@ ln -s ~/src/venice-skills/skills ~/.claude/skills/venice
 - Agent guide: https://docs.venice.ai/agents.md
 - Getting started: https://docs.venice.ai/getting-started/quick-start.md
 - Privacy tiers: https://docs.venice.ai/overview/privacy.md
-- Pricing: https://docs.venice.ai/overview/pricing.md
+- Pricing: https://docs.venice.ai/pricing.md
 - Rate limiting: https://docs.venice.ai/api-reference/rate-limiting.md
 - Docs index for LLMs: https://docs.venice.ai/llms.txt
 - Any docs page as raw markdown: append `.md` to its URL
