@@ -12,7 +12,6 @@ const fs = require('fs');
 const path = require('path');
 const { createPrerenderer, writeSnippet } = require('./model-hub-prerender');
 const {
-  isAppDefaultModel,
   isDeprecatedModel,
   isListedModel,
   getVideoType,
@@ -111,7 +110,6 @@ function getPrivacyLabel(model) {
 function getModelName(model) {
   const name = model.model_spec?.name || model.id;
   const tags = [];
-  if (isAppDefaultModel(model)) tags.push('(App Default)');
   if (isBetaModel(model)) tags.push('(Beta)');
   if (isDeprecatedModel(model)) tags.push('(Retiring)');
   return [name, ...tags].join(' ');
