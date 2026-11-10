@@ -100,6 +100,7 @@ const PROVIDERS = [
   ['microsoft', 'Microsoft', 'text.svg', ['e5-large']],
   ['acestudio', 'ACE Studio', 'music.svg', ['ace-step']],
   ['typesafe', 'TypeSafe AI', 'typesafeai.svg', ['jev']],
+  ['cloudflare', 'Cloudflare', 'text.svg', ['clef']],
   ['abliteration', 'Abliteration AI', 'text.svg', ['abliteration']],
   ['venice', 'Venice', 'venice-keys.svg', ['venice', 'upscaler']],
   ['community', 'Community', 'image.svg', ['lustify', 'wai-illustrious', 'chroma', 'heretic']]
