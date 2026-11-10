@@ -1669,7 +1669,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                 {['name', 'newest', 'price', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{SORTS[key].label}</option>)}
               </select>
               <Segmented ariaLabel="View" value={shownView} onChange={setView}
-                options={[{ value: 'list', label: 'List' }, { value: 'table', label: 'Table' }, ...(canGrid ? [{ value: 'grid', label: 'Gallery' }] : [])]} />
+                options={[{ value: 'list', label: 'List' }, { value: 'table', label: 'Table' },
+                  { value: 'grid', label: 'Gallery', disabled: !canGrid, title: canGrid ? undefined : 'Sample images and videos, for image and video models' }]} />
             </div>
 
             <ScopeTabs scope={scope} counts={catalog ? scopeCounts : null} onScope={chooseScope} />
