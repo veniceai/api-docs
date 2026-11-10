@@ -1295,15 +1295,30 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const { catalog, error } = useCatalog();
     const now = useNow();
     const startScope = initialScope(initialModality, initialTask);
-    const [scope, setScope] = useState(startScope);
-    const [query, setQuery] = useState('');
-    const [filters, setFilters] = useState(EMPTY_FILTERS);
     const startSort = defaultSort(initialModality);
-    const [sort, setSort] = useState(startSort);
-    const [view, setView] = useState(defaultView(initialModality));
+    // A link's state applies on the first render, so a shared view opens as
+    // it was.
+    const [linked] = useState(() => {
+      const params = readParams();
+      // `m=audio&t=stt` is the shape of links from before the facet.
+      const m = params.get('m') === 'audio' ? params.get('t') || 'tts' : params.get('m') || (initialModality === 'audio' && params.get('t'));
+      const scope = m === 'all' ? null : parseScope(m) || startScope;
+      return {
+        scope,
+        query: params.get('q') || '',
+        sort: params.get('sort') && SORTS[params.get('sort')] ? params.get('sort') : startSort,
+        // Links leave the view out when it is the modality's default.
+        view: VIEWS.includes(params.get('view')) ? params.get('view') : defaultView(scope),
+        filters: { ...EMPTY_FILTERS, ...filtersFromParams(params) }
+      };
+    });
+    const [scope, setScope] = useState(linked.scope);
+    const [query, setQuery] = useState(linked.query);
+    const [filters, setFilters] = useState(linked.filters);
+    const [sort, setSort] = useState(linked.sort);
+    const [view, setView] = useState(linked.view);
     const [railOpen, setRailOpen] = useState(false);
     const [limit, setLimit] = useState(PAGE_SIZE);
-    const [hydrated, setHydrated] = useState(false);
     const searchRef = useRef(null);
     // A chosen modality brings its columns, filters and price lenses; All
     // shows the cross-modality view.
@@ -1311,17 +1326,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     const task = AUDIO_SCOPES.includes(scope) ? scope : 'tts';
 
     useEffect(() => {
-      const params = readParams();
-      // `m=audio&t=stt` is the shape of links from before the facet.
-      const m = params.get('m') === 'audio' ? params.get('t') || 'tts' : params.get('m') || (initialModality === 'audio' && params.get('t'));
-      const linked = m === 'all' ? null : parseScope(m) || startScope;
-      setScope(linked);
-      if (params.get('q')) setQuery(params.get('q'));
-      if (params.get('sort') && SORTS[params.get('sort')]) setSort(params.get('sort'));
-      // Links leave the view out when it is the modality's default.
-      setView(VIEWS.includes(params.get('view')) ? params.get('view') : defaultView(linked));
-      setFilters({ ...EMPTY_FILTERS, ...filtersFromParams(params) });
-      setHydrated(true);
       // "/" jumps to the search unless the reader is typing somewhere or the
       // filter drawer holds focus.
       const typing = el => Boolean(el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)));
@@ -1336,7 +1340,6 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     }, []);
 
     useEffect(() => {
-      if (!hydrated) return;
       writeParams({
         m: scope === startScope ? null : scope || 'all',
         q: query || null,
@@ -1344,7 +1347,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
         view: view !== defaultView(modality) ? view : null,
         ...filtersToParams(filters)
       });
-    }, [hydrated, scope, query, sort, view, filters]);
+    }, [scope, query, sort, view, filters]);
 
     useEffect(() => { setLimit(PAGE_SIZE); }, [scope, filters, query, sort, view]);
 
