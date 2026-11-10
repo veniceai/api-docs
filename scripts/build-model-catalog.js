@@ -27,7 +27,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { checkSnapshotDrop } = require('./model-helpers');
+const { checkSnapshotDrop, providerLogo } = require('./model-helpers');
 const { createPrerenderer, writeSnippet, snippetImport, SNIPPETS } = require('./model-hub-prerender');
 
 const ROOT = path.join(__dirname, '..');
@@ -57,53 +57,53 @@ const RESERVED_SLUGS = new Set([
 
 // Ordered: the first provider whose pattern is a substring of id + name + source wins.
 const PROVIDERS = [
-  ['nous', 'Nous Research', 'nousresearch.svg', ['hermes']],
-  ['anthropic', 'Anthropic', 'opus.svg', ['claude']],
+  ['nous', 'Nous Research', 'nous.svg', ['hermes']],
+  ['anthropic', 'Anthropic', 'anthropic.svg', ['claude']],
   ['openai', 'OpenAI', 'openai.svg', ['openai', 'gpt-', 'whisper', 'sora', 'text-embedding-3']],
   ['google', 'Google', 'google.svg', ['gemini', 'gemma', 'veo', 'nano-banana', 'lyria', 'imagen']],
-  ['xai', 'xAI', 'grok.svg', ['grok', 'xai']],
-  ['zai', 'Z.ai', 'Zhipu.svg', ['glm', 'zai-org', 'z-ai']],
-  ['moonshot', 'Moonshot AI', 'kimi.svg', ['kimi']],
+  ['xai', 'xAI', 'xai.svg', ['grok', 'xai']],
+  ['zai', 'Z.ai', 'zai.svg', ['glm', 'zai-org', 'z-ai']],
+  ['moonshot', 'Moonshot AI', 'moonshot.svg', ['kimi']],
   ['deepseek', 'DeepSeek', 'deepseek.svg', ['deepseek']],
-  ['alibaba', 'Alibaba Qwen', 'qwen.svg', ['qwen', 'wan-', 'wan2', 'z-image', 'happyhorse']],
+  ['alibaba', 'Alibaba Qwen', 'alibaba.svg', ['qwen', 'wan-', 'wan2', 'z-image', 'happyhorse']],
   ['minimax', 'MiniMax', 'minimax.svg', ['minimax', 'hailuo']],
   ['bytedance', 'ByteDance Seed', 'bytedance.svg', ['seedance', 'seedream', 'seed-']],
-  ['bfl', 'Black Forest Labs', 'BlackForestLabs.svg', ['flux']],
+  ['bfl', 'Black Forest Labs', 'bfl.svg', ['flux']],
   ['kling', 'Kling AI', 'kling.svg', ['kling']],
   ['runway', 'Runway', 'runway.svg', ['runway']],
-  ['pixverse', 'PixVerse', 'pixversevideo.svg', ['pixverse']],
-  ['lightricks', 'Lightricks', 'ltx.svg', ['ltx']],
+  ['pixverse', 'PixVerse', 'pixverse.svg', ['pixverse']],
+  ['lightricks', 'Lightricks', 'lightricks.svg', ['ltx']],
   ['vidu', 'Vidu', 'vidu.svg', ['vidu']],
   ['luma', 'Luma AI', 'luma.svg', ['luma']],
-  ['meituan', 'Meituan', 'longcat.svg', ['longcat']],
-  ['characterai', 'Character.AI', 'ovi.svg', ['ovi-']],
+  ['meituan', 'Meituan', 'meituan.svg', ['longcat']],
+  ['characterai', 'Character.AI', 'characterai.png', ['ovi-']],
   ['topaz', 'Topaz Labs', 'topaz.svg', ['topaz']],
   ['ideogram', 'Ideogram', 'ideogram.svg', ['ideogram']],
   ['recraft', 'Recraft', 'recraft.svg', ['recraft']],
   ['krea', 'Krea', 'krea.svg', ['krea']],
-  ['tencent', 'Tencent Hunyuan', 'hunyuan.svg', ['hunyuan', 'hy4']],
+  ['tencent', 'Tencent Hunyuan', 'tencent.svg', ['hunyuan', 'hy4']],
   ['elevenlabs', 'ElevenLabs', 'elevenlabs.svg', ['elevenlabs']],
-  ['resemble', 'Resemble AI', 'music.svg', ['chatterbox']],
-  ['inworld', 'Inworld', 'music.svg', ['inworld']],
-  ['gradium', 'Gradium', 'music.svg', ['gradium']],
-  ['hexgrad', 'hexgrad', 'music.svg', ['kokoro']],
-  ['canopy', 'Canopy Labs', 'music.svg', ['orpheus']],
+  ['resemble', 'Resemble AI', null, ['chatterbox']],
+  ['inworld', 'Inworld', null, ['inworld']],
+  ['gradium', 'Gradium', null, ['gradium']],
+  ['hexgrad', 'hexgrad', null, ['kokoro']],
+  ['canopy', 'Canopy Labs', null, ['orpheus']],
   ['nvidia', 'NVIDIA', 'nvidia.svg', ['nvidia', 'nemotron', 'parakeet']],
   ['meta', 'Meta', 'meta.svg', ['llama', 'muse-spark', 'muse-wonder', 'muse-image']],
   ['mistral', 'Mistral AI', 'mistral.svg', ['mistral']],
   ['inception', 'Inception', 'inception.svg', ['mercury']],
-  ['xiaomi', 'Xiaomi', 'xiaomimimo.svg', ['mimo', 'xiaomi']],
-  ['aion', 'Aion Labs', 'aionlabs.svg', ['aion']],
-  ['stability', 'Stability AI', 'stable-audio.svg', ['stable-audio', 'sd35']],
-  ['bria', 'Bria AI', 'image.svg', ['bria']],
+  ['xiaomi', 'Xiaomi', 'xiaomi.svg', ['mimo', 'xiaomi']],
+  ['aion', 'Aion Labs', 'aion.svg', ['aion']],
+  ['stability', 'Stability AI', 'stability.svg', ['stable-audio', 'sd35']],
+  ['bria', 'Bria AI', null, ['bria']],
   ['baai', 'BAAI', 'baai.svg', ['bge']],
-  ['microsoft', 'Microsoft', 'text.svg', ['e5-large']],
-  ['acestudio', 'ACE Studio', 'music.svg', ['ace-step']],
-  ['typesafe', 'TypeSafe AI', 'typesafeai.svg', ['jev']],
-  ['cloudflare', 'Cloudflare', 'text.svg', ['clef']],
-  ['abliteration', 'Abliteration AI', 'text.svg', ['abliteration']],
-  ['venice', 'Venice', 'venice-keys.svg', ['venice', 'upscaler']],
-  ['community', 'Community', 'image.svg', ['lustify', 'wai-illustrious', 'chroma', 'heretic']]
+  ['microsoft', 'Microsoft', null, ['e5-large']],
+  ['acestudio', 'ACE Studio', null, ['ace-step']],
+  ['typesafe', 'TypeSafe AI', 'typesafe.svg', ['jev']],
+  ['cloudflare', 'Cloudflare', null, ['clef']],
+  ['abliteration', 'Abliteration AI', null, ['abliteration']],
+  ['venice', 'Venice', 'venice.svg', ['venice', 'upscaler']],
+  ['community', 'Community', null, ['lustify', 'wai-illustrious', 'chroma', 'heretic']]
 ];
 
 const TRAIT_LABELS = {
@@ -1338,7 +1338,7 @@ async function main() {
   const familyByKey = Object.fromEntries(families.map(f => [f.key, f]));
   models.forEach(model => { model.family = familyByKey[model.familyKey].slug; });
 
-  const providers = Object.fromEntries(PROVIDERS.map(([slug, name, logo]) => [slug, { slug, name, logo: `/images/icons/models/${logo}` }]));
+  const providers = Object.fromEntries(PROVIDERS.map(([slug, name, logo]) => [slug, { slug, name, ...providerLogo(logo) }]));
   Object.entries(ctx.overrides.providers || {}).forEach(([slug, value]) => { providers[slug] = { slug, ...providers[slug], ...value }; });
   // Providers we could not identify fall back to the family name so no row renders blank.
   for (const family of families) {
@@ -1346,7 +1346,7 @@ async function main() {
       const slug = slugify(family.name.split(/\s+/)[0]);
       family.provider = slug;
       family.variants.forEach(id => { modelsById[id].provider = slug; });
-      if (!providers[slug]) providers[slug] = { slug, name: family.name.split(/\s+/)[0], logo: `/images/icons/models/${family.modality === 'video' ? 'video' : family.modality === 'image' ? 'image' : family.modality === 'audio' ? 'music' : 'text'}.svg`, inferred: true };
+      if (!providers[slug]) providers[slug] = { slug, name: family.name.split(/\s+/)[0], inferred: true };
     }
   }
 
