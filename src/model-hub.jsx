@@ -7,8 +7,8 @@
 // __jsx()/__Fragment, names chosen so local variables can't shadow them.
 // Data comes from scripts/build-model-catalog.js: views fetch
 // data/model-catalog.json, except model pages, which receive their
-// family inline.
-export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEffect, useRef, useMemo, fetchData }) => {
+// family inline. `now` is the clock a view's first render reads.
+export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEffect, useRef, useMemo, fetchData, now: clock = Date.now }) => {
   /* ------------------------------------------------------------ data */
 
   const CATALOG_PATH = '/data/model-catalog.json';
@@ -37,11 +37,7 @@ export const createModelHub = ({ h: __jsx, Fragment: __Fragment, useState, useEf
     return state;
   };
 
-  const useNow = () => {
-    const [now, setNow] = useState(null);
-    useEffect(() => setNow(Date.now()), []);
-    return now;
-  };
+  const useNow = () => useState(() => (typeof clock === 'function' ? clock() : clock))[0];
 
   const readParams = () => (typeof window === 'undefined' ? new URLSearchParams() : new URLSearchParams(window.location.search));
   const listParam = (params, key) => (params.get(key) ? params.get(key).split(',').filter(Boolean) : []);
