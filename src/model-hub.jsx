@@ -891,9 +891,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   // The filter column; below 1024px it opens as a drawer from the toolbar.
   const DRAWER_MAX_WIDTH = 1024;
-  const FilterRail = ({ modality, task, scope, scopeCounts, onScope, filters, setFilters, facetCount, providerCounts, providers, onClear, open, onClose }) => {
+  const FilterRail = ({ modality, task, scope, scopeCounts, onScope, statuses, filters, setFilters, facetCount, providerCounts, providers, onClear, open, onClose }) => {
     const toggleIn = (key, value) => setFilters(prev => ({ ...prev, [key]: prev[key].includes(value) ? prev[key].filter(v => v !== value) : [...prev[key], value] }));
     // An option nothing in scope matches is disabled unless already checked.
+    // A checked status stays, so it can be unchecked.
+    const hasStatus = flag => statuses[flag] || filters.flags.includes(flag);
     const option = (key, value, label, title) => {
       const checked = filters[key].includes(value);
       const count = facetCount(key, value);
@@ -971,11 +973,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             </>
           ) : null}
 
-          <FilterGroup title="Status" icon="clock">
-            {option('flags', 'new', 'New', 'Added in the last 30 days.')}
-            {option('flags', 'beta', 'Beta', 'Experimental. May change or be removed without notice.')}
-            {option('flags', 'deprecated', 'Deprecated', 'Scheduled for removal. See Deprecations.')}
-          </FilterGroup>
+          {hasStatus('beta') || hasStatus('deprecated') || filters.flags.includes('new') ? (
+            <FilterGroup title="Status" icon="clock">
+              {option('flags', 'new', 'New', 'Added in the last 30 days.')}
+              {hasStatus('beta') ? option('flags', 'beta', 'Beta', 'Experimental. May change or be removed without notice.') : null}
+              {hasStatus('deprecated') ? option('flags', 'deprecated', 'Deprecated', 'Scheduled for removal. See Deprecations.') : null}
+            </FilterGroup>
+          ) : null}
 
           <FilterGroup title="Attributes" icon="sliders">
             {option('flags', 'open', 'Open weights')}
@@ -1577,6 +1581,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const providers = catalog ? catalog.providers : {};
 
     const scoped = useMemo(() => (catalog ? catalog.families.filter(family => !scope || familyScope(family) === scope) : []), [catalog, scope]);
+    // The Status group shows only where the modality has beta or deprecated
+    // families, counted before search and filters so it doesn't come and go
+    // while typing. New alone doesn't keep it: New changes with the date, so
+    // the build-time first screen and the live view could disagree on it.
+    const statuses = useMemo(() => ({ beta: scoped.some(family => family.beta), deprecated: scoped.some(family => family.deprecated) }), [scoped]);
 
     const scopeCounts = useMemo(() => {
       const out = {};
@@ -1644,7 +1653,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <HoverTips />
         <div className="vx-page-grid">
           {catalog ? (
-            <FilterRail modality={modality} task={task} scope={scope} scopeCounts={scopeCounts} onScope={chooseScope}
+            <FilterRail modality={modality} task={task} scope={scope} scopeCounts={scopeCounts} onScope={chooseScope} statuses={statuses}
               filters={filters} setFilters={setFilters} facetCount={facetCount} providerCounts={providerCounts} providers={providers}
               onClear={() => setFilters(EMPTY_FILTERS)} open={railOpen} onClose={() => setRailOpen(false)} />
           ) : <aside className="vx-side vx-filters" aria-hidden="true" />}
