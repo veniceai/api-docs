@@ -475,19 +475,20 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   /* ------------------------------------------------------------ atoms */
 
-  const ProviderLogo = ({ provider, size = 32 }) => {
+  const ProviderLogo = ({ provider, size = 32, title = provider && provider.name }) => {
     const box = { width: size, height: size };
     const name = (provider && provider.name) || undefined;
+    const tip = title || undefined;
     if (!provider || !provider.logo) {
       const initial = (name || '?').charAt(0);
-      return <span className="vx-logo vx-logo-initial" style={{ ...box, fontSize: Math.round(size * 0.5) }} title={name} aria-hidden="true">{initial}</span>;
+      return <span className="vx-logo vx-logo-initial" style={{ ...box, fontSize: Math.round(size * 0.5) }} title={tip} aria-hidden="true">{initial}</span>;
     }
     // Translated pages keep the page data of their last sync, which can still
     // name the old single-color icons; those draw only as masks.
     if (provider.mono || provider.logo.startsWith('/images/icons/models/')) {
-      return <span className="vx-logo vx-logo-mono" style={{ ...box, '--vx-logo': `url('${provider.logo}')` }} title={name} aria-hidden="true" />;
+      return <span className="vx-logo vx-logo-mono" style={{ ...box, '--vx-logo': `url('${provider.logo}')` }} title={tip} aria-hidden="true" />;
     }
-    return <img className="vx-logo" src={provider.logo} width={size} height={size} alt="" title={name} aria-hidden="true" loading="lazy" decoding="async" />;
+    return <img className="vx-logo" src={provider.logo} width={size} height={size} alt="" title={tip} aria-hidden="true" loading="lazy" decoding="async" />;
   };
 
   const PrivacyBadge = ({ tier }) => {
@@ -837,10 +838,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  const Check = ({ checked, onChange, label, count, title, disabled }) => (
+  const Check = ({ checked, onChange, label, count, title, disabled, logo }) => (
     <label className={cls('vx-check', checked && 'is-checked', disabled && 'is-disabled')} title={title}>
       <input type="checkbox" checked={checked} onChange={onChange} disabled={disabled} />
       <span className="vx-check-box"><Icon name="check" size={12} /></span>
+      {logo}
       <span className="vx-check-label">{label}</span>
       {count != null ? <span className="vx-check-count">{count}</span> : null}
     </label>
@@ -981,7 +983,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <FilterGroup title="Provider" icon="server">
             {visibleProviders.map(([slug, n]) => {
               const checked = filters.providers.includes(slug);
-              return <Check key={slug} checked={checked} onChange={() => toggleIn('providers', slug)} label={providerName(slug)} count={n} disabled={!checked && n === 0} />;
+              return <Check key={slug} checked={checked} onChange={() => toggleIn('providers', slug)} label={providerName(slug)} count={n} disabled={!checked && n === 0}
+                logo={<ProviderLogo provider={providers[slug]} size={18} title={null} />} />;
             })}
             {providerList.length > 10 ? (
               <button type="button" className="vx-link-btn vx-more" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : `Show all ${providerList.length}`}</button>
