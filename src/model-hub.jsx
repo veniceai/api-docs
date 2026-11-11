@@ -97,7 +97,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // task and decision models stand apart from chat.
   const SCOPES = [
     { key: 'text', label: 'Text' }, { key: 'image', label: 'Image' }, { key: 'video', label: 'Video' },
-    { key: 'tts', label: 'Text to speech' }, { key: 'stt', label: 'Speech to text' }, { key: 'music', label: 'Music & sound effects' },
+    { key: 'tts', label: 'Text to speech', short: 'Speech' }, { key: 'stt', label: 'Speech to text', short: 'Transcription' },
+    { key: 'music', label: 'Music & sound effects', short: 'Music' },
     { key: 'embedding', label: 'Embeddings' }, { key: 'decision', label: 'Decisions' }
   ];
   const AUDIO_SCOPES = ['tts', 'stt', 'music'];
@@ -474,19 +475,20 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   /* ------------------------------------------------------------ atoms */
 
-  const ProviderLogo = ({ provider, size = 32 }) => {
+  const ProviderLogo = ({ provider, size = 32, title = provider && provider.name }) => {
     const box = { width: size, height: size };
     const name = (provider && provider.name) || undefined;
+    const tip = title || undefined;
     if (!provider || !provider.logo) {
       const initial = (name || '?').charAt(0);
-      return <span className="vx-logo vx-logo-initial" style={{ ...box, fontSize: Math.round(size * 0.5) }} title={name} aria-hidden="true">{initial}</span>;
+      return <span className="vx-logo vx-logo-initial" style={{ ...box, fontSize: Math.round(size * 0.5) }} title={tip} aria-hidden="true">{initial}</span>;
     }
     // Translated pages keep the page data of their last sync, which can still
     // name the old single-color icons; those draw only as masks.
     if (provider.mono || provider.logo.startsWith('/images/icons/models/')) {
-      return <span className="vx-logo vx-logo-mono" style={{ ...box, '--vx-logo': `url('${provider.logo}')` }} title={name} aria-hidden="true" />;
+      return <span className="vx-logo vx-logo-mono" style={{ ...box, '--vx-logo': `url('${provider.logo}')` }} title={tip} aria-hidden="true" />;
     }
-    return <img className="vx-logo" src={provider.logo} width={size} height={size} alt="" title={name} aria-hidden="true" loading="lazy" decoding="async" />;
+    return <img className="vx-logo" src={provider.logo} width={size} height={size} alt="" title={tip} aria-hidden="true" loading="lazy" decoding="async" />;
   };
 
   const PrivacyBadge = ({ tier }) => {
@@ -805,6 +807,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const familyMatches = (family, models, f, now) => {
     if (f.providers.length && !f.providers.includes(family.provider)) return false;
     if (f.flags.includes('new') && !isNew(family.updated || family.created, now)) return false;
+    if (f.flags.includes('beta') && !family.beta) return false;
+    if (f.flags.includes('deprecated') && !family.deprecated) return false;
     if (f.flags.includes('open') && !family.openWeights) return false;
     if (f.flags.includes('uncensored') && !family.uncensored) return false;
     return models.some(model => variantMatches(model, f));
@@ -820,36 +824,68 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
   const defaultSort = modality => (modality === 'all' ? 'newest' : 'name');
 
-  const FilterGroup = ({ title, children, defaultOpen = true, role }) => {
+  const FilterGroup = ({ title, icon, children, defaultOpen = true, role }) => {
     const [open, setOpen] = useState(defaultOpen);
     return (
       <div className={cls('vx-fgroup', open && 'is-open')}>
         <button type="button" className="vx-fgroup-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <Icon name={icon} size={16} />
           <span>{title}</span>
-          <Icon name="chevronDown" size={14} />
+          <Icon name="chevronDown" size={14} className="vx-fgroup-chevron" />
         </button>
         {open ? <div className="vx-fgroup-body" role={role} aria-label={role ? title : undefined}>{children}</div> : null}
       </div>
     );
   };
 
-  const Check = ({ checked, onChange, label, count, title, disabled }) => (
+  const Check = ({ checked, onChange, label, count, title, disabled, logo }) => (
     <label className={cls('vx-check', checked && 'is-checked', disabled && 'is-disabled')} title={title}>
       <input type="checkbox" checked={checked} onChange={onChange} disabled={disabled} />
-      <span className="vx-check-box"><Icon name="check" size={11} /></span>
+      <span className="vx-check-box"><Icon name="check" size={12} /></span>
+      {logo}
       <span className="vx-check-label">{label}</span>
       {count != null ? <span className="vx-check-count">{count}</span> : null}
     </label>
   );
 
-  const Radio = ({ name, checked, onChange, label, count }) => (
-    <label className={cls('vx-check vx-radio', checked && 'is-checked')}>
-      <input type="radio" name={name} checked={checked} onChange={onChange} />
-      <span className="vx-check-box" />
+  // A modality, picked like a page in a nav: its type icon, and the chosen
+  // one filled. The radio stays for keyboard and screen readers.
+  const ScopeOption = ({ scope, checked, onChange, label, count }) => (
+    <label className={cls('vx-check vx-scope', checked && 'is-checked')}>
+      <input type="radio" name="vx-modality" checked={checked} onChange={onChange} />
+      <span className={`vx-scope-icon vx-type-${scope || 'all'}`} aria-hidden="true" />
       <span className="vx-check-label">{label}</span>
       <span className="vx-check-count">{count}</span>
     </label>
   );
+
+  // The same choice as tabs above the results, each with its type icon and its
+  // count, the chosen one underlined. Their radios are a group of their own:
+  // sharing the sidebar's name, the browser would uncheck one for the other.
+  const ScopeTabs = ({ scope, counts, onScope }) => {
+    const ref = useRef(null);
+    const shown = SCOPES.filter(s => !counts || counts[s.key]);
+    const total = counts ? shown.reduce((n, s) => n + counts[s.key], 0) : null;
+    // Where the row scrolls, as on a phone, the chosen tab is scrolled into
+    // view. Sideways only: scrollIntoView would also move the page.
+    useEffect(() => {
+      const row = ref.current;
+      const tab = row && row.querySelector('.is-checked');
+      if (tab && (tab.offsetLeft < row.scrollLeft || tab.offsetLeft + tab.offsetWidth > row.scrollLeft + row.clientWidth)) row.scrollLeft = tab.offsetLeft - 16;
+    }, [scope]);
+    return (
+      <div ref={ref} className="vx-tabs" role="radiogroup" aria-label="Modality">
+        {[{ key: null, label: 'All' }, ...shown].map(s => (
+          <label key={s.key || 'all'} className={cls('vx-tab', (scope || null) === s.key && 'is-checked')} title={s.short ? s.label : undefined}>
+            <input type="radio" name="vx-modality-tab" checked={(scope || null) === s.key} onChange={() => onScope(s.key)} />
+            <span className={`vx-scope-icon vx-type-${s.key || 'all'}`} aria-hidden="true" />
+            <span>{s.short || s.label}</span>
+            {counts ? <span className="vx-tab-count">{s.key ? counts[s.key] : total}</span> : null}
+          </label>
+        ))}
+      </div>
+    );
+  };
 
   // The filter column; below 1024px it opens as a drawer from the toolbar.
   const DRAWER_MAX_WIDTH = 1024;
@@ -862,8 +898,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       return <Check key={value} checked={checked} onChange={() => toggleIn(key, value)} label={label} title={title} count={count} disabled={!checked && count === 0} />;
     };
     // Single-choice filters are segmented tracks, as in Gordon's column.
-    const range = (key, title, options) => (
-      <FilterGroup title={title}>
+    const range = (key, title, icon, options) => (
+      <FilterGroup title={title} icon={icon}>
         <Segmented ariaLabel={title} value={filters[key]} onChange={value => setFilters(prev => ({ ...prev, [key]: value }))}
           options={options.map(([value, label, hint]) => ({ value, label, title: hint }))} />
       </FilterGroup>
@@ -885,25 +921,25 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <button type="button" className="vx-btn vx-btn-sm vx-rail-done" onClick={onClose}>Done</button>
           </div>
 
-          <FilterGroup title="Modality" role="radiogroup">
-            <Radio name="vx-modality" checked={!scope} onChange={() => onScope(null)} label="All" count={Object.values(scopeCounts).reduce((n, c) => n + c, 0)} />
+          <FilterGroup title="Modality" icon="layers" role="radiogroup">
+            <ScopeOption checked={!scope} onChange={() => onScope(null)} label="All" count={Object.values(scopeCounts).reduce((n, c) => n + c, 0)} />
             {SCOPES.filter(s => scopeCounts[s.key]).map(s => (
-              <Radio key={s.key} name="vx-modality" checked={scope === s.key} onChange={() => onScope(s.key)} label={s.label} count={scopeCounts[s.key]} />
+              <ScopeOption key={s.key} scope={s.key} checked={scope === s.key} onChange={() => onScope(s.key)} label={s.label} count={scopeCounts[s.key]} />
             ))}
           </FilterGroup>
 
-          <FilterGroup title="Privacy">
+          <FilterGroup title="Privacy" icon="shield">
             {PRIVACY_ORDER.map(tier => option('privacy', tier, PRIVACY[tier].long, PRIVACY[tier].desc))}
           </FilterGroup>
 
           {modality === 'text' ? (
             <>
-              <FilterGroup title="Capabilities">
+              <FilterGroup title="Capabilities" icon="sparkles">
                 {TEXT_CAPS.filter(c => !['logprobs', 'xSearch', 'audioInput'].includes(c.key)).map(cap => option('caps', cap.key, cap.label, cap.desc))}
               </FilterGroup>
-              {range('ctx', 'Context length', [['', 'Any'], ['128000', '128K', '128K tokens or more'], ['256000', '256K', '256K tokens or more'], ['1000000', '1M', '1M tokens or more']])}
-              {range('price', 'Input price (per 1M tokens)', [['', 'Any'], ['0.5', '≤$0.5', 'Up to $0.50'], ['2', '≤$2', 'Up to $2'], ['5', '≤$5', 'Up to $5']])}
-              <FilterGroup title="Served precision" defaultOpen={false}>
+              {range('ctx', 'Context length', 'maximize', [['', 'Any'], ['128000', '128K', '128K tokens or more'], ['256000', '256K', '256K tokens or more'], ['1000000', '1M', '1M tokens or more']])}
+              {range('price', 'Input price (per 1M tokens)', 'dollar', [['', 'Any'], ['0.5', '≤$0.5', 'Up to $0.50'], ['2', '≤$2', 'Up to $2'], ['5', '≤$5', 'Up to $5']])}
+              <FilterGroup title="Served precision" icon="gauge" defaultOpen={false}>
                 {[['bf16', 'BF16'], ['fp16', 'FP16'], ['fp8', 'FP8'], ['fp4', 'FP4'], ['int4', 'INT4'], ['none', 'Not disclosed']].map(([value, label]) => option('quant', value, label, QUANT_NOTES[value]))}
               </FilterGroup>
             </>
@@ -911,11 +947,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
           {modality === 'image' ? (
             <>
-              <FilterGroup title="Task">
+              <FilterGroup title="Task" icon="wand">
                 {[['generate', 'Generate'], ['edit', 'Edit'], ['upscale', 'Upscale'], ['background-removal', 'Remove background']].map(([value, label]) => option('modes', value, label))}
               </FilterGroup>
-              {range('res', 'Output resolution', [['', 'Any'], ['2K', '2K', '2K available'], ['4K', '4K', '4K available']])}
-              <FilterGroup title="Features">
+              {range('res', 'Output resolution', 'maximize', [['', 'Any'], ['2K', '2K', '2K available'], ['4K', '4K', '4K available']])}
+              <FilterGroup title="Features" icon="zap">
                 {option('caps', 'webSearch', 'Web-grounded generation')}
                 {option('caps', 'multiImage', 'Multi-image editing')}
               </FilterGroup>
@@ -924,25 +960,31 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
           {modality === 'video' ? (
             <>
-              <FilterGroup title="Mode">
+              <FilterGroup title="Mode" icon="film">
                 {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition'].map(mode => option('modes', mode, VARIANT_LABELS[mode]))}
               </FilterGroup>
-              {range('audio', 'Audio', [['', 'Any'], ['audio', 'Audio', 'Generates audio'], ['silent', 'Silent', 'Can be silent']])}
-              {range('res', 'Resolution', [['', 'Any'], ['720', '720p', '720p or higher'], ['1080', '1080p', '1080p or higher'], ['1440', '1440p', '1440p or higher'], ['2160', '4K']])}
-              {range('dur', 'Clip length', [['', 'Any'], ['10', '10s', '10 seconds or longer'], ['15', '15s', '15 seconds or longer'], ['20', '20s', '20 seconds or longer'], ['30', '30s', '30 seconds or longer']])}
+              {range('audio', 'Audio', 'volume', [['', 'Any'], ['audio', 'Audio', 'Generates audio'], ['silent', 'Silent', 'Can be silent']])}
+              {range('res', 'Resolution', 'maximize', [['', 'Any'], ['720', '720p', '720p or higher'], ['1080', '1080p', '1080p or higher'], ['1440', '1440p', '1440p or higher'], ['2160', '4K']])}
+              {range('dur', 'Clip length', 'clock', [['', 'Any'], ['10', '10s', '10 seconds or longer'], ['15', '15s', '15 seconds or longer'], ['20', '20s', '20 seconds or longer'], ['30', '30s', '30 seconds or longer']])}
             </>
           ) : null}
 
-          <FilterGroup title="Attributes">
-            {option('flags', 'open', 'Open weights')}
-            {option('flags', 'uncensored', 'Uncensored')}
-            {option('flags', 'new', 'Added in the last 30 days')}
+          <FilterGroup title="Status" icon="clock">
+            {option('flags', 'new', 'New', 'Added in the last 30 days.')}
+            {option('flags', 'beta', 'Beta', 'Experimental. May change or be removed without notice.')}
+            {option('flags', 'deprecated', 'Deprecated', 'Scheduled for removal. See Deprecations.')}
           </FilterGroup>
 
-          <FilterGroup title="Provider">
+          <FilterGroup title="Attributes" icon="sliders">
+            {option('flags', 'open', 'Open weights')}
+            {option('flags', 'uncensored', 'Uncensored')}
+          </FilterGroup>
+
+          <FilterGroup title="Provider" icon="server">
             {visibleProviders.map(([slug, n]) => {
               const checked = filters.providers.includes(slug);
-              return <Check key={slug} checked={checked} onChange={() => toggleIn('providers', slug)} label={providerName(slug)} count={n} disabled={!checked && n === 0} />;
+              return <Check key={slug} checked={checked} onChange={() => toggleIn('providers', slug)} label={providerName(slug)} count={n} disabled={!checked && n === 0}
+                logo={<ProviderLogo provider={providers[slug]} size={18} title={null} />} />;
             })}
             {providerList.length > 10 ? (
               <button type="button" className="vx-link-btn vx-more" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : `Show all ${providerList.length}`}</button>
@@ -1628,6 +1670,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                 options={[{ value: 'list', label: 'List' }, { value: 'table', label: 'Table' }, ...(canGrid ? [{ value: 'grid', label: 'Gallery' }] : [])]} />
             </div>
 
+            <ScopeTabs scope={scope} counts={catalog ? scopeCounts : null} onScope={chooseScope} />
+
             {!catalog ? (
               error
                 ? <div className="vx-error" role="alert">The model catalog could not load. Reload the page to try again.</div>
@@ -1851,6 +1895,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   /* ------------------------------------------------------------ model page */
 
+  const SECTION_ICONS = {
+    overview: 'info', pricing: 'dollar', examples: 'image', voices: 'volume', specs: 'sliders',
+    capabilities: 'sparkles', api: 'code', privacy: 'shield', variants: 'layers', related: 'link'
+  };
   const pageSections = (model, { variants = 1, related = false, examples = false, capabilities = false } = {}) => {
     const list = [['overview', 'Overview'], ['pricing', 'Pricing']];
     if (examples) list.push(['examples', 'Examples']);
@@ -2726,12 +2774,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <div className="vx-side-inner">
               <nav className="vx-crumbs" aria-label="Breadcrumb">
                 <a href="/models/overview">Models</a>
-                <span aria-hidden="true">/</span>
+                <Icon name="chevronRight" size={12} />
                 <span aria-current="page">{family.name}</span>
               </nav>
               <nav className="vx-side-nav" aria-label="On this page">
                 {sections.map(([id, label]) => (
-                  <a key={id} href={`#${id}`} className={cls(activeSection === id && 'is-active')} aria-current={activeSection === id ? 'location' : undefined}>{label}</a>
+                  <a key={id} href={`#${id}`} className={cls(activeSection === id && 'is-active')} aria-current={activeSection === id ? 'location' : undefined}>
+                    <Icon name={SECTION_ICONS[id]} size={16} />{label}
+                  </a>
                 ))}
               </nav>
               {safeUrl(model.source) ? (
