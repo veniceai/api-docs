@@ -598,9 +598,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   /* ------------------------------------------------------------ media */
 
-  const sampleFor = (model, preferred) => {
-    const media = model.media || [];
-    return media.find(m => m.prompt === preferred) || media[0] || null;
+  // The gallery compares models on one reference prompt: a model's render of
+  // it, or, for a model that transforms an input, its output from that
+  // prompt's render. The displayed variant comes first, then its siblings.
+  const GALLERY_PROMPTS = { image: 'photoreal', video: 'cinematic-landscape' };
+  const galleryMedia = (family, display, catalog) => {
+    const prompt = GALLERY_PROMPTS[family.modality];
+    const pick = model => {
+      const media = (model && model.media) || [];
+      return media.find(m => m.prompt === prompt) || media.find(m => m.from === prompt);
+    };
+    return pick(display) || family.variants.map(id => catalog.models[id]).map(pick).find(Boolean) || null;
   };
 
   // Sources attach only as a tile nears the viewport, so a gallery doesn't
@@ -1339,8 +1347,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const ExplorerCard = ({ row, now, catalog }) => {
     const { family, display } = row;
     const isVideo = family.modality === 'video';
-    const media = sampleFor(display, isVideo ? 'cinematic-landscape' : 'photoreal') ||
-      family.variants.map(id => catalog.models[id]).map(m => sampleFor(m, isVideo ? 'cinematic-landscape' : 'photoreal')).find(Boolean);
+    const media = galleryMedia(family, display, catalog);
     const { offer } = row;
     const href = modelHref(family, display.id);
     const extra = family.variants.length - 1;
@@ -1449,13 +1456,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </ul>
   );
 
-  const hasRenders = (family, catalog) => family.variants.some(id => ((catalog.models[id] || {}).media || []).length);
-
-  // Families without reference renders go in a table under the gallery rather
-  // than as empty tiles, so the grid only shows real outputs.
+  // Families with nothing on the gallery's prompt go in a table under it
+  // rather than as tiles of another scene, so the grid compares like with like.
   const Gallery = ({ rows, columns, sort, setSort, providers, now, catalog, modality }) => {
-    const rendered = rows.filter(row => hasRenders(row.family, catalog));
-    const pending = rows.filter(row => !hasRenders(row.family, catalog));
+    const rendered = rows.filter(row => galleryMedia(row.family, row.display, catalog));
+    const pending = rows.filter(row => !galleryMedia(row.family, row.display, catalog));
+    const prompt = ((catalog.mediaSuite || {})[modality] || []).find(item => item.id === GALLERY_PROMPTS[modality]);
     return (
       <>
         {rendered.length ? (
@@ -1465,7 +1471,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         ) : null}
         {pending.length ? (
           <section className="vx-unrendered" aria-labelledby="vx-unrendered-title">
-            <h3 id="vx-unrendered-title" className="vx-h3">No reference renders yet <span className="vx-muted">{plural(pending.length, 'family')}</span></h3>
+            <h3 id="vx-unrendered-title" className="vx-h3">{prompt ? `Not rendered on the ${prompt.title.toLowerCase()} prompt` : 'No reference renders yet'} <span className="vx-muted">{plural(pending.length, 'family')}</span></h3>
             <ExplorerTable rows={pending} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} />
           </section>
         ) : null}
