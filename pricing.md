@@ -59,7 +59,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | DeepSeek V4 Flash 0731 Fast | `deepseek-v4-flash-0731-fast` | $0.35 | $0.70 | $0.0875 | — | Private |
 | DeepSeek V4 Pro | `deepseek-v4-pro` | $1.65 | $3.301 | $0.33 | — | Private |
 | DeepSeek V4 Pro 0813 | `deepseek-v4-pro-0813` | $1.65 | $4.95 | $0.165 | — | Private |
-| DeepSeek V4.1 Flash (Retiring) | `deepseek-v4-1-flash` | $0.30 | $1.20 | $0.0075 | — | Private |
+| DeepSeek V4.1 Flash | `deepseek-v4-1-flash` | $0.30 | $1.20 | $0.0075 | — | Private |
 | DeepSeek v4.1 Flash (1017) | `deepseek-v4-1-flash-1017` | $0.30 | $1.20 | $0.0075 | — | Private |
 | DeepSeek V4.1 Flash 1017 Abliterated | `e2ee-deepseek-v4-1-flash-1017-abliterated` | $0.375 | $1.50 | $0.0075 | — | E2EE |
 | DeepSeek V4.1 Flash 1017 Ultrafast | `deepseek-v4-1-flash-1017-ultrafast` | $3.00 | $12.00 | $0.06 | — | Private |
