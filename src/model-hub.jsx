@@ -1035,7 +1035,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         const title = el.getAttribute('title');
         const label = el.getAttribute('data-tip-label');
         const text = el.getAttribute('data-tip') || title;
-        const repeats = !label && text && text === el.textContent.trim() && el.scrollWidth <= el.clientWidth;
+        const clipped = [el, ...el.querySelectorAll('*')].some(node => node.scrollWidth > node.clientWidth);
+        const repeats = !label && text && text === el.textContent.trim() && !clipped;
         if ((!label && !text) || repeats) return;
         if (title != null) {
           el.setAttribute('data-tip-title', title);
