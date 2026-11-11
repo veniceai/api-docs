@@ -1854,6 +1854,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   /* ------------------------------------------------------------ model page */
 
+  const SECTION_ICONS = {
+    overview: 'info', pricing: 'dollar', examples: 'image', voices: 'volume', specs: 'sliders',
+    capabilities: 'sparkles', api: 'code', privacy: 'shield', variants: 'layers', related: 'link'
+  };
   const pageSections = (model, { variants = 1, related = false, examples = false, capabilities = false } = {}) => {
     const list = [['overview', 'Overview'], ['pricing', 'Pricing']];
     if (examples) list.push(['examples', 'Examples']);
@@ -2729,12 +2733,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <div className="vx-side-inner">
               <nav className="vx-crumbs" aria-label="Breadcrumb">
                 <a href="/models/overview">Models</a>
-                <span aria-hidden="true">/</span>
+                <Icon name="chevronRight" size={12} />
                 <span aria-current="page">{family.name}</span>
               </nav>
               <nav className="vx-side-nav" aria-label="On this page">
                 {sections.map(([id, label]) => (
-                  <a key={id} href={`#${id}`} className={cls(activeSection === id && 'is-active')} aria-current={activeSection === id ? 'location' : undefined}>{label}</a>
+                  <a key={id} href={`#${id}`} className={cls(activeSection === id && 'is-active')} aria-current={activeSection === id ? 'location' : undefined}>
+                    <Icon name={SECTION_ICONS[id]} size={16} />{label}
+                  </a>
                 ))}
               </nav>
               {safeUrl(model.source) ? (
