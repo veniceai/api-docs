@@ -7,7 +7,7 @@ description: "Generate, edit, extend, and stitch videos with Seedance 2.0 and 2.
 
 Seedance is a flagship multimodal video family on Venice for text-, image-, and reference-driven video generation. **Seedance 2.0** (plus Fast) and **Seedance 2.5** share the same R2V prompt-routing model: a single reference-to-video endpoint handles **four distinct workflows** (Reference, Edit, Extend, Stitch) — the workflow is inferred from the **shape of your prompt**.
 
-This guide covers variants, the four workflows, **public API media policy**, **family-specific multimodal limits**, output bitrate, pricing, and `curl` examples.
+This guide covers variants, the four workflows, **public API media policy**, **family-specific multimodal limits**, output bitrate, Seedance 2.5 draft mode, pricing, and `curl` examples.
 
 <Warning>
 **Person-bearing media is not supported on the public Seedance API.** Public `*-basic` models do not use consent attestation (`consents.seedance` / `needs_consent`). Such inputs may be rejected upstream as a content-policy or provider error. Use the Venice app or Studio for the full Seedance feature set.
@@ -245,6 +245,115 @@ Reference audio is supported on the R2V variants only. Each entry is forwarded t
 ### Request size
 
 The queue endpoint accepts JSON bodies up to **35 MB**. Inline data URLs for large videos can push past this — for multi-clip Stitch in particular, prefer URLs over inline base64.
+
+---
+
+## Draft mode (Seedance 2.5)
+
+Seedance 2.5 models that support draft mode, such as `seedance-2-5-text-to-video-basic`, can render a 480p draft and later upgrade that draft to 1080p. The draft and the HD upgrade are separate requests and are billed separately. Call `POST /api/v1/video/quote` for each price before you queue it.
+
+Sending `draft` to any other model returns 400 *"This model does not support draft"*. Sending `draft_task_id` to any other model returns 400 *"This model does not support draft_task_id"*.
+
+### Create a draft
+
+Set `draft: true` on `POST /api/v1/video/queue` or `POST /api/v1/video/quote`. `resolution` defaults to `480p`. Any other value returns 400 *"Draft mode requires resolution 480p"*. A 5 second 16:9 draft is 854×480.
+
+Quote the draft:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/quote \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-5-text-to-video-basic",
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "draft": true
+  }'
+```
+
+Queue the draft:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-5-text-to-video-basic",
+    "prompt": "A slow aerial push over misty mountains at sunrise, clouds parting, cinematic widescreen framing.",
+    "duration": "5s",
+    "aspect_ratio": "16:9",
+    "draft": true
+  }'
+```
+
+The queue response, and a retrieve response while status is `PROCESSING`, include these fields. `draft_task_id` is the draft's `queue_id`.
+
+| Field | Meaning |
+|---|---|
+| `is_draft` | `true` for a draft |
+| `draft_task_id` | Pass this value as `draft_task_id` on a later queue request to upgrade the draft |
+| `draft_expires_at` | ISO timestamp. The draft can be upgraded for 7 days from creation |
+| `can_upgrade_to_hd` | `true` once the draft has finished and the 7-day window has not ended. `false` on the queue response and while the draft is still running |
+
+Retrieve the draft while it is running:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/retrieve \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-5-text-to-video-basic",
+    "queue_id": "123e4567-e89b-12d3-a456-426614174000"
+  }'
+```
+
+```json
+{
+  "status": "PROCESSING",
+  "is_draft": true,
+  "draft_task_id": "123e4567-e89b-12d3-a456-426614174000",
+  "draft_expires_at": "2026-11-18T02:00:00.000Z",
+  "can_upgrade_to_hd": false
+}
+```
+
+The response also includes `average_execution_time` and `execution_duration`, as any other retrieve does. `draft_expires_at` is 7 days after the draft was created. When the body switches to `video/mp4`, the same draft values are response headers: `x-venice-is-draft`, `x-venice-draft-task-id`, `x-venice-draft-expires-at`, and `x-venice-can-upgrade-to-hd`. On that completed response, `x-venice-can-upgrade-to-hd` is `true` until `draft_expires_at`.
+
+A draft's media is kept until the HD upgrade window ends, even when `delete_media_on_completion` is `true`.
+
+### Upgrade the draft to 1080p
+
+Send a new `POST /api/v1/video/queue` with `draft_task_id` set to the draft's `queue_id`. The draft must be your own, on the same model, and inside the 7-day window. `resolution` defaults to `1080p`. Any other value returns 400 *"Draft HD upgrade requires resolution 1080p"*.
+
+`duration` and `aspect_ratio` are optional on the upgrade. Seed, duration, aspect ratio, and audio follow the draft. A `duration` or `aspect_ratio` that does not match the draft is ignored, and the draft's values are used. Media inputs on the upgrade request are ignored. `prompt` is still required. The same draft can be upgraded more than once inside the window. Do not send `draft` and `draft_task_id` together.
+
+Quote the HD upgrade. This quote requires authentication:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/quote \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-5-text-to-video-basic",
+    "draft_task_id": "123e4567-e89b-12d3-a456-426614174000"
+  }'
+```
+
+Queue the upgrade:
+
+```bash
+curl -X POST https://api.venice.ai/api/v1/video/queue \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "seedance-2-5-text-to-video-basic",
+    "prompt": "A slow aerial push over misty mountains at sunrise, clouds parting, cinematic widescreen framing.",
+    "draft_task_id": "123e4567-e89b-12d3-a456-426614174000"
+  }'
+```
+
+A rejected draft or upgrade request is not charged.
 
 ---
 
@@ -549,6 +658,23 @@ Public Seedance API models do not run a consent attestation flow (`consents.seed
 ### Quote doesn't match the queued amount
 
 If you included a reference video but didn't pass `reference_video_total_duration` to `/video/quote`, the quote and the queued amount may differ. Always pass `reference_video_total_duration` (sum of all reference clip durations, in seconds) when reference videos are present.
+
+### Draft mode
+
+These requests return 400 and are not charged. See [Draft mode (Seedance 2.5)](#draft-mode-seedance-25).
+
+- `draft` on a model that does not support it: *"This model does not support draft"*
+- `draft_task_id` on a model that does not support it: *"This model does not support draft_task_id"*
+- `draft` and `draft_task_id` together: *"draft cannot be combined with draft_task_id"*
+- `draft_task_id` that is not a UUID: *"draft_task_id must be a valid queue_id"*
+- Unknown or unavailable id: *"Draft queue id was not found or is no longer available."*
+- A queue id that is not a Seedance 2.5 draft: *"Only a Seedance 2.5 draft can be upgraded to HD."*
+- A different model than the draft: *"Draft HD upgrade must use the same model as the draft."*
+- Draft still generating: *"Draft has not finished generating. Wait until it completes, then upgrade to HD."*
+- Draft not yet accepted by the provider: *"Draft is still submitting. Wait until the draft task is accepted before upgrading."*
+- Older than 7 days: *"Draft expired. Draft task IDs are valid for 7 days from creation."*
+- Draft `resolution` other than `480p`: *"Draft mode requires resolution 480p"*
+- Upgrade `resolution` other than `1080p`: *"Draft HD upgrade requires resolution 1080p"*
 
 ---
 
