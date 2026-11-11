@@ -806,6 +806,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const familyMatches = (family, models, f, now) => {
     if (f.providers.length && !f.providers.includes(family.provider)) return false;
     if (f.flags.includes('new') && !isNew(family.updated || family.created, now)) return false;
+    if (f.flags.includes('beta') && !family.beta) return false;
+    if (f.flags.includes('deprecated') && !family.deprecated) return false;
     if (f.flags.includes('open') && !family.openWeights) return false;
     if (f.flags.includes('uncensored') && !family.uncensored) return false;
     return models.some(model => variantMatches(model, f));
@@ -965,10 +967,15 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             </>
           ) : null}
 
+          <FilterGroup title="Status" icon="clock">
+            {option('flags', 'new', 'New', 'Added in the last 30 days.')}
+            {option('flags', 'beta', 'Beta', 'Experimental. May change or be removed without notice.')}
+            {option('flags', 'deprecated', 'Deprecated', 'Scheduled for removal. See Deprecations.')}
+          </FilterGroup>
+
           <FilterGroup title="Attributes" icon="sliders">
             {option('flags', 'open', 'Open weights')}
             {option('flags', 'uncensored', 'Uncensored')}
-            {option('flags', 'new', 'Added in the last 30 days')}
           </FilterGroup>
 
           <FilterGroup title="Provider" icon="server">
