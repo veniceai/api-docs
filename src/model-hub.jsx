@@ -743,8 +743,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const parts = [h ? `${heightLabel(h)}${h < 2160 ? ' or higher' : ''}` : null, f.audio === 'audio' ? 'with audio' : f.audio === 'silent' ? 'silent' : null].filter(Boolean);
     return parts.length ? `prices at ${parts.join(', ')}` : null;
   };
+  // Each blurb fits one line of the explorer's header, and two on a 360 px
+  // phone, so switching modality doesn't move the toolbar under it.
   const SCOPE_BLURBS = {
-    all: 'Every model on the Venice API across text, image, video, audio and embeddings, with normalized prices, limits and privacy tiers.',
+    all: 'Every model on the Venice API, with prices, limits and privacy tiers.',
     text: 'Chat, reasoning, coding and agent models, priced per 1M tokens.',
     image: 'Image generation, editing, upscaling and background removal, priced per image.',
     video: 'Text, image and reference to video, video editing and upscaling, priced per clip from quotes.',
