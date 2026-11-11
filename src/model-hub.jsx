@@ -820,13 +820,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
   const defaultSort = modality => (modality === 'all' ? 'newest' : 'name');
 
-  const FilterGroup = ({ title, children, defaultOpen = true, role }) => {
+  const FilterGroup = ({ title, icon, children, defaultOpen = true, role }) => {
     const [open, setOpen] = useState(defaultOpen);
     return (
       <div className={cls('vx-fgroup', open && 'is-open')}>
         <button type="button" className="vx-fgroup-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <Icon name={icon} size={16} />
           <span>{title}</span>
-          <Icon name="chevronDown" size={14} />
+          <Icon name="chevronDown" size={14} className="vx-fgroup-chevron" />
         </button>
         {open ? <div className="vx-fgroup-body" role={role} aria-label={role ? title : undefined}>{children}</div> : null}
       </div>
@@ -836,7 +837,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const Check = ({ checked, onChange, label, count, title, disabled }) => (
     <label className={cls('vx-check', checked && 'is-checked', disabled && 'is-disabled')} title={title}>
       <input type="checkbox" checked={checked} onChange={onChange} disabled={disabled} />
-      <span className="vx-check-box"><Icon name="check" size={11} /></span>
+      <span className="vx-check-box"><Icon name="check" size={12} /></span>
       <span className="vx-check-label">{label}</span>
       {count != null ? <span className="vx-check-count">{count}</span> : null}
     </label>
@@ -862,8 +863,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       return <Check key={value} checked={checked} onChange={() => toggleIn(key, value)} label={label} title={title} count={count} disabled={!checked && count === 0} />;
     };
     // Single-choice filters are segmented tracks, as in Gordon's column.
-    const range = (key, title, options) => (
-      <FilterGroup title={title}>
+    const range = (key, title, icon, options) => (
+      <FilterGroup title={title} icon={icon}>
         <Segmented ariaLabel={title} value={filters[key]} onChange={value => setFilters(prev => ({ ...prev, [key]: value }))}
           options={options.map(([value, label, hint]) => ({ value, label, title: hint }))} />
       </FilterGroup>
@@ -885,25 +886,25 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <button type="button" className="vx-btn vx-btn-sm vx-rail-done" onClick={onClose}>Done</button>
           </div>
 
-          <FilterGroup title="Modality" role="radiogroup">
+          <FilterGroup title="Modality" icon="layers" role="radiogroup">
             <Radio name="vx-modality" checked={!scope} onChange={() => onScope(null)} label="All" count={Object.values(scopeCounts).reduce((n, c) => n + c, 0)} />
             {SCOPES.filter(s => scopeCounts[s.key]).map(s => (
               <Radio key={s.key} name="vx-modality" checked={scope === s.key} onChange={() => onScope(s.key)} label={s.label} count={scopeCounts[s.key]} />
             ))}
           </FilterGroup>
 
-          <FilterGroup title="Privacy">
+          <FilterGroup title="Privacy" icon="shield">
             {PRIVACY_ORDER.map(tier => option('privacy', tier, PRIVACY[tier].long, PRIVACY[tier].desc))}
           </FilterGroup>
 
           {modality === 'text' ? (
             <>
-              <FilterGroup title="Capabilities">
+              <FilterGroup title="Capabilities" icon="sparkles">
                 {TEXT_CAPS.filter(c => !['logprobs', 'xSearch', 'audioInput'].includes(c.key)).map(cap => option('caps', cap.key, cap.label, cap.desc))}
               </FilterGroup>
-              {range('ctx', 'Context length', [['', 'Any'], ['128000', '128K', '128K tokens or more'], ['256000', '256K', '256K tokens or more'], ['1000000', '1M', '1M tokens or more']])}
-              {range('price', 'Input price (per 1M tokens)', [['', 'Any'], ['0.5', '≤$0.5', 'Up to $0.50'], ['2', '≤$2', 'Up to $2'], ['5', '≤$5', 'Up to $5']])}
-              <FilterGroup title="Served precision" defaultOpen={false}>
+              {range('ctx', 'Context length', 'maximize', [['', 'Any'], ['128000', '128K', '128K tokens or more'], ['256000', '256K', '256K tokens or more'], ['1000000', '1M', '1M tokens or more']])}
+              {range('price', 'Input price (per 1M tokens)', 'dollar', [['', 'Any'], ['0.5', '≤$0.5', 'Up to $0.50'], ['2', '≤$2', 'Up to $2'], ['5', '≤$5', 'Up to $5']])}
+              <FilterGroup title="Served precision" icon="gauge" defaultOpen={false}>
                 {[['bf16', 'BF16'], ['fp16', 'FP16'], ['fp8', 'FP8'], ['fp4', 'FP4'], ['int4', 'INT4'], ['none', 'Not disclosed']].map(([value, label]) => option('quant', value, label, QUANT_NOTES[value]))}
               </FilterGroup>
             </>
@@ -911,11 +912,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
           {modality === 'image' ? (
             <>
-              <FilterGroup title="Task">
+              <FilterGroup title="Task" icon="wand">
                 {[['generate', 'Generate'], ['edit', 'Edit'], ['upscale', 'Upscale'], ['background-removal', 'Remove background']].map(([value, label]) => option('modes', value, label))}
               </FilterGroup>
-              {range('res', 'Output resolution', [['', 'Any'], ['2K', '2K', '2K available'], ['4K', '4K', '4K available']])}
-              <FilterGroup title="Features">
+              {range('res', 'Output resolution', 'maximize', [['', 'Any'], ['2K', '2K', '2K available'], ['4K', '4K', '4K available']])}
+              <FilterGroup title="Features" icon="zap">
                 {option('caps', 'webSearch', 'Web-grounded generation')}
                 {option('caps', 'multiImage', 'Multi-image editing')}
               </FilterGroup>
@@ -924,22 +925,22 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
           {modality === 'video' ? (
             <>
-              <FilterGroup title="Mode">
+              <FilterGroup title="Mode" icon="film">
                 {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition'].map(mode => option('modes', mode, VARIANT_LABELS[mode]))}
               </FilterGroup>
-              {range('audio', 'Audio', [['', 'Any'], ['audio', 'Audio', 'Generates audio'], ['silent', 'Silent', 'Can be silent']])}
-              {range('res', 'Resolution', [['', 'Any'], ['720', '720p', '720p or higher'], ['1080', '1080p', '1080p or higher'], ['1440', '1440p', '1440p or higher'], ['2160', '4K']])}
-              {range('dur', 'Clip length', [['', 'Any'], ['10', '10s', '10 seconds or longer'], ['15', '15s', '15 seconds or longer'], ['20', '20s', '20 seconds or longer'], ['30', '30s', '30 seconds or longer']])}
+              {range('audio', 'Audio', 'volume', [['', 'Any'], ['audio', 'Audio', 'Generates audio'], ['silent', 'Silent', 'Can be silent']])}
+              {range('res', 'Resolution', 'maximize', [['', 'Any'], ['720', '720p', '720p or higher'], ['1080', '1080p', '1080p or higher'], ['1440', '1440p', '1440p or higher'], ['2160', '4K']])}
+              {range('dur', 'Clip length', 'clock', [['', 'Any'], ['10', '10s', '10 seconds or longer'], ['15', '15s', '15 seconds or longer'], ['20', '20s', '20 seconds or longer'], ['30', '30s', '30 seconds or longer']])}
             </>
           ) : null}
 
-          <FilterGroup title="Attributes">
+          <FilterGroup title="Attributes" icon="sliders">
             {option('flags', 'open', 'Open weights')}
             {option('flags', 'uncensored', 'Uncensored')}
             {option('flags', 'new', 'Added in the last 30 days')}
           </FilterGroup>
 
-          <FilterGroup title="Provider">
+          <FilterGroup title="Provider" icon="server">
             {visibleProviders.map(([slug, n]) => {
               const checked = filters.providers.includes(slug);
               return <Check key={slug} checked={checked} onChange={() => toggleIn('providers', slug)} label={providerName(slug)} count={n} disabled={!checked && n === 0} />;
