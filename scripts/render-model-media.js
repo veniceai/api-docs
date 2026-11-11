@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Render the reference prompt suite through the Venice API, for models that
- * venice.ai doesn't publish samples for.
+ * venice.ai doesn't publish samples for, or doesn't for every prompt.
  *
  * Text-to-image models get the image suite listed in data/model-media.json,
  * at default settings. Edit models get three instructions applied to one
