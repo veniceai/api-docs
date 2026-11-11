@@ -97,7 +97,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // task and decision models stand apart from chat.
   const SCOPES = [
     { key: 'text', label: 'Text' }, { key: 'image', label: 'Image' }, { key: 'video', label: 'Video' },
-    { key: 'tts', label: 'Text to speech' }, { key: 'stt', label: 'Speech to text' }, { key: 'music', label: 'Music & sound effects' },
+    { key: 'tts', label: 'Text to speech', short: 'Speech' }, { key: 'stt', label: 'Speech to text', short: 'Transcription' },
+    { key: 'music', label: 'Music & sound effects', short: 'Music' },
     { key: 'embedding', label: 'Embeddings' }, { key: 'decision', label: 'Decisions' }
   ];
   const AUDIO_SCOPES = ['tts', 'stt', 'music'];
@@ -853,6 +854,34 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       <span className="vx-check-count">{count}</span>
     </label>
   );
+
+  // The same choice as tabs above the results, each with its type icon and its
+  // count, the chosen one underlined. Their radios are a group of their own:
+  // sharing the sidebar's name, the browser would uncheck one for the other.
+  const ScopeTabs = ({ scope, counts, onScope }) => {
+    const ref = useRef(null);
+    const shown = SCOPES.filter(s => !counts || counts[s.key]);
+    const total = counts ? shown.reduce((n, s) => n + counts[s.key], 0) : null;
+    // Where the row scrolls, as on a phone, the chosen tab is scrolled into
+    // view. Sideways only: scrollIntoView would also move the page.
+    useEffect(() => {
+      const row = ref.current;
+      const tab = row && row.querySelector('.is-checked');
+      if (tab && (tab.offsetLeft < row.scrollLeft || tab.offsetLeft + tab.offsetWidth > row.scrollLeft + row.clientWidth)) row.scrollLeft = tab.offsetLeft - 16;
+    }, [scope]);
+    return (
+      <div ref={ref} className="vx-tabs" role="radiogroup" aria-label="Modality">
+        {[{ key: null, label: 'All' }, ...shown].map(s => (
+          <label key={s.key || 'all'} className={cls('vx-tab', (scope || null) === s.key && 'is-checked')} title={s.short ? s.label : undefined}>
+            <input type="radio" name="vx-modality-tab" checked={(scope || null) === s.key} onChange={() => onScope(s.key)} />
+            <span className={`vx-scope-icon vx-type-${s.key || 'all'}`} aria-hidden="true" />
+            <span>{s.short || s.label}</span>
+            {counts ? <span className="vx-tab-count">{s.key ? counts[s.key] : total}</span> : null}
+          </label>
+        ))}
+      </div>
+    );
+  };
 
   // The filter column; below 1024px it opens as a drawer from the toolbar.
   const DRAWER_MAX_WIDTH = 1024;
@@ -1630,6 +1659,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               <Segmented ariaLabel="View" value={shownView} onChange={setView}
                 options={[{ value: 'list', label: 'List' }, { value: 'table', label: 'Table' }, ...(canGrid ? [{ value: 'grid', label: 'Gallery' }] : [])]} />
             </div>
+
+            <ScopeTabs scope={scope} counts={catalog ? scopeCounts : null} onScope={chooseScope} />
 
             {!catalog ? (
               error
