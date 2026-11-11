@@ -843,10 +843,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </label>
   );
 
-  const Radio = ({ name, checked, onChange, label, count }) => (
-    <label className={cls('vx-check vx-radio', checked && 'is-checked')}>
-      <input type="radio" name={name} checked={checked} onChange={onChange} />
-      <span className="vx-check-box" />
+  // A modality, picked like a page in a nav: its type icon, and the chosen
+  // one filled. The radio stays for keyboard and screen readers.
+  const ScopeOption = ({ scope, checked, onChange, label, count }) => (
+    <label className={cls('vx-check vx-scope', checked && 'is-checked')}>
+      <input type="radio" name="vx-modality" checked={checked} onChange={onChange} />
+      <span className={`vx-scope-icon vx-type-${scope || 'all'}`} aria-hidden="true" />
       <span className="vx-check-label">{label}</span>
       <span className="vx-check-count">{count}</span>
     </label>
@@ -887,9 +889,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
 
           <FilterGroup title="Modality" icon="layers" role="radiogroup">
-            <Radio name="vx-modality" checked={!scope} onChange={() => onScope(null)} label="All" count={Object.values(scopeCounts).reduce((n, c) => n + c, 0)} />
+            <ScopeOption checked={!scope} onChange={() => onScope(null)} label="All" count={Object.values(scopeCounts).reduce((n, c) => n + c, 0)} />
             {SCOPES.filter(s => scopeCounts[s.key]).map(s => (
-              <Radio key={s.key} name="vx-modality" checked={scope === s.key} onChange={() => onScope(s.key)} label={s.label} count={scopeCounts[s.key]} />
+              <ScopeOption key={s.key} scope={s.key} checked={scope === s.key} onChange={() => onScope(s.key)} label={s.label} count={scopeCounts[s.key]} />
             ))}
           </FilterGroup>
 
