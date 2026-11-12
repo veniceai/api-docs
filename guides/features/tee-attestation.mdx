@@ -1,0 +1,459 @@
+---
+title: "Verifying TEE Attestation"
+description: "Check that a Venice model runs in a genuine enclave, and that a reply was signed by that enclave."
+'og:title': "Verifying TEE Attestation | Venice API Docs"
+'og:description': "Fetch and check TEE attestation reports and response signatures for Venice TEE and E2EE models."
+---
+
+Attestation is how a TEE proves what it is. Venice exposes two endpoints for this, for any model with `supportsTeeAttestation`:
+
+- **`GET /tee/attestation`** returns hardware evidence for the enclave serving a model, and the public key bound to that enclave. It proves which enclave you're talking to.
+- **`GET /tee/signature`** returns the enclave's signature over a specific completion. It proves that a reply came from that enclave.
+
+For an overview of TEE and E2EE, see [TEE & E2EE Models](/guides/features/tee-e2ee-models).
+
+## Fetch an attestation
+
+```bash
+NONCE=$(openssl rand -hex 32)
+
+curl "https://api.venice.ai/api/v1/tee/attestation?model=e2ee-qwen3-6-35b-a3b&nonce=$NONCE" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+| Parameter | Description |
+| --- | --- |
+| `model` | Required. A model ID with `supportsTeeAttestation`. |
+| `nonce` | A fresh random value: 32 bytes, hex-encoded to 64 characters. The enclave includes it in its evidence, which proves the attestation was produced for your request and isn't a replay. Some enclaves reject nonces of any other length. |
+
+### Response fields
+
+| Field | Description |
+| --- | --- |
+| `verified` | `true` if the evidence passed Venice's server-side verification. |
+| `nonce` | The nonce the evidence was produced for. It should equal the one you sent. |
+| `model` | The attested model ID. |
+| `signing_key` | The enclave's secp256k1 public key, hex-encoded. E2EE clients encrypt to this key, and the enclave signs replies with it. May be omitted for some TEE-only models. |
+| `signing_address` | The Ethereum-style address of `signing_key`: the last 20 bytes of the Keccak-256 hash of the uncompressed key without its `04` prefix. |
+| `intel_quote` | The Intel TDX quote, hex-encoded. It contains the enclave's measurements and 64 bytes of report data. |
+| `nvidia_payload` | NVIDIA GPU attestation evidence, as a JSON string with `nonce`, `arch` and `evidence_list`, when the enclave uses a confidential-computing GPU. |
+| `server_verification` | The individual results of Venice's checks: `tdx.valid`, `nvidia.valid`, `signingAddressBinding.bound`, `nonceBinding.bound` and `verifiedAt`. |
+| `tee_provider` | An identifier for the operator running the enclave. |
+
+## Levels of verification
+
+How much you verify yourself decides how much you rely on Venice.
+
+| Level | What you check | What you still rely on Venice for |
+| --- | --- | --- |
+| 1. Venice's result | `verified` is `true`, and `nonce` and `model` match your request | Everything about the evidence |
+| 2. Local consistency | Level 1, plus the TDX quote: debug mode is off, the signing key is bound to the quote's report data, and `signing_address` matches the key | The quote's signature and certificate chain, the GPU evidence, and the nonce binding |
+| 3. Independent verification | Level 2, plus the quote signature and certificate chain, the GPU evidence, and the enclave measurements against reference values | Nothing about the attestation itself |
+
+The [E2EE examples](/guides/features/e2ee-protocol#complete-example) do level 1. The code below does level 2, the same checks as `venice tee verify` in the [Venice CLI](/guides/integrations/venice-cli).
+
+### Check the quote locally
+
+An Intel TDX quote starts with a 48-byte header. Version 5 quotes add a 6-byte body descriptor after it. The TD report follows, and the fields used here sit at these offsets from its start:
+
+| Offset | Size | Field | What to check |
+| --- | --- | --- | --- |
+| 120 | 8 | `TDATTRIBUTES` | Bit 0 of the first byte is the debug flag. It must be `0`: a debug enclave can be inspected by its host. |
+| 136 | 48 | `MRTD` | Measurement of the initial enclave image. Compare against reference values for level 3. |
+| 328 | 4 × 48 | `RTMR0`–`RTMR3` | Runtime measurements. Compare against reference values for level 3. |
+| 520 | 64 | `REPORTDATA` | The first 20 bytes must equal `signing_address`, which proves the signing key was created inside this enclave. |
+
+Install the dependencies:
+
+<CodeGroup>
+```bash JavaScript
+npm install @noble/curves @noble/hashes
+```
+
+```bash Python
+pip install requests eth-account
+```
+</CodeGroup>
+
+This module checks an attestation and, further down, a response signature:
+
+<CodeGroup>
+```javascript verify.mjs
+import { secp256k1 } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+import { keccak_256 } from '@noble/hashes/sha3.js'
+import { bytesToHex, concatBytes, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js'
+
+const strip0x = (hex) => hex.replace(/^0x/, '').toLowerCase()
+
+// Ethereum-style address of an uncompressed secp256k1 public key.
+export function addressOf(publicKeyHex) {
+  let key = hexToBytes(strip0x(publicKeyHex))
+  if (key.length === 64) key = Uint8Array.of(0x04, ...key)
+  if (key.length !== 65 || key[0] !== 0x04) throw new Error('Expected an uncompressed public key')
+  return bytesToHex(keccak_256(key.subarray(1)).subarray(12))
+}
+
+// Reads the TD report fields from an Intel TDX quote (version 4 or 5).
+export function parseTdxQuote(hex) {
+  const quote = hexToBytes(strip0x(hex))
+  const view = new DataView(quote.buffer, quote.byteOffset, quote.byteLength)
+  if (quote.length < 48 || view.getUint32(4, true) !== 0x81) throw new Error('Not a TDX quote')
+
+  const version = view.getUint16(0, true)
+  if (version !== 4 && version !== 5) throw new Error(`Unsupported quote version ${version}`)
+  const body = version === 5 ? 54 : 48 // v5 adds a 6-byte body descriptor
+  if (quote.length < body + 584) throw new Error('Quote is truncated')
+
+  const field = (offset, length) => quote.subarray(body + offset, body + offset + length)
+  return {
+    tdAttributes: field(120, 8),
+    mrtd: bytesToHex(field(136, 48)),
+    rtmr: [328, 376, 424, 472].map((offset) => bytesToHex(field(offset, 48))),
+    reportData: field(520, 64),
+  }
+}
+
+// Returns a list of failed checks. An empty list means every check passed.
+export function checkAttestation(attestation, { model, nonce }) {
+  const failures = []
+  if (attestation.verified !== true) failures.push('Venice did not verify the attestation')
+  if (attestation.nonce !== nonce) failures.push('Attestation does not echo the nonce you sent')
+  if (attestation.model !== model) failures.push('Attestation is for a different model')
+  if (attestation.server_verification?.nonceBinding?.bound !== true) {
+    failures.push('Nonce is not bound to the attestation evidence')
+  }
+
+  const signingKey = attestation.signing_key ?? attestation.signing_public_key
+  if (!signingKey) return [...failures, 'Attestation has no signing key']
+  if (!attestation.intel_quote) return [...failures, 'Attestation has no TDX quote']
+
+  const quote = parseTdxQuote(attestation.intel_quote)
+  if (quote.tdAttributes[0] & 0x01) failures.push('Enclave is running in debug mode')
+
+  const address = addressOf(signingKey)
+  if (bytesToHex(quote.reportData.subarray(0, 20)) !== address) {
+    failures.push('Signing key is not bound to the quote REPORTDATA')
+  }
+  if (attestation.signing_address && strip0x(attestation.signing_address) !== address) {
+    failures.push('signing_address does not match the signing key')
+  }
+  return failures
+}
+
+// Recovers the address that produced an EIP-191 (personal_sign) signature over `text`.
+export function recoverSigner(text, signatureHex) {
+  const sig = hexToBytes(strip0x(signatureHex))
+  if (sig.length !== 65) throw new Error('Expected a 65-byte r || s || v signature')
+  const message = utf8ToBytes(text)
+  const digest = keccak_256(concatBytes(utf8ToBytes(`\x19Ethereum Signed Message:\n${message.length}`), message))
+  const recovery = sig[64] >= 27 ? sig[64] - 27 : sig[64]
+  const publicKey = secp256k1.Signature.fromBytes(sig.subarray(0, 64), 'compact')
+    .addRecoveryBit(recovery)
+    .recoverPublicKey(digest)
+    .toBytes(false)
+  return bytesToHex(keccak_256(publicKey.subarray(1)).subarray(12))
+}
+
+const sha256Hex = (text) => bytesToHex(sha256(utf8ToBytes(text)))
+
+// Checks a /tee/signature response against the attested signer and the reply you received.
+export function checkSignature(signatureResponse, { signingAddress, reply, request }) {
+  const { text } = signatureResponse
+  const signature = typeof signatureResponse.signature === 'string'
+    ? signatureResponse.signature
+    : signatureResponse.signature?.value
+  if (!text || !signature) return ['Signature response has no signed text or signature']
+
+  const failures = []
+  if (recoverSigner(text, signature) !== strip0x(signingAddress)) {
+    failures.push('Signature was not made by the attested signing key')
+  }
+  const signedHashes = text.match(/^([0-9a-f]{64}):([0-9a-f]{64})$/)
+  if (signedHashes) {
+    if (signedHashes[2] !== sha256Hex(reply)) failures.push('Signed response hash does not match the reply')
+    if (request === undefined) failures.push('Signed text covers the request too; pass the exact request to check it')
+    else if (signedHashes[1] !== sha256Hex(request)) failures.push('Signed request hash does not match the request')
+  } else if (text !== reply) {
+    failures.push('Signed text does not match the reply')
+  }
+  return failures
+}
+```
+
+```python venice_verify.py
+import hashlib
+import re
+import struct
+
+from eth_account import Account
+from eth_account.messages import encode_defunct
+from eth_utils import keccak
+
+
+def _strip0x(value: str) -> str:
+    return value.lower().removeprefix("0x")
+
+
+def address_of(public_key_hex: str) -> str:
+    """Ethereum-style address of an uncompressed secp256k1 public key."""
+    key = bytes.fromhex(_strip0x(public_key_hex))
+    if len(key) == 64:
+        key = b"\x04" + key
+    if len(key) != 65 or key[0] != 0x04:
+        raise ValueError("Expected an uncompressed public key")
+    return keccak(key[1:])[12:].hex()
+
+
+def parse_tdx_quote(hex_quote: str) -> dict:
+    """Reads the TD report fields from an Intel TDX quote (version 4 or 5)."""
+    quote = bytes.fromhex(_strip0x(hex_quote))
+    if len(quote) < 48 or struct.unpack_from("<I", quote, 4)[0] != 0x81:
+        raise ValueError("Not a TDX quote")
+    version = struct.unpack_from("<H", quote, 0)[0]
+    if version not in (4, 5):
+        raise ValueError(f"Unsupported quote version {version}")
+    body = 54 if version == 5 else 48  # v5 adds a 6-byte body descriptor
+    if len(quote) < body + 584:
+        raise ValueError("Quote is truncated")
+
+    def field(offset: int, length: int) -> bytes:
+        return quote[body + offset : body + offset + length]
+
+    return {
+        "td_attributes": field(120, 8),
+        "mrtd": field(136, 48).hex(),
+        "rtmr": [field(offset, 48).hex() for offset in (328, 376, 424, 472)],
+        "report_data": field(520, 64),
+    }
+
+
+def check_attestation(attestation: dict, model: str, nonce: str) -> list[str]:
+    """Returns a list of failed checks. An empty list means every check passed."""
+    failures = []
+    if attestation.get("verified") is not True:
+        failures.append("Venice did not verify the attestation")
+    if attestation.get("nonce") != nonce:
+        failures.append("Attestation does not echo the nonce you sent")
+    if attestation.get("model") != model:
+        failures.append("Attestation is for a different model")
+    nonce_binding = (attestation.get("server_verification") or {}).get("nonceBinding") or {}
+    if nonce_binding.get("bound") is not True:
+        failures.append("Nonce is not bound to the attestation evidence")
+
+    signing_key = attestation.get("signing_key") or attestation.get("signing_public_key")
+    if not signing_key:
+        return failures + ["Attestation has no signing key"]
+    if not attestation.get("intel_quote"):
+        return failures + ["Attestation has no TDX quote"]
+
+    quote = parse_tdx_quote(attestation["intel_quote"])
+    if quote["td_attributes"][0] & 0x01:
+        failures.append("Enclave is running in debug mode")
+
+    address = address_of(signing_key)
+    if quote["report_data"][:20].hex() != address:
+        failures.append("Signing key is not bound to the quote REPORTDATA")
+    if attestation.get("signing_address") and _strip0x(attestation["signing_address"]) != address:
+        failures.append("signing_address does not match the signing key")
+    return failures
+
+
+def recover_signer(text: str, signature_hex: str) -> str:
+    """Recovers the address that produced an EIP-191 (personal_sign) signature over `text`."""
+    return _strip0x(Account.recover_message(encode_defunct(text=text), signature=signature_hex))
+
+
+def _sha256_hex(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def check_signature(signature_response: dict, signing_address: str, reply: str, request: str | None = None) -> list[str]:
+    """Checks a /tee/signature response against the attested signer and the reply you received."""
+    text = signature_response.get("text")
+    signature = signature_response.get("signature")
+    if isinstance(signature, dict):
+        signature = signature.get("value")
+    if not text or not signature:
+        return ["Signature response has no signed text or signature"]
+
+    failures = []
+    if recover_signer(text, signature) != _strip0x(signing_address):
+        failures.append("Signature was not made by the attested signing key")
+    signed_hashes = re.fullmatch(r"([0-9a-f]{64}):([0-9a-f]{64})", text)
+    if signed_hashes:
+        if signed_hashes[2] != _sha256_hex(reply):
+            failures.append("Signed response hash does not match the reply")
+        if request is None:
+            failures.append("Signed text covers the request too; pass the exact request to check it")
+        elif signed_hashes[1] != _sha256_hex(request):
+            failures.append("Signed request hash does not match the request")
+    elif text != reply:
+        failures.append("Signed text does not match the reply")
+    return failures
+```
+</CodeGroup>
+
+Use it to check a live attestation:
+
+<CodeGroup>
+```javascript check-attestation.mjs
+import { bytesToHex, randomBytes } from '@noble/hashes/utils.js'
+import { checkAttestation, parseTdxQuote } from './verify.mjs'
+
+const BASE_URL = 'https://api.venice.ai/api/v1'
+const MODEL = 'e2ee-qwen3-6-35b-a3b'
+
+const nonce = bytesToHex(randomBytes(32))
+const res = await fetch(`${BASE_URL}/tee/attestation?${new URLSearchParams({ model: MODEL, nonce })}`, {
+  headers: { Authorization: `Bearer ${process.env.VENICE_API_KEY}` },
+})
+const attestation = await res.json()
+
+const failures = checkAttestation(attestation, { model: MODEL, nonce })
+if (failures.length) throw new Error(`Attestation rejected:\n- ${failures.join('\n- ')}`)
+
+const quote = parseTdxQuote(attestation.intel_quote)
+console.log('Attestation passed local checks')
+console.log('Signing address:', attestation.signing_address)
+console.log('MRTD:', quote.mrtd)
+```
+
+```python check_attestation.py
+import os
+import secrets
+
+import requests
+
+from venice_verify import check_attestation, parse_tdx_quote
+
+BASE_URL = "https://api.venice.ai/api/v1"
+MODEL = "e2ee-qwen3-6-35b-a3b"
+
+nonce = secrets.token_hex(32)
+attestation = requests.get(
+    f"{BASE_URL}/tee/attestation",
+    params={"model": MODEL, "nonce": nonce},
+    headers={"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"},
+    timeout=30,
+).json()
+
+failures = check_attestation(attestation, MODEL, nonce)
+if failures:
+    raise SystemExit("Attestation rejected:\n- " + "\n- ".join(failures))
+
+quote = parse_tdx_quote(attestation["intel_quote"])
+print("Attestation passed local checks")
+print("Signing address:", attestation["signing_address"])
+print("MRTD:", quote["mrtd"])
+```
+</CodeGroup>
+
+### Verify independently
+
+Level 3 removes Venice from the trust path for attestation:
+
+- **TDX quote**: verify the quote signature and its certificate chain back to Intel, using Intel's DCAP quote verification tooling. See the [Intel TDX documentation](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html).
+- **GPU evidence**: verify `nvidia_payload` with NVIDIA's attestation tooling. See [NVIDIA Confidential Computing](https://developer.nvidia.com/confidential-computing).
+- **Nonce binding**: confirm your nonce is part of the signed evidence, not just echoed in the response.
+- **Measurements**: compare `MRTD` and `RTMR0`–`RTMR3` with reference values for the enclave image.
+
+<Note>
+Reference measurements and the enclave's report-data layout for the nonce aren't published in these docs yet. Until they are, level 2 is the strongest check you can do from this page.
+</Note>
+
+## Verify a response signature
+
+After a completion finishes, fetch the enclave's signature for it with the completion ID: the `id` field of the response or of any streamed chunk.
+
+```bash
+curl "https://api.venice.ai/api/v1/tee/signature?model=e2ee-qwen3-6-35b-a3b&request_id=chatcmpl-abc123" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+| Field | Description |
+| --- | --- |
+| `text` | The exact text the enclave signed. |
+| `signature` | An [EIP-191](https://eips.ethereum.org/EIPS/eip-191) (`personal_sign`) signature over `text`: 65 bytes, `r ‖ s ‖ v`, hex-encoded. |
+| `signing_address` | The address of the signing key, as reported by the enclave. |
+| `payload` | `request_hash`, `response_hash` and `timestamp`, as reported by the enclave. |
+| `request_id` | The completion ID the signature belongs to. |
+
+To verify a signature:
+
+1. Recover the signer's address from `signature` over `text`.
+2. Check that it equals the `signing_address` from an attestation that passed your checks. Don't rely on the `signing_address` in the signature response for this.
+3. Check that `text` covers what you received. It takes one of two forms:
+   - The reply text itself. It must equal your reply exactly.
+   - Two lowercase hex SHA-256 digests joined by a colon: `sha256(request):sha256(reply)`. The second must equal the digest of your reply. Checking the first needs the exact request bytes the enclave hashed.
+
+`request_id` isn't covered by the signature, so it doesn't prove by itself that a signature belongs to your request. Only the signed text ties the two together.
+
+The module above includes `checkSignature` (`check_signature` in Python):
+
+<CodeGroup>
+```javascript check-signature.mjs
+import { checkSignature } from './verify.mjs'
+
+const BASE_URL = 'https://api.venice.ai/api/v1'
+const MODEL = 'e2ee-qwen3-6-35b-a3b'
+
+// From your own records: the completion ID, the full reply text, and the
+// signing address from an attestation that passed your checks.
+const [completionId, reply, signingAddress] = process.argv.slice(2)
+
+const res = await fetch(`${BASE_URL}/tee/signature?${new URLSearchParams({ model: MODEL, request_id: completionId })}`, {
+  headers: { Authorization: `Bearer ${process.env.VENICE_API_KEY}` },
+})
+const signature = await res.json()
+
+const failures = checkSignature(signature, { signingAddress, reply })
+if (failures.length) throw new Error(`Signature rejected:\n- ${failures.join('\n- ')}`)
+console.log('Reply was signed by the attested enclave key')
+```
+
+```python check_signature.py
+import os
+import sys
+
+import requests
+
+from venice_verify import check_signature
+
+BASE_URL = "https://api.venice.ai/api/v1"
+MODEL = "e2ee-qwen3-6-35b-a3b"
+
+# From your own records: the completion ID, the full reply text, and the
+# signing address from an attestation that passed your checks.
+completion_id, reply, signing_address = sys.argv[1:4]
+
+signature = requests.get(
+    f"{BASE_URL}/tee/signature",
+    params={"model": MODEL, "request_id": completion_id},
+    headers={"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"},
+    timeout=30,
+).json()
+
+failures = check_signature(signature, signing_address, reply)
+if failures:
+    raise SystemExit("Signature rejected:\n- " + "\n- ".join(failures))
+print("Reply was signed by the attested enclave key")
+```
+</CodeGroup>
+
+## Use the Venice CLI
+
+The [Venice CLI](/guides/integrations/venice-cli) wraps both endpoints:
+
+```bash
+# Show the attestation report
+venice tee attestation e2ee-qwen3-6-35b-a3b --verbose
+
+# Run the level 2 checks
+venice tee verify e2ee-qwen3-6-35b-a3b
+
+# Check a response signature against a signing address you trust and the reply you received
+venice tee signature e2ee-qwen3-6-35b-a3b <completion-id> \
+  --verify-signer <signing-address> \
+  --expect-content reply.txt
+```
