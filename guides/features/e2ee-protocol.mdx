@@ -24,10 +24,10 @@ If you don't need your own client, the [Venice CLI](/guides/integrations/venice-
     Encrypt the `content` of every `user` and `system` message to the enclave's public key.
   </Step>
   <Step title="Send the request">
-    Call `POST /chat/completions` with `stream: true` and the three `X-Venice-TEE-*` headers.
+    Call `POST /chat/completions` with the three `X-Venice-TEE-*` headers. Streaming is optional.
   </Step>
-  <Step title="Decrypt the stream">
-    Decrypt each `delta.content` chunk with your client private key. Stop if any chunk isn't encrypted or fails to decrypt.
+  <Step title="Decrypt the response">
+    Decrypt `content` and `reasoning_content` with your client private key. Stop if any value isn't encrypted or fails to decrypt.
   </Step>
 </Steps>
 
@@ -77,10 +77,12 @@ When these headers are present on a request to an E2EE model, Venice treats the 
 
 | Direction | Encrypted | Not encrypted |
 | --- | --- | --- |
-| Request | `content` of every `user` and `system` message. It must be a string | `assistant` and `tool` messages, tool definitions, model ID and all other parameters |
-| Response | `choices[].delta.content` in each streamed chunk | Chunk IDs, roles, finish reasons and other metadata |
+| Request | `content` of every `user` and `system` message. It must be a string | Model ID, parameters, tool definitions and message roles |
+| Response | `content` and `reasoning_content`: in `choices[].delta` when streaming, or in `choices[].message` otherwise. Each streamed chunk is encrypted separately | IDs, roles, finish reasons and token usage |
 
 When E2EE is active, every `user` and `system` message must be encrypted. A plaintext message in either role fails with `Encrypted field is not valid hex`.
+
+Venice forwards E2EE messages unchanged and never encrypts anything on your behalf. Anything your client sends in plaintext, such as earlier `assistant` replies in the history, stays readable to Venice.
 
 ### Security properties
 
@@ -235,7 +237,7 @@ def decrypt_field(hex_text: str, client_key: ec.EllipticCurvePrivateKey) -> str:
 
 ### Complete example
 
-This script checks the attestation, encrypts the prompt, sends the request and decrypts the streamed reply. It prints the completion ID at the end, which you can use to [fetch a response signature](/guides/features/tee-attestation#verify-a-response-signature).
+This script checks the attestation, encrypts the prompt, sends a streaming request and decrypts the reply and any reasoning. It prints the completion ID at the end, which you can use to [fetch a response signature](/guides/features/tee-attestation#verify-a-response-signature).
 
 <CodeGroup>
 ```javascript e2ee-chat.mjs
@@ -292,6 +294,7 @@ async function e2eeChat(model, messages) {
     const decoder = new TextDecoder()
     let buffer = ''
     let reply = ''
+    let reasoning = ''
     let id
     let finishReason
 
@@ -309,6 +312,9 @@ async function e2eeChat(model, messages) {
         if (event.error) throw new Error(`Stream error: ${JSON.stringify(event.error)}`)
         id ??= event.id
         const choice = event.choices?.[0]
+        if (choice?.delta?.reasoning_content) {
+          reasoning += decryptField(choice.delta.reasoning_content, client.privateKey)
+        }
         if (choice?.delta?.content) {
           const text = decryptField(choice.delta.content, client.privateKey)
           reply += text
@@ -319,14 +325,15 @@ async function e2eeChat(model, messages) {
     }
 
     if (!finishReason) throw new Error('Stream ended without a finish reason, so the reply may be truncated')
-    return { id, reply }
+    return { id, reply, reasoning }
   } finally {
     client.privateKey.fill(0)
   }
 }
 
 const prompt = process.argv[2] ?? 'What is 2+2? Answer briefly.'
-const { id } = await e2eeChat(MODEL, [{ role: 'user', content: prompt }])
+const { id, reasoning } = await e2eeChat(MODEL, [{ role: 'user', content: prompt }])
+if (reasoning) console.log(`\n\nReasoning: ${reasoning}`)
 console.log(`\n\nCompletion ID: ${id}`)
 ```
 
@@ -367,7 +374,7 @@ def fetch_model_key(model: str) -> str:
     return key_hex
 
 
-def e2ee_chat(model: str, messages: list[dict]) -> tuple[str | None, str]:
+def e2ee_chat(model: str, messages: list[dict]) -> tuple[str | None, str, str]:
     model_key_hex = fetch_model_key(model)
     model_key = parse_public_key(model_key_hex)
     client_key = generate_client_key()
@@ -387,7 +394,7 @@ def e2ee_chat(model: str, messages: list[dict]) -> tuple[str | None, str]:
         "X-Venice-TEE-Signing-Algo": "ecdsa",
     }
 
-    reply, completion_id, finish_reason = "", None, None
+    reply, reasoning, completion_id, finish_reason = "", "", None, None
     with requests.post(f"{BASE_URL}/chat/completions", json=body, headers=headers, stream=True, timeout=120) as res:
         res.raise_for_status()
         res.encoding = "utf-8"
@@ -403,7 +410,10 @@ def e2ee_chat(model: str, messages: list[dict]) -> tuple[str | None, str]:
                 raise RuntimeError(f"Stream error: {event['error']}")
             completion_id = completion_id or event.get("id")
             choice = (event.get("choices") or [{}])[0]
-            content = (choice.get("delta") or {}).get("content")
+            delta = choice.get("delta") or {}
+            if delta.get("reasoning_content"):
+                reasoning += decrypt_field(delta["reasoning_content"], client_key)
+            content = delta.get("content")
             if content:
                 text = decrypt_field(content, client_key)
                 reply += text
@@ -412,12 +422,14 @@ def e2ee_chat(model: str, messages: list[dict]) -> tuple[str | None, str]:
 
     if not finish_reason:
         raise RuntimeError("Stream ended without a finish reason, so the reply may be truncated")
-    return completion_id, reply
+    return completion_id, reply, reasoning
 
 
 if __name__ == "__main__":
     prompt = sys.argv[1] if len(sys.argv) > 1 else "What is 2+2? Answer briefly."
-    completion_id, _ = e2ee_chat(MODEL, [{"role": "user", "content": prompt}])
+    completion_id, _, reasoning = e2ee_chat(MODEL, [{"role": "user", "content": prompt}])
+    if reasoning:
+        print(f"\n\nReasoning: {reasoning}")
     print(f"\n\nCompletion ID: {completion_id}")
 ```
 </CodeGroup>
@@ -434,17 +446,52 @@ VENICE_API_KEY=your-key python e2ee_chat.py "What is 2+2?"
 ```
 </CodeGroup>
 
+### Non-streaming responses
+
+With `stream: false`, the reply arrives in one response. Its `content` and `reasoning_content` are each encrypted as a single field:
+
+<CodeGroup>
+```javascript decrypt-completion.mjs
+import { decryptField } from './e2ee.mjs'
+
+// For a request sent with stream: false.
+export function decryptCompletion(completion, clientPrivateKey) {
+  const { message, finish_reason: finishReason } = completion.choices[0]
+  return {
+    finishReason,
+    reply: message.content ? decryptField(message.content, clientPrivateKey) : '',
+    reasoning: message.reasoning_content ? decryptField(message.reasoning_content, clientPrivateKey) : '',
+  }
+}
+```
+
+```python decrypt_completion.py
+from venice_e2ee import decrypt_field
+
+
+def decrypt_completion(completion: dict, client_key) -> dict:
+    """For a request sent with "stream": False."""
+    choice = completion["choices"][0]
+    message = choice["message"]
+    return {
+        "finish_reason": choice.get("finish_reason"),
+        "reply": decrypt_field(message["content"], client_key) if message.get("content") else "",
+        "reasoning": decrypt_field(message["reasoning_content"], client_key) if message.get("reasoning_content") else "",
+    }
+```
+</CodeGroup>
+
 ### Multi-turn conversations
 
-Keep the conversation history in plaintext on your side. For each new request, fetch or reuse a recently checked enclave key, generate a new client key pair, and encrypt every `user` and `system` message again. Earlier `assistant` replies are sent unencrypted, so leave them out of the history if Venice shouldn't see them.
+Keep the conversation history in plaintext on your side. For each new request, fetch or reuse a recently checked enclave key, generate a new client key pair, and encrypt every `user` and `system` message again. The examples send earlier `assistant` replies as plaintext, which Venice can read, so leave them out of the history if Venice shouldn't see them.
 
 ## Production checklist
 
 - Check the attestation before trusting its key: `verified` is `true`, the nonce matches the one you sent, and the model matches the one you asked for. For stronger guarantees, follow [Verifying TEE attestation](/guides/features/tee-attestation).
 - Generate a fresh 32-byte nonce for every attestation request.
 - Generate a new client key pair for every request, and discard the private key afterwards. JavaScript can overwrite the key bytes, as the example does. Python can't reliably wipe memory, so keep keys short-lived.
-- Stream the response, and stop on any chunk that isn't encrypted or fails to decrypt.
-- Treat a stream without a `finish_reason` as incomplete.
+- Stop on any `content` or `reasoning_content` value that isn't encrypted or fails to decrypt.
+- When streaming, treat a stream without a `finish_reason` as incomplete.
 - Don't log plaintext prompts or decrypted replies.
 
 ## Errors and troubleshooting

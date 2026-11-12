@@ -75,12 +75,11 @@ pip install requests eth-account
 ```
 </CodeGroup>
 
-This module checks an attestation and, further down, a response signature:
+This module checks an attestation and, [further down](#verify-a-response-signature), a response signature:
 
 <CodeGroup>
 ```javascript verify.mjs
 import { secp256k1 } from '@noble/curves/secp256k1.js'
-import { sha256 } from '@noble/hashes/sha2.js'
 import { keccak_256 } from '@noble/hashes/sha3.js'
 import { bytesToHex, concatBytes, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js'
 
@@ -155,34 +154,33 @@ export function recoverSigner(text, signatureHex) {
   return bytesToHex(keccak_256(publicKey.subarray(1)).subarray(12))
 }
 
-const sha256Hex = (text) => bytesToHex(sha256(utf8ToBytes(text)))
-
 // Checks a /tee/signature response against the attested signer and the reply you received.
-export function checkSignature(signatureResponse, { signingAddress, reply, request }) {
+// For E2EE requests, `reply` is the decrypted reply text.
+// `covers` is 'reply' when the signed text is the reply itself, or 'hashes' when it is a
+// request and response hash pair reported by the enclave.
+export function checkSignature(signatureResponse, { signingAddress, reply }) {
   const { text } = signatureResponse
   const signature = typeof signatureResponse.signature === 'string'
     ? signatureResponse.signature
     : signatureResponse.signature?.value
-  if (!text || !signature) return ['Signature response has no signed text or signature']
+  if (!text || !signature) {
+    const reason = signatureResponse.receipt
+      ? 'This model returns a receipt instead of a signed text'
+      : 'Signature response has no signed text or signature'
+    return { covers: null, failures: [reason] }
+  }
 
   const failures = []
   if (recoverSigner(text, signature) !== strip0x(signingAddress)) {
     failures.push('Signature was not made by the attested signing key')
   }
-  const signedHashes = text.match(/^([0-9a-f]{64}):([0-9a-f]{64})$/)
-  if (signedHashes) {
-    if (signedHashes[2] !== sha256Hex(reply)) failures.push('Signed response hash does not match the reply')
-    if (request === undefined) failures.push('Signed text covers the request too; pass the exact request to check it')
-    else if (signedHashes[1] !== sha256Hex(request)) failures.push('Signed request hash does not match the request')
-  } else if (text !== reply) {
-    failures.push('Signed text does not match the reply')
-  }
-  return failures
+  if (/^[0-9a-f]{64}:[0-9a-f]{64}$/.test(text)) return { covers: 'hashes', failures }
+  if (text !== reply) failures.push('Signed text does not match the reply')
+  return { covers: 'reply', failures }
 }
 ```
 
 ```python venice_verify.py
-import hashlib
 import re
 import struct
 
@@ -264,33 +262,30 @@ def recover_signer(text: str, signature_hex: str) -> str:
     return _strip0x(Account.recover_message(encode_defunct(text=text), signature=signature_hex))
 
 
-def _sha256_hex(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def check_signature(signature_response: dict, signing_address: str, reply: str) -> tuple[str | None, list[str]]:
+    """Checks a /tee/signature response against the attested signer and the reply you received.
 
-
-def check_signature(signature_response: dict, signing_address: str, reply: str, request: str | None = None) -> list[str]:
-    """Checks a /tee/signature response against the attested signer and the reply you received."""
+    For E2EE requests, `reply` is the decrypted reply text. Returns (covers, failures):
+    covers is "reply" when the signed text is the reply itself, or "hashes" when it is a
+    request and response hash pair reported by the enclave.
+    """
     text = signature_response.get("text")
     signature = signature_response.get("signature")
     if isinstance(signature, dict):
         signature = signature.get("value")
     if not text or not signature:
-        return ["Signature response has no signed text or signature"]
+        if signature_response.get("receipt"):
+            return None, ["This model returns a receipt instead of a signed text"]
+        return None, ["Signature response has no signed text or signature"]
 
     failures = []
     if recover_signer(text, signature) != _strip0x(signing_address):
         failures.append("Signature was not made by the attested signing key")
-    signed_hashes = re.fullmatch(r"([0-9a-f]{64}):([0-9a-f]{64})", text)
-    if signed_hashes:
-        if signed_hashes[2] != _sha256_hex(reply):
-            failures.append("Signed response hash does not match the reply")
-        if request is None:
-            failures.append("Signed text covers the request too; pass the exact request to check it")
-        elif signed_hashes[1] != _sha256_hex(request):
-            failures.append("Signed request hash does not match the request")
-    elif text != reply:
+    if re.fullmatch(r"[0-9a-f]{64}:[0-9a-f]{64}", text):
+        return "hashes", failures
+    if text != reply:
         failures.append("Signed text does not match the reply")
-    return failures
+    return "reply", failures
 ```
 </CodeGroup>
 
@@ -379,17 +374,19 @@ curl "https://api.venice.ai/api/v1/tee/signature?model=e2ee-qwen3-6-35b-a3b&requ
 | `payload` | `request_hash`, `response_hash` and `timestamp`, as reported by the enclave. |
 | `request_id` | The completion ID the signature belongs to. |
 
+Some models return a `receipt` object instead of `text` and `signature`. The steps and code below don't cover receipts.
+
 To verify a signature:
 
 1. Recover the signer's address from `signature` over `text`.
 2. Check that it equals the `signing_address` from an attestation that passed your checks. Don't rely on the `signing_address` in the signature response for this.
-3. Check that `text` covers what you received. It takes one of two forms:
-   - The reply text itself. It must equal your reply exactly.
-   - Two lowercase hex SHA-256 digests joined by a colon: `sha256(request):sha256(reply)`. The second must equal the digest of your reply. Checking the first needs the exact request bytes the enclave hashed.
+3. Check what `text` covers. It takes one of two forms:
+   - **The reply text itself.** It must equal the reply you received exactly. For E2EE requests, compare it with the decrypted reply.
+   - **Two hex digests joined by a colon.** These are request and response hashes reported by the enclave. The signature proves the enclave signed them, but the exact bytes it hashed aren't documented, so you can't recompute them yourself yet. Treat them as reported values, not as proof about your request.
 
 `request_id` isn't covered by the signature, so it doesn't prove by itself that a signature belongs to your request. Only the signed text ties the two together.
 
-The module above includes `checkSignature` (`check_signature` in Python):
+The module above includes `checkSignature` (`check_signature` in Python). It also reports which form the signed text took:
 
 <CodeGroup>
 ```javascript check-signature.mjs
@@ -398,8 +395,8 @@ import { checkSignature } from './verify.mjs'
 const BASE_URL = 'https://api.venice.ai/api/v1'
 const MODEL = 'e2ee-qwen3-6-35b-a3b'
 
-// From your own records: the completion ID, the full reply text, and the
-// signing address from an attestation that passed your checks.
+// From your own records: the completion ID, the full (decrypted) reply text, and
+// the signing address from an attestation that passed your checks.
 const [completionId, reply, signingAddress] = process.argv.slice(2)
 
 const res = await fetch(`${BASE_URL}/tee/signature?${new URLSearchParams({ model: MODEL, request_id: completionId })}`, {
@@ -407,9 +404,13 @@ const res = await fetch(`${BASE_URL}/tee/signature?${new URLSearchParams({ model
 })
 const signature = await res.json()
 
-const failures = checkSignature(signature, { signingAddress, reply })
+const { covers, failures } = checkSignature(signature, { signingAddress, reply })
 if (failures.length) throw new Error(`Signature rejected:\n- ${failures.join('\n- ')}`)
-console.log('Reply was signed by the attested enclave key')
+console.log(
+  covers === 'reply'
+    ? 'The attested enclave key signed this exact reply'
+    : `The attested enclave key signed request and response hashes it reported: ${signature.text}`
+)
 ```
 
 ```python check_signature.py
@@ -423,8 +424,8 @@ from venice_verify import check_signature
 BASE_URL = "https://api.venice.ai/api/v1"
 MODEL = "e2ee-qwen3-6-35b-a3b"
 
-# From your own records: the completion ID, the full reply text, and the
-# signing address from an attestation that passed your checks.
+# From your own records: the completion ID, the full (decrypted) reply text, and
+# the signing address from an attestation that passed your checks.
 completion_id, reply, signing_address = sys.argv[1:4]
 
 signature = requests.get(
@@ -434,10 +435,13 @@ signature = requests.get(
     timeout=30,
 ).json()
 
-failures = check_signature(signature, signing_address, reply)
+covers, failures = check_signature(signature, signing_address, reply)
 if failures:
     raise SystemExit("Signature rejected:\n- " + "\n- ".join(failures))
-print("Reply was signed by the attested enclave key")
+if covers == "reply":
+    print("The attested enclave key signed this exact reply")
+else:
+    print(f"The attested enclave key signed request and response hashes it reported: {signature['text']}")
 ```
 </CodeGroup>
 
@@ -452,7 +456,7 @@ venice tee attestation e2ee-qwen3-6-35b-a3b --verbose
 # Run the level 2 checks
 venice tee verify e2ee-qwen3-6-35b-a3b
 
-# Check a response signature against a signing address you trust and the reply you received
+# Check a response signature against a signing address you trust and the (decrypted) reply you received
 venice tee signature e2ee-qwen3-6-35b-a3b <completion-id> \
   --verify-signer <signing-address> \
   --expect-content reply.txt
