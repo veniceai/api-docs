@@ -1035,7 +1035,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         const title = el.getAttribute('title');
         const label = el.getAttribute('data-tip-label');
         const text = el.getAttribute('data-tip') || title;
-        const repeats = !label && text && text === el.textContent.trim() && el.scrollWidth <= el.clientWidth;
+        const clipped = [el, ...el.querySelectorAll('*')].some(node => node.scrollWidth > node.clientWidth);
+        const repeats = !label && text && text === el.textContent.trim() && !clipped;
         if ((!label && !text) || repeats) return;
         if (title != null) {
           el.setAttribute('data-tip-title', title);
@@ -1338,6 +1339,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       family.variants.map(id => catalog.models[id]).map(m => sampleFor(m, isVideo ? 'cinematic-landscape' : 'photoreal')).find(Boolean);
     const { offer } = row;
     const href = modelHref(family, display.id);
+    const extra = family.variants.length - 1;
     return (
       <article className="vx-card">
         <a className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} href={href} tabIndex={-1} aria-hidden="true">
@@ -1351,6 +1353,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <a className="vx-card-name" href={href} title={family.name}>{family.name}</a>
             <TypeBadge family={family} />
             <StatusTags item={family} now={now} />
+          </div>
+          <div className="vx-card-id">
+            <IdChip id={display.id} />
+            {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
           </div>
           <div className="vx-card-foot">
             {isVideo && offer.status !== 'quoted' ? <span className="vx-card-price vx-muted">Priced by source length</span> : (
