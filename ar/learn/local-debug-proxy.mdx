@@ -1,0 +1,381 @@
+---
+title: "تصحيح أخطاء وكلاء البرمجة باستخدام وكيل محلي"
+description: "شغّل وكيلًا صغيرًا مبنيًا على Node.js على جهازك بين وكيل البرمجة وواجهة Venice API لتسجيل كل طلب واستجابة وجزء متدفق وعدد رموز وترويسة حدّ معدل."
+slug: local-debug-proxy
+"og:title": "تصحيح أخطاء وكلاء البرمجة باستخدام وكيل Venice محلي"
+"og:description": "سجّل بدقة ما يرسله Claude Code وCodex CLI وOpenCode وCline وAider وغيرها من الوكلاء إلى Venice باستخدام وكيل محلي بلا اعتماديات"
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="12 November 2026"/>
+
+عندما يتصرف وكيل البرمجة بشكل غير متوقع، نادرًا ما تخبرك واجهته بالسبب. قد لا يفعل استدعاء أداة شيئًا دون أي تنبيه، أو يفشل طلب برسالة "provider error"، أو يتجاهل النموذج موجّه النظام الخاص بك، أو تكلّف جلسة قصيرة أكثر بكثير مما توقعت. في معظم الأحيان تكمن الإجابة في حركة HTTP بين الوكيل وVenice، وهي حركة لا تستطيع رؤيتها عادةً.
+
+في هذا الدليل، سنشغّل وكيلًا صغيرًا (proxy) على جهازك يقع بين وكيل البرمجة وواجهة Venice API. يتواصل وكيل البرمجة مع الـ proxy، ويمرّر الـ proxy كل شيء إلى Venice دون تغيير، ويُكتب كل طلب واستجابة في ملف سجل محلي يمكنك البحث فيه باستخدام `jq`.
+
+<CardGroup cols={3}>
+  <Card title="شاهد الطلب الحقيقي" icon="eye">
+    معرّف النموذج والرسائل والأدوات والمعاملات تمامًا كما أرسلها الوكيل
+  </Card>
+  <Card title="البث يبقى سليمًا" icon="radio">
+    تُمرَّر الأجزاء فور وصولها، لذا يتصرف الوكيل بشكل طبيعي
+  </Card>
+  <Card title="بلا اعتماديات" icon="package">
+    ملف واحد، Node.js 18 أو أحدث، لا شيء لتثبيته
+  </Card>
+</CardGroup>
+
+---
+
+## كيف يعمل {#how-it-works}
+
+```txt
+coding agent  ──▶  http://127.0.0.1:8787/api/v1  ──▶  https://api.venice.ai/api/v1
+                          │
+                          └──▶  venice-debug.jsonl (one line per request)
+```
+
+يمرّر الـ proxy المسار الكامل وترويسة `Authorization` الخاصة بك، لذا يبقى مفتاح API في إعدادات الوكيل وتعمل كل نقاط نهاية Venice عبره: `/chat/completions` و`/responses` و`/models` و`/embeddings` وغيرها. التغيير الوحيد الذي تجريه على الوكيل هو عنوان URL الأساسي.
+
+لكل طلب، يسجّل الـ proxy ما يلي:
+
+- الطريقة والمسار ومتن الطلب، مع إخفاء مفتاح API باستثناء آخر أربعة أحرف منه
+- حالة الاستجابة ومتنها. تُخزَّن الاستجابات المتدفقة كقائمة من الأجزاء المحلَّلة.
+- استخدام الرموز، من كائن `usage` الذي تُرجعه Venice
+- المدة الإجمالية والوقت حتى أول بايت
+- ترويسات الاستجابة `x-venice-*` و`x-ratelimit-*`، مثل الرصيد المتبقي وحالة حدّ المعدل وتحذيرات إيقاف النماذج
+
+<Note>
+هذه أداة تصحيح أخطاء لجهازك الخاص. ترتبط بالعنوان `127.0.0.1` فقط، وليس لها مصادقة خاصة بها، وتكتب الموجّهات والشيفرة على القرص كنص عادي. لا تنشرها كبوابة مشتركة. إذا كنت تحتاج إلى بوابة، فراجع [بناء بوابة LLM بلغة Rust](/ar/learn/rust-llm-gateway).
+</Note>
+
+---
+
+## المتطلبات المسبقة {#prerequisites}
+
+- [Node.js](https://nodejs.org/) 18 أو أحدث (`node --version`)
+- مفتاح Venice API من [venice.ai/settings/api](https://venice.ai/settings/api?utm_source=venice-api-documentation)
+- وكيل برمجة يعمل بالفعل مع Venice، مثل [Claude Code](/ar/guides/integrations/claude-code) أو [Codex CLI](/ar/guides/integrations/codex-cli) أو [OpenCode](/ar/guides/integrations/opencode) أو [Cline](/ar/guides/integrations/cline) أو [Aider](/ar/guides/integrations/aider)
+- [`jq`](https://jqlang.org/) لقراءة السجلات (اختياري، لكنه موصى به)
+
+---
+
+## الإعداد {#setup}
+
+<Steps>
+  <Step title="أنشئ الـ proxy">
+    احفظ ما يلي باسم `venice-debug-proxy.mjs` في مجلد مؤقت:
+
+    ```js venice-debug-proxy.mjs
+    import http from "node:http";
+    import { appendFileSync } from "node:fs";
+    import { randomUUID } from "node:crypto";
+
+    const PORT = Number(process.env.PORT ?? 8787);
+    const UPSTREAM = process.env.VENICE_UPSTREAM ?? "https://api.venice.ai";
+    const LOG_FILE = process.env.LOG_FILE ?? "venice-debug.jsonl";
+
+    // Node's fetch sets these itself, and decompresses the response for us
+    const SKIP_REQUEST_HEADERS = new Set([
+      "host", "connection", "content-length", "transfer-encoding", "accept-encoding",
+    ]);
+    const SKIP_RESPONSE_HEADERS = new Set([
+      "content-encoding", "content-length", "transfer-encoding", "connection", "set-cookie",
+    ]);
+
+    function parseJson(text) {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text || undefined;
+      }
+    }
+
+    function parseSse(text) {
+      return text
+        .split("\n")
+        .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map((line) => parseJson(line.slice(6)));
+    }
+
+    function redact(headers) {
+      const auth = headers.authorization;
+      if (!auth) return headers;
+      return { ...headers, authorization: `Bearer …${auth.slice(-4)}` };
+    }
+
+    function findUsage(body) {
+      const items = Array.isArray(body) ? [...body].reverse() : [body];
+      for (const item of items) {
+        const usage = item?.usage ?? item?.response?.usage;
+        if (usage) return usage;
+      }
+    }
+
+    function veniceHeaders(headers) {
+      const picked = {};
+      headers.forEach((value, key) => {
+        if (key.startsWith("x-venice-") || key.startsWith("x-ratelimit-")) picked[key] = value;
+      });
+      return picked;
+    }
+
+    const server = http.createServer(async (req, res) => {
+      const id = randomUUID().slice(0, 8);
+      const started = performance.now();
+
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const requestBody = Buffer.concat(chunks);
+
+      const headers = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (!SKIP_REQUEST_HEADERS.has(key)) headers[key] = value;
+      }
+
+      // Stop the upstream request if the agent hangs up mid-stream
+      const abort = new AbortController();
+      res.on("close", () => {
+        if (!res.writableFinished) abort.abort();
+      });
+
+      const entry = {
+        id,
+        time: new Date().toISOString(),
+        method: req.method,
+        path: req.url,
+        requestHeaders: redact(req.headers),
+        request: parseJson(requestBody.toString()),
+      };
+
+      let upstream;
+      try {
+        upstream = await fetch(UPSTREAM + req.url, {
+          method: req.method,
+          headers,
+          body: requestBody.length ? requestBody : undefined,
+          signal: abort.signal,
+        });
+      } catch (err) {
+        entry.error = `Could not reach Venice: ${err.message}`;
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: entry.error }));
+        return finish(entry, started);
+      }
+
+      const responseHeaders = {};
+      upstream.headers.forEach((value, key) => {
+        if (!SKIP_RESPONSE_HEADERS.has(key)) responseHeaders[key] = value;
+      });
+      res.writeHead(upstream.status, responseHeaders);
+
+      const received = [];
+      try {
+        for await (const chunk of upstream.body ?? []) {
+          entry.firstByteMs ??= Math.round(performance.now() - started);
+          received.push(Buffer.from(chunk));
+          res.write(chunk);
+        }
+      } catch (err) {
+        entry.error = abort.signal.aborted
+          ? "Agent disconnected before the response finished"
+          : `Stream ended early: ${err.message}`;
+      }
+      res.end();
+
+      const text = Buffer.concat(received).toString();
+      const isStream = upstream.headers.get("content-type")?.includes("text/event-stream");
+      entry.status = upstream.status;
+      entry.stream = Boolean(isStream);
+      entry.responseHeaders = veniceHeaders(upstream.headers);
+      entry.response = isStream ? parseSse(text) : parseJson(text);
+      entry.usage = findUsage(entry.response);
+      finish(entry, started);
+    });
+
+    function finish(entry, started) {
+      entry.durationMs = Math.round(performance.now() - started);
+      appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+
+      const model = entry.request?.model ?? "-";
+      const tokens = entry.usage
+        ? ` tokens=${entry.usage.prompt_tokens ?? entry.usage.input_tokens}→${entry.usage.completion_tokens ?? entry.usage.output_tokens}`
+        : "";
+      const ttfb = entry.firstByteMs === undefined ? "" : ` ttfb=${entry.firstByteMs}ms`;
+      console.log(
+        `[${entry.id}] ${entry.method} ${entry.path} model=${model} status=${entry.status ?? "ERR"}` +
+          `${entry.stream ? " stream" : ""} ${entry.durationMs}ms${ttfb}${tokens}` +
+          `${entry.error ? ` error="${entry.error}"` : ""}`,
+      );
+    }
+
+    server.listen(PORT, "127.0.0.1", () => {
+      console.log(`Venice debug proxy on http://127.0.0.1:${PORT}/api/v1 → ${UPSTREAM}`);
+      console.log(`Logging full requests and responses to ${LOG_FILE}`);
+    });
+    ```
+
+    هناك بعض النقاط الجديرة بالإشارة:
+
+    - **البث يعمل بشكل طبيعي.** يُكتب كل جزء من Venice إلى الوكيل لحظة وصوله، وتُحفظ نسخة منه للسجل. يرى الوكيل نفس البث رمزًا برمز الذي كان سيحصل عليه من Venice مباشرة.
+    - **يُعالَج الضغط نيابة عنك.** تفك دالة `fetch` في Node ضغط الاستجابة، لذا يحذف الـ proxy ترويسة `content-encoding` قبل تمرير الترويسات. وإلا لحاول الوكيل فك ضغط نص عادي وفشل.
+    - **يُمرَّر قطع الاتصال.** إذا ألغيت دورة في الوكيل، يلغي الـ proxy أيضًا الطلب المرسل إلى Venice، حتى لا تستمر Venice في توليد رموز لا يقرؤها أحد.
+  </Step>
+
+  <Step title="شغّله">
+    ```bash
+    node venice-debug-proxy.mjs
+    ```
+
+    يُفترض أن ترى:
+
+    ```txt
+    Venice debug proxy on http://127.0.0.1:8787/api/v1 → https://api.venice.ai
+    Logging full requests and responses to venice-debug.jsonl
+    ```
+
+    عيّن `PORT` أو `LOG_FILE` في البيئة لتغيير أي من القيمتين الافتراضيتين.
+  </Step>
+
+  <Step title="تحقق منه باستخدام curl">
+    في طرفية ثانية، أرسل طلبًا عبر الـ proxy:
+
+    ```bash
+    curl http://127.0.0.1:8787/api/v1/chat/completions \
+      -H "Authorization: Bearer $VENICE_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "venice-uncensored-1-2",
+        "messages": [{"role": "user", "content": "Say hello"}]
+      }'
+    ```
+
+    يطبع الـ proxy سطرًا واحدًا لكل طلب:
+
+    ```txt
+    [3f9c2a1e] POST /api/v1/chat/completions model=venice-uncensored-1-2 status=200 855ms ttfb=851ms tokens=1746→10
+    ```
+
+    هذا عدد كبير من رموز الموجّه مقابل "Say hello". معظمها يأتي من موجّه النظام الافتراضي في Venice، الذي يُضاف إلى طلبات الدردشة ما لم تضبط `venice_parameters.include_venice_system_prompt` على `false`. هذا بالضبط نوع الأشياء التي يكشفها الـ proxy.
+  </Step>
+
+  <Step title="وجّه الوكيل إلى الـ proxy">
+    في إعدادات Venice الخاصة بالوكيل، استبدل `https://api.venice.ai` بـ `http://127.0.0.1:8787` واترك بقية عنوان URL كما هي. يمرّر الـ proxy المسار الكامل، لذا يظل ما يطلب منك دليل الوكيل إدخاله صالحًا.
+
+    | الوكيل | الإعداد | القيمة أثناء التصحيح |
+    | --- | --- | --- |
+    | [Claude Code](/ar/guides/integrations/claude-code) (عبر CCR) | **API endpoint** للمزوّد | `http://127.0.0.1:8787/api/v1` |
+    | [Codex CLI](/ar/guides/integrations/codex-cli) | `base_url` في `[model_providers.venice]` | `http://127.0.0.1:8787/api/v1/` |
+    | [OpenCode](/ar/guides/integrations/opencode) | `options.baseURL` في كتلة المزوّد اليدوي | `http://127.0.0.1:8787/api/v1` |
+    | [Cline](/ar/guides/integrations/cline) | **Base URL** | `http://127.0.0.1:8787/api/v1` |
+    | [Kilo Code](/ar/guides/integrations/kilo-code) | **Base URL** لمزوّد متوافق مع OpenAI | `http://127.0.0.1:8787/api/v1` |
+    | [Aider](/ar/guides/integrations/aider) | `OPENAI_API_BASE` | `http://127.0.0.1:8787/api/v1` |
+    | [Hermes Agent](/ar/guides/integrations/hermes-agent) | `base_url` في `~/.hermes/config.yaml` | `http://127.0.0.1:8787/api/v1` |
+    | [Xcode](/ar/guides/integrations/xcode) | **URL** المزوّد | `http://127.0.0.1:8787/api` |
+
+    لا يتيح مزوّد Venice المضمّن في OpenCode ولا مزوّد Venice الأصلي في Kilo Code تعيين عنوان URL أساسي، لذا انتقل إلى المزوّد اليدوي أو المتوافق مع OpenAI أثناء التصحيح.
+
+    في OpenCode، امنح مزوّد التصحيح معرّفًا خاصًا به، مثل `venice-debug`، وشغّله باستخدام `-m venice-debug/<model-id>`. إذا كنت قد حفظت مفتاحًا باستخدام `/connect`، فسيرسل OpenCode ذلك المفتاح المحفوظ لمعرّف المزوّد `venice` حتى عندما تعيّن إعداداتك `apiKey`.
+
+    استخدم `127.0.0.1` بدلًا من `localhost`. في بعض الأنظمة يُحَل `localhost` إلى عنوان IPv6 ‏`::1`، وهو عنوان لا يستمع إليه الـ proxy.
+
+    <Warning>
+    لا يعمل هذا مع [Cursor](/ar/guides/integrations/cursor). يرسل Cursor طلبات النماذج المخصصة من خوادمه الخاصة، والتي لا يمكنها الوصول إلى proxy على جهازك.
+    </Warning>
+  </Step>
+
+  <Step title="أعد إنتاج المشكلة">
+    استخدم الوكيل كالمعتاد حتى تحدث المشكلة مرة أخرى، ثم اطّلع على مخرجات الـ proxy في الطرفية وعلى ملف السجل.
+  </Step>
+</Steps>
+
+---
+
+## قراءة السجلات {#reading-the-logs}
+
+كل سطر في `venice-debug.jsonl` هو كائن JSON كامل، لذا يمكن لـ `jq` تقسيمه بالطريقة التي تحتاجها.
+
+اعرض أحدث طلب واستجابة:
+
+```bash
+tail -n 1 venice-debug.jsonl | jq .
+```
+
+اعرض الطلبات الفاشلة أو المقطوعة فقط:
+
+```bash
+jq -c 'select(.status >= 400 or .error) | {id, status, error, response}' venice-debug.jsonl
+```
+
+تحقق من النموذج والمعاملات والأدوات التي أرسلها الوكيل فعليًا:
+
+```bash
+jq -c '{id, model: .request.model, temperature: .request.temperature, max_tokens: .request.max_tokens, tools: [.request.tools[]?.function.name]}' venice-debug.jsonl
+```
+
+أعد بناء نص chat completions المتدفقة:
+
+```bash
+jq -r 'select(.stream) | .id + " " + ([.response[]? | .choices[0]?.delta?.content // empty] | join(""))' venice-debug.jsonl
+```
+
+إجمالي الرموز لكل نموذج في الجلسة:
+
+```bash
+jq -s 'group_by(.request.model) | map({model: .[0].request.model, requests: length, input: (map(.usage.prompt_tokens // .usage.input_tokens // 0) | add), output: (map(.usage.completion_tokens // .usage.output_tokens // 0) | add)})' venice-debug.jsonl
+```
+
+اعثر على أبطأ الطلبات:
+
+```bash
+jq -s -c 'sort_by(-.durationMs) | .[:5][] | {id, model: .request.model, durationMs, firstByteMs}' venice-debug.jsonl
+```
+
+---
+
+## ما الذي تبحث عنه {#what-to-look-for}
+
+| العَرَض في الوكيل | أين تبحث في السجل |
+| --- | --- |
+| رسالة عامة "provider error" أو "request failed" | `status` و`response`. عادةً ما يذكر متن الخطأ من Venice المعامل غير الصالح. راجع [رموز الأخطاء](/ar/api-reference/error-codes). |
+| `401` "Authentication failed"، لكن المفتاح نفسه يعمل مع curl | آخر أربعة أحرف من `requestHeaders.authorization`. إذا لم تطابق مفتاحك، فالوكيل يرسل مفتاحًا مختلفًا، وغالبًا ما يكون مفتاحًا قديمًا حفظه سابقًا. |
+| `404` في كل طلب | `path`. المسار المكرر مثل `/api/v1/chat/completions/chat/completions` يعني أن الوكيل يضيف نقطة النهاية بنفسه، لذا يجب أن ينتهي عنوان URL الأساسي عند `/api/v1`. |
+| نموذج خاطئ أو غير متوقع | `request.model`، بالإضافة إلى `x-venice-model-id` و`x-venice-model-deprecation-warning` في `responseHeaders` |
+| لا تحدث استدعاءات الأدوات أبدًا | `request.tools` فارغ، أو أن النموذج لا يدعم استدعاء الدوال. تحقق من `model_spec.capabilities.supportsFunctionCalling` للنموذج في [`GET /models`](/ar/api-reference/endpoint/models/list). |
+| أخطاء السياق أو الطول | حجم `request.messages`. يعيد الوكلاء إرسال المحادثة بأكملها وكل نتيجة أداة في كل دورة، لذا تنمو رموز الموجّه بسرعة. |
+| تبدأ الطلبات بالفشل في منتصف الجلسة | `status` ‏`429` مع ترويسات `x-ratelimit-*` (راجع [حدود المعدل](/ar/api-reference/rate-limiting))، أو `402` مع ترويسات `x-venice-balance-*` عند نفاد الرصيد |
+| تكلفة الجلسة أعلى من المتوقع | استعلام الرموز لكل نموذج أعلاه. ابحث عن طلبات في الخلفية، مثل توليد عنوان الجلسة، موجّهة إلى نموذج أكبر من الذي اخترته، أو عن طلبات كثيرة ذات موجّهات كبيرة. كما يضيف موجّه النظام الافتراضي في Venice رموز موجّه إلى كل طلب دردشة ما لم تكن قيمة `include_venice_system_prompt` هي `false`. |
+| يبدو الوكيل بطيئًا | قارن `firstByteMs` مع `durationMs`. طول الوقت حتى أول بايت هو الوقت قبل أن يبدأ النموذج بالإجابة، وغالبًا ما يعود إلى موجّه كبير جدًا أو نموذج استدلال يفكّر. أما الفجوة الطويلة بعد ذلك فهي وقت التوليد. |
+
+---
+
+## دون كتابة أي شيفرة {#without-writing-any-code}
+
+إذا كنت تفضّل تصفح الحركة بالنقر في متصفح، يمكن تشغيل [mitmproxy](https://mitmproxy.org/) كوكيل عكسي أمام Venice:
+
+```bash
+mitmweb --mode reverse:https://api.venice.ai --listen-port 8787
+```
+
+وجّه الوكيل إلى `http://127.0.0.1:8787/api/v1` بالطريقة نفسها، ثم افحص كل طلب في واجهة mitmweb. الـ proxy المبني على Node أسهل في الأتمتة بالسكربتات ويحتفظ بسجل يمكنك البحث فيه باستخدام grep لاحقًا. أما mitmproxy فهو أفضل لتصفح جلسة بشكل تفاعلي.
+
+---
+
+## حافظ على خصوصية السجلات {#keep-the-logs-private}
+
+لا تخزّن Venice موجّهاتك أو استجاباتك في الاستدلال العادي (راجع [الخصوصية](/ar/overview/privacy))، لكن ملف السجل هذا يخزّنها. فهو يحتوي على شيفرتك وموجّهاتك ومخرجات الأدوات واستجابات النموذج كنص عادي.
+
+- شغّل الـ proxy خارج مشروعك، أو أضف `venice-debug.jsonl` إلى `.gitignore`.
+- احذف السجل عند الانتهاء من التصحيح.
+- لا تلصق إدخالات سجل كاملة في issues عامة. استخرج بدلًا من ذلك `status` و`error` والجزء ذا الصلة من `response`.
+
+بالنسبة إلى [نماذج E2EE](/ar/guides/features/tee-e2ee-models)، يشفّر الوكيل محتوى الرسائل قبل أن يغادر جهازك، لذا سيعرض السجل حمولات مشفّرة بدلًا من نص مقروء.
+
+---
+
+## الختام {#finishing-up}
+
+عند الانتهاء، أوقف الـ proxy باستخدام `Ctrl+C` وأعد عنوان URL الأساسي للوكيل إلى `https://api.venice.ai/api/v1`. إذا نسيت، فسيفشل الوكيل بخطأ اتصال بمجرد توقف الـ proxy عن العمل، وهو أمر يسهل اكتشافه على الأقل.
+
+شكرًا على القراءة! نأمل أن تتمكن في المرة القادمة التي يقول فيها الوكيل "something went wrong" من رؤية ما الذي حدث خطأً بالضبط.

@@ -1,0 +1,381 @@
+---
+title: "로컬 프록시로 코딩 에이전트 디버깅하기"
+description: "코딩 에이전트와 Venice API 사이에 작은 Node.js 프록시를 내 컴퓨터에서 실행해 모든 요청, 응답, 스트리밍 청크, 토큰 수, 속도 제한 헤더를 기록합니다."
+slug: local-debug-proxy
+"og:title": "로컬 Venice 프록시로 코딩 에이전트 디버깅하기"
+"og:description": "의존성 없는 로컬 프록시로 Claude Code, Codex CLI, OpenCode, Cline, Aider 등 에이전트가 Venice에 보내는 내용을 정확히 기록합니다"
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="12 November 2026"/>
+
+코딩 에이전트가 이상하게 동작할 때, 에이전트 UI는 그 이유를 거의 알려 주지 않습니다. 도구 호출이 아무 말 없이 아무 일도 하지 않거나, 요청이 "provider error"로 실패하거나, 모델이 시스템 프롬프트를 무시하거나, 짧은 세션인데도 예상보다 훨씬 많은 비용이 듭니다. 대부분의 경우 답은 에이전트와 Venice 사이의 HTTP 트래픽에 있는데, 평소에는 이 트래픽을 볼 수 없습니다.
+
+이 가이드에서는 에이전트와 Venice API 사이에 위치하는 작은 프록시를 내 컴퓨터에서 실행합니다. 에이전트는 프록시와 통신하고, 프록시는 모든 것을 변경 없이 Venice로 전달하며, 모든 요청과 응답은 `jq`로 검색할 수 있는 로컬 로그 파일에 기록됩니다.
+
+<CardGroup cols={3}>
+  <Card title="실제 요청 확인" icon="eye">
+    에이전트가 보낸 그대로의 모델 ID, 메시지, 도구, 파라미터
+  </Card>
+  <Card title="스트리밍 유지" icon="radio">
+    청크가 도착하는 즉시 전달되므로 에이전트가 평소처럼 동작합니다
+  </Card>
+  <Card title="의존성 없음" icon="package">
+    파일 하나, Node.js 18 이상, 설치할 것 없음
+  </Card>
+</CardGroup>
+
+---
+
+## 작동 방식 {#how-it-works}
+
+```txt
+coding agent  ──▶  http://127.0.0.1:8787/api/v1  ──▶  https://api.venice.ai/api/v1
+                          │
+                          └──▶  venice-debug.jsonl (one line per request)
+```
+
+프록시는 전체 경로와 `Authorization` 헤더를 그대로 전달하므로 API 키는 에이전트 설정에 그대로 두면 되고, 모든 Venice 엔드포인트가 프록시를 통해 동작합니다: `/chat/completions`, `/responses`, `/models`, `/embeddings` 등. 에이전트에서 바꿀 것은 base URL뿐입니다.
+
+프록시는 요청마다 다음을 기록합니다.
+
+- 메서드, 경로, 요청 본문. API 키는 마지막 네 글자만 남기고 마스킹됩니다
+- 응답 상태와 본문. 스트리밍 응답은 파싱된 청크 목록으로 저장됩니다.
+- Venice가 반환하는 `usage` 객체의 토큰 사용량
+- 전체 소요 시간과 첫 바이트까지의 시간
+- 남은 잔액, 속도 제한 상태, 모델 지원 중단 경고 등 `x-venice-*` 및 `x-ratelimit-*` 응답 헤더
+
+<Note>
+이 도구는 내 컴퓨터에서 쓰는 디버깅 도구입니다. `127.0.0.1`에만 바인딩되고, 자체 인증이 없으며, 프롬프트와 코드를 평문으로 디스크에 기록합니다. 공유 게이트웨이로 배포하지 마세요. 게이트웨이가 필요하다면 [Rust LLM 게이트웨이 구축하기](/ko/learn/rust-llm-gateway)를 참고하세요.
+</Note>
+
+---
+
+## 사전 요구 사항 {#prerequisites}
+
+- [Node.js](https://nodejs.org/) 18 이상 (`node --version`)
+- [venice.ai/settings/api](https://venice.ai/settings/api?utm_source=venice-api-documentation)에서 발급한 Venice API 키
+- [Claude Code](/ko/guides/integrations/claude-code), [Codex CLI](/ko/guides/integrations/codex-cli), [OpenCode](/ko/guides/integrations/opencode), [Cline](/ko/guides/integrations/cline), [Aider](/ko/guides/integrations/aider) 등 이미 Venice와 함께 동작하는 코딩 에이전트
+- 로그를 읽기 위한 [`jq`](https://jqlang.org/) (선택 사항이지만 권장)
+
+---
+
+## 설정 {#setup}
+
+<Steps>
+  <Step title="프록시 만들기">
+    다음 내용을 임시 디렉터리에 `venice-debug-proxy.mjs`로 저장합니다.
+
+    ```js venice-debug-proxy.mjs
+    import http from "node:http";
+    import { appendFileSync } from "node:fs";
+    import { randomUUID } from "node:crypto";
+
+    const PORT = Number(process.env.PORT ?? 8787);
+    const UPSTREAM = process.env.VENICE_UPSTREAM ?? "https://api.venice.ai";
+    const LOG_FILE = process.env.LOG_FILE ?? "venice-debug.jsonl";
+
+    // Node's fetch sets these itself, and decompresses the response for us
+    const SKIP_REQUEST_HEADERS = new Set([
+      "host", "connection", "content-length", "transfer-encoding", "accept-encoding",
+    ]);
+    const SKIP_RESPONSE_HEADERS = new Set([
+      "content-encoding", "content-length", "transfer-encoding", "connection", "set-cookie",
+    ]);
+
+    function parseJson(text) {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text || undefined;
+      }
+    }
+
+    function parseSse(text) {
+      return text
+        .split("\n")
+        .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map((line) => parseJson(line.slice(6)));
+    }
+
+    function redact(headers) {
+      const auth = headers.authorization;
+      if (!auth) return headers;
+      return { ...headers, authorization: `Bearer …${auth.slice(-4)}` };
+    }
+
+    function findUsage(body) {
+      const items = Array.isArray(body) ? [...body].reverse() : [body];
+      for (const item of items) {
+        const usage = item?.usage ?? item?.response?.usage;
+        if (usage) return usage;
+      }
+    }
+
+    function veniceHeaders(headers) {
+      const picked = {};
+      headers.forEach((value, key) => {
+        if (key.startsWith("x-venice-") || key.startsWith("x-ratelimit-")) picked[key] = value;
+      });
+      return picked;
+    }
+
+    const server = http.createServer(async (req, res) => {
+      const id = randomUUID().slice(0, 8);
+      const started = performance.now();
+
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const requestBody = Buffer.concat(chunks);
+
+      const headers = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (!SKIP_REQUEST_HEADERS.has(key)) headers[key] = value;
+      }
+
+      // Stop the upstream request if the agent hangs up mid-stream
+      const abort = new AbortController();
+      res.on("close", () => {
+        if (!res.writableFinished) abort.abort();
+      });
+
+      const entry = {
+        id,
+        time: new Date().toISOString(),
+        method: req.method,
+        path: req.url,
+        requestHeaders: redact(req.headers),
+        request: parseJson(requestBody.toString()),
+      };
+
+      let upstream;
+      try {
+        upstream = await fetch(UPSTREAM + req.url, {
+          method: req.method,
+          headers,
+          body: requestBody.length ? requestBody : undefined,
+          signal: abort.signal,
+        });
+      } catch (err) {
+        entry.error = `Could not reach Venice: ${err.message}`;
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: entry.error }));
+        return finish(entry, started);
+      }
+
+      const responseHeaders = {};
+      upstream.headers.forEach((value, key) => {
+        if (!SKIP_RESPONSE_HEADERS.has(key)) responseHeaders[key] = value;
+      });
+      res.writeHead(upstream.status, responseHeaders);
+
+      const received = [];
+      try {
+        for await (const chunk of upstream.body ?? []) {
+          entry.firstByteMs ??= Math.round(performance.now() - started);
+          received.push(Buffer.from(chunk));
+          res.write(chunk);
+        }
+      } catch (err) {
+        entry.error = abort.signal.aborted
+          ? "Agent disconnected before the response finished"
+          : `Stream ended early: ${err.message}`;
+      }
+      res.end();
+
+      const text = Buffer.concat(received).toString();
+      const isStream = upstream.headers.get("content-type")?.includes("text/event-stream");
+      entry.status = upstream.status;
+      entry.stream = Boolean(isStream);
+      entry.responseHeaders = veniceHeaders(upstream.headers);
+      entry.response = isStream ? parseSse(text) : parseJson(text);
+      entry.usage = findUsage(entry.response);
+      finish(entry, started);
+    });
+
+    function finish(entry, started) {
+      entry.durationMs = Math.round(performance.now() - started);
+      appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+
+      const model = entry.request?.model ?? "-";
+      const tokens = entry.usage
+        ? ` tokens=${entry.usage.prompt_tokens ?? entry.usage.input_tokens}→${entry.usage.completion_tokens ?? entry.usage.output_tokens}`
+        : "";
+      const ttfb = entry.firstByteMs === undefined ? "" : ` ttfb=${entry.firstByteMs}ms`;
+      console.log(
+        `[${entry.id}] ${entry.method} ${entry.path} model=${model} status=${entry.status ?? "ERR"}` +
+          `${entry.stream ? " stream" : ""} ${entry.durationMs}ms${ttfb}${tokens}` +
+          `${entry.error ? ` error="${entry.error}"` : ""}`,
+      );
+    }
+
+    server.listen(PORT, "127.0.0.1", () => {
+      console.log(`Venice debug proxy on http://127.0.0.1:${PORT}/api/v1 → ${UPSTREAM}`);
+      console.log(`Logging full requests and responses to ${LOG_FILE}`);
+    });
+    ```
+
+    몇 가지 짚어 볼 점이 있습니다.
+
+    - **스트리밍이 평소처럼 동작합니다.** Venice에서 오는 각 청크는 도착하는 즉시 에이전트에 기록되고, 로그용으로 사본이 보관됩니다. 에이전트는 Venice에서 직접 받을 때와 똑같은 토큰 단위 스트림을 봅니다.
+    - **압축은 자동으로 처리됩니다.** Node의 `fetch`가 응답의 압축을 풀기 때문에, 프록시는 헤더를 전달하기 전에 `content-encoding`을 제거합니다. 그렇지 않으면 에이전트가 평문의 압축을 풀려고 시도하다가 실패합니다.
+    - **연결 끊김이 전달됩니다.** 에이전트에서 턴을 취소하면 프록시도 업스트림 요청을 중단하므로, Venice가 아무도 읽지 않는 토큰을 계속 생성하지 않습니다.
+  </Step>
+
+  <Step title="실행하기">
+    ```bash
+    node venice-debug-proxy.mjs
+    ```
+
+    다음과 같이 표시되어야 합니다.
+
+    ```txt
+    Venice debug proxy on http://127.0.0.1:8787/api/v1 → https://api.venice.ai
+    Logging full requests and responses to venice-debug.jsonl
+    ```
+
+    기본값을 바꾸려면 환경 변수에 `PORT` 또는 `LOG_FILE`을 설정하세요.
+  </Step>
+
+  <Step title="curl로 확인하기">
+    두 번째 터미널에서 프록시를 통해 요청을 보냅니다.
+
+    ```bash
+    curl http://127.0.0.1:8787/api/v1/chat/completions \
+      -H "Authorization: Bearer $VENICE_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "venice-uncensored-1-2",
+        "messages": [{"role": "user", "content": "Say hello"}]
+      }'
+    ```
+
+    프록시는 요청마다 한 줄을 출력합니다.
+
+    ```txt
+    [3f9c2a1e] POST /api/v1/chat/completions model=venice-uncensored-1-2 status=200 855ms ttfb=851ms tokens=1746→10
+    ```
+
+    "Say hello"치고는 프롬프트 토큰이 많습니다. 대부분은 Venice의 기본 시스템 프롬프트로, `venice_parameters.include_venice_system_prompt`를 `false`로 설정하지 않으면 채팅 요청에 추가됩니다. 바로 이런 것을 프록시가 보여 줍니다.
+  </Step>
+
+  <Step title="에이전트가 프록시를 가리키도록 설정하기">
+    에이전트의 Venice 설정에서 `https://api.venice.ai`를 `http://127.0.0.1:8787`로 바꾸고 URL의 나머지 부분은 그대로 둡니다. 프록시가 전체 경로를 전달하므로, 에이전트 가이드에서 입력하라고 안내한 값은 그대로 동작합니다.
+
+    | 에이전트 | 설정 | 디버깅 중 값 |
+    | --- | --- | --- |
+    | [Claude Code](/ko/guides/integrations/claude-code) (CCR 사용) | 제공자 **API endpoint** | `http://127.0.0.1:8787/api/v1` |
+    | [Codex CLI](/ko/guides/integrations/codex-cli) | `[model_providers.venice]`의 `base_url` | `http://127.0.0.1:8787/api/v1/` |
+    | [OpenCode](/ko/guides/integrations/opencode) | 수동 제공자 블록의 `options.baseURL` | `http://127.0.0.1:8787/api/v1` |
+    | [Cline](/ko/guides/integrations/cline) | **Base URL** | `http://127.0.0.1:8787/api/v1` |
+    | [Kilo Code](/ko/guides/integrations/kilo-code) | OpenAI 호환 제공자의 **Base URL** | `http://127.0.0.1:8787/api/v1` |
+    | [Aider](/ko/guides/integrations/aider) | `OPENAI_API_BASE` | `http://127.0.0.1:8787/api/v1` |
+    | [Hermes Agent](/ko/guides/integrations/hermes-agent) | `~/.hermes/config.yaml`의 `base_url` | `http://127.0.0.1:8787/api/v1` |
+    | [Xcode](/ko/guides/integrations/xcode) | 제공자 **URL** | `http://127.0.0.1:8787/api` |
+
+    OpenCode에 번들된 Venice 제공자와 Kilo Code의 기본 Venice 제공자는 base URL을 설정할 수 없으므로, 디버깅하는 동안에는 수동 제공자나 OpenAI 호환 제공자로 전환하세요.
+
+    OpenCode에서는 디버그용 제공자에 `venice-debug` 같은 별도 ID를 지정하고 `-m venice-debug/<model-id>`로 실행하세요. `/connect`로 키를 저장한 적이 있다면, 설정에 `apiKey`가 지정되어 있어도 OpenCode는 `venice` 제공자 ID에 대해 저장된 키를 보냅니다.
+
+    `localhost` 대신 `127.0.0.1`을 사용하세요. 일부 시스템에서는 `localhost`가 IPv6 주소 `::1`로 해석되는데, 프록시는 이 주소에서 수신하지 않습니다.
+
+    <Warning>
+    이 방법은 [Cursor](/ko/guides/integrations/cursor)에서는 동작하지 않습니다. Cursor는 사용자 지정 모델 요청을 자체 서버에서 보내며, 이 서버는 내 컴퓨터의 프록시에 접근할 수 없습니다.
+    </Warning>
+  </Step>
+
+  <Step title="문제 재현하기">
+    문제가 다시 발생할 때까지 평소처럼 에이전트를 사용한 다음, 프록시의 터미널 출력과 로그 파일을 확인하세요.
+  </Step>
+</Steps>
+
+---
+
+## 로그 읽기 {#reading-the-logs}
+
+`venice-debug.jsonl`의 각 줄은 완전한 JSON 객체이므로 `jq`로 원하는 대로 잘라 볼 수 있습니다.
+
+가장 최근의 요청과 응답 보기:
+
+```bash
+tail -n 1 venice-debug.jsonl | jq .
+```
+
+실패했거나 중단된 요청만 보기:
+
+```bash
+jq -c 'select(.status >= 400 or .error) | {id, status, error, response}' venice-debug.jsonl
+```
+
+에이전트가 실제로 보낸 모델, 파라미터, 도구 확인하기:
+
+```bash
+jq -c '{id, model: .request.model, temperature: .request.temperature, max_tokens: .request.max_tokens, tools: [.request.tools[]?.function.name]}' venice-debug.jsonl
+```
+
+스트리밍된 chat completions의 텍스트 재구성하기:
+
+```bash
+jq -r 'select(.stream) | .id + " " + ([.response[]? | .choices[0]?.delta?.content // empty] | join(""))' venice-debug.jsonl
+```
+
+세션의 모델별 총 토큰 수:
+
+```bash
+jq -s 'group_by(.request.model) | map({model: .[0].request.model, requests: length, input: (map(.usage.prompt_tokens // .usage.input_tokens // 0) | add), output: (map(.usage.completion_tokens // .usage.output_tokens // 0) | add)})' venice-debug.jsonl
+```
+
+가장 느린 요청 찾기:
+
+```bash
+jq -s -c 'sort_by(-.durationMs) | .[:5][] | {id, model: .request.model, durationMs, firstByteMs}' venice-debug.jsonl
+```
+
+---
+
+## 확인할 항목 {#what-to-look-for}
+
+| 에이전트에서 나타나는 증상 | 로그에서 확인할 위치 |
+| --- | --- |
+| 일반적인 "provider error" 또는 "request failed" | `status`와 `response`. Venice의 오류 본문에는 보통 잘못된 파라미터 이름이 나옵니다. [오류 코드](/ko/api-reference/error-codes)를 참고하세요. |
+| `401` "Authentication failed"인데 같은 키가 curl에서는 동작함 | `requestHeaders.authorization`의 마지막 네 글자. 내 키와 일치하지 않으면 에이전트가 다른 키, 흔히 이전에 저장해 둔 오래된 키를 보내고 있는 것입니다. |
+| 모든 요청에서 `404` | `path`. `/api/v1/chat/completions/chat/completions`처럼 경로가 중복되면 에이전트가 엔드포인트를 직접 덧붙인다는 뜻이므로, base URL은 `/api/v1`에서 끝나야 합니다. |
+| 잘못되었거나 예상치 못한 모델 | `request.model`과 `responseHeaders`의 `x-venice-model-id` 및 `x-venice-model-deprecation-warning` |
+| 도구 호출이 전혀 일어나지 않음 | `request.tools`가 비어 있거나 모델이 함수 호출을 지원하지 않습니다. [`GET /models`](/ko/api-reference/endpoint/models/list)에서 해당 모델의 `model_spec.capabilities.supportsFunctionCalling`을 확인하세요. |
+| 컨텍스트 또는 길이 오류 | `request.messages`의 크기. 에이전트는 턴마다 전체 대화와 모든 도구 결과를 다시 보내므로 프롬프트 토큰이 빠르게 늘어납니다. |
+| 세션 도중에 요청이 실패하기 시작함 | `x-ratelimit-*` 헤더가 있는 `status` `429`([속도 제한](/ko/api-reference/rate-limiting) 참고), 또는 크레딧이 소진되었을 때 `x-venice-balance-*` 헤더가 있는 `402` |
+| 세션 비용이 예상보다 높음 | 위의 모델별 토큰 쿼리. 세션 제목 생성 같은 백그라운드 요청이 선택한 모델보다 큰 모델로 가는지, 또는 큰 프롬프트를 가진 요청이 많은지 확인하세요. `include_venice_system_prompt`가 `false`가 아니면 Venice의 기본 시스템 프롬프트도 모든 채팅 요청에 프롬프트 토큰을 추가합니다. |
+| 에이전트가 느리게 느껴짐 | `firstByteMs`와 `durationMs` 비교. 첫 바이트까지의 시간이 길면 모델이 답변을 시작하기 전의 시간으로, 대개 매우 큰 프롬프트나 생각 중인 추론 모델 때문입니다. 그 이후의 긴 간격은 생성 시간입니다. |
+
+---
+
+## 코드를 작성하지 않고 확인하기 {#without-writing-any-code}
+
+브라우저에서 클릭하며 트래픽을 살펴보고 싶다면, [mitmproxy](https://mitmproxy.org/)를 Venice 앞단의 리버스 프록시로 실행할 수 있습니다.
+
+```bash
+mitmweb --mode reverse:https://api.venice.ai --listen-port 8787
+```
+
+같은 방식으로 에이전트가 `http://127.0.0.1:8787/api/v1`을 가리키도록 한 다음, mitmweb UI에서 각 요청을 살펴보세요. Node 프록시는 스크립트로 다루기 쉽고 나중에 grep으로 검색할 수 있는 로그를 남깁니다. mitmproxy는 세션을 대화형으로 둘러보는 데 더 적합합니다.
+
+---
+
+## 로그를 비공개로 유지하기 {#keep-the-logs-private}
+
+Venice는 일반 추론에서 프롬프트나 응답을 저장하지 않지만([개인정보 보호](/ko/overview/privacy) 참고), 이 로그 파일은 저장합니다. 로그 파일에는 코드, 프롬프트, 도구 출력, 모델 응답이 평문으로 들어 있습니다.
+
+- 프로젝트 밖에서 프록시를 실행하거나 `venice-debug.jsonl`을 `.gitignore`에 추가하세요.
+- 디버깅이 끝나면 로그를 삭제하세요.
+- 전체 로그 항목을 공개 이슈에 붙여 넣지 마세요. 대신 `status`, `error`, 그리고 `response`의 관련 부분만 추려 내세요.
+
+[E2EE 모델](/ko/guides/features/tee-e2ee-models)의 경우 에이전트가 메시지 내용이 내 컴퓨터를 떠나기 전에 암호화하므로, 로그에는 읽을 수 있는 텍스트 대신 암호화된 페이로드가 표시됩니다.
+
+---
+
+## 마무리 {#finishing-up}
+
+작업이 끝나면 `Ctrl+C`로 프록시를 중지하고 에이전트의 base URL을 `https://api.venice.ai/api/v1`로 되돌리세요. 잊어버리더라도 프록시가 실행 중이 아니면 에이전트가 즉시 연결 오류로 실패하므로, 적어도 알아차리기는 쉽습니다.
+
+읽어 주셔서 감사합니다! 다음에 에이전트가 "something went wrong"이라고 할 때는 무엇이 잘못되었는지 정확히 확인할 수 있기를 바랍니다.

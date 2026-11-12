@@ -1,0 +1,381 @@
+---
+title: "Depurar agentes de programación con un proxy local"
+description: "Ejecuta un pequeño proxy de Node.js en tu equipo, entre un agente de programación y la API de Venice, para registrar cada petición, respuesta, fragmento en streaming, recuento de tokens y encabezado de límite de tasa."
+slug: local-debug-proxy
+"og:title": "Depurar agentes de programación con un proxy local de Venice"
+"og:description": "Registra exactamente lo que Claude Code, Codex CLI, OpenCode, Cline, Aider y otros agentes envían a Venice con un proxy local sin dependencias"
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="12 November 2026"/>
+
+Cuando un agente de programación se comporta mal, su interfaz rara vez te dice por qué. Una llamada a herramienta no hace nada sin avisar, una petición falla con "provider error", el modelo ignora tu prompt de sistema o una sesión corta cuesta mucho más de lo que esperabas. La mayoría de las veces, la respuesta está en el tráfico HTTP entre el agente y Venice, que normalmente no puedes ver.
+
+En esta guía, ejecutaremos un pequeño proxy en tu propio equipo que se sitúa entre el agente y la API de Venice. El agente habla con el proxy, el proxy reenvía todo a Venice sin cambios, y cada petición y respuesta se escribe en un archivo de registro local que puedes consultar con `jq`.
+
+<CardGroup cols={3}>
+  <Card title="Ve la petición real" icon="eye">
+    ID del modelo, mensajes, herramientas y parámetros exactamente como los envió el agente
+  </Card>
+  <Card title="Streaming intacto" icon="radio">
+    Los fragmentos se reenvían a medida que llegan, así que el agente se comporta con normalidad
+  </Card>
+  <Card title="Sin dependencias" icon="package">
+    Un solo archivo, Node.js 18 o posterior, nada que instalar
+  </Card>
+</CardGroup>
+
+---
+
+## Cómo funciona {#how-it-works}
+
+```txt
+coding agent  ──▶  http://127.0.0.1:8787/api/v1  ──▶  https://api.venice.ai/api/v1
+                          │
+                          └──▶  venice-debug.jsonl (one line per request)
+```
+
+El proxy reenvía la ruta completa y tu encabezado `Authorization`, así que tu clave de API se queda en la configuración del agente y todos los endpoints de Venice funcionan a través de él: `/chat/completions`, `/responses`, `/models`, `/embeddings` y el resto. El único cambio que haces en el agente es la URL base.
+
+Para cada petición, el proxy registra:
+
+- El método, la ruta y el cuerpo de la petición, con tu clave de API enmascarada salvo sus últimos cuatro caracteres
+- El estado y el cuerpo de la respuesta. Las respuestas en streaming se guardan como una lista de fragmentos analizados.
+- El uso de tokens, a partir del objeto `usage` que devuelve Venice
+- La duración total y el tiempo hasta el primer byte
+- Los encabezados de respuesta `x-venice-*` y `x-ratelimit-*`, como el saldo restante, el estado del límite de tasa y los avisos de retirada de modelos
+
+<Note>
+Esta es una herramienta de depuración para tu propio equipo. Solo escucha en `127.0.0.1`, no tiene autenticación propia y escribe prompts y código en disco en texto plano. No la despliegues como gateway compartido. Si necesitas uno, consulta [Construir un LLM Gateway en Rust](/es/learn/rust-llm-gateway).
+</Note>
+
+---
+
+## Requisitos previos {#prerequisites}
+
+- [Node.js](https://nodejs.org/) 18 o posterior (`node --version`)
+- Una clave de API de Venice de [venice.ai/settings/api](https://venice.ai/settings/api?utm_source=venice-api-documentation)
+- Un agente de programación que ya funcione con Venice, como [Claude Code](/es/guides/integrations/claude-code), [Codex CLI](/es/guides/integrations/codex-cli), [OpenCode](/es/guides/integrations/opencode), [Cline](/es/guides/integrations/cline) o [Aider](/es/guides/integrations/aider)
+- [`jq`](https://jqlang.org/) para leer los registros (opcional, pero recomendado)
+
+---
+
+## Configuración {#setup}
+
+<Steps>
+  <Step title="Crea el proxy">
+    Guarda esto como `venice-debug-proxy.mjs` en un directorio temporal:
+
+    ```js venice-debug-proxy.mjs
+    import http from "node:http";
+    import { appendFileSync } from "node:fs";
+    import { randomUUID } from "node:crypto";
+
+    const PORT = Number(process.env.PORT ?? 8787);
+    const UPSTREAM = process.env.VENICE_UPSTREAM ?? "https://api.venice.ai";
+    const LOG_FILE = process.env.LOG_FILE ?? "venice-debug.jsonl";
+
+    // Node's fetch sets these itself, and decompresses the response for us
+    const SKIP_REQUEST_HEADERS = new Set([
+      "host", "connection", "content-length", "transfer-encoding", "accept-encoding",
+    ]);
+    const SKIP_RESPONSE_HEADERS = new Set([
+      "content-encoding", "content-length", "transfer-encoding", "connection", "set-cookie",
+    ]);
+
+    function parseJson(text) {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text || undefined;
+      }
+    }
+
+    function parseSse(text) {
+      return text
+        .split("\n")
+        .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map((line) => parseJson(line.slice(6)));
+    }
+
+    function redact(headers) {
+      const auth = headers.authorization;
+      if (!auth) return headers;
+      return { ...headers, authorization: `Bearer …${auth.slice(-4)}` };
+    }
+
+    function findUsage(body) {
+      const items = Array.isArray(body) ? [...body].reverse() : [body];
+      for (const item of items) {
+        const usage = item?.usage ?? item?.response?.usage;
+        if (usage) return usage;
+      }
+    }
+
+    function veniceHeaders(headers) {
+      const picked = {};
+      headers.forEach((value, key) => {
+        if (key.startsWith("x-venice-") || key.startsWith("x-ratelimit-")) picked[key] = value;
+      });
+      return picked;
+    }
+
+    const server = http.createServer(async (req, res) => {
+      const id = randomUUID().slice(0, 8);
+      const started = performance.now();
+
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const requestBody = Buffer.concat(chunks);
+
+      const headers = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (!SKIP_REQUEST_HEADERS.has(key)) headers[key] = value;
+      }
+
+      // Stop the upstream request if the agent hangs up mid-stream
+      const abort = new AbortController();
+      res.on("close", () => {
+        if (!res.writableFinished) abort.abort();
+      });
+
+      const entry = {
+        id,
+        time: new Date().toISOString(),
+        method: req.method,
+        path: req.url,
+        requestHeaders: redact(req.headers),
+        request: parseJson(requestBody.toString()),
+      };
+
+      let upstream;
+      try {
+        upstream = await fetch(UPSTREAM + req.url, {
+          method: req.method,
+          headers,
+          body: requestBody.length ? requestBody : undefined,
+          signal: abort.signal,
+        });
+      } catch (err) {
+        entry.error = `Could not reach Venice: ${err.message}`;
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: entry.error }));
+        return finish(entry, started);
+      }
+
+      const responseHeaders = {};
+      upstream.headers.forEach((value, key) => {
+        if (!SKIP_RESPONSE_HEADERS.has(key)) responseHeaders[key] = value;
+      });
+      res.writeHead(upstream.status, responseHeaders);
+
+      const received = [];
+      try {
+        for await (const chunk of upstream.body ?? []) {
+          entry.firstByteMs ??= Math.round(performance.now() - started);
+          received.push(Buffer.from(chunk));
+          res.write(chunk);
+        }
+      } catch (err) {
+        entry.error = abort.signal.aborted
+          ? "Agent disconnected before the response finished"
+          : `Stream ended early: ${err.message}`;
+      }
+      res.end();
+
+      const text = Buffer.concat(received).toString();
+      const isStream = upstream.headers.get("content-type")?.includes("text/event-stream");
+      entry.status = upstream.status;
+      entry.stream = Boolean(isStream);
+      entry.responseHeaders = veniceHeaders(upstream.headers);
+      entry.response = isStream ? parseSse(text) : parseJson(text);
+      entry.usage = findUsage(entry.response);
+      finish(entry, started);
+    });
+
+    function finish(entry, started) {
+      entry.durationMs = Math.round(performance.now() - started);
+      appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+
+      const model = entry.request?.model ?? "-";
+      const tokens = entry.usage
+        ? ` tokens=${entry.usage.prompt_tokens ?? entry.usage.input_tokens}→${entry.usage.completion_tokens ?? entry.usage.output_tokens}`
+        : "";
+      const ttfb = entry.firstByteMs === undefined ? "" : ` ttfb=${entry.firstByteMs}ms`;
+      console.log(
+        `[${entry.id}] ${entry.method} ${entry.path} model=${model} status=${entry.status ?? "ERR"}` +
+          `${entry.stream ? " stream" : ""} ${entry.durationMs}ms${ttfb}${tokens}` +
+          `${entry.error ? ` error="${entry.error}"` : ""}`,
+      );
+    }
+
+    server.listen(PORT, "127.0.0.1", () => {
+      console.log(`Venice debug proxy on http://127.0.0.1:${PORT}/api/v1 → ${UPSTREAM}`);
+      console.log(`Logging full requests and responses to ${LOG_FILE}`);
+    });
+    ```
+
+    Hay algunas cosas que vale la pena destacar:
+
+    - **El streaming funciona con normalidad.** Cada fragmento de Venice se escribe hacia el agente en cuanto llega, y se guarda una copia para el registro. El agente ve el mismo flujo token a token que recibiría directamente de Venice.
+    - **La compresión se gestiona por ti.** El `fetch` de Node descomprime la respuesta, así que el proxy elimina `content-encoding` antes de reenviar los encabezados. De lo contrario, el agente intentaría descomprimir texto plano y fallaría.
+    - **Las desconexiones se propagan.** Si cancelas un turno en el agente, el proxy también aborta la petición upstream, para que Venice no siga generando tokens que nadie lee.
+  </Step>
+
+  <Step title="Inícialo">
+    ```bash
+    node venice-debug-proxy.mjs
+    ```
+
+    Deberías ver:
+
+    ```txt
+    Venice debug proxy on http://127.0.0.1:8787/api/v1 → https://api.venice.ai
+    Logging full requests and responses to venice-debug.jsonl
+    ```
+
+    Define `PORT` o `LOG_FILE` en el entorno para cambiar cualquiera de los dos valores predeterminados.
+  </Step>
+
+  <Step title="Compruébalo con curl">
+    En una segunda terminal, envía una petición a través del proxy:
+
+    ```bash
+    curl http://127.0.0.1:8787/api/v1/chat/completions \
+      -H "Authorization: Bearer $VENICE_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "venice-uncensored-1-2",
+        "messages": [{"role": "user", "content": "Say hello"}]
+      }'
+    ```
+
+    El proxy imprime una línea por petición:
+
+    ```txt
+    [3f9c2a1e] POST /api/v1/chat/completions model=venice-uncensored-1-2 status=200 855ms ttfb=851ms tokens=1746→10
+    ```
+
+    Son muchos tokens de prompt para "Say hello". La mayoría son el prompt de sistema predeterminado de Venice, que se añade a las peticiones de chat salvo que establezcas `venice_parameters.include_venice_system_prompt` en `false`. Justo este tipo de cosas es lo que el proxy hace visible.
+  </Step>
+
+  <Step title="Apunta tu agente al proxy">
+    En la configuración de Venice de tu agente, sustituye `https://api.venice.ai` por `http://127.0.0.1:8787` y deja el resto de la URL como está. El proxy reenvía la ruta completa, así que lo que te indique la guía del agente sigue funcionando.
+
+    | Agente | Ajuste | Valor durante la depuración |
+    | --- | --- | --- |
+    | [Claude Code](/es/guides/integrations/claude-code) (vía CCR) | **API endpoint** del proveedor | `http://127.0.0.1:8787/api/v1` |
+    | [Codex CLI](/es/guides/integrations/codex-cli) | `base_url` en `[model_providers.venice]` | `http://127.0.0.1:8787/api/v1/` |
+    | [OpenCode](/es/guides/integrations/opencode) | `options.baseURL` en el bloque de proveedor manual | `http://127.0.0.1:8787/api/v1` |
+    | [Cline](/es/guides/integrations/cline) | **Base URL** | `http://127.0.0.1:8787/api/v1` |
+    | [Kilo Code](/es/guides/integrations/kilo-code) | **Base URL** en un proveedor compatible con OpenAI | `http://127.0.0.1:8787/api/v1` |
+    | [Aider](/es/guides/integrations/aider) | `OPENAI_API_BASE` | `http://127.0.0.1:8787/api/v1` |
+    | [Hermes Agent](/es/guides/integrations/hermes-agent) | `base_url` en `~/.hermes/config.yaml` | `http://127.0.0.1:8787/api/v1` |
+    | [Xcode](/es/guides/integrations/xcode) | **URL** del proveedor | `http://127.0.0.1:8787/api` |
+
+    El proveedor de Venice incluido en OpenCode y el proveedor nativo de Venice de Kilo Code no exponen una URL base, así que cambia al proveedor manual o compatible con OpenAI mientras depuras.
+
+    En OpenCode, dale al proveedor de depuración su propio ID, como `venice-debug`, y ejecútalo con `-m venice-debug/<model-id>`. Si guardaste una clave con `/connect`, OpenCode envía esa clave almacenada para el ID de proveedor `venice` aunque tu configuración defina `apiKey`.
+
+    Usa `127.0.0.1` en lugar de `localhost`. En algunos sistemas, `localhost` se resuelve a la dirección IPv6 `::1`, en la que el proxy no escucha.
+
+    <Warning>
+    Esto no funciona con [Cursor](/es/guides/integrations/cursor). Cursor envía las peticiones de modelos personalizados desde sus propios servidores, que no pueden llegar a un proxy en tu equipo.
+    </Warning>
+  </Step>
+
+  <Step title="Reproduce el problema">
+    Usa el agente como siempre hasta que el problema vuelva a ocurrir y, después, revisa la salida del proxy en la terminal y el archivo de registro.
+  </Step>
+</Steps>
+
+---
+
+## Leer los registros {#reading-the-logs}
+
+Cada línea de `venice-debug.jsonl` es un objeto JSON completo, así que `jq` puede filtrarlo como necesites.
+
+Muestra la petición y la respuesta más recientes:
+
+```bash
+tail -n 1 venice-debug.jsonl | jq .
+```
+
+Muestra solo las peticiones fallidas o interrumpidas:
+
+```bash
+jq -c 'select(.status >= 400 or .error) | {id, status, error, response}' venice-debug.jsonl
+```
+
+Comprueba qué modelo, parámetros y herramientas envió realmente el agente:
+
+```bash
+jq -c '{id, model: .request.model, temperature: .request.temperature, max_tokens: .request.max_tokens, tools: [.request.tools[]?.function.name]}' venice-debug.jsonl
+```
+
+Reconstruye el texto de las chat completions en streaming:
+
+```bash
+jq -r 'select(.stream) | .id + " " + ([.response[]? | .choices[0]?.delta?.content // empty] | join(""))' venice-debug.jsonl
+```
+
+Total de tokens por modelo en la sesión:
+
+```bash
+jq -s 'group_by(.request.model) | map({model: .[0].request.model, requests: length, input: (map(.usage.prompt_tokens // .usage.input_tokens // 0) | add), output: (map(.usage.completion_tokens // .usage.output_tokens // 0) | add)})' venice-debug.jsonl
+```
+
+Encuentra las peticiones más lentas:
+
+```bash
+jq -s -c 'sort_by(-.durationMs) | .[:5][] | {id, model: .request.model, durationMs, firstByteMs}' venice-debug.jsonl
+```
+
+---
+
+## Qué buscar {#what-to-look-for}
+
+| Síntoma en el agente | Dónde mirar en el registro |
+| --- | --- |
+| "provider error" o "request failed" genérico | `status` y `response`. El cuerpo de error de Venice suele nombrar el parámetro no válido. Consulta [Códigos de error](/es/api-reference/error-codes). |
+| `401` "Authentication failed", pero la misma clave funciona con curl | Los últimos cuatro caracteres de `requestHeaders.authorization`. Si no coinciden con tu clave, el agente está enviando otra clave, a menudo una antigua que guardó antes. |
+| `404` en todas las peticiones | `path`. Una ruta duplicada como `/api/v1/chat/completions/chat/completions` significa que el agente añade el endpoint por su cuenta, así que la URL base debe terminar en `/api/v1`. |
+| Modelo incorrecto o inesperado | `request.model`, además de `x-venice-model-id` y `x-venice-model-deprecation-warning` en `responseHeaders` |
+| Nunca se producen llamadas a herramientas | `request.tools` está vacío o el modelo no admite llamadas a funciones. Comprueba `model_spec.capabilities.supportsFunctionCalling` para el modelo en [`GET /models`](/es/api-reference/endpoint/models/list). |
+| Errores de contexto o de longitud | El tamaño de `request.messages`. Los agentes reenvían toda la conversación y cada resultado de herramienta en cada turno, así que los tokens de prompt crecen rápido. |
+| Las peticiones empiezan a fallar a mitad de sesión | `status` `429` con encabezados `x-ratelimit-*` (consulta [Límites de tasa](/es/api-reference/rate-limiting)), o `402` con encabezados `x-venice-balance-*` cuando se agotan los créditos |
+| La sesión cuesta más de lo esperado | La consulta de tokens por modelo de arriba. Busca peticiones en segundo plano, como la generación del título de la sesión, a un modelo más grande que el que elegiste, o muchas peticiones con prompts grandes. El prompt de sistema predeterminado de Venice también añade tokens de prompt a cada petición de chat salvo que `include_venice_system_prompt` sea `false`. |
+| El agente parece lento | `firstByteMs` frente a `durationMs`. Un tiempo largo hasta el primer byte es tiempo antes de que el modelo empiece a responder, a menudo por un prompt muy grande o un modelo de razonamiento pensando. Un intervalo largo después es tiempo de generación. |
+
+---
+
+## Sin escribir código {#without-writing-any-code}
+
+Si prefieres revisar el tráfico haciendo clic en un navegador, [mitmproxy](https://mitmproxy.org/) puede funcionar como proxy inverso delante de Venice:
+
+```bash
+mitmweb --mode reverse:https://api.venice.ai --listen-port 8787
+```
+
+Apunta el agente a `http://127.0.0.1:8787/api/v1` de la misma forma y luego inspecciona cada petición en la interfaz de mitmweb. El proxy de Node es más fácil de automatizar y guarda un registro que puedes consultar después con grep. mitmproxy es mejor para explorar una sesión de forma interactiva.
+
+---
+
+## Mantén los registros privados {#keep-the-logs-private}
+
+Venice no almacena tus prompts ni tus respuestas en la inferencia normal (consulta [Privacidad](/es/overview/privacy)), pero este archivo de registro sí. Contiene tu código, prompts, salida de herramientas y respuestas del modelo en texto plano.
+
+- Ejecuta el proxy fuera de tu proyecto o añade `venice-debug.jsonl` a `.gitignore`.
+- Borra el registro cuando termines de depurar.
+- No pegues entradas completas del registro en issues públicos. Extrae en su lugar `status`, `error` y la parte relevante de `response`.
+
+Para los [modelos E2EE](/es/guides/features/tee-e2ee-models), el agente cifra el contenido de los mensajes antes de que salga de tu equipo, así que el registro mostrará cargas cifradas en lugar de texto legible.
+
+---
+
+## Para terminar {#finishing-up}
+
+Cuando termines, detén el proxy con `Ctrl+C` y vuelve a poner la URL base del agente en `https://api.venice.ai/api/v1`. Si se te olvida, el agente fallará con un error de conexión en cuanto el proxy no esté en ejecución, lo que al menos es fácil de detectar.
+
+¡Gracias por leer! Ojalá la próxima vez que un agente diga "something went wrong", puedas ver exactamente qué salió mal.
