@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Render the reference prompt suite through the Venice API, for models that
- * venice.ai doesn't publish samples for.
+ * venice.ai doesn't publish samples for, or doesn't for every prompt.
  *
  * Text-to-image models get the image suite listed in data/model-media.json,
  * at default settings. Edit models get three instructions applied to one
@@ -114,7 +114,9 @@ async function save(id, name, image) {
   return `/images/models/renders/${id}/${name}.webp`;
 }
 
-const entry = (prompt, title, caption, url, type = 'image') => ({ prompt, type, url, title, caption, date: today, page: null });
+// A transform's outputs name the reference prompt their input was rendered
+// from, which the gallery uses to line them up with the other models.
+const entry = (prompt, title, caption, url, type = 'image', from) => ({ prompt, type, url, title, caption, ...(from ? { from } : {}), date: today, page: null });
 
 async function renderGeneration(sharp, id, model, suite) {
   const constraints = (model.model_spec && model.model_spec.constraints) || {};
@@ -136,7 +138,7 @@ async function renderEdits(sharp, id, source) {
   for (const edit of EDITS) {
     const bytes = await call('/image/edit', { model: id, prompt: edit.prompt, image, output_format: 'webp' });
     const fitted = sharp(bytes).resize({ width: MAX_SIZE, height: MAX_SIZE, fit: 'inside', withoutEnlargement: true });
-    entries.push(entry(edit.id, edit.title, edit.prompt, await save(id, edit.id, fitted)));
+    entries.push(entry(edit.id, edit.title, edit.prompt, await save(id, edit.id, fitted), 'image', 'photoreal'));
     console.log(`  ${id}: ${edit.id}`);
   }
   // Last, so gallery cards lead with an edit rather than the input.
@@ -152,8 +154,8 @@ async function renderUpscale(sharp, id, source) {
     .resize(DETAIL_DISPLAY, DETAIL_DISPLAY, { kernel: 'cubic' });
   console.log(`  ${id}: upscaled`);
   return [
-    entry('upscaled', 'Upscaled 2x', `A ${DETAIL.size} px detail of the ${UPSCALE_INPUT} px input after a 2x upscale, enlarged for display`, await save(id, 'upscaled', detail(upscaled, 2))),
-    entry('bicubic', 'Bicubic 2x', 'The same detail enlarged with bicubic resampling instead, for comparison', await save(id, 'bicubic', detail(input, 1))),
+    entry('upscaled', 'Upscaled 2x', `A ${DETAIL.size} px detail of the ${UPSCALE_INPUT} px input after a 2x upscale, enlarged for display`, await save(id, 'upscaled', detail(upscaled, 2)), 'image', 'photoreal'),
+    entry('bicubic', 'Bicubic 2x', 'The same detail enlarged with bicubic resampling instead, for comparison', await save(id, 'bicubic', detail(input, 1)), 'image', 'photoreal'),
     entry('source', `Input, ${UPSCALE_INPUT} px`, `${source.name} on the photorealism prompt, reduced to ${UPSCALE_INPUT} px`, await save(id, 'source', sharp(input)))
   ];
 }
@@ -220,7 +222,7 @@ async function renderVideoEdit(id, model, source, edit) {
   const bytes = await generateVideo({ model: id, prompt: edit.prompt, video_url: source.dataUrl, ...videoSettings(model) });
   console.log(`  ${id}: ${edit.id}`);
   return [
-    entry(edit.id, edit.title, edit.prompt, saveVideo(id, edit.id, bytes), 'video'),
+    entry(edit.id, edit.title, edit.prompt, saveVideo(id, edit.id, bytes), 'video', VIDEO_PROMPT),
     entry('source', 'Source clip', `The input: ${source.name} on the cinematic landscape prompt`, source.url, 'video')
   ];
 }
@@ -239,7 +241,7 @@ async function renderVideoRecast(id, model, sourceModel, sourcePrompt, reference
   console.log(`  ${id}: ${VIDEO_RECAST.id}`);
   const sourceName = (sourceModel.model_spec && sourceModel.model_spec.name) || sourceModel.id;
   return [
-    entry(VIDEO_RECAST.id, VIDEO_RECAST.title, VIDEO_RECAST.prompt, saveVideo(id, VIDEO_RECAST.id, bytes), 'video'),
+    entry(VIDEO_RECAST.id, VIDEO_RECAST.title, VIDEO_RECAST.prompt, saveVideo(id, VIDEO_RECAST.id, bytes), 'video', VIDEO_RECAST.source),
     entry('source', 'Source clip', `The input: ${sourceName} on the ${sourcePrompt.title.toLowerCase()} prompt`, sourceUrl, 'video'),
     entry('reference', 'Reference', `The person to recast: ${reference.name} on the photorealism prompt`, reference.url)
   ];
@@ -249,8 +251,8 @@ async function renderVideoUpscale(id, source) {
   const bytes = await generateVideo({ model: id, video_url: source.dataUrl, upscale_factor: 2 });
   console.log(`  ${id}: upscaled`);
   return [
-    entry('upscaled', 'Upscaled 2x', `A detail of the ${VIDEO_HEIGHT}p input after a 2x upscale`, saveVideo(id, 'upscaled', bytes, VIDEO_DETAIL), 'video'),
-    entry('bicubic', 'Bicubic 2x', 'The same detail enlarged with bicubic resampling instead, for comparison', saveVideo(id, 'bicubic', source.file, `scale=iw*2:ih*2:flags=bicubic,${VIDEO_DETAIL}`), 'video'),
+    entry('upscaled', 'Upscaled 2x', `A detail of the ${VIDEO_HEIGHT}p input after a 2x upscale`, saveVideo(id, 'upscaled', bytes, VIDEO_DETAIL), 'video', VIDEO_PROMPT),
+    entry('bicubic', 'Bicubic 2x', 'The same detail enlarged with bicubic resampling instead, for comparison', saveVideo(id, 'bicubic', source.file, `scale=iw*2:ih*2:flags=bicubic,${VIDEO_DETAIL}`), 'video', VIDEO_PROMPT),
     entry('source', `Input, ${VIDEO_HEIGHT}p`, `${source.name} on the cinematic landscape prompt`, source.url, 'video')
   ];
 }
