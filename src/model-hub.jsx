@@ -1462,8 +1462,16 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const rendered = rows.filter(row => galleryMedia(row.family, row.display, catalog));
     const pending = rows.filter(row => !galleryMedia(row.family, row.display, catalog));
     const prompt = ((catalog.mediaSuite || {})[modality] || []).find(item => item.id === GALLERY_PROMPTS[modality]);
+    const transforms = rendered.some(row => galleryMedia(row.family, row.display, catalog).from);
     return (
       <>
+        {rendered.length && prompt ? (
+          <p className="vx-gallery-prompt">
+            <span className="vx-gallery-prompt-label">Prompt</span>
+            <q>{prompt.prompt}</q>
+            {transforms ? <span className="vx-gallery-prompt-note">Models that edit, extend or upscale start from a render of it.</span> : null}
+          </p>
+        ) : null}
         {rendered.length ? (
           <div className={cls('vx-cards', modality === 'video' && 'is-video')}>
             {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} now={now} catalog={catalog} />)}
