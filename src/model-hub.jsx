@@ -1929,7 +1929,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   const SECTION_ICONS = {
     overview: 'info', pricing: 'dollar', examples: 'image', voices: 'volume', specs: 'sliders',
-    capabilities: 'sparkles', api: 'code', privacy: 'shield', variants: 'layers', related: 'link'
+    capabilities: 'sparkles', api: 'code', variants: 'layers', related: 'link'
   };
   const pageSections = (model, { variants = 1, related = false, examples = false, capabilities = false } = {}) => {
     const list = [['overview', 'Overview'], ['pricing', 'Pricing']];
@@ -1938,7 +1938,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     list.push(['specs', 'Specs']);
     if (capabilities) list.push(['capabilities', 'Capabilities']);
     list.push(['api', 'API']);
-    if (PRIVACY_TIERS.some(([tier]) => tier === model.privacy)) list.push(['privacy', 'Privacy']);
     if (variants > 1) list.push(['variants', 'Variants']);
     if (related) list.push(['related', 'Related models']);
     return list;
@@ -2286,36 +2285,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // host isn't known, so it isn't named.
   const upstreamName = (model, provider) => (!model.openWeights && provider ? provider.name : null);
 
-  // Venice's four privacy modes, weakest first. Each builds on the one before,
-  // so lower tiers are included in the current one.
-  const PRIVACY_TIERS = [['anonymized', 'Anonymized'], ['private', 'Private'], ['tee', 'TEE'], ['e2ee', 'End-to-end encrypted']];
   const tierText = (tier, by) => ({
     anonymized: `Venice hides your identity and stores no prompts. ${by || 'The provider'} still sees the content.`,
     private: "Zero data retention, enforced by contract. Prompts and outputs aren't stored.",
     tee: 'Hardware-isolated inference with remote attestation.',
     e2ee: 'Your client encrypts the prompt, and only the verified enclave decrypts it.'
   })[tier];
-
-  const PrivacyTiers = ({ model, models, provider, onSelect }) => {
-    const rank = PRIVACY_TIERS.findIndex(([tier]) => tier === model.privacy);
-    return (
-      <div className="vx-tiers">
-        {PRIVACY_TIERS.map(([tier, label], i) => {
-          const other = i > rank ? models.find(m => m.id !== model.id && offersTier(m, tier)) : null;
-          return (
-            <div key={tier} className={cls('vx-tier', i === rank && 'is-current')} aria-current={i === rank ? 'true' : undefined}>
-              <div className="vx-tier-num">Tier {i + 1}{i === rank ? ' · this model' : ''}</div>
-              <div className="vx-tier-name">{label}</div>
-              {i === rank ? <p className="vx-tier-text">{tierText(tier, upstreamName(model, provider))}</p>
-                : i < rank ? <p className="vx-tier-text">Included</p>
-                  : other ? <button type="button" className="vx-tier-link" onClick={() => onSelect(other.id)}>Available as <code>{other.id}</code></button>
-                    : <p className="vx-tier-text">Not available</p>}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
 
   // One card per billed unit, four a row, on the same hairline gaps as the
   // key numbers.
@@ -2910,12 +2885,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
               <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
             </Section>
-
-            {has('privacy') ? (
-              <Section id="privacy" title="Privacy">
-                <PrivacyTiers model={model} models={models} provider={provider} onSelect={selectVariant} />
-              </Section>
-            ) : null}
 
             {has('variants') ? (
               <Section id="variants" title="Variants">
