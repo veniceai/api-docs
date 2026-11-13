@@ -2661,6 +2661,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
+  const E2eePanel = ({ model }) => (model.privacy === 'e2ee' ? (
+    <div className="vx-e2ee">
+      <span className="vx-e2ee-icon" aria-hidden="true"><Icon name="lock" size={16} /></span>
+      <div className="vx-e2ee-body">
+        <p className="vx-e2ee-title">End-to-end encrypted</p>
+        <p>{PRIVACY.e2ee.desc} Requests without the E2EE handshake reach Venice as plaintext and run TEE-only.</p>
+        <a className="vx-e2ee-action" href="/guides/features/tee-e2ee-models#e2ee-models">How to call an E2EE model<Icon name="arrowRight" size={12} /></a>
+      </div>
+    </div>
+  ) : null);
+
   const VariantsTable = ({ models, activeId, onSelect }) => {
     const first = models[0];
     const isText = first.modality === 'text' && first.task === 'chat';
@@ -2856,6 +2867,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                   ))}
                 </div>
               ) : null}
+
+              <E2eePanel model={model} />
 
               <Counterpart item={counterpart} />
 
