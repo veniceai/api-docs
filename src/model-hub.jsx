@@ -51,6 +51,33 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return state;
   };
 
+  // Performance figures change every hour, so model pages load them rather
+  // than carry them in their data.
+  const PERFORMANCE_PATH = '/data/model-performance.json';
+  const performanceStore = { data: null, promise: null };
+
+  const loadPerformance = () => {
+    if (performanceStore.data) return Promise.resolve(performanceStore.data);
+    if (performanceStore.promise) return performanceStore.promise;
+    performanceStore.promise = fetchData(PERFORMANCE_PATH)
+      .then(data => { performanceStore.data = data; return data; })
+      .catch(err => { performanceStore.promise = null; throw err; });
+    return performanceStore.promise;
+  };
+
+  const usePerformance = () => {
+    const [state, setState] = useState({ data: performanceStore.data, failed: false });
+    useEffect(() => {
+      if (state.data) return undefined;
+      let alive = true;
+      loadPerformance()
+        .then(data => alive && setState({ data, failed: false }))
+        .catch(() => alive && setState({ data: null, failed: true }));
+      return () => { alive = false; };
+    }, []);
+    return state;
+  };
+
   const useNow = () => useState(() => (typeof clock === 'function' ? clock() : clock))[0];
 
   const readParams = () => (typeof window === 'undefined' ? new URLSearchParams() : new URLSearchParams(window.location.search));
@@ -186,6 +213,15 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const d = new Date(ts * 1000);
     return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
   };
+  const fmtMs = ms => {
+    if (ms == null || !Number.isFinite(ms)) return '—';
+    if (ms < 1000) return `${Math.round(ms)} ms`;
+    return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
+  };
+  const fmtUptime = pct => (pct == null || !Number.isFinite(pct) ? '—' : `${pct}%`);
+  // In the reader's time zone, since the figures run up to the last hour.
+  const fmtClock = ms => new Date(ms).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const fmtTime = ms => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   const isNew = (ts, now) => Boolean(now && ts && (now - ts * 1000) / 86400000 <= 30);
   const plural = (n, word) => `${n.toLocaleString('en-US')} ${n === 1 ? word : word.endsWith('y') ? `${word.slice(0, -1)}ies` : `${word}s`}`;
   const cls = (...parts) => parts.filter(Boolean).join(' ');
@@ -1928,11 +1964,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   /* ------------------------------------------------------------ model page */
 
   const SECTION_ICONS = {
-    overview: 'info', pricing: 'dollar', examples: 'image', voices: 'volume', specs: 'sliders',
+    overview: 'info', pricing: 'dollar', performance: 'activity', examples: 'image', voices: 'volume', specs: 'sliders',
     capabilities: 'sparkles', api: 'code', privacy: 'shield', variants: 'layers', related: 'link'
   };
+  const hasPerformance = model => model.modality === 'text' && model.task === 'chat';
   const pageSections = (model, { variants = 1, related = false, examples = false, capabilities = false } = {}) => {
     const list = [['overview', 'Overview'], ['pricing', 'Pricing']];
+    if (hasPerformance(model)) list.push(['performance', 'Performance']);
     if (examples) list.push(['examples', 'Examples']);
     if (model.task === 'tts' && model.audio && model.audio.voices && model.audio.voices.length) list.push(['voices', 'Voices']);
     list.push(['specs', 'Specs']);
@@ -2269,6 +2307,86 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <div key={label} className="vx-kv-row"><dt>{label}</dt><dd>{value}</dd></div>
         ))}
       </dl>
+    );
+  };
+
+  // Older figures read as unavailable rather than as the last 24 hours.
+  const PERFORMANCE_MAX_AGE = 6 * 3600 * 1000;
+  const DAY_BARS = 96;
+  const BAR_STATES = [['u', 'Up'], ['d', 'Degraded'], ['x', 'Down'], ['n', 'No data']];
+  const BAR_LABELS = Object.fromEntries(BAR_STATES);
+  const PERFORMANCE_WINDOWS = [['1h', 'Last hour'], ['4h', 'Last 4 hours'], ['24h', 'Last 24 hours']];
+
+  // The first screen, a failed load, stale figures and a model without any
+  // all draw the same frame, so figures arriving don't move the page.
+  const Performance = ({ model, now }) => {
+    const { data, failed } = usePerformance();
+    const fresh = data && data.window && Date.parse(data.window.end) > now - PERFORMANCE_MAX_AGE ? data : null;
+    const figures = fresh && fresh.models ? fresh.models[model.id] : null;
+    const bars = figures && figures.bars ? figures.bars : 'n'.repeat(DAY_BARS);
+    const barUptime = figures && figures.barUptime;
+    const ttft = (figures && figures.ttftMs) || {};
+    const speed = figures && figures.tokensPerSecond;
+    const start = fresh ? Date.parse(fresh.window.start) : 0;
+    const barMs = fresh ? fresh.window.barMinutes * 60000 : 0;
+    const status = figures ? null : !data && !failed ? 'Loading' : fresh ? 'Not published for this model yet' : 'Not available right now';
+    const counts = BAR_STATES.map(([code, name]) => [name, [...bars].filter(c => c === code).length]).filter(([, n]) => n);
+    return (
+      <>
+        <div className="vx-uptime">
+          <div className="vx-uptime-head">
+            <div>
+              <div className="vx-uptime-label">Uptime</div>
+              <div className="vx-uptime-value">{fmtUptime(figures && figures.uptime)}</div>
+            </div>
+            <ul className="vx-uptime-legend" aria-hidden="true">
+              {BAR_STATES.map(([code, name]) => <li key={code}><span className={`vx-uptime-swatch is-${code}`} />{name}</li>)}
+            </ul>
+          </div>
+          <div className="vx-uptime-bars" role="img"
+            aria-label={figures ? `Uptime in 15-minute bars: ${counts.map(([name, n]) => `${n} ${name.toLowerCase()}`).join(', ')}` : 'Uptime in 15-minute bars: no figures'}>
+            {[...bars].map((code, i) => {
+              if (!figures) return <span key={i} className={`vx-uptime-bar is-${code}`} />;
+              const pct = barUptime ? barUptime[i] : null;
+              const range = `${fmtClock(start + i * barMs)} – ${fmtTime(start + (i + 1) * barMs)}`;
+              // Bars under 100 requests have no published percentage.
+              const [label, tip] = pct != null ? [`${fmtUptime(pct)} uptime`, `${BAR_LABELS[code]} · ${range}`] : [BAR_LABELS[code], range];
+              return <span key={i} className={`vx-uptime-bar is-${code}`} data-tip-label={label} title={tip} />;
+            })}
+          </div>
+          <div className="vx-uptime-axis">
+            {status ? <span>{status}</span> : <><span>{fmtClock(start)}</span><span>{fmtClock(Date.parse(fresh.window.end))}</span></>}
+          </div>
+        </div>
+        <div className="vx-table-wrap vx-ruled vx-perf-table">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Time to first token</th>
+                <th scope="col" className="vx-al-right">Median</th>
+                <th scope="col" className="vx-al-right">p90</th>
+                {speed ? <th scope="col" className="vx-al-right">Output speed</th> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {PERFORMANCE_WINDOWS.map(([key, name]) => {
+                const w = ttft[key] || {};
+                return (
+                  <tr key={key}>
+                    <th scope="row">{name}</th>
+                    <td className="vx-al-right vx-num">{fmtMs(w.p50)}</td>
+                    <td className="vx-al-right vx-num">{fmtMs(w.p90)}</td>
+                    {speed ? <td className="vx-al-right vx-num">{speed[key] != null ? `${Math.round(speed[key])} tokens/s` : '—'}</td> : null}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className="vx-text vx-perf-note">
+          Measured on Venice API traffic and refreshed every hour. Uptime doesn't count rate limits or requests rejected as malformed. Time to first token is timed on streamed Chat Completions, to the first token of reasoning or output. A dash means too few requests in that window. <a href="/models/methodology#performance">How it's measured</a>
+        </p>
+      </>
     );
   };
 
@@ -2881,6 +2999,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                 ]} />
               ) : null}
             </Section>
+
+            {has('performance') ? (
+              <Section id="performance" title="Performance" note="Last 24 hours">
+                <Performance model={model} now={now} />
+              </Section>
+            ) : null}
 
             {has('examples') ? (
               <Section id="examples" title="Examples">
