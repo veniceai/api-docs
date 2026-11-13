@@ -692,22 +692,29 @@ function matchesRule(entry, match) {
 
 // ---------------------------------------------------------------- families
 
+// An E2EE build has a page of its own, named for its model plus "E2EE":
+// calling it takes the E2EE handshake, and its limits and price differ.
+const E2EE_KEY = ':e2ee';
+
 function buildFamilies(models) {
   const groups = new Map();
   for (const model of models) {
-    if (!groups.has(model.familyKey)) groups.set(model.familyKey, []);
-    groups.get(model.familyKey).push(model);
+    const key = model.privacy === 'e2ee' ? model.familyKey + E2EE_KEY : model.familyKey;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(model);
   }
 
   const families = [];
+  const builds = [];
   for (const [key, variants] of groups) {
     variants.sort((a, b) => VARIANT_ORDER.indexOf(a.variant) - VARIANT_ORDER.indexOf(b.variant) || (a.created || 0) - (b.created || 0));
     const primary = variants.find(v => ['standard', 'generate', 't2v'].includes(v.variant)) || variants[0];
     const modality = primary.modality;
-    families.push({
+    const e2ee = key.endsWith(E2EE_KEY);
+    (e2ee && groups.has(key.slice(0, -E2EE_KEY.length)) ? builds : families).push({
       key,
       slug: slugify(primary.familyName),
-      name: primary.familyName,
+      name: e2ee ? `${primary.familyName} E2EE` : primary.familyName,
       modality,
       task: primary.task,
       provider: primary.provider,
@@ -742,6 +749,15 @@ function buildFamilies(models) {
     }
   }
   families.forEach(family => { if (RESERVED_SLUGS.has(family.slug)) family.slug = `${family.slug}-model`; });
+  // A build beside its model takes the model's name and slug, so the two
+  // pages read as one model called two ways, and each links to the other.
+  const byKey = new Map(families.map(family => [family.key, family]));
+  for (const build of builds) {
+    const model = byKey.get(build.key.slice(0, -E2EE_KEY.length));
+    Object.assign(build, { name: `${model.name} E2EE`, slug: `${model.slug}-e2ee`, counterpart: model.slug });
+    model.counterpart = build.slug;
+    families.push(build);
+  }
   const duplicates = [...groupBy(families, family => family.slug)].filter(([, list]) => list.length > 1).map(([slug]) => slug);
   if (duplicates.length) throw new Error(`Duplicate family slugs would overwrite pages: ${duplicates.join(', ')}`);
   families.forEach(family => { if (!Number.isFinite(family.created)) family.created = null; });
@@ -755,7 +771,7 @@ function lineageKey(family) {
 function relatedFor(family, families, modelsById) {
   const primary = modelsById[family.primary];
   const price = primary.headline?.value;
-  const sameTask = families.filter(f => f !== family && f.modality === family.modality && f.task === family.task && !f.deprecated);
+  const sameTask = families.filter(f => f !== family && f.slug !== family.counterpart && f.modality === family.modality && f.task === family.task && !f.deprecated);
   const similar = sameTask
     .map(f => {
       const other = modelsById[f.primary];
@@ -864,7 +880,6 @@ function uniq(values) {
 }
 
 function privacySummary(tiers) {
-  if (tiers.includes('e2ee') && tiers.length > 1) return 'Private and end-to-end encrypted variants';
   if (tiers.includes('e2ee')) return 'End-to-end encrypted';
   if (tiers.includes('tee')) return 'Runs in a trusted execution environment';
   if (tiers.includes('private')) return 'Private, with zero data retention';
@@ -872,7 +887,6 @@ function privacySummary(tiers) {
 }
 
 function privacySentence(tiers) {
-  if (tiers.includes('e2ee') && tiers.length > 1) return 'Private and end-to-end encrypted variants are available.';
   if (tiers.includes('e2ee')) return 'It is end-to-end encrypted.';
   if (tiers.includes('tee')) return 'It runs in a trusted execution environment.';
   if (tiers.includes('private')) return 'It runs privately, with zero data retention.';
@@ -999,7 +1013,9 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   const lines = [`## ${name} API`, ''];
   const kind = family.modality === 'video' ? listPhrase(f.modes) || 'video' : listPhrase(f.tasks.map(t => TASK_PHRASES[t]).filter(Boolean)) || family.modality;
   const article = /^[aeiou]/i.test(kind) ? 'an' : 'a';
-  lines.push(`${name} is ${article} ${mdxText(kind)} model${f.provider ? ` by ${mdxText(f.provider)}` : ''}, available on the Venice API as \`${primary.id}\`. ${privacySentence(family.privacy || [primary.privacy])}`);
+  const counterpart = familiesBySlug[family.counterpart];
+  const also = counterpart ? ` It is also available ${counterpart.privacy.includes('e2ee') ? 'end-to-end encrypted' : 'without end-to-end encryption'}, as [${mdxText(counterpart.name)}](/models/${counterpart.slug}).` : '';
+  lines.push(`${name} is ${article} ${mdxText(kind)} model${f.provider ? ` by ${mdxText(f.provider)}` : ''}, available on the Venice API as \`${primary.id}\`. ${privacySentence(family.privacy || [primary.privacy])}${also}`);
   if (family.description) lines.push('', mdxText(family.description));
 
   lines.push('', `### ${name} API pricing`, '', '| Model ID | Variant | Privacy | Price |', '|---|---|---|---|');
@@ -1123,6 +1139,9 @@ function pageDataFor(family, variants, related, providers, familiesBySlug, model
       similar: relatedSummary(related.similar, familiesBySlug, modelsById),
       versions: relatedSummary(related.versions, familiesBySlug, modelsById)
     },
+    counterpart: family.counterpart
+      ? { ...relatedSummary([family.counterpart], familiesBySlug, modelsById)[0], primary: familiesBySlug[family.counterpart].primary }
+      : undefined,
     providers: Object.fromEntries([...new Set([family.provider, ...related.similar.concat(related.versions).map(s => familiesBySlug[s].provider)])]
       .filter(slug => providers[slug]).map(slug => [slug, providers[slug]]))
   };
@@ -1198,9 +1217,9 @@ function writePages(families, modelsById, providers, relatedBySlug) {
   return removed;
 }
 
-// Where a removed family's URL goes: the family that replaces it, when its
-// deprecation names a model that still has a page, else its modality's
-// catalog page.
+// Where a removed family's URL goes: the family its models moved to, at
+// their variant; else the family that replaces it, when its deprecation
+// names a model that still has a page; else its modality's catalog page.
 const CATALOG_PAGES = {
   text: '/models/text', image: '/models/image', video: '/models/video', embedding: '/models/embeddings',
   tts: '/models/text-to-speech', stt: '/models/speech-to-text', music: '/models/music', sfx: '/models/music'
@@ -1208,6 +1227,12 @@ const CATALOG_PAGES = {
 
 function redirectFor({ slug, data }, families) {
   const family = data?.family || {};
+  const ids = (data?.models || []).map(m => m.id);
+  const home = families.find(f => ids.some(id => f.variants.includes(id)));
+  if (home) {
+    const id = ids.find(i => home.variants.includes(i));
+    return { source: `/models/${slug}`, destination: `/models/${home.slug}${id === home.primary ? '' : `?v=${id}`}` };
+  }
   const replacements = (data?.models || []).map(m => m.deprecation?.replacement).filter(Boolean);
   const successor = families.find(f => replacements.some(id => f.variants.includes(id)));
   const destination = successor ? `/models/${successor.slug}`
@@ -1215,11 +1240,21 @@ function redirectFor({ slug, data }, families) {
   return { source: `/models/${slug}`, destination };
 }
 
-// Indexed links to removed pages keep working. A redirect never shadows a
-// live page, so one is dropped when its slug gets a page again.
+// Indexed links to removed pages keep working, in each language the page was
+// translated into, to the translation of the destination where there is one.
+// A redirect never shadows a live page, so one is dropped when its slug gets
+// a page again.
 function updateRedirects(docs, families, removed) {
-  const live = new Set(families.map(f => `/models/${f.slug}`));
-  const added = removed.map(page => redirectFor(page, families));
+  const codes = docs.navigation.languages.map(language => language.language).filter(code => code !== 'en');
+  const live = new Set(families.flatMap(f => ['', ...codes.map(code => `/${code}`)].map(prefix => `${prefix}/models/${f.slug}`)));
+  const translated = (code, destination) => fs.existsSync(path.join(ROOT, code, `${destination.split('?')[0]}.mdx`));
+  const added = removed.flatMap(page => {
+    const redirect = redirectFor(page, families);
+    return [redirect, ...(page.locales || []).map(code => ({
+      source: `/${code}${redirect.source}`,
+      destination: translated(code, redirect.destination) ? `/${code}${redirect.destination}` : redirect.destination
+    }))];
+  });
   const sources = new Set(added.map(r => r.source));
   docs.redirects = [...(docs.redirects || []).filter(r => !live.has(r.source) && !sources.has(r.source)), ...added];
 }
@@ -1241,6 +1276,17 @@ function updateDocsNavigation(families, removed) {
   group.hidden = true;
   group.searchable = true;
   group.pages = families.map(f => `models/${f.slug}`).sort();
+  // A removed family's translated copies import its first screen, which went
+  // with its page, so they go too, along with their navigation entries.
+  const languages = docs.navigation.languages.map(language => language.language).filter(code => code !== 'en');
+  for (const page of removed) {
+    page.locales = languages.filter(code => fs.existsSync(path.join(ROOT, code, 'models', `${page.slug}.mdx`)));
+    page.locales.forEach(code => fs.unlinkSync(path.join(ROOT, code, 'models', `${page.slug}.mdx`)));
+  }
+  const gone = new Set(removed.flatMap(page => page.locales.map(code => `${code}/models/${page.slug}`)));
+  const prune = node => Array.isArray(node) ? node.filter(item => !gone.has(item)).map(prune)
+    : node && typeof node === 'object' ? Object.fromEntries(Object.entries(node).map(([key, value]) => [key, prune(value)])) : node;
+  if (gone.size) docs.navigation.languages = prune(docs.navigation.languages);
   updateRedirects(docs, families, removed);
   const out = JSON.stringify(docs, null, 2).replace(/\n/g, eol) + eol;
   if (out !== raw) fs.writeFileSync(file, out, 'utf-8');
@@ -1338,9 +1384,14 @@ async function main() {
   const raw = await loadModels();
   const models = raw.map(model => normalizeModel(model, ctx));
   const modelsById = Object.fromEntries(models.map(m => [m.id, m]));
+  // Models group by their IDs, so one named apart from its model, like an
+  // E2EE build released under another name, names that model in familyOf.
+  for (const model of models) {
+    const home = modelsById[ctx.overrides.models?.[model.id]?.familyOf];
+    if (home) Object.assign(model, { familyKey: home.familyKey, familyName: home.familyName });
+  }
   const families = buildFamilies(models);
-  const familyByKey = Object.fromEntries(families.map(f => [f.key, f]));
-  models.forEach(model => { model.family = familyByKey[model.familyKey].slug; });
+  families.forEach(family => family.variants.forEach(id => { modelsById[id].family = family.slug; }));
 
   const providers = Object.fromEntries(PROVIDERS.map(([slug, name, logo]) => [slug, { slug, name, ...providerLogo(logo) }]));
   Object.entries(ctx.overrides.providers || {}).forEach(([slug, value]) => { providers[slug] = { slug, ...providers[slug], ...value }; });

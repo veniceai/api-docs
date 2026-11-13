@@ -2661,6 +2661,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
+  const E2eePanel = ({ model }) => (model.privacy === 'e2ee' ? (
+    <div className="vx-e2ee">
+      <span className="vx-e2ee-icon" aria-hidden="true"><Icon name="lock" size={16} /></span>
+      <div className="vx-e2ee-body">
+        <p className="vx-e2ee-title">End-to-end encrypted</p>
+        <p>{PRIVACY.e2ee.desc} Requests without the E2EE handshake reach Venice as plaintext and run TEE-only.</p>
+        <a className="vx-e2ee-action" href="/guides/features/tee-e2ee-models#e2ee-models">How to call an E2EE model<Icon name="arrowRight" size={12} /></a>
+      </div>
+    </div>
+  ) : null);
+
   const VariantsTable = ({ models, activeId, onSelect }) => {
     const first = models[0];
     const isText = first.modality === 'text' && first.task === 'chat';
@@ -2742,8 +2753,23 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
+  // The same model called the other way: a model's E2EE build, or an E2EE
+  // build's model.
+  const Counterpart = ({ item }) => {
+    if (!item) return null;
+    const e2ee = item.privacy.includes('e2ee');
+    return (
+      <a className="vx-counterpart" href={`/models/${item.slug}`}>
+        {e2ee ? <Icon name="lock" size={12} /> : null}
+        <span className="vx-counterpart-name">{e2ee ? 'Also available end-to-end encrypted' : 'Also available without end-to-end encryption'}</span>
+        <span className="vx-counterpart-sub">{relatedPrice(item)}</span>
+        <Icon name="arrowRight" size={12} />
+      </a>
+    );
+  };
+
   const ModelPage = ({ data }) => {
-    const { family, models, related, providers } = data;
+    const { family, models, related, counterpart, providers } = data;
     // ?v= names the variant. It's read on the first render, so the primary
     // never flashes, and again on Back and Forward.
     const variantFromUrl = () => {
@@ -2761,6 +2787,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       };
       window.addEventListener('popstate', onPop);
       return () => window.removeEventListener('popstate', onPop);
+    }, []);
+
+    // Links from before E2EE builds had pages of their own name the build as
+    // a variant of its model.
+    useEffect(() => {
+      if (counterpart && readParams().get('v') === counterpart.primary) window.location.replace(`/models/${counterpart.slug}`);
     }, []);
 
     const model = models.find(m => m.id === variantId) || models[0];
@@ -2836,6 +2868,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                 </div>
               ) : null}
 
+              <E2eePanel model={model} />
+
+              <Counterpart item={counterpart} />
+
               <div className="vx-idbar">
                 <ModelId id={model.id} />
                 {recommended ? <span className="vx-endpoint-url">{recommended.method} {API}{recommended.path}</span> : null}
@@ -2887,7 +2923,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
             <Section id="api" title="API" actions={<a className="vx-link-btn" href="https://venice.ai/settings/api" target="_blank" rel="noopener">Get an API key</a>}>
               <Endpoints model={model} endpointId={activeEndpoint && activeEndpoint.id} setEndpointId={setEndpointId} />
-              {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
+              {model.privacy === 'e2ee' ? <p className="vx-text">These samples send the prompt as plaintext, so the request runs TEE-only. For end-to-end encryption, send encrypted messages with the E2EE headers, as the <a href="/guides/features/tee-e2ee-models#e2ee-models">TEE and E2EE guide</a> shows.</p> : null}
               <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
             </Section>
 
