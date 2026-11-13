@@ -2252,7 +2252,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return [];
   };
 
-  const Specs = ({ model, models }) => {
+  const Specs = ({ model, models, provider }) => {
     const endpoint = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
     const editor = model.task === 'image-generation' ? models.find(m => m.task === 'image-edit') : null;
     const rows = [
@@ -2260,6 +2260,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       editor ? ['Edit model ID', <code>{editor.id}</code>] : null,
       endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
       ...modalitySpecs(model),
+      PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<span className="vx-muted"> · {tierText(model.privacy, upstreamName(model, provider))}</span> · <a href="/overview/privacy">guide</a></>] : null,
       ['Added', fmtDate(model.created)],
       model.openWeights ? ['Weights', `Open${model.license ? ` · ${model.license}` : ''}`] : null
     ].filter(Boolean);
@@ -2895,7 +2896,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             ) : null}
 
             <Section id="specs" title="Specs">
-              <Specs model={model} models={models} />
+              <Specs model={model} models={models} provider={provider} />
             </Section>
 
             {has('capabilities') ? (
