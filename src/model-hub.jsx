@@ -1986,7 +1986,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  const KeyStats = ({ model, models }) => {
+  const KeyStats = ({ model, models, provider }) => {
     const p = model.pricing || {};
     if (model.modality === 'text' && model.task === 'chat') {
       const text = model.text || {};
@@ -2005,7 +2005,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           p.cacheRead != null
             ? { label: 'Cached input', value: usd(p.cacheRead), sub: p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens' }
             : { label: 'Cached input', value: '—', sub: 'no prompt caching' },
-          { label: 'Modalities', value: ['Text', caps.vision && 'image', caps.videoInput && 'video', caps.audioInput && 'audio'].filter(Boolean).join(', '), sub: 'out: text' }
+          { label: 'Modalities', value: ['Text', caps.vision && 'image', caps.videoInput && 'video', caps.audioInput && 'audio'].filter(Boolean).join(', '), sub: 'out: text' },
+          PRIVACY[model.privacy] ? {
+            label: 'Privacy',
+            value: PRIVACY[model.privacy].label,
+            sub: model.privacy === 'anonymized' ? `identity hidden from ${upstreamName(model, provider) || 'the provider'}` : PRIVACY[model.privacy].long.toLowerCase()
+          } : null
         ]} />
       );
     }
@@ -2837,7 +2842,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               </div>
             </header>
 
-            <KeyStats model={model} models={models} />
+            <KeyStats model={model} models={models} provider={provider} />
 
             <Section id="pricing" title="Pricing" note={`USD ${priceUnit(model)}`}>
               {model.modality === 'text' && model.task === 'chat' ? <TextPricing model={model} family={family} related={related} /> : null}
