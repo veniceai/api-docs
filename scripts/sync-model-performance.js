@@ -92,10 +92,22 @@ function modelFigures(summary, detail) {
     expect(value == null || (Number.isFinite(value) && value >= 0 && value <= 100), `${summary.id} has a bar at ${value}%`);
     return value == null ? null : value;
   });
+  // Each bar's time to first token, aligned with `bars`; null under 20 requests.
+  const series = (detail.performance && detail.performance.series) || [];
+  expect(!series.length || series.length === buckets.length, `${summary.id} has ${series.length} latency points for ${buckets.length} bars`);
+  const ttftSeries = compact(Object.fromEntries(['p50', 'p90'].map(p => {
+    const values = series.map(point => {
+      const value = point.ttft_ms && point.ttft_ms[p];
+      expect(value == null || (Number.isFinite(value) && value >= 0), `${summary.id} has a bar at ${value} ms`);
+      return value == null ? null : value;
+    });
+    return [p, values.some(value => value != null) ? values : null];
+  })));
   return compact({
     uptime: summary.uptime_24h_percent,
     bars: bars || null,
     barUptime: barUptime.some(value => value != null) ? barUptime : null,
+    ttftSeries,
     ttftMs: byWindow(summary.performance, w => compact({ p50: w.ttft_ms && w.ttft_ms.p50, p90: w.ttft_ms && w.ttft_ms.p90 })),
     tokensPerSecond: byWindow(summary.performance, w => w.tokens_per_second)
   });

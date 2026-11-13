@@ -2317,6 +2317,77 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const BAR_LABELS = Object.fromEntries(BAR_STATES);
   const PERFORMANCE_WINDOWS = [['1h', 'Last hour'], ['4h', 'Last 4 hours'], ['24h', 'Last 24 hours']];
 
+  // 1, 2, 2.5 or 5 times a power of ten, at or above `value`.
+  const niceCeil = value => {
+    if (!(value > 0)) return 1;
+    const base = 10 ** Math.floor(Math.log10(value));
+    return [1, 2, 2.5, 5, 10].map(step => step * base).find(step => step >= value);
+  };
+
+  // Splits a series into runs of consecutive bars with a figure.
+  const seriesRuns = values => values.reduce((runs, value, i) => {
+    if (value == null) return runs;
+    const last = runs[runs.length - 1];
+    if (last && last[last.length - 1][0] === i - 1) last.push([i, value]);
+    else runs.push([[i, value]]);
+    return runs;
+  }, []);
+
+  // Time to first token by 15-minute bar. The scale stops at twice the 90th
+  // percentile of the plotted figures, so one stalled bar can't flatten the
+  // rest; a bar above it is drawn at the top, and its tip gives the figure.
+  const TtftChart = ({ figures, start, end, barMs }) => {
+    const series = (figures && figures.ttftSeries) || {};
+    const p50 = series.p50 || [];
+    const p90 = series.p90 || [];
+    const values = [...p50, ...p90].filter(v => v != null).sort((a, b) => a - b);
+    const top = values.length ? niceCeil(Math.min(values[values.length - 1], values[Math.floor((values.length - 1) * 0.9)] * 2)) : null;
+    const y = v => 100 - (Math.min(v, top) / top) * 100;
+    const note = figures && !values.length ? 'Too few streamed requests in any 15 minutes to chart' : null;
+    const lines = top ? [['p90', p90], ['p50', p50]].flatMap(([key, line]) => seriesRuns(line).map((run, i) => (run.length === 1
+      ? <line key={`${key}-${i}`} className={`vx-ttft-line is-${key}`} x1={run[0][0] + 0.2} x2={run[0][0] + 0.8} y1={y(run[0][1])} y2={y(run[0][1])} vectorEffect="non-scaling-stroke" />
+      : <polyline key={`${key}-${i}`} className={`vx-ttft-line is-${key}`} points={run.map(([x, v]) => `${x + 0.5},${y(v)}`).join(' ')} vectorEffect="non-scaling-stroke" />))) : [];
+    return (
+      <div className="vx-ttft">
+        <div className="vx-uptime-head">
+          <div className="vx-uptime-label">Time to first token</div>
+          <ul className="vx-uptime-legend" aria-hidden="true">
+            <li><span className="vx-ttft-key is-p50" />Median</li>
+            <li><span className="vx-ttft-key is-p90" />p90</li>
+          </ul>
+        </div>
+        <div className="vx-ttft-plot">
+          <div className="vx-ttft-scale" aria-hidden="true">
+            <span>{top ? fmtMs(top) : ''}</span>
+            <span>{top ? fmtMs(top / 2) : ''}</span>
+            <span>{top ? '0' : ''}</span>
+          </div>
+          <div className="vx-ttft-area">
+            <svg viewBox="0 0 96 100" preserveAspectRatio="none" role="img"
+              aria-label={top ? `Time to first token in 15-minute bars: ${p50.filter(v => v != null).length} bars with a median` : 'Time to first token in 15-minute bars: no figures'}>
+              {[0, 50, 100].map(g => <line key={g} className="vx-ttft-grid" x1="0" x2="96" y1={g} y2={g} vectorEffect="non-scaling-stroke" />)}
+              {lines}
+            </svg>
+            {top ? (
+              <div className="vx-ttft-hover">
+                {p50.map((median, i) => {
+                  const range = `${fmtClock(start + i * barMs)} – ${fmtTime(start + (i + 1) * barMs)}`;
+                  return median == null
+                    ? <span key={i} data-tip-label="No figure" title={range} />
+                    : <span key={i} data-tip-label={`${fmtMs(median)} median`} title={`p90 ${fmtMs(p90[i])} · ${range}`} />;
+                })}
+              </div>
+            ) : null}
+            {note ? <div className="vx-ttft-note">{note}</div> : null}
+          </div>
+        </div>
+        <div className="vx-uptime-axis vx-ttft-axis">
+          {top ? <><span>{fmtClock(start)}</span><span>{fmtClock(end)}</span></> : null}
+        </div>
+      </div>
+    );
+  };
+
   // The first screen, a failed load, stale figures and a model without any
   // all draw the same frame, so figures arriving don't move the page.
   const Performance = ({ model, now }) => {
@@ -2358,6 +2429,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {status ? <span>{status}</span> : <><span>{fmtClock(start)}</span><span>{fmtClock(Date.parse(fresh.window.end))}</span></>}
           </div>
         </div>
+        <TtftChart figures={figures} start={start} end={fresh ? Date.parse(fresh.window.end) : 0} barMs={barMs} />
         <div className="vx-table-wrap vx-ruled vx-perf-table">
           <table>
             <thead>
