@@ -1929,7 +1929,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   const SECTION_ICONS = {
     overview: 'info', pricing: 'dollar', examples: 'image', voices: 'volume', specs: 'sliders',
-    capabilities: 'sparkles', api: 'code', privacy: 'shield', variants: 'layers', related: 'link'
+    capabilities: 'sparkles', api: 'code', variants: 'layers', related: 'link'
   };
   const pageSections = (model, { variants = 1, related = false, examples = false, capabilities = false } = {}) => {
     const list = [['overview', 'Overview'], ['pricing', 'Pricing']];
@@ -1938,7 +1938,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     list.push(['specs', 'Specs']);
     if (capabilities) list.push(['capabilities', 'Capabilities']);
     list.push(['api', 'API']);
-    if (PRIVACY_TIERS.some(([tier]) => tier === model.privacy)) list.push(['privacy', 'Privacy']);
     if (variants > 1) list.push(['variants', 'Variants']);
     if (related) list.push(['related', 'Related models']);
     return list;
@@ -1987,7 +1986,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  const KeyStats = ({ model, models }) => {
+  const KeyStats = ({ model, models, provider }) => {
     const p = model.pricing || {};
     if (model.modality === 'text' && model.task === 'chat') {
       const text = model.text || {};
@@ -2006,7 +2005,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           p.cacheRead != null
             ? { label: 'Cached input', value: usd(p.cacheRead), sub: p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens' }
             : { label: 'Cached input', value: '—', sub: 'no prompt caching' },
-          { label: 'Modalities', value: ['Text', caps.vision && 'image', caps.videoInput && 'video', caps.audioInput && 'audio'].filter(Boolean).join(', '), sub: 'out: text' }
+          { label: 'Modalities', value: ['Text', caps.vision && 'image', caps.videoInput && 'video', caps.audioInput && 'audio'].filter(Boolean).join(', '), sub: 'out: text' },
+          PRIVACY[model.privacy] ? {
+            label: 'Privacy',
+            value: PRIVACY[model.privacy].label,
+            sub: model.privacy === 'anonymized' ? `identity hidden from ${upstreamName(model, provider) || 'the provider'}` : PRIVACY[model.privacy].long.toLowerCase()
+          } : null
         ]} />
       );
     }
@@ -2252,7 +2256,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return [];
   };
 
-  const Specs = ({ model, models }) => {
+  const Specs = ({ model, models, provider }) => {
     const endpoint = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
     const editor = model.task === 'image-generation' ? models.find(m => m.task === 'image-edit') : null;
     const rows = [
@@ -2260,6 +2264,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       editor ? ['Edit model ID', <code>{editor.id}</code>] : null,
       endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
       ...modalitySpecs(model),
+      PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<span className="vx-muted"> · {tierText(model.privacy, upstreamName(model, provider))}</span> · <a href="/overview/privacy">guide</a></>] : null,
       ['Added', fmtDate(model.created)],
       model.openWeights ? ['Weights', `Open${model.license ? ` · ${model.license}` : ''}`] : null
     ].filter(Boolean);
@@ -2285,36 +2290,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // host isn't known, so it isn't named.
   const upstreamName = (model, provider) => (!model.openWeights && provider ? provider.name : null);
 
-  // Venice's four privacy modes, weakest first. Each builds on the one before,
-  // so lower tiers are included in the current one.
-  const PRIVACY_TIERS = [['anonymized', 'Anonymized'], ['private', 'Private'], ['tee', 'TEE'], ['e2ee', 'End-to-end encrypted']];
   const tierText = (tier, by) => ({
     anonymized: `Venice hides your identity and stores no prompts. ${by || 'The provider'} still sees the content.`,
     private: "Zero data retention, enforced by contract. Prompts and outputs aren't stored.",
     tee: 'Hardware-isolated inference with remote attestation.',
     e2ee: 'Your client encrypts the prompt, and only the verified enclave decrypts it.'
   })[tier];
-
-  const PrivacyTiers = ({ model, models, provider, onSelect }) => {
-    const rank = PRIVACY_TIERS.findIndex(([tier]) => tier === model.privacy);
-    return (
-      <div className="vx-tiers">
-        {PRIVACY_TIERS.map(([tier, label], i) => {
-          const other = i > rank ? models.find(m => m.id !== model.id && offersTier(m, tier)) : null;
-          return (
-            <div key={tier} className={cls('vx-tier', i === rank && 'is-current')} aria-current={i === rank ? 'true' : undefined}>
-              <div className="vx-tier-num">Tier {i + 1}{i === rank ? ' · this model' : ''}</div>
-              <div className="vx-tier-name">{label}</div>
-              {i === rank ? <p className="vx-tier-text">{tierText(tier, upstreamName(model, provider))}</p>
-                : i < rank ? <p className="vx-tier-text">Included</p>
-                  : other ? <button type="button" className="vx-tier-link" onClick={() => onSelect(other.id)}>Available as <code>{other.id}</code></button>
-                    : <p className="vx-tier-text">Not available</p>}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
 
   // One card per billed unit, four a row, on the same hairline gaps as the
   // key numbers.
@@ -2861,7 +2842,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               </div>
             </header>
 
-            <KeyStats model={model} models={models} />
+            <KeyStats model={model} models={models} provider={provider} />
 
             <Section id="pricing" title="Pricing" note={`USD ${priceUnit(model)}`}>
               {model.modality === 'text' && model.task === 'chat' ? <TextPricing model={model} family={family} related={related} /> : null}
@@ -2895,7 +2876,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             ) : null}
 
             <Section id="specs" title="Specs">
-              <Specs model={model} models={models} />
+              <Specs model={model} models={models} provider={provider} />
             </Section>
 
             {has('capabilities') ? (
@@ -2909,12 +2890,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
               <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
             </Section>
-
-            {has('privacy') ? (
-              <Section id="privacy" title="Privacy">
-                <PrivacyTiers model={model} models={models} provider={provider} onSelect={selectVariant} />
-              </Section>
-            ) : null}
 
             {has('variants') ? (
               <Section id="variants" title="Variants">
