@@ -15,7 +15,7 @@
  *   data/model-overrides.json curated metadata the API does not expose yet
  *   data/model-media.json     reference outputs for image and video models
  *   data/model-renders.json   the docs' own renders, for prompts venice.ai has none for
- *   data/model-benchmarks.json, data/model-telemetry.json   future data feeds
+ *   data/model-benchmarks.json  future data feed
  *
  * Refuses to overwrite the catalog if the model count drops by more than 20%
  * against the committed one; --allow-drop accepts a real drop.
@@ -619,7 +619,6 @@ function normalizeModel(model, ctx) {
   const renders = (ctx.renders.models?.[model.id] || []).filter(render => !samples.some(sample => sample.prompt === render.prompt));
   entry.media = [...samples, ...renders].slice(0, 12);
   entry.benchmarks = ctx.benchmarks.results?.[model.id] || null;
-  entry.telemetry = ctx.telemetry.models?.[model.id] || null;
   return entry;
 }
 
@@ -1331,8 +1330,7 @@ async function main() {
     overrides: readJson('model-overrides.json', {}),
     media: readJson('model-media.json', { models: {} }),
     renders: readJson('model-renders.json', { models: {} }),
-    benchmarks: readJson('model-benchmarks.json', { results: {} }),
-    telemetry: readJson('model-telemetry.json', { models: {} })
+    benchmarks: readJson('model-benchmarks.json', { results: {} })
   };
 
   const raw = await loadModels();
