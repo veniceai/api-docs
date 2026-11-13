@@ -2742,8 +2742,23 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
+  // The same model called the other way: a model's E2EE build, or an E2EE
+  // build's model.
+  const Counterpart = ({ item }) => {
+    if (!item) return null;
+    const e2ee = item.privacy.includes('e2ee');
+    return (
+      <a className="vx-counterpart" href={`/models/${item.slug}`}>
+        {e2ee ? <Icon name="lock" size={12} /> : null}
+        <span className="vx-counterpart-name">{e2ee ? 'Also available end-to-end encrypted' : 'Also available without end-to-end encryption'}</span>
+        <span className="vx-counterpart-sub">{relatedPrice(item)}</span>
+        <Icon name="arrowRight" size={12} />
+      </a>
+    );
+  };
+
   const ModelPage = ({ data }) => {
-    const { family, models, related, providers } = data;
+    const { family, models, related, counterpart, providers } = data;
     // ?v= names the variant. It's read on the first render, so the primary
     // never flashes, and again on Back and Forward.
     const variantFromUrl = () => {
@@ -2761,6 +2776,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       };
       window.addEventListener('popstate', onPop);
       return () => window.removeEventListener('popstate', onPop);
+    }, []);
+
+    // Links from before E2EE builds had pages of their own name the build as
+    // a variant of its model.
+    useEffect(() => {
+      if (counterpart && readParams().get('v') === counterpart.primary) window.location.replace(`/models/${counterpart.slug}`);
     }, []);
 
     const model = models.find(m => m.id === variantId) || models[0];
@@ -2835,6 +2856,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                   ))}
                 </div>
               ) : null}
+
+              <Counterpart item={counterpart} />
 
               <div className="vx-idbar">
                 <ModelId id={model.id} />

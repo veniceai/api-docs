@@ -692,22 +692,29 @@ function matchesRule(entry, match) {
 
 // ---------------------------------------------------------------- families
 
+// An E2EE build has a page of its own, named for its model plus "E2EE":
+// calling it takes the E2EE handshake, and its limits and price differ.
+const E2EE_KEY = ':e2ee';
+
 function buildFamilies(models) {
   const groups = new Map();
   for (const model of models) {
-    if (!groups.has(model.familyKey)) groups.set(model.familyKey, []);
-    groups.get(model.familyKey).push(model);
+    const key = model.privacy === 'e2ee' ? model.familyKey + E2EE_KEY : model.familyKey;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(model);
   }
 
   const families = [];
+  const builds = [];
   for (const [key, variants] of groups) {
     variants.sort((a, b) => VARIANT_ORDER.indexOf(a.variant) - VARIANT_ORDER.indexOf(b.variant) || (a.created || 0) - (b.created || 0));
     const primary = variants.find(v => ['standard', 'generate', 't2v'].includes(v.variant)) || variants[0];
     const modality = primary.modality;
-    families.push({
+    const e2ee = key.endsWith(E2EE_KEY);
+    (e2ee && groups.has(key.slice(0, -E2EE_KEY.length)) ? builds : families).push({
       key,
       slug: slugify(primary.familyName),
-      name: primary.familyName,
+      name: e2ee ? `${primary.familyName} E2EE` : primary.familyName,
       modality,
       task: primary.task,
       provider: primary.provider,
@@ -742,6 +749,15 @@ function buildFamilies(models) {
     }
   }
   families.forEach(family => { if (RESERVED_SLUGS.has(family.slug)) family.slug = `${family.slug}-model`; });
+  // A build beside its model takes the model's name and slug, so the two
+  // pages read as one model called two ways, and each links to the other.
+  const byKey = new Map(families.map(family => [family.key, family]));
+  for (const build of builds) {
+    const model = byKey.get(build.key.slice(0, -E2EE_KEY.length));
+    Object.assign(build, { name: `${model.name} E2EE`, slug: `${model.slug}-e2ee`, counterpart: model.slug });
+    model.counterpart = build.slug;
+    families.push(build);
+  }
   const duplicates = [...groupBy(families, family => family.slug)].filter(([, list]) => list.length > 1).map(([slug]) => slug);
   if (duplicates.length) throw new Error(`Duplicate family slugs would overwrite pages: ${duplicates.join(', ')}`);
   families.forEach(family => { if (!Number.isFinite(family.created)) family.created = null; });
@@ -755,7 +771,7 @@ function lineageKey(family) {
 function relatedFor(family, families, modelsById) {
   const primary = modelsById[family.primary];
   const price = primary.headline?.value;
-  const sameTask = families.filter(f => f !== family && f.modality === family.modality && f.task === family.task && !f.deprecated);
+  const sameTask = families.filter(f => f !== family && f.slug !== family.counterpart && f.modality === family.modality && f.task === family.task && !f.deprecated);
   const similar = sameTask
     .map(f => {
       const other = modelsById[f.primary];
@@ -864,7 +880,6 @@ function uniq(values) {
 }
 
 function privacySummary(tiers) {
-  if (tiers.includes('e2ee') && tiers.length > 1) return 'Private and end-to-end encrypted variants';
   if (tiers.includes('e2ee')) return 'End-to-end encrypted';
   if (tiers.includes('tee')) return 'Runs in a trusted execution environment';
   if (tiers.includes('private')) return 'Private, with zero data retention';
@@ -872,7 +887,6 @@ function privacySummary(tiers) {
 }
 
 function privacySentence(tiers) {
-  if (tiers.includes('e2ee') && tiers.length > 1) return 'Private and end-to-end encrypted variants are available.';
   if (tiers.includes('e2ee')) return 'It is end-to-end encrypted.';
   if (tiers.includes('tee')) return 'It runs in a trusted execution environment.';
   if (tiers.includes('private')) return 'It runs privately, with zero data retention.';
@@ -999,7 +1013,9 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   const lines = [`## ${name} API`, ''];
   const kind = family.modality === 'video' ? listPhrase(f.modes) || 'video' : listPhrase(f.tasks.map(t => TASK_PHRASES[t]).filter(Boolean)) || family.modality;
   const article = /^[aeiou]/i.test(kind) ? 'an' : 'a';
-  lines.push(`${name} is ${article} ${mdxText(kind)} model${f.provider ? ` by ${mdxText(f.provider)}` : ''}, available on the Venice API as \`${primary.id}\`. ${privacySentence(family.privacy || [primary.privacy])}`);
+  const counterpart = familiesBySlug[family.counterpart];
+  const also = counterpart ? ` It is also available ${counterpart.privacy.includes('e2ee') ? 'end-to-end encrypted' : 'without end-to-end encryption'}, as [${mdxText(counterpart.name)}](/models/${counterpart.slug}).` : '';
+  lines.push(`${name} is ${article} ${mdxText(kind)} model${f.provider ? ` by ${mdxText(f.provider)}` : ''}, available on the Venice API as \`${primary.id}\`. ${privacySentence(family.privacy || [primary.privacy])}${also}`);
   if (family.description) lines.push('', mdxText(family.description));
 
   lines.push('', `### ${name} API pricing`, '', '| Model ID | Variant | Privacy | Price |', '|---|---|---|---|');
@@ -1123,6 +1139,9 @@ function pageDataFor(family, variants, related, providers, familiesBySlug, model
       similar: relatedSummary(related.similar, familiesBySlug, modelsById),
       versions: relatedSummary(related.versions, familiesBySlug, modelsById)
     },
+    counterpart: family.counterpart
+      ? { ...relatedSummary([family.counterpart], familiesBySlug, modelsById)[0], primary: familiesBySlug[family.counterpart].primary }
+      : undefined,
     providers: Object.fromEntries([...new Set([family.provider, ...related.similar.concat(related.versions).map(s => familiesBySlug[s].provider)])]
       .filter(slug => providers[slug]).map(slug => [slug, providers[slug]]))
   };
@@ -1366,8 +1385,7 @@ async function main() {
   const models = raw.map(model => normalizeModel(model, ctx));
   const modelsById = Object.fromEntries(models.map(m => [m.id, m]));
   const families = buildFamilies(models);
-  const familyByKey = Object.fromEntries(families.map(f => [f.key, f]));
-  models.forEach(model => { model.family = familyByKey[model.familyKey].slug; });
+  families.forEach(family => family.variants.forEach(id => { modelsById[id].family = family.slug; }));
 
   const providers = Object.fromEntries(PROVIDERS.map(([slug, name, logo]) => [slug, { slug, name, ...providerLogo(logo) }]));
   Object.entries(ctx.overrides.providers || {}).forEach(([slug, value]) => { providers[slug] = { slug, ...providers[slug], ...value }; });
