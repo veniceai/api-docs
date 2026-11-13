@@ -1384,6 +1384,12 @@ async function main() {
   const raw = await loadModels();
   const models = raw.map(model => normalizeModel(model, ctx));
   const modelsById = Object.fromEntries(models.map(m => [m.id, m]));
+  // Models group by their IDs, so one named apart from its model, like an
+  // E2EE build released under another name, names that model in familyOf.
+  for (const model of models) {
+    const home = modelsById[ctx.overrides.models?.[model.id]?.familyOf];
+    if (home) Object.assign(model, { familyKey: home.familyKey, familyName: home.familyName });
+  }
   const families = buildFamilies(models);
   families.forEach(family => family.variants.forEach(id => { modelsById[id].family = family.slug; }));
 
