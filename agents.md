@@ -91,6 +91,7 @@ Feature suffixes also work on model IDs as `key=value` pairs, e.g. `venice-uncen
 - Prompt caching: https://docs.venice.ai/guides/features/prompt-caching.md
 - Model catalog methodology (families, normalized prices, privacy tiers): https://docs.venice.ai/models/methodology.md
 - Machine-readable model catalog: https://docs.venice.ai/data/model-catalog.json, a JSON object with `families` (array of model families), `models` (keyed by model ID), `providers`, `counts` and `generatedAt`, rebuilt hourly from `GET /models`. Still call `GET /models` at runtime to pick a model.
+- Model performance: https://docs.venice.ai/data/model-performance.json, each text model's uptime and time to first token over the last 24 hours, keyed by model ID and refreshed hourly. How they're measured: https://docs.venice.ai/models/methodology.md
 
 ## Documentation repo (this project)
 
