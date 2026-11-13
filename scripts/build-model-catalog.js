@@ -1198,9 +1198,9 @@ function writePages(families, modelsById, providers, relatedBySlug) {
   return removed;
 }
 
-// Where a removed family's URL goes: the family that replaces it, when its
-// deprecation names a model that still has a page, else its modality's
-// catalog page.
+// Where a removed family's URL goes: the family its models moved to, at
+// their variant; else the family that replaces it, when its deprecation
+// names a model that still has a page; else its modality's catalog page.
 const CATALOG_PAGES = {
   text: '/models/text', image: '/models/image', video: '/models/video', embedding: '/models/embeddings',
   tts: '/models/text-to-speech', stt: '/models/speech-to-text', music: '/models/music', sfx: '/models/music'
@@ -1208,6 +1208,12 @@ const CATALOG_PAGES = {
 
 function redirectFor({ slug, data }, families) {
   const family = data?.family || {};
+  const ids = (data?.models || []).map(m => m.id);
+  const home = families.find(f => ids.some(id => f.variants.includes(id)));
+  if (home) {
+    const id = ids.find(i => home.variants.includes(i));
+    return { source: `/models/${slug}`, destination: `/models/${home.slug}${id === home.primary ? '' : `?v=${id}`}` };
+  }
   const replacements = (data?.models || []).map(m => m.deprecation?.replacement).filter(Boolean);
   const successor = families.find(f => replacements.some(id => f.variants.includes(id)));
   const destination = successor ? `/models/${successor.slug}`
@@ -1215,11 +1221,21 @@ function redirectFor({ slug, data }, families) {
   return { source: `/models/${slug}`, destination };
 }
 
-// Indexed links to removed pages keep working. A redirect never shadows a
-// live page, so one is dropped when its slug gets a page again.
+// Indexed links to removed pages keep working, in each language the page was
+// translated into, to the translation of the destination where there is one.
+// A redirect never shadows a live page, so one is dropped when its slug gets
+// a page again.
 function updateRedirects(docs, families, removed) {
-  const live = new Set(families.map(f => `/models/${f.slug}`));
-  const added = removed.map(page => redirectFor(page, families));
+  const codes = docs.navigation.languages.map(language => language.language).filter(code => code !== 'en');
+  const live = new Set(families.flatMap(f => ['', ...codes.map(code => `/${code}`)].map(prefix => `${prefix}/models/${f.slug}`)));
+  const translated = (code, destination) => fs.existsSync(path.join(ROOT, code, `${destination.split('?')[0]}.mdx`));
+  const added = removed.flatMap(page => {
+    const redirect = redirectFor(page, families);
+    return [redirect, ...(page.locales || []).map(code => ({
+      source: `/${code}${redirect.source}`,
+      destination: translated(code, redirect.destination) ? `/${code}${redirect.destination}` : redirect.destination
+    }))];
+  });
   const sources = new Set(added.map(r => r.source));
   docs.redirects = [...(docs.redirects || []).filter(r => !live.has(r.source) && !sources.has(r.source)), ...added];
 }
