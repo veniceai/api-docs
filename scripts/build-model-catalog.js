@@ -1241,6 +1241,17 @@ function updateDocsNavigation(families, removed) {
   group.hidden = true;
   group.searchable = true;
   group.pages = families.map(f => `models/${f.slug}`).sort();
+  // A removed family's translated copies import its first screen, which went
+  // with its page, so they go too, along with their navigation entries.
+  const languages = docs.navigation.languages.map(language => language.language).filter(code => code !== 'en');
+  for (const page of removed) {
+    page.locales = languages.filter(code => fs.existsSync(path.join(ROOT, code, 'models', `${page.slug}.mdx`)));
+    page.locales.forEach(code => fs.unlinkSync(path.join(ROOT, code, 'models', `${page.slug}.mdx`)));
+  }
+  const gone = new Set(removed.flatMap(page => page.locales.map(code => `${code}/models/${page.slug}`)));
+  const prune = node => Array.isArray(node) ? node.filter(item => !gone.has(item)).map(prune)
+    : node && typeof node === 'object' ? Object.fromEntries(Object.entries(node).map(([key, value]) => [key, prune(value)])) : node;
+  if (gone.size) docs.navigation.languages = prune(docs.navigation.languages);
   updateRedirects(docs, families, removed);
   const out = JSON.stringify(docs, null, 2).replace(/\n/g, eol) + eol;
   if (out !== raw) fs.writeFileSync(file, out, 'utf-8');
