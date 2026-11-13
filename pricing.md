@@ -44,7 +44,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Claude Opus 4.6 | `claude-opus-4-6` | $5.00 | $25.00 | $0.50 | $6.25 | Anonymized |
 | Claude Opus 4.7 | `claude-opus-4-7` | $5.00 | $25.00 | $0.50 | $6.25 | Anonymized |
 | Claude Opus 4.8 | `claude-opus-4-8` | $5.00 | $25.00 | $0.50 | $6.25 | Anonymized |
-| Claude Opus 4.8 Fast (Retiring) | `claude-opus-4-8-fast` | $10.00 | $50.00 | $1.00 | $12.50 | Anonymized |
 | Claude Opus 5 | `claude-opus-5` | $5.00 | $25.00 | $0.50 | $6.25 | Anonymized |
 | Claude Opus 5 Fast | `claude-opus-5-fast` | $10.00 | $50.00 | $1.00 | $12.50 | Anonymized |
 | Claude Opus 5.5 | `claude-opus-5-5` | $4.00 | $20.00 | $0.20 | $5.00 | Anonymized |
