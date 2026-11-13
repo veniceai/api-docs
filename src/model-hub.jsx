@@ -598,9 +598,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   /* ------------------------------------------------------------ media */
 
-  const sampleFor = (model, preferred) => {
-    const media = model.media || [];
-    return media.find(m => m.prompt === preferred) || media[0] || null;
+  // The gallery compares models on one reference prompt: a model's render of
+  // it, or, for a model that transforms an input, its output from that
+  // prompt's render. The displayed variant comes first, then its siblings.
+  const GALLERY_PROMPTS = { image: 'photoreal', video: 'cinematic-landscape' };
+  const galleryMedia = (family, display, catalog) => {
+    const prompt = GALLERY_PROMPTS[family.modality];
+    const pick = model => {
+      const media = (model && model.media) || [];
+      return media.find(m => m.prompt === prompt) || media.find(m => m.from === prompt);
+    };
+    return pick(display) || family.variants.map(id => catalog.models[id]).map(pick).find(Boolean) || null;
   };
 
   // Sources attach only as a tile nears the viewport, so a gallery doesn't
@@ -891,9 +899,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   // The filter column; below 1024px it opens as a drawer from the toolbar.
   const DRAWER_MAX_WIDTH = 1024;
-  const FilterRail = ({ modality, task, scope, scopeCounts, onScope, filters, setFilters, facetCount, providerCounts, providers, onClear, open, onClose }) => {
+  const FilterRail = ({ modality, task, scope, scopeCounts, onScope, statuses, filters, setFilters, facetCount, providerCounts, providers, onClear, open, onClose }) => {
     const toggleIn = (key, value) => setFilters(prev => ({ ...prev, [key]: prev[key].includes(value) ? prev[key].filter(v => v !== value) : [...prev[key], value] }));
     // An option nothing in scope matches is disabled unless already checked.
+    // A checked status stays, so it can be unchecked.
+    const hasStatus = flag => statuses[flag] || filters.flags.includes(flag);
     const option = (key, value, label, title) => {
       const checked = filters[key].includes(value);
       const count = facetCount(key, value);
@@ -971,11 +981,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             </>
           ) : null}
 
-          <FilterGroup title="Status" icon="clock">
-            {option('flags', 'new', 'New', 'Added in the last 30 days.')}
-            {option('flags', 'beta', 'Beta', 'Experimental. May change or be removed without notice.')}
-            {option('flags', 'deprecated', 'Deprecated', 'Scheduled for removal. See Deprecations.')}
-          </FilterGroup>
+          {hasStatus('beta') || hasStatus('deprecated') || filters.flags.includes('new') ? (
+            <FilterGroup title="Status" icon="clock">
+              {option('flags', 'new', 'New', 'Added in the last 30 days.')}
+              {hasStatus('beta') ? option('flags', 'beta', 'Beta', 'Experimental. May change or be removed without notice.') : null}
+              {hasStatus('deprecated') ? option('flags', 'deprecated', 'Deprecated', 'Scheduled for removal. See Deprecations.') : null}
+            </FilterGroup>
+          ) : null}
 
           <FilterGroup title="Attributes" icon="sliders">
             {option('flags', 'open', 'Open weights')}
@@ -1035,7 +1047,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         const title = el.getAttribute('title');
         const label = el.getAttribute('data-tip-label');
         const text = el.getAttribute('data-tip') || title;
-        const repeats = !label && text && text === el.textContent.trim() && el.scrollWidth <= el.clientWidth;
+        const clipped = [el, ...el.querySelectorAll('*')].some(node => node.scrollWidth > node.clientWidth);
+        const repeats = !label && text && text === el.textContent.trim() && !clipped;
         if ((!label && !text) || repeats) return;
         if (title != null) {
           el.setAttribute('data-tip-title', title);
@@ -1334,10 +1347,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const ExplorerCard = ({ row, now, catalog }) => {
     const { family, display } = row;
     const isVideo = family.modality === 'video';
-    const media = sampleFor(display, isVideo ? 'cinematic-landscape' : 'photoreal') ||
-      family.variants.map(id => catalog.models[id]).map(m => sampleFor(m, isVideo ? 'cinematic-landscape' : 'photoreal')).find(Boolean);
+    const media = galleryMedia(family, display, catalog);
     const { offer } = row;
     const href = modelHref(family, display.id);
+    const extra = family.variants.length - 1;
     return (
       <article className="vx-card">
         <a className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} href={href} tabIndex={-1} aria-hidden="true">
@@ -1351,6 +1364,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <a className="vx-card-name" href={href} title={family.name}>{family.name}</a>
             <TypeBadge family={family} />
             <StatusTags item={family} now={now} />
+          </div>
+          <div className="vx-card-id">
+            <IdChip id={display.id} />
+            {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
           </div>
           <div className="vx-card-foot">
             {isVideo && offer.status !== 'quoted' ? <span className="vx-card-price vx-muted">Priced by source length</span> : (
@@ -1439,15 +1456,22 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </ul>
   );
 
-  const hasRenders = (family, catalog) => family.variants.some(id => ((catalog.models[id] || {}).media || []).length);
-
-  // Families without reference renders go in a table under the gallery rather
-  // than as empty tiles, so the grid only shows real outputs.
+  // Families with nothing on the gallery's prompt go in a table under it
+  // rather than as tiles of another scene, so the grid compares like with like.
   const Gallery = ({ rows, columns, sort, setSort, providers, now, catalog, modality }) => {
-    const rendered = rows.filter(row => hasRenders(row.family, catalog));
-    const pending = rows.filter(row => !hasRenders(row.family, catalog));
+    const rendered = rows.filter(row => galleryMedia(row.family, row.display, catalog));
+    const pending = rows.filter(row => !galleryMedia(row.family, row.display, catalog));
+    const prompt = ((catalog.mediaSuite || {})[modality] || []).find(item => item.id === GALLERY_PROMPTS[modality]);
+    const transforms = rendered.some(row => galleryMedia(row.family, row.display, catalog).from);
     return (
       <>
+        {rendered.length && prompt ? (
+          <p className="vx-gallery-prompt">
+            <span className="vx-gallery-prompt-label">Prompt</span>
+            <q>{prompt.prompt}</q>
+            {transforms ? <span className="vx-gallery-prompt-note">Models that edit, extend or upscale start from a render of it.</span> : null}
+          </p>
+        ) : null}
         {rendered.length ? (
           <div className={cls('vx-cards', modality === 'video' && 'is-video')}>
             {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} now={now} catalog={catalog} />)}
@@ -1455,7 +1479,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         ) : null}
         {pending.length ? (
           <section className="vx-unrendered" aria-labelledby="vx-unrendered-title">
-            <h3 id="vx-unrendered-title" className="vx-h3">No reference renders yet <span className="vx-muted">{plural(pending.length, 'family')}</span></h3>
+            <h3 id="vx-unrendered-title" className="vx-h3">{prompt ? `Not rendered on the ${prompt.title.toLowerCase()} prompt` : 'No reference renders yet'} <span className="vx-muted">{plural(pending.length, 'family')}</span></h3>
             <ExplorerTable rows={pending} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} />
           </section>
         ) : null}
@@ -1571,6 +1595,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const providers = catalog ? catalog.providers : {};
 
     const scoped = useMemo(() => (catalog ? catalog.families.filter(family => !scope || familyScope(family) === scope) : []), [catalog, scope]);
+    // The Status group shows only where the modality has beta or deprecated
+    // families, counted before search and filters so it doesn't come and go
+    // while typing. New alone doesn't keep it: New changes with the date, so
+    // the build-time first screen and the live view could disagree on it.
+    const statuses = useMemo(() => ({ beta: scoped.some(family => family.beta), deprecated: scoped.some(family => family.deprecated) }), [scoped]);
 
     const scopeCounts = useMemo(() => {
       const out = {};
@@ -1638,7 +1667,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <HoverTips />
         <div className="vx-page-grid">
           {catalog ? (
-            <FilterRail modality={modality} task={task} scope={scope} scopeCounts={scopeCounts} onScope={chooseScope}
+            <FilterRail modality={modality} task={task} scope={scope} scopeCounts={scopeCounts} onScope={chooseScope} statuses={statuses}
               filters={filters} setFilters={setFilters} facetCount={facetCount} providerCounts={providerCounts} providers={providers}
               onClear={() => setFilters(EMPTY_FILTERS)} open={railOpen} onClose={() => setRailOpen(false)} />
           ) : <aside className="vx-side vx-filters" aria-hidden="true" />}
