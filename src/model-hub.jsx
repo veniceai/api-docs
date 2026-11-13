@@ -2887,7 +2887,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
             <Section id="api" title="API" actions={<a className="vx-link-btn" href="https://venice.ai/settings/api" target="_blank" rel="noopener">Get an API key</a>}>
               <Endpoints model={model} endpointId={activeEndpoint && activeEndpoint.id} setEndpointId={setEndpointId} />
-              {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
+              {model.privacy === 'e2ee' ? <p className="vx-text">These samples send the prompt as plaintext, so the request runs TEE-only. For end-to-end encryption, send encrypted messages with the E2EE headers, as the <a href="/guides/features/tee-e2ee-models#e2ee-models">TEE and E2EE guide</a> shows.</p> : null}
               <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
             </Section>
 
