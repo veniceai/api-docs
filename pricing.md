@@ -593,13 +593,13 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | Wan 3.0 | `wan-3-0-image-to-video` | Image to video | $0.0488 to $0.195 | Anonymized |
 | Wan 3.0 Prime | `wan-3-0-prime-text-to-video` | Text to video | $0.066 to $0.2732 | Anonymized |
 | Wan 3.0 Prime | `wan-3-0-prime-image-to-video` | Image to video | $0.066 to $0.2732 | Anonymized |
-| Wan 3.0 Prime Pro | `wan-3-0-prime-pro-text-to-video` | Text to video | $0.3312 to $0.3787 | Anonymized |
-| Wan 3.0 Prime Pro | `wan-3-0-prime-pro-image-to-video` | Image to video | $0.3312 to $0.3787 | Anonymized |
-| Wan 3.0 Prime Pro Reference | `wan-3-0-prime-pro-reference-to-video` | Reference to video | $0.3312 to $0.3787 | Anonymized |
+| Wan 3.0 Prime Pro | `wan-3-0-prime-pro-text-to-video` | Text to video | $0.355 to $0.4056 | Anonymized |
+| Wan 3.0 Prime Pro | `wan-3-0-prime-pro-image-to-video` | Image to video | $0.355 to $0.4056 | Anonymized |
+| Wan 3.0 Prime Pro Reference | `wan-3-0-prime-pro-reference-to-video` | Reference to video | $0.355 to $0.4056 | Anonymized |
 | Wan 3.0 Prime Reference | `wan-3-0-prime-reference-to-video` | Reference to video | $0.066 to $0.2732 | Anonymized |
-| Wan 3.0 Pro | `wan-3-0-pro-text-to-video` | Text to video | $0.2367 to $0.296 | Anonymized |
-| Wan 3.0 Pro | `wan-3-0-pro-image-to-video` | Image to video | $0.2367 to $0.296 | Anonymized |
-| Wan 3.0 Pro Reference | `wan-3-0-pro-reference-to-video` | Reference to video | $0.2367 to $0.296 | Anonymized |
+| Wan 3.0 Pro | `wan-3-0-pro-text-to-video` | Text to video | $0.2537 to $0.3168 | Anonymized |
+| Wan 3.0 Pro | `wan-3-0-pro-image-to-video` | Image to video | $0.2537 to $0.3168 | Anonymized |
+| Wan 3.0 Pro Reference | `wan-3-0-pro-reference-to-video` | Reference to video | $0.2537 to $0.3168 | Anonymized |
 | Wan 3.0 Reference | `wan-3-0-reference-to-video` | Reference to video | $0.0488 to $0.195 | Anonymized |
 
 ## Web search and tools
