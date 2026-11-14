@@ -492,10 +492,10 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | Kling 2.6 Pro | `kling-2.6-pro-image-to-video` | Image to video | $0.0775 to $0.154 | Anonymized |
 | Kling 4.0 | `kling-v4-text-to-video` | Text to video | $0.1472 to $0.2203 | Anonymized |
 | Kling 4.0 | `kling-v4-image-to-video` | Image to video | $0.1472 to $0.2203 | Anonymized |
-| Kling 4.0 Flash | `kling-v4-flash-text-to-video` | Text to video | $0.1174 | Anonymized |
-| Kling 4.0 Flash | `kling-v4-flash-image-to-video` | Image to video | $0.1174 | Anonymized |
+| Kling 4.0 Flash | `kling-v4-flash-text-to-video` | Text to video | $0.088 | Anonymized |
+| Kling 4.0 Flash | `kling-v4-flash-image-to-video` | Image to video | $0.088 | Anonymized |
 | Kling 4.0 Flash Edit | `kling-v4-flash-video-to-video` | Video edit | Priced by source | Anonymized |
-| Kling 4.0 Flash R2V | `kling-v4-flash-reference-to-video` | Reference to video | $0.1175 | Anonymized |
+| Kling 4.0 Flash R2V | `kling-v4-flash-reference-to-video` | Reference to video | $0.088 | Anonymized |
 | Kling 4.0 R2V | `kling-v4-reference-to-video` | Reference to video | $0.1472 to $0.2202 | Anonymized |
 | Kling O3 4K | `kling-o3-4k-text-to-video` | Text to video | $0.462 | Anonymized |
 | Kling O3 4K | `kling-o3-4k-image-to-video` | Image to video | $0.462 | Anonymized |
