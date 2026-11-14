@@ -1,0 +1,381 @@
+---
+title: "使用本地代理调试编程智能体"
+description: "在你的机器上运行一个小型 Node.js 代理，置于编程智能体和 Venice API 之间，记录每个请求、响应、流式数据块、token 计数和速率限制响应头。"
+slug: local-debug-proxy
+"og:title": "使用本地 Venice 代理调试编程智能体"
+"og:description": "使用零依赖的本地代理，准确记录 Claude Code、Codex CLI、OpenCode、Cline、Aider 等智能体发送给 Venice 的内容"
+
+---
+import { AuthorByline } from "/snippets/authorByline.jsx";
+
+<AuthorByline name="Joshua Mo" date="12 November 2026"/>
+
+当编程智能体出现异常时，它的界面很少告诉你原因。工具调用悄无声息地什么也没做，请求以 "provider error" 失败，模型忽略了你的系统提示词，或者一次很短的会话花费远超预期。大多数时候，答案就藏在智能体与 Venice 之间的 HTTP 流量里，而这些流量你通常看不到。
+
+在本指南中，我们将在你自己的机器上运行一个小型代理，让它位于智能体和 Venice API 之间。智能体与代理通信，代理将所有内容原样转发给 Venice，每个请求和响应都会写入一个本地日志文件，你可以用 `jq` 查询它。
+
+<CardGroup cols={3}>
+  <Card title="查看真实请求" icon="eye">
+    模型 ID、消息、工具和参数，与智能体发送时完全一致
+  </Card>
+  <Card title="流式传输不受影响" icon="radio">
+    数据块一到达就立即转发，因此智能体行为正常
+  </Card>
+  <Card title="无依赖" icon="package">
+    单个文件，Node.js 18 或更高版本，无需安装任何东西
+  </Card>
+</CardGroup>
+
+---
+
+## 工作原理 {#how-it-works}
+
+```txt
+coding agent  ──▶  http://127.0.0.1:8787/api/v1  ──▶  https://api.venice.ai/api/v1
+                          │
+                          └──▶  venice-debug.jsonl (one line per request)
+```
+
+代理会转发完整路径和你的 `Authorization` 请求头，因此你的 API 密钥保留在智能体的配置中，所有 Venice 端点都可以通过它工作：`/chat/completions`、`/responses`、`/models`、`/embeddings` 等。你只需要修改智能体的 base URL。
+
+对于每个请求，代理会记录：
+
+- 方法、路径和请求体，你的 API 密钥会被遮盖，只保留最后四个字符
+- 响应状态和响应体。流式响应会以解析后的数据块列表形式存储。
+- token 用量，来自 Venice 返回的 `usage` 对象
+- 总耗时和首字节时间
+- `x-venice-*` 和 `x-ratelimit-*` 响应头，例如剩余余额、速率限制状态和模型弃用警告
+
+<Note>
+这是一个用于你自己机器的调试工具。它只绑定到 `127.0.0.1`，没有自己的身份验证，并以明文将提示词和代码写入磁盘。不要把它部署为共享网关。如果你需要网关，请参阅[构建一个 Rust LLM 网关](/zh/learn/rust-llm-gateway)。
+</Note>
+
+---
+
+## 前提条件 {#prerequisites}
+
+- [Node.js](https://nodejs.org/) 18 或更高版本（`node --version`）
+- 来自 [venice.ai/settings/api](https://venice.ai/settings/api?utm_source=venice-api-documentation) 的 Venice API 密钥
+- 一个已经能与 Venice 配合使用的编程智能体，例如 [Claude Code](/zh/guides/integrations/claude-code)、[Codex CLI](/zh/guides/integrations/codex-cli)、[OpenCode](/zh/guides/integrations/opencode)、[Cline](/zh/guides/integrations/cline) 或 [Aider](/zh/guides/integrations/aider)
+- 用于读取日志的 [`jq`](https://jqlang.org/)（可选，但推荐）
+
+---
+
+## 设置 {#setup}
+
+<Steps>
+  <Step title="创建代理">
+    将以下内容保存为临时目录中的 `venice-debug-proxy.mjs`：
+
+    ```js venice-debug-proxy.mjs
+    import http from "node:http";
+    import { appendFileSync } from "node:fs";
+    import { randomUUID } from "node:crypto";
+
+    const PORT = Number(process.env.PORT ?? 8787);
+    const UPSTREAM = process.env.VENICE_UPSTREAM ?? "https://api.venice.ai";
+    const LOG_FILE = process.env.LOG_FILE ?? "venice-debug.jsonl";
+
+    // Node's fetch sets these itself, and decompresses the response for us
+    const SKIP_REQUEST_HEADERS = new Set([
+      "host", "connection", "content-length", "transfer-encoding", "accept-encoding",
+    ]);
+    const SKIP_RESPONSE_HEADERS = new Set([
+      "content-encoding", "content-length", "transfer-encoding", "connection", "set-cookie",
+    ]);
+
+    function parseJson(text) {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text || undefined;
+      }
+    }
+
+    function parseSse(text) {
+      return text
+        .split("\n")
+        .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map((line) => parseJson(line.slice(6)));
+    }
+
+    function redact(headers) {
+      const auth = headers.authorization;
+      if (!auth) return headers;
+      return { ...headers, authorization: `Bearer …${auth.slice(-4)}` };
+    }
+
+    function findUsage(body) {
+      const items = Array.isArray(body) ? [...body].reverse() : [body];
+      for (const item of items) {
+        const usage = item?.usage ?? item?.response?.usage;
+        if (usage) return usage;
+      }
+    }
+
+    function veniceHeaders(headers) {
+      const picked = {};
+      headers.forEach((value, key) => {
+        if (key.startsWith("x-venice-") || key.startsWith("x-ratelimit-")) picked[key] = value;
+      });
+      return picked;
+    }
+
+    const server = http.createServer(async (req, res) => {
+      const id = randomUUID().slice(0, 8);
+      const started = performance.now();
+
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const requestBody = Buffer.concat(chunks);
+
+      const headers = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (!SKIP_REQUEST_HEADERS.has(key)) headers[key] = value;
+      }
+
+      // Stop the upstream request if the agent hangs up mid-stream
+      const abort = new AbortController();
+      res.on("close", () => {
+        if (!res.writableFinished) abort.abort();
+      });
+
+      const entry = {
+        id,
+        time: new Date().toISOString(),
+        method: req.method,
+        path: req.url,
+        requestHeaders: redact(req.headers),
+        request: parseJson(requestBody.toString()),
+      };
+
+      let upstream;
+      try {
+        upstream = await fetch(UPSTREAM + req.url, {
+          method: req.method,
+          headers,
+          body: requestBody.length ? requestBody : undefined,
+          signal: abort.signal,
+        });
+      } catch (err) {
+        entry.error = `Could not reach Venice: ${err.message}`;
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: entry.error }));
+        return finish(entry, started);
+      }
+
+      const responseHeaders = {};
+      upstream.headers.forEach((value, key) => {
+        if (!SKIP_RESPONSE_HEADERS.has(key)) responseHeaders[key] = value;
+      });
+      res.writeHead(upstream.status, responseHeaders);
+
+      const received = [];
+      try {
+        for await (const chunk of upstream.body ?? []) {
+          entry.firstByteMs ??= Math.round(performance.now() - started);
+          received.push(Buffer.from(chunk));
+          res.write(chunk);
+        }
+      } catch (err) {
+        entry.error = abort.signal.aborted
+          ? "Agent disconnected before the response finished"
+          : `Stream ended early: ${err.message}`;
+      }
+      res.end();
+
+      const text = Buffer.concat(received).toString();
+      const isStream = upstream.headers.get("content-type")?.includes("text/event-stream");
+      entry.status = upstream.status;
+      entry.stream = Boolean(isStream);
+      entry.responseHeaders = veniceHeaders(upstream.headers);
+      entry.response = isStream ? parseSse(text) : parseJson(text);
+      entry.usage = findUsage(entry.response);
+      finish(entry, started);
+    });
+
+    function finish(entry, started) {
+      entry.durationMs = Math.round(performance.now() - started);
+      appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+
+      const model = entry.request?.model ?? "-";
+      const tokens = entry.usage
+        ? ` tokens=${entry.usage.prompt_tokens ?? entry.usage.input_tokens}→${entry.usage.completion_tokens ?? entry.usage.output_tokens}`
+        : "";
+      const ttfb = entry.firstByteMs === undefined ? "" : ` ttfb=${entry.firstByteMs}ms`;
+      console.log(
+        `[${entry.id}] ${entry.method} ${entry.path} model=${model} status=${entry.status ?? "ERR"}` +
+          `${entry.stream ? " stream" : ""} ${entry.durationMs}ms${ttfb}${tokens}` +
+          `${entry.error ? ` error="${entry.error}"` : ""}`,
+      );
+    }
+
+    server.listen(PORT, "127.0.0.1", () => {
+      console.log(`Venice debug proxy on http://127.0.0.1:${PORT}/api/v1 → ${UPSTREAM}`);
+      console.log(`Logging full requests and responses to ${LOG_FILE}`);
+    });
+    ```
+
+    这里有几点值得指出：
+
+    - **流式传输正常工作。** 来自 Venice 的每个数据块一到达就立即写给智能体，同时保留一份副本用于日志。智能体看到的逐 token 流与直接从 Venice 获取的完全相同。
+    - **压缩已为你处理。** Node 的 `fetch` 会解压响应，因此代理在转发响应头之前会删除 `content-encoding`。否则智能体会尝试解压纯文本并失败。
+    - **断开连接会被传递。** 如果你在智能体中取消一轮对话，代理也会中止上游请求，这样 Venice 就不会继续生成没人读取的 token。
+  </Step>
+
+  <Step title="启动代理">
+    ```bash
+    node venice-debug-proxy.mjs
+    ```
+
+    你应该会看到：
+
+    ```txt
+    Venice debug proxy on http://127.0.0.1:8787/api/v1 → https://api.venice.ai
+    Logging full requests and responses to venice-debug.jsonl
+    ```
+
+    在环境中设置 `PORT` 或 `LOG_FILE` 可以更改相应的默认值。
+  </Step>
+
+  <Step title="用 curl 检查">
+    在第二个终端中，通过代理发送一个请求：
+
+    ```bash
+    curl http://127.0.0.1:8787/api/v1/chat/completions \
+      -H "Authorization: Bearer $VENICE_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "venice-uncensored-1-2",
+        "messages": [{"role": "user", "content": "Say hello"}]
+      }'
+    ```
+
+    代理会为每个请求打印一行：
+
+    ```txt
+    [3f9c2a1e] POST /api/v1/chat/completions model=venice-uncensored-1-2 status=200 855ms ttfb=851ms tokens=1746→10
+    ```
+
+    对 "Say hello" 来说，这些提示词 token 太多了。其中大部分是 Venice 的默认系统提示词，除非你将 `venice_parameters.include_venice_system_prompt` 设置为 `false`，否则它会被添加到聊天请求中。这正是代理能让你看到的那类问题。
+  </Step>
+
+  <Step title="将智能体指向代理">
+    在智能体的 Venice 设置中，将 `https://api.venice.ai` 替换为 `http://127.0.0.1:8787`，URL 的其余部分保持不变。代理会转发完整路径，因此智能体指南中让你填写的内容仍然有效。
+
+    | 智能体 | 设置项 | 调试时的值 |
+    | --- | --- | --- |
+    | [Claude Code](/zh/guides/integrations/claude-code)（通过 CCR） | 提供商的 **API endpoint** | `http://127.0.0.1:8787/api/v1` |
+    | [Codex CLI](/zh/guides/integrations/codex-cli) | `[model_providers.venice]` 中的 `base_url` | `http://127.0.0.1:8787/api/v1/` |
+    | [OpenCode](/zh/guides/integrations/opencode) | 手动提供商配置块中的 `options.baseURL` | `http://127.0.0.1:8787/api/v1` |
+    | [Cline](/zh/guides/integrations/cline) | **Base URL** | `http://127.0.0.1:8787/api/v1` |
+    | [Kilo Code](/zh/guides/integrations/kilo-code) | OpenAI 兼容提供商的 **Base URL** | `http://127.0.0.1:8787/api/v1` |
+    | [Aider](/zh/guides/integrations/aider) | `OPENAI_API_BASE` | `http://127.0.0.1:8787/api/v1` |
+    | [Hermes Agent](/zh/guides/integrations/hermes-agent) | `~/.hermes/config.yaml` 中的 `base_url` | `http://127.0.0.1:8787/api/v1` |
+    | [Xcode](/zh/guides/integrations/xcode) | 提供商的 **URL** | `http://127.0.0.1:8787/api` |
+
+    OpenCode 内置的 Venice 提供商和 Kilo Code 的原生 Venice 提供商都不提供 base URL 设置，因此调试时请切换到手动提供商或 OpenAI 兼容提供商。
+
+    在 OpenCode 中，为调试提供商设置一个独立的 ID，例如 `venice-debug`，并使用 `-m venice-debug/<model-id>` 运行。如果你曾通过 `/connect` 保存过密钥，即使配置中设置了 `apiKey`，OpenCode 仍会为 `venice` 提供商 ID 发送该已保存的密钥。
+
+    请使用 `127.0.0.1` 而不是 `localhost`。在某些系统上，`localhost` 会解析为 IPv6 地址 `::1`，而代理并未在该地址上监听。
+
+    <Warning>
+    这不适用于 [Cursor](/zh/guides/integrations/cursor)。Cursor 从它自己的服务器发送自定义模型请求，这些服务器无法访问你机器上的代理。
+    </Warning>
+  </Step>
+
+  <Step title="复现问题">
+    像平常一样使用智能体，直到问题再次出现，然后查看代理的终端输出和日志文件。
+  </Step>
+</Steps>
+
+---
+
+## 读取日志 {#reading-the-logs}
+
+`venice-debug.jsonl` 中的每一行都是一个完整的 JSON 对象，因此你可以用 `jq` 按需切分。
+
+显示最近的请求和响应：
+
+```bash
+tail -n 1 venice-debug.jsonl | jq .
+```
+
+只显示失败或中断的请求：
+
+```bash
+jq -c 'select(.status >= 400 or .error) | {id, status, error, response}' venice-debug.jsonl
+```
+
+检查智能体实际发送的模型、参数和工具：
+
+```bash
+jq -c '{id, model: .request.model, temperature: .request.temperature, max_tokens: .request.max_tokens, tools: [.request.tools[]?.function.name]}' venice-debug.jsonl
+```
+
+重建流式 chat completions 的文本：
+
+```bash
+jq -r 'select(.stream) | .id + " " + ([.response[]? | .choices[0]?.delta?.content // empty] | join(""))' venice-debug.jsonl
+```
+
+统计会话中每个模型的 token 总量：
+
+```bash
+jq -s 'group_by(.request.model) | map({model: .[0].request.model, requests: length, input: (map(.usage.prompt_tokens // .usage.input_tokens // 0) | add), output: (map(.usage.completion_tokens // .usage.output_tokens // 0) | add)})' venice-debug.jsonl
+```
+
+找出最慢的请求：
+
+```bash
+jq -s -c 'sort_by(-.durationMs) | .[:5][] | {id, model: .request.model, durationMs, firstByteMs}' venice-debug.jsonl
+```
+
+---
+
+## 需要关注什么 {#what-to-look-for}
+
+| 智能体中的症状 | 在日志中查看的位置 |
+| --- | --- |
+| 笼统的 "provider error" 或 "request failed" | `status` 和 `response`。Venice 的错误响应体通常会指出无效的参数。请参阅[错误代码](/zh/api-reference/error-codes)。 |
+| `401` "Authentication failed"，但同一个密钥用 curl 可以正常工作 | `requestHeaders.authorization` 的最后四个字符。如果它们与你的密钥不匹配，说明智能体发送的是另一个密钥，通常是它之前保存的旧密钥。 |
+| 每个请求都返回 `404` | `path`。像 `/api/v1/chat/completions/chat/completions` 这样重复的路径说明智能体会自行追加端点，因此 base URL 应止于 `/api/v1`。 |
+| 模型错误或出乎意料 | `request.model`，以及 `responseHeaders` 中的 `x-venice-model-id` 和 `x-venice-model-deprecation-warning` |
+| 从未发生工具调用 | `request.tools` 为空，或者该模型不支持函数调用。在 [`GET /models`](/zh/api-reference/endpoint/models/list) 中检查该模型的 `model_spec.capabilities.supportsFunctionCalling`。 |
+| 上下文或长度错误 | `request.messages` 的大小。智能体每一轮都会重新发送整个对话和每个工具结果，因此提示词 token 增长很快。 |
+| 请求在会话中途开始失败 | 带有 `x-ratelimit-*` 响应头的 `status` `429`（参阅[速率限制](/zh/api-reference/rate-limiting)），或在额度耗尽时带有 `x-venice-balance-*` 响应头的 `402` |
+| 会话花费超出预期 | 上面的按模型统计 token 的查询。留意发往比你所选模型更大的模型的后台请求（例如生成会话标题），或大量带有大型提示词的请求。除非 `include_venice_system_prompt` 为 `false`，否则 Venice 的默认系统提示词也会为每个聊天请求增加提示词 token。 |
+| 智能体感觉很慢 | 对比 `firstByteMs` 与 `durationMs`。首字节时间长表示模型开始回答之前的等待时间，通常源于非常大的提示词或推理模型正在思考。之后的长时间间隔则是生成时间。 |
+
+---
+
+## 无需编写任何代码 {#without-writing-any-code}
+
+如果你更想在浏览器中点击查看流量，可以让 [mitmproxy](https://mitmproxy.org/) 作为反向代理运行在 Venice 前面：
+
+```bash
+mitmweb --mode reverse:https://api.venice.ai --listen-port 8787
+```
+
+用同样的方式将智能体指向 `http://127.0.0.1:8787/api/v1`，然后在 mitmweb 界面中检查每个请求。Node 代理更容易用脚本处理，并会保留一份日志供你之后用 grep 搜索。mitmproxy 更适合交互式地浏览一次会话。
+
+---
+
+## 保护日志隐私 {#keep-the-logs-private}
+
+Venice 在常规推理中不会存储你的提示词或响应（参阅[隐私](/zh/overview/privacy)），但这个日志文件会。它以明文形式包含你的代码、提示词、工具输出和模型响应。
+
+- 在项目之外运行代理，或将 `venice-debug.jsonl` 添加到 `.gitignore`。
+- 调试完成后删除日志。
+- 不要把完整的日志条目粘贴到公开 issue 中。只提取 `status`、`error` 和 `response` 中的相关部分。
+
+对于 [E2EE 模型](/zh/guides/features/tee-e2ee-models)，智能体会在消息内容离开你的机器之前对其进行加密，因此日志中显示的是加密的负载，而不是可读文本。
+
+---
+
+## 收尾 {#finishing-up}
+
+完成后，用 `Ctrl+C` 停止代理，并将智能体的 base URL 改回 `https://api.venice.ai/api/v1`。如果你忘了，只要代理没有运行，智能体就会因连接错误而失败，至少这很容易发现。
+
+感谢阅读！希望下次智能体提示 "something went wrong" 时，你能准确看到究竟哪里出了问题。
