@@ -565,6 +565,10 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | Seedance 2.5 | `seedance-2-5-text-to-video-basic` | Text to video | $0.1685 to $1.1421 | Anonymized |
 | Seedance 2.5 | `seedance-2-5-image-to-video-basic` | Image to video | $0.0722 to $1.1421 | Anonymized |
 | Seedance 2.5 Edit | `seedance-2-5-edit-video-basic` | Video edit | Quote per job | Anonymized |
+| Seedance 2.5 Flash | `seedance-2-5-flash-text-to-video-basic` | Text to video | $0.0879 to $0.19 | Anonymized |
+| Seedance 2.5 Flash | `seedance-2-5-flash-image-to-video-basic` | Image to video | $0.084 to $0.189 | Anonymized |
+| Seedance 2.5 Flash Edit | `seedance-2-5-flash-edit-video-basic` | Video edit | Quote per job | Anonymized |
+| Seedance 2.5 Flash R2V | `seedance-2-5-flash-reference-to-video-basic` | Reference to video | $0.0879 to $0.19 | Anonymized |
 | Seedance 2.5 R2V | `seedance-2-5-reference-to-video-basic` | Reference to video | $0.1685 to $1.1421 | Anonymized |
 | Topaz Video Upscale | `topaz-video-upscale` | Upscale | Priced by source | Anonymized |
 | Veo 3.1 Fast | `veo3.1-fast-text-to-video` | Text to video | $0.11 to $0.385 | Anonymized |
