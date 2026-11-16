@@ -535,13 +535,13 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | MiniMax H3 | `minimax-h3-text-to-video` | Text to video | $0.10 to $0.1627 | Anonymized |
 | MiniMax H3 | `minimax-h3-image-to-video` | Image to video | $0.10 to $0.1627 | Anonymized |
 | MiniMax H3 Enhanced | `minimax-h3-enhanced-text-to-video` | Text to video | $0.10 to $0.1627 | Anonymized |
-| MiniMax H3 Max | `minimax-h3-max-text-to-video` | Text to video | $0.0391 to $0.1247 | Private |
-| MiniMax H3 Max | `minimax-h3-max-image-to-video` | Image to video | $0.0391 to $0.1247 | Private |
-| MiniMax H3 Max Multi-Angle | `minimax-h3-max-multi-angle` | Multi-angle | $0.0391 to $0.1247 | Private |
+| MiniMax H3 Max | `minimax-h3-max-text-to-video` | Text to video | $0.06 to $0.192 | Private |
+| MiniMax H3 Max | `minimax-h3-max-image-to-video` | Image to video | $0.06 to $0.192 | Private |
+| MiniMax H3 Max Multi-Angle | `minimax-h3-max-multi-angle` | Multi-angle | $0.06 to $0.192 | Private |
 | MiniMax H3 Max R2V | `minimax-h3-max-reference-to-video` | Reference to video | $0.06 to $0.192 | Private |
 | MiniMax H3 Max Recast | `minimax-h3-max-recast` | Video edit | Priced by source | Private |
-| MiniMax H3 Max Turbo | `minimax-h3-max-turbo-text-to-video` | Text to video | $0.02 to $0.0623 | Private |
-| MiniMax H3 Max Turbo | `minimax-h3-max-turbo-image-to-video` | Image to video | $0.02 to $0.0623 | Private |
+| MiniMax H3 Max Turbo | `minimax-h3-max-turbo-text-to-video` | Text to video | $0.03 to $0.096 | Private |
+| MiniMax H3 Max Turbo | `minimax-h3-max-turbo-image-to-video` | Image to video | $0.03 to $0.096 | Private |
 | MiniMax H3 R2V | `minimax-h3-reference-to-video` | Reference to video | $0.10 to $0.1627 | Anonymized |
 | MiniMax H3 R2V Enhanced | `minimax-h3-enhanced-reference-to-video` | Reference to video | $0.10 to $0.1627 | Anonymized |
 | Ovi | `ovi-image-to-video` | Image to video | $0.044 | Private |
