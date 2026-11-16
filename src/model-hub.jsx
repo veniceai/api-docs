@@ -843,7 +843,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     input: { label: 'Input price, low to high', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.input) || 1e9) - ((b.display.pricing && b.display.pricing.input) || 1e9) },
     output: { label: 'Output price, low to high', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.output) || 1e9) - ((b.display.pricing && b.display.pricing.output) || 1e9) }
   };
-  const defaultSort = modality => (modality === 'all' ? 'newest' : 'name');
+  const DEFAULT_SORT = 'newest';
 
   const FilterGroup = ({ title, icon, children, defaultOpen = true, role }) => {
     const [open, setOpen] = useState(defaultOpen);
@@ -1517,7 +1517,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const { catalog, error } = useCatalog();
     const now = useNow();
     const startScope = initialScope(initialModality, initialTask);
-    const startSort = defaultSort(initialModality);
     // A link's state applies on the first render, so a shared view opens as
     // it was.
     const [linked] = useState(() => {
@@ -1528,7 +1527,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       return {
         scope,
         query: params.get('q') || '',
-        sort: params.get('sort') && SORTS[params.get('sort')] ? params.get('sort') : startSort,
+        sort: params.get('sort') && SORTS[params.get('sort')] ? params.get('sort') : DEFAULT_SORT,
         // Links leave the view out when it is the modality's default.
         view: VIEWS.includes(params.get('view')) ? params.get('view') : defaultView(scope),
         filters: { ...EMPTY_FILTERS, ...filtersFromParams(params) }
@@ -1565,7 +1564,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       writeParams({
         m: scope === startScope ? null : scope || 'all',
         q: query || null,
-        sort: sort !== startSort ? sort : null,
+        sort: sort !== DEFAULT_SORT ? sort : null,
         view: view !== defaultView(modality) ? view : null,
         ...filtersToParams(filters)
       });
@@ -1615,7 +1614,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       setScope(key);
       setFilters(prev => ({ ...EMPTY_FILTERS, providers: [], privacy: prev.privacy, flags: prev.flags }));
       setView(defaultView(key));
-      if (key !== 'text' && !['newest', 'name', 'price'].includes(sort)) setSort(startSort);
+      if (key !== 'text' && !['newest', 'name', 'price'].includes(sort)) setSort(DEFAULT_SORT);
     };
 
     const providers = catalog ? catalog.providers : {};
@@ -1661,7 +1660,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         const offer = listPrice(display, filters);
         list.push({ family, models, display, offer, price: offer.value });
       }
-      const sorter = SORTS[sort] || SORTS[startSort];
+      const sorter = SORTS[sort] || SORTS[DEFAULT_SORT];
       return list.sort(sorter.fn);
     }, [catalog, searched, filters, sort, now]);
 
