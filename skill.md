@@ -77,7 +77,7 @@ catalog moves; the capability flags on each model are the authoritative answer.
 
 | Surface | Endpoints |
 | --- | --- |
-| Chat / text | `POST /chat/completions`; `POST /responses` (beta, see https://docs.venice.ai/guides/features/responses-api) |
+| Chat / text | `POST /chat/completions`; `POST /responses` (see https://docs.venice.ai/guides/features/responses-api) |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`; OpenAI-style `POST /images/generations` |
 | Video (async) | `POST /video/quote`, `/video/queue`, `/video/retrieve` (JSON body `{model, queue_id}`), `/video/complete` |
 | Audio | `POST /audio/speech` (TTS), `POST /audio/voices` (voice cloning), `POST /audio/transcriptions` (STT) |
@@ -96,7 +96,10 @@ For bounded judgments your code acts on directly (yes/no, pick one label,
 score on a rubric), use `POST /decisions` with `jev-latest` or `clef-api` instead of asking a
 chat model for JSON. Send a `state` and a `questions` map with at least one
 entry, plus an optional `images` array (up to 4 PNG/JPEG `data:` URIs or
-`{content_type, base64}` objects; remote URLs are not fetched); each question has a `type` of `noul`, `choice`, or `score`, and each
+`{content_type, base64}` objects; remote URLs are not fetched). Jev also
+accepts an `assets` map of named `{data_base64, format}` images referenced from
+`state`, `instructions`, or `criteria`; other decision models reject `assets`
+with 400. Each question has a `type` of `noul`, `choice`, or `score`, and each
 answer comes back typed with probabilities. Use `/chat/completions` when you
 need prose, multi-turn conversation, or tool calling. The Decisions API is in
 beta. See https://docs.venice.ai/guides/features/decisions.
@@ -199,7 +202,7 @@ ln -s ~/src/venice-skills/skills ~/.claude/skills/venice
 | `venice-image-generate`, `venice-image-edit` | generation, edit, upscale |
 | `venice-video` | video generation, editing, upscaling, and async job lifecycle |
 | `venice-audio-speech`, `venice-audio-music`, `venice-audio-transcription` | TTS, voice cloning, music, STT |
-| `venice-embeddings`, `venice-characters`, `venice-responses` | embeddings, personas, the beta Responses API |
+| `venice-embeddings`, `venice-characters`, `venice-responses` | embeddings, personas, the Responses API |
 | `venice-augment` | document parsing and web search |
 | `venice-x402`, `venice-crypto-rpc` | wallet credits, JSON-RPC proxy |
 | `venice-billing`, `venice-api-keys` | balance, usage history, key management |
