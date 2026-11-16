@@ -871,6 +871,14 @@ function privacySummary(tiers) {
   return 'Anonymized access without your identity';
 }
 
+// Only a plain https address becomes a link, since it lands in MDX; the
+// link comes escaped, as { md }.
+function weightsLink(source) {
+  const { safeUrl, weightsName } = hub().helpers;
+  const href = safeUrl(source);
+  return href && /^https:\/\/[\w.-]+(\/[\w.~%@+-]+)*\/?$/.test(href) ? { md: `[${mdxText(weightsName(href))}](${href})` } : null;
+}
+
 function privacySentence(tiers) {
   if (tiers.includes('e2ee') && tiers.length > 1) return 'Private and end-to-end encrypted variants are available.';
   const { PRIVACY } = hub().helpers;
@@ -1029,7 +1037,7 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   const { statusText } = hub().helpers;
   const specs = [['Provider', f.provider], ['Released', primary.created ? hub().helpers.fmtDate(primary.created) : null], ['Privacy', tierLabels],
     ['Status', perVariant(variants, statusText)],
-    ['Open weights', family.openWeights ? 'Yes' : null], ['License', primary.license]];
+    ['Open weights', family.openWeights ? weightsLink(primary.source) || 'Yes' : null], ['License', primary.license]];
   if (primary.text) {
     const t = primary.text;
     specs.push(['Context window', t.context ? `${fmtTokens(t.context)} tokens` : null], ['Max output', t.maxOutput ? `${fmtTokens(t.maxOutput)} tokens` : null],
@@ -1049,7 +1057,7 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   if (primary.embedding) specs.push(['Dimensions', primary.embedding.dimensions?.toLocaleString('en-US')], ['Max input', primary.embedding.maxInputTokens ? `${fmtTokens(primary.embedding.maxInputTokens)} tokens` : null]);
   const specRows = specs.filter(([, value]) => value != null && value !== '');
   if (specRows.length) {
-    lines.push('', `### ${name} specifications`, '', '| Spec | Value |', '|---|---|', ...specRows.map(([label, value]) => `| ${label} | ${mdxText(value)} |`));
+    lines.push('', `### ${name} specifications`, '', '| Spec | Value |', '|---|---|', ...specRows.map(([label, value]) => `| ${label} | ${value.md || mdxText(value)} |`));
   }
 
   const recommended = (primary.endpoints || []).find(e => e.recommended) || (primary.endpoints || [])[0];
