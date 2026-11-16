@@ -96,7 +96,10 @@ For bounded judgments your code acts on directly (yes/no, pick one label,
 score on a rubric), use `POST /decisions` with `jev-latest` or `clef-api` instead of asking a
 chat model for JSON. Send a `state` and a `questions` map with at least one
 entry, plus an optional `images` array (up to 4 PNG/JPEG `data:` URIs or
-`{content_type, base64}` objects; remote URLs are not fetched); each question has a `type` of `noul`, `choice`, or `score`, and each
+`{content_type, base64}` objects; remote URLs are not fetched). Jev also
+accepts an `assets` map of named `{data_base64, format}` images referenced from
+`state`, `instructions`, or `criteria`; other decision models reject `assets`
+with 400. Each question has a `type` of `noul`, `choice`, or `score`, and each
 answer comes back typed with probabilities. Use `/chat/completions` when you
 need prose, multi-turn conversation, or tool calling. The Decisions API is in
 beta. See https://docs.venice.ai/guides/features/decisions.
