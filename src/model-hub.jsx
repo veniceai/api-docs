@@ -126,10 +126,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
   const MODE_SHORT = { t2v: 'T2V', i2v: 'I2V', r2v: 'R2V', flf: 'Keyframes', v2v: 'Edit', motion: 'Motion', transition: 'Transition', 'multi-angle': 'Multi-angle', upscale: 'Upscale' };
   const PRIVACY = {
-    e2ee: { label: 'E2EE', long: 'End-to-end encrypted', icon: 'lock', desc: 'Prompts are encrypted on your device and only decrypted inside an attested hardware enclave. Neither Venice nor the GPU provider can read them.' },
-    tee: { label: 'TEE', long: 'Trusted execution', icon: 'shield', desc: 'Runs inside a hardware-secured enclave with cryptographic attestation. No prompt data is stored or accessible outside the enclave.' },
-    private: { label: 'Private', long: 'Zero data retention', icon: 'eyeOff', desc: 'Zero data retention, enforced by contract. Prompts and outputs are processed for inference only and not retained after the request completes.' },
-    anonymized: { label: 'Anonymized', long: 'Anonymized proxy', icon: 'mask', desc: 'Proxied to the upstream provider without your identity. The provider may retain prompt data; use a Private, TEE or E2EE model for sensitive work.' }
+    e2ee: { label: 'E2EE', icon: 'lock', desc: "This model supports end-to-end encryption (E2EE) and runs in a Trusted Execution Environment (TEE). Your prompt is encrypted on your client and decrypted on the GPU within the TEE. The response is then encrypted and sent back to your client for decryption. Venice's system prompt and web search are disabled to preserve end-to-end encryption. Attestation evidence is available for independent verification." },
+    tee: { label: 'TEE', icon: 'shield', desc: 'This model runs in a Trusted Execution Environment (TEE). Attestation evidence is available for independent verification.' },
+    private: { label: 'Private', icon: 'eyeOff', desc: 'This model is private and no prompt data is stored in any capacity.' },
+    anonymized: { label: 'Anonymized', icon: 'mask', desc: 'The provider of this model may retain prompt data (though it is anonymized by Venice). For sensitive content, use a private model.' }
   };
   const PRIVACY_ORDER = ['e2ee', 'tee', 'private', 'anonymized'];
   const TEXT_CAPS = [
@@ -494,13 +494,19 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const PrivacyBadge = ({ tier }) => {
     const meta = PRIVACY[tier];
     if (!meta) return null;
-    return <span className={cls('vx-badge', `vx-privacy-${tier}`)} title={`${meta.long}. ${meta.desc}`} data-tip-label={meta.long} data-tip={meta.desc}>{meta.label}</span>;
+    return <span className={cls('vx-badge', `vx-privacy-${tier}`)} title={meta.desc}>{meta.label}</span>;
   };
 
   const PrivacyStack = ({ tiers }) => (
     <span className="vx-badges">
       {privacyTiers(tiers).map(tier => <PrivacyBadge key={tier} tier={tier} />)}
     </span>
+  );
+
+  // HoverTips shows the text on hover or keyboard focus, and, for an info
+  // icon, on tap.
+  const InfoTip = ({ text, size = 13 }) => (
+    <span className="vx-info" title={text} tabIndex={0} role="img" aria-label={text}><Icon name="info" size={size} /></span>
   );
 
   const Tag = ({ tone, children, title }) => (
@@ -575,9 +581,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </span>
   );
 
-  const Stat = ({ label, value, sub, last }) => (
+  const Stat = ({ label, value, sub, tip, last }) => (
     <div className={cls('vx-stat', last && 'is-last')}>
-      <div className="vx-stat-label">{label}</div>
+      <div className="vx-stat-label">{label}{tip ? <InfoTip text={tip} size={11} /> : null}</div>
       <div className="vx-stat-value">{value}</div>
       {sub ? <div className="vx-stat-sub">{sub}</div> : null}
     </div>
@@ -941,7 +947,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </FilterGroup>
 
           <FilterGroup title="Privacy" icon="shield">
-            {PRIVACY_ORDER.map(tier => option('privacy', tier, PRIVACY[tier].long, PRIVACY[tier].desc))}
+            {PRIVACY_ORDER.map(tier => option('privacy', tier, PRIVACY[tier].label, PRIVACY[tier].desc))}
           </FilterGroup>
 
           {modality === 'text' ? (
@@ -1081,20 +1087,35 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         show(e.target);
       };
       const onKey = e => { if (e.key === 'Escape') hide(); };
+      // Touch has no hover, so a tap on an info icon shows its tip, and the
+      // next tap hides it. The tip opens on click, after the tap moves focus.
+      let touched = null;
+      const onDown = e => {
+        touched = e.pointerType === 'touch' ? { open: target } : null;
+        hide();
+      };
+      const onClick = e => {
+        const info = touched && e.target.closest ? e.target.closest('.vx-info') : null;
+        if (info && root.contains(info) && info !== touched.open) show(info);
+        touched = null;
+      };
+      const onLeave = e => { if (e.pointerType !== 'touch') hide(); };
       root.addEventListener('pointermove', onMove);
-      root.addEventListener('pointerleave', hide);
+      root.addEventListener('pointerleave', onLeave);
       root.addEventListener('focusin', onFocus);
       root.addEventListener('focusout', hide);
-      document.addEventListener('pointerdown', hide, true);
+      root.addEventListener('click', onClick);
+      document.addEventListener('pointerdown', onDown, true);
       document.addEventListener('keydown', onKey);
       window.addEventListener('scroll', hide, true);
       return () => {
         cancelAnimationFrame(frame);
         root.removeEventListener('pointermove', onMove);
-        root.removeEventListener('pointerleave', hide);
+        root.removeEventListener('pointerleave', onLeave);
         root.removeEventListener('focusin', onFocus);
         root.removeEventListener('focusout', hide);
-        document.removeEventListener('pointerdown', hide, true);
+        root.removeEventListener('click', onClick);
+        document.removeEventListener('pointerdown', onDown, true);
         document.removeEventListener('keydown', onKey);
         window.removeEventListener('scroll', hide, true);
         clearTimeout(timer);
@@ -1929,7 +1950,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   const SECTION_ICONS = {
     overview: 'info', pricing: 'dollar', examples: 'image', voices: 'volume', specs: 'sliders',
-    capabilities: 'sparkles', api: 'code', privacy: 'shield', variants: 'layers', related: 'link'
+    capabilities: 'sparkles', api: 'code', variants: 'layers', related: 'link'
   };
   const pageSections = (model, { variants = 1, related = false, examples = false, capabilities = false } = {}) => {
     const list = [['overview', 'Overview'], ['pricing', 'Pricing']];
@@ -1938,7 +1959,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     list.push(['specs', 'Specs']);
     if (capabilities) list.push(['capabilities', 'Capabilities']);
     list.push(['api', 'API']);
-    if (PRIVACY_TIERS.some(([tier]) => tier === model.privacy)) list.push(['privacy', 'Privacy']);
     if (variants > 1) list.push(['variants', 'Variants']);
     if (related) list.push(['related', 'Related models']);
     return list;
@@ -2006,7 +2026,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           p.cacheRead != null
             ? { label: 'Cached input', value: usd(p.cacheRead), sub: p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens' }
             : { label: 'Cached input', value: '—', sub: 'no prompt caching' },
-          { label: 'Modalities', value: ['Text', caps.vision && 'image', caps.videoInput && 'video', caps.audioInput && 'audio'].filter(Boolean).join(', '), sub: 'out: text' }
+          { label: 'Modalities', value: ['Text', caps.vision && 'image', caps.videoInput && 'video', caps.audioInput && 'audio'].filter(Boolean).join(', '), sub: 'out: text' },
+          PRIVACY[model.privacy] ? { label: 'Privacy', value: PRIVACY[model.privacy].label, tip: PRIVACY[model.privacy].desc } : null
         ]} />
       );
     }
@@ -2260,6 +2281,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       editor ? ['Edit model ID', <code>{editor.id}</code>] : null,
       endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
       ...modalitySpecs(model),
+      PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
       ['Added', fmtDate(model.created)],
       model.openWeights ? ['Weights', `Open${model.license ? ` · ${model.license}` : ''}`] : null
     ].filter(Boolean);
@@ -2280,40 +2302,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       return `Deprecated${date ? `, retiring ${date}` : ''}${d.replacement ? `; use ${d.replacement}` : ''}`;
     }
     return model.beta ? 'Beta' : 'Stable';
-  };
-  // The maker is the upstream for proprietary models; an open-weight model's
-  // host isn't known, so it isn't named.
-  const upstreamName = (model, provider) => (!model.openWeights && provider ? provider.name : null);
-
-  // Venice's four privacy modes, weakest first. Each builds on the one before,
-  // so lower tiers are included in the current one.
-  const PRIVACY_TIERS = [['anonymized', 'Anonymized'], ['private', 'Private'], ['tee', 'TEE'], ['e2ee', 'End-to-end encrypted']];
-  const tierText = (tier, by) => ({
-    anonymized: `Venice hides your identity and stores no prompts. ${by || 'The provider'} still sees the content.`,
-    private: "Zero data retention, enforced by contract. Prompts and outputs aren't stored.",
-    tee: 'Hardware-isolated inference with remote attestation.',
-    e2ee: 'Your client encrypts the prompt, and only the verified enclave decrypts it.'
-  })[tier];
-
-  const PrivacyTiers = ({ model, models, provider, onSelect }) => {
-    const rank = PRIVACY_TIERS.findIndex(([tier]) => tier === model.privacy);
-    return (
-      <div className="vx-tiers">
-        {PRIVACY_TIERS.map(([tier, label], i) => {
-          const other = i > rank ? models.find(m => m.id !== model.id && offersTier(m, tier)) : null;
-          return (
-            <div key={tier} className={cls('vx-tier', i === rank && 'is-current')} aria-current={i === rank ? 'true' : undefined}>
-              <div className="vx-tier-num">Tier {i + 1}{i === rank ? ' · this model' : ''}</div>
-              <div className="vx-tier-name">{label}</div>
-              {i === rank ? <p className="vx-tier-text">{tierText(tier, upstreamName(model, provider))}</p>
-                : i < rank ? <p className="vx-tier-text">Included</p>
-                  : other ? <button type="button" className="vx-tier-link" onClick={() => onSelect(other.id)}>Available as <code>{other.id}</code></button>
-                    : <p className="vx-tier-text">Not available</p>}
-            </div>
-          );
-        })}
-      </div>
-    );
   };
 
   // One card per billed unit, four a row, on the same hairline gaps as the
@@ -2909,12 +2897,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               {model.privacy === 'e2ee' ? <p className="vx-text">E2EE requests encrypt the prompt on your device and send attestation headers; follow the <a href="/guides/features/tee-e2ee-models">TEE and E2EE guide</a>. The samples show the plain request shape.</p> : null}
               <CodeTabs samples={codeSamples(model, activeEndpoint && activeEndpoint.id)} />
             </Section>
-
-            {has('privacy') ? (
-              <Section id="privacy" title="Privacy">
-                <PrivacyTiers model={model} models={models} provider={provider} onSelect={selectVariant} />
-              </Section>
-            ) : null}
 
             {has('variants') ? (
               <Section id="variants" title="Variants">
