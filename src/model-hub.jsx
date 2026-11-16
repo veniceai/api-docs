@@ -503,6 +503,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </span>
   );
 
+  // HoverTips shows the text on hover or keyboard focus, and, for an info
+  // icon, on tap.
+  const InfoTip = ({ text, size = 13 }) => (
+    <span className="vx-info" title={text} tabIndex={0} role="img" aria-label={text}><Icon name="info" size={size} /></span>
+  );
+
   const Tag = ({ tone, children, title }) => (
     <span className={cls('vx-badge', tone && `vx-badge-${tone}`)} title={title}>{children}</span>
   );
@@ -1081,20 +1087,35 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         show(e.target);
       };
       const onKey = e => { if (e.key === 'Escape') hide(); };
+      // Touch has no hover, so a tap on an info icon shows its tip, and the
+      // next tap hides it. The tip opens on click, after the tap moves focus.
+      let touched = null;
+      const onDown = e => {
+        touched = e.pointerType === 'touch' ? { open: target } : null;
+        hide();
+      };
+      const onClick = e => {
+        const info = touched && e.target.closest ? e.target.closest('.vx-info') : null;
+        if (info && root.contains(info) && info !== touched.open) show(info);
+        touched = null;
+      };
+      const onLeave = e => { if (e.pointerType !== 'touch') hide(); };
       root.addEventListener('pointermove', onMove);
-      root.addEventListener('pointerleave', hide);
+      root.addEventListener('pointerleave', onLeave);
       root.addEventListener('focusin', onFocus);
       root.addEventListener('focusout', hide);
-      document.addEventListener('pointerdown', hide, true);
+      root.addEventListener('click', onClick);
+      document.addEventListener('pointerdown', onDown, true);
       document.addEventListener('keydown', onKey);
       window.addEventListener('scroll', hide, true);
       return () => {
         cancelAnimationFrame(frame);
         root.removeEventListener('pointermove', onMove);
-        root.removeEventListener('pointerleave', hide);
+        root.removeEventListener('pointerleave', onLeave);
         root.removeEventListener('focusin', onFocus);
         root.removeEventListener('focusout', hide);
-        document.removeEventListener('pointerdown', hide, true);
+        root.removeEventListener('click', onClick);
+        document.removeEventListener('pointerdown', onDown, true);
         document.removeEventListener('keydown', onKey);
         window.removeEventListener('scroll', hide, true);
         clearTimeout(timer);
@@ -2260,6 +2281,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       editor ? ['Edit model ID', <code>{editor.id}</code>] : null,
       endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
       ...modalitySpecs(model),
+      PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
       ['Added', fmtDate(model.created)],
       model.openWeights ? ['Weights', `Open${model.license ? ` · ${model.license}` : ''}`] : null
     ].filter(Boolean);
