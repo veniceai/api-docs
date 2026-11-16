@@ -581,9 +581,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </span>
   );
 
-  const Stat = ({ label, value, sub, last }) => (
+  const Stat = ({ label, value, sub, tip, last }) => (
     <div className={cls('vx-stat', last && 'is-last')}>
-      <div className="vx-stat-label">{label}</div>
+      <div className="vx-stat-label">{label}{tip ? <InfoTip text={tip} size={11} /> : null}</div>
       <div className="vx-stat-value">{value}</div>
       {sub ? <div className="vx-stat-sub">{sub}</div> : null}
     </div>
@@ -2026,7 +2026,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           p.cacheRead != null
             ? { label: 'Cached input', value: usd(p.cacheRead), sub: p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens' }
             : { label: 'Cached input', value: '—', sub: 'no prompt caching' },
-          { label: 'Modalities', value: ['Text', caps.vision && 'image', caps.videoInput && 'video', caps.audioInput && 'audio'].filter(Boolean).join(', '), sub: 'out: text' }
+          { label: 'Modalities', value: ['Text', caps.vision && 'image', caps.videoInput && 'video', caps.audioInput && 'audio'].filter(Boolean).join(', '), sub: 'out: text' },
+          PRIVACY[model.privacy] ? { label: 'Privacy', value: PRIVACY[model.privacy].label, tip: PRIVACY[model.privacy].desc } : null
         ]} />
       );
     }
