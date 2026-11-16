@@ -1107,6 +1107,7 @@ function relatedSummary(slugs, familiesBySlug, modelsById) {
     const primary = modelsById[family.primary];
     return compact({
       slug,
+      primary: family.primary,
       name: family.name,
       provider: family.provider,
       modality: family.modality,

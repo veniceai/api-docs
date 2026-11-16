@@ -843,7 +843,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     input: { label: 'Input price, low to high', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.input) || 1e9) - ((b.display.pricing && b.display.pricing.input) || 1e9) },
     output: { label: 'Output price, low to high', dir: 'ascending', fn: (a, b) => ((a.display.pricing && a.display.pricing.output) || 1e9) - ((b.display.pricing && b.display.pricing.output) || 1e9) }
   };
-  const defaultSort = modality => (modality === 'all' ? 'newest' : 'name');
+  const DEFAULT_SORT = 'newest';
 
   const FilterGroup = ({ title, icon, children, defaultOpen = true, role }) => {
     const [open, setOpen] = useState(defaultOpen);
@@ -1517,7 +1517,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const { catalog, error } = useCatalog();
     const now = useNow();
     const startScope = initialScope(initialModality, initialTask);
-    const startSort = defaultSort(initialModality);
     // A link's state applies on the first render, so a shared view opens as
     // it was.
     const [linked] = useState(() => {
@@ -1528,7 +1527,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       return {
         scope,
         query: params.get('q') || '',
-        sort: params.get('sort') && SORTS[params.get('sort')] ? params.get('sort') : startSort,
+        sort: params.get('sort') && SORTS[params.get('sort')] ? params.get('sort') : DEFAULT_SORT,
         // Links leave the view out when it is the modality's default.
         view: VIEWS.includes(params.get('view')) ? params.get('view') : defaultView(scope),
         filters: { ...EMPTY_FILTERS, ...filtersFromParams(params) }
@@ -1565,7 +1564,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       writeParams({
         m: scope === startScope ? null : scope || 'all',
         q: query || null,
-        sort: sort !== startSort ? sort : null,
+        sort: sort !== DEFAULT_SORT ? sort : null,
         view: view !== defaultView(modality) ? view : null,
         ...filtersToParams(filters)
       });
@@ -1615,7 +1614,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       setScope(key);
       setFilters(prev => ({ ...EMPTY_FILTERS, providers: [], privacy: prev.privacy, flags: prev.flags }));
       setView(defaultView(key));
-      if (key !== 'text' && !['newest', 'name', 'price'].includes(sort)) setSort(startSort);
+      if (key !== 'text' && !['newest', 'name', 'price'].includes(sort)) setSort(DEFAULT_SORT);
     };
 
     const providers = catalog ? catalog.providers : {};
@@ -1661,7 +1660,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         const offer = listPrice(display, filters);
         list.push({ family, models, display, offer, price: offer.value });
       }
-      const sorter = SORTS[sort] || SORTS[startSort];
+      const sorter = SORTS[sort] || SORTS[DEFAULT_SORT];
       return list.sort(sorter.fn);
     }, [catalog, searched, filters, sort, now]);
 
@@ -1721,7 +1720,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                 {query ? <button type="button" className="vx-icon-btn" onClick={() => setQuery('')} aria-label="Clear search"><Icon name="x" size={14} /></button> : <kbd aria-hidden="true">/</kbd>}
               </div>
               <select className="vx-select" value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
-                {['name', 'newest', 'price', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{SORTS[key].label}</option>)}
+                {['newest', 'name', 'price', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{SORTS[key].label}</option>)}
               </select>
               <Segmented ariaLabel="View" value={shownView} onChange={setView}
                 options={[{ value: 'list', label: 'List' }, { value: 'table', label: 'Table' },
@@ -2756,7 +2755,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  const ModelPage = ({ data }) => {
+  const ModelPage = ({ data }) => (data.family.task === 'chat' ? <ModelPageNext data={data} /> : <ModelPageClassic data={data} />);
+
+  const ModelPageClassic = ({ data }) => {
     const { family, models, related, providers } = data;
     // ?v= names the variant. It's read on the first render, so the primary
     // never flashes, and again on Back and Forward.
@@ -2925,6 +2926,505 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
+  /* ------------------------------------------------------------ model page, next */
+
+  const CAP_GUIDES = {
+    tools: '/guides/features/function-calling', structured: '/guides/features/structured-responses',
+    reasoning: '/guides/features/reasoning-models', vision: '/guides/features/vision', caching: '/guides/features/prompt-caching'
+  };
+
+  // What a capability takes in a request, or what it adds.
+  const capDetail = (model, key) => {
+    const t = model.text || {};
+    const caps = t.caps || {};
+    const r = t.reasoning;
+    if (key === 'tools') return <code>tools</code>;
+    if (key === 'structured') return <code>response_format</code>;
+    if (key === 'reasoning') return r && r.effort && r.effort.length ? <><code>reasoning_effort</code> {r.effort.join(' · ')}</> : 'Always on';
+    if (key === 'vision') return caps.maxImages ? `Up to ${caps.maxImages} images` : 'Images in messages';
+    if (key === 'videoInput') return caps.maxVideos ? `Up to ${caps.maxVideos} videos` : 'Video in messages';
+    if (key === 'audioInput') return 'Audio in messages';
+    if (key === 'webSearch') return <code>enable_web_search</code>;
+    if (key === 'xSearch') return <code>enable_x_search</code>;
+    if (key === 'caching') return `Reads at ${usd(model.pricing && model.pricing.cacheRead)}`;
+    if (key === 'logprobs') return <code>logprobs</code>;
+    return 'Tuned for software work';
+  };
+
+  // Everything an agent needs to call the model, as Markdown.
+  const agentBrief = (family, model, sample) => {
+    const t = model.text || {};
+    const p = model.pricing || {};
+    const r = t.reasoning;
+    const endpoint = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
+    const supports = TEXT_CAPS.filter(c => c.key !== 'effort' && hasCap(model, c.key)).map(c => c.label.toLowerCase());
+    return [
+      `# ${family.name} on the Venice API`,
+      '',
+      `- Model ID: \`${model.id}\``,
+      endpoint ? `- Endpoint: \`${endpoint.method} ${API}${endpoint.path}\`, OpenAI-compatible with base URL ${API}` : null,
+      '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
+      p.input != null ? `- Price per 1M tokens: ${usd(p.input)} input, ${usd(p.output)} output${p.cacheRead != null ? `, ${usd(p.cacheRead)} cached input` : ''}` : null,
+      t.context ? `- Context: ${count(t.context)} tokens${t.maxOutput ? `, up to ${count(t.maxOutput)} out` : ''}` : null,
+      r && r.effort && r.effort.length ? `- Reasoning: \`reasoning_effort\` ${r.effort.join(' | ')}${r.defaultEffort ? `, default ${r.defaultEffort}` : ''}` : null,
+      supports.length ? `- Supports: ${listText(supports)}` : null,
+      PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      `- Docs: https://docs.venice.ai/models/${family.slug}`,
+      '',
+      '```bash',
+      sample,
+      '```'
+    ].filter(line => line != null).join('\n');
+  };
+
+  const CodePanel = ({ model, endpoint, setEndpointId }) => {
+    const [lang, setLang] = useState('curl');
+    const list = (model.endpoints || []).filter(e => e.supported !== false);
+    const samples = codeSamples(model, endpoint && endpoint.id);
+    const langs = [['curl', 'cURL'], ['python', 'Python'], ['typescript', 'TypeScript']];
+    return (
+      <div className="vxn-code">
+        <div className="vxn-code-head">
+          <div className="vxn-tabs" role="tablist" aria-label="Language">
+            {langs.map(([key, label]) => (
+              <button key={key} type="button" role="tab" aria-selected={lang === key} className={cls('vxn-tab', lang === key && 'is-active')} onClick={() => setLang(key)}>{label}</button>
+            ))}
+          </div>
+          {list.length > 1 ? (
+            <div className="vxn-switch" role="radiogroup" aria-label="Endpoint">
+              {list.map(e => (
+                <button key={e.id} type="button" role="radio" aria-checked={endpoint && e.id === endpoint.id} className={cls(endpoint && e.id === endpoint.id && 'is-active')} onClick={() => setEndpointId(e.id)}>{e.name}</button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <pre className="vxn-code-body"><code>{samples[lang]}</code></pre>
+        <div className="vxn-code-foot">
+          <span><span className="vx-muted">Base URL</span> <code>{API}</code></span>
+          <CopyButton text={samples[lang]} label="Copy" small />
+        </div>
+      </div>
+    );
+  };
+
+  // One place for everything an agent can take from the page.
+  const AgentMenu = ({ brief, slug }) => {
+    const [open, setOpen] = useState(false);
+    const [done, setDone] = useState(false);
+    const ref = useRef(null);
+    useEffect(() => {
+      if (!open) return undefined;
+      const close = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+      const key = e => { if (e.key === 'Escape') setOpen(false); };
+      document.addEventListener('pointerdown', close);
+      document.addEventListener('keydown', key);
+      return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', key); };
+    }, [open]);
+    const copy = () => copyText(brief).then(() => { setDone(true); setTimeout(() => setDone(false), 1600); });
+    const ask = encodeURIComponent(`Read https://docs.venice.ai/models/${slug}.md and help me call this model through the Venice API.`);
+    return (
+      <div className="vxn-menu" ref={ref}>
+        <button type="button" className="vxn-menu-main" onClick={copy}><Icon name={done ? 'check' : 'copy'} size={14} /><span aria-live="polite">{done ? 'Copied' : 'Copy for agent'}</span></button>
+        <button type="button" className="vxn-menu-toggle" aria-label="More for agents" aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(!open)}><Icon name="chevronDown" size={14} /></button>
+        {open ? (
+          <div className="vxn-menu-list" role="menu">
+            <button type="button" role="menuitem" onClick={() => { copy(); setOpen(false); }}><Icon name="copy" size={15} /><span><strong>Copy for agent</strong><span>ID, endpoint, limits and a request, as Markdown</span></span></button>
+            <a role="menuitem" href={`/models/${slug}.md`}><Icon name="book" size={15} /><span><strong>View as Markdown</strong><span>This page as plain text</span></span></a>
+            <a role="menuitem" href={`https://chatgpt.com/?q=${ask}`} target="_blank" rel="noopener noreferrer"><Icon name="external" size={15} /><span><strong>Open in ChatGPT</strong><span>Ask questions about this model</span></span></a>
+            <a role="menuitem" href={`https://claude.ai/new?q=${ask}`} target="_blank" rel="noopener noreferrer"><Icon name="external" size={15} /><span><strong>Open in Claude</strong><span>Ask questions about this model</span></span></a>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  // Where the model falls among every text model on price and limits, each
+  // drawn so that further right is better.
+  const STANDING = [
+    { key: 'price', label: 'Price', better: 'cheaper', lowerIsBetter: true, format: v => `$${v.toFixed(v >= 0.1 ? 2 : 3)}`, tip: 'Blended price per 1M tokens, at three input tokens for each output token.' },
+    { key: 'context', label: 'Context window', better: 'larger', lowerIsBetter: false, format: v => tokens(v) },
+    { key: 'maxOutput', label: 'Max output', better: 'larger', lowerIsBetter: false, format: v => tokens(v) }
+  ];
+  const standingValues = model => {
+    const p = model.pricing || {};
+    const t = model.text || {};
+    return {
+      price: p.input != null && p.output != null ? (3 * p.input + p.output) / 4 : null,
+      context: t.context,
+      maxOutput: t.maxOutput
+    };
+  };
+  const Standing = ({ model, catalog }) => {
+    const others = useMemo(() => (catalog ? catalog.families
+      .filter(f => f.task === 'chat' && !f.deprecated && f.primary !== model.id)
+      .map(f => ({ slug: f.slug, name: f.name, values: standingValues(catalog.models[f.primary] || {}) })) : []), [catalog, model.id]);
+    const mine = standingValues(model);
+    const rows = STANDING.filter(m => mine[m.key] != null);
+    const hash = text => [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+    return (
+      <div className="vxn-standing">
+        <div className="vxn-standing-head">
+          <span className="vxn-price-label">How it compares</span>
+          <span className="vx-muted">{catalog ? `among ${others.length + 1} text models` : 'among text models'}</span>
+        </div>
+        {rows.map(metric => {
+          const values = others.map(o => o.values[metric.key]).filter(v => v != null && v > 0);
+          const all = values.concat([mine[metric.key]]);
+          const lo = Math.log(Math.min(...all));
+          const hi = Math.log(Math.max(...all));
+          const at = v => {
+            const x = hi > lo ? (Math.log(v) - lo) / (hi - lo) : 0.5;
+            return (metric.lowerIsBetter ? 1 - x : x) * 100;
+          };
+          const worse = values.filter(v => (metric.lowerIsBetter ? v > mine[metric.key] : v < mine[metric.key])).length;
+          return (
+            <div key={metric.key} className="vxn-standing-row">
+              <div className="vxn-standing-line">
+                <span className="vxn-standing-name">{metric.label}{metric.tip ? <InfoTip text={metric.tip} size={11} /> : null}</span>
+                {values.length ? <span className="vx-muted">{metric.better} than {Math.round((worse / values.length) * 100)}%</span> : null}
+                <span className="vxn-standing-value">{metric.format(mine[metric.key])}</span>
+              </div>
+              <div className="vxn-strip">
+                {others.filter(o => o.values[metric.key] != null && o.values[metric.key] > 0).map(o => (
+                  <a key={o.slug} className="vxn-strip-dot" href={`/models/${o.slug}`} title={`${o.name}: ${metric.format(o.values[metric.key])}`}
+                    style={{ left: `${at(o.values[metric.key])}%`, top: `${6 + (hash(o.slug + metric.key) % 3) * 5}px` }} />
+                ))}
+                <span className="vxn-strip-mine" style={{ left: `${at(mine[metric.key])}%` }} />
+              </div>
+            </div>
+          );
+        })}
+        <p className="vxn-caption">Further right is better. Hover a dot for its model.</p>
+      </div>
+    );
+  };
+
+  const Figure = ({ value, label, tip }) => (
+    <div className="vxn-fig">
+      <div className="vxn-fig-value">{value}</div>
+      <div className="vxn-fig-label">{label}{tip ? <InfoTip text={tip} size={11} /> : null}</div>
+    </div>
+  );
+
+  const CapTile = ({ cap, model }) => {
+    const href = CAP_GUIDES[cap.key];
+    const body = (
+      <>
+        <span className="vxn-tile-icon"><Icon name={cap.icon} size={16} /></span>
+        <span className="vxn-tile-text">
+          <span className="vxn-tile-name">{cap.label === 'Image input' ? 'Vision' : cap.label}</span>
+          <span className="vxn-tile-detail">{capDetail(model, cap.key)}</span>
+        </span>
+      </>
+    );
+    return href ? <a className="vxn-tile" href={href}>{body}</a> : <div className="vxn-tile">{body}</div>;
+  };
+
+  const IO_ICONS = { Text: 'text', Image: 'image', Video: 'video', Audio: 'mic' };
+  const IoFlow = ({ inputs, outputs }) => (
+    <div className="vxn-io" aria-label={`Takes ${listText(inputs)}, returns ${listText(outputs)}`}>
+      <div className="vxn-io-group">
+        <span className="vxn-io-label">In</span>
+        {inputs.map(name => <span key={name} className="vxn-io-chip"><Icon name={IO_ICONS[name]} size={14} />{name}</span>)}
+      </div>
+      <Icon name="arrowRight" size={16} />
+      <div className="vxn-io-group">
+        <span className="vxn-io-label">Out</span>
+        {outputs.map(name => <span key={name} className="vxn-io-chip"><Icon name={IO_ICONS[name]} size={14} />{name}</span>)}
+      </div>
+    </div>
+  );
+
+  const Estimator = ({ pricing }) => {
+    const [inTok, setIn] = useState(2000);
+    const [outTok, setOut] = useState(500);
+    const [requests, setRequests] = useState(10000);
+    const per = ((inTok * (pricing.input || 0)) + (outTok * (pricing.output || 0))) / 1e6;
+    const field = (label, value, set, step) => (
+      <label className="vxn-field">
+        <span>{label}</span>
+        <input type="number" min="0" step={step} value={value} onChange={e => set(Math.max(0, Number(e.target.value) || 0))} />
+      </label>
+    );
+    return (
+      <div className="vxn-est">
+        <div className="vxn-est-fields">
+          {field('Input tokens', inTok, setIn, 100)}
+          {field('Output tokens', outTok, setOut, 100)}
+          {field('Requests', requests, setRequests, 1000)}
+        </div>
+        <div className="vxn-est-result">
+          <div><span className="vxn-est-value">{usd(per)}</span><span className="vx-muted">per request</span></div>
+          <div><span className="vxn-est-value is-total">{usd(per * requests)}</span><span className="vx-muted">for {count(requests)} requests</span></div>
+        </div>
+      </div>
+    );
+  };
+
+  const Bars = ({ rows, format, caption }) => {
+    const max = Math.max(...rows.map(r => r.value || 0)) || 1;
+    return (
+      <div className="vxn-bars">
+        {rows.map(row => (
+          <div key={row.key} className={cls('vxn-bar-row', row.current && 'is-current')}>
+            {row.href && !row.current ? <a className="vxn-bar-name" href={row.href}>{row.name}</a> : <span className="vxn-bar-name">{row.name}</span>}
+            <span className="vxn-bar-track"><span className="vxn-bar-fill" style={{ width: `${Math.max(2, (row.value / max) * 100)}%` }} /></span>
+            <span className="vxn-bar-value">{format(row.value)}</span>
+          </div>
+        ))}
+        {caption ? <p className="vxn-caption">{caption}</p> : null}
+      </div>
+    );
+  };
+
+  const ParamTable = ({ model }) => {
+    const t = model.text || {};
+    const caps = t.caps || {};
+    const r = t.reasoning;
+    const inputs = ['text', caps.vision && 'image_url', caps.videoInput && 'video_url', caps.audioInput && 'input_audio'].filter(Boolean);
+    const rows = [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['messages', <>{inputs.map((part, i) => <span key={part}>{i ? ' · ' : ''}<code>{part}</code></span>)}</>, 'Content parts the model reads'],
+      ['max_completion_tokens', t.maxOutput ? `Up to ${count(t.maxOutput)}` : 'Integer', r ? 'Counts reasoning tokens' : null],
+      r && r.effort && r.effort.length ? ['reasoning_effort', <code>{r.effort.join(' | ')}</code>, r.defaultEffort ? `Default ${r.defaultEffort}` : null] : null,
+      caps.tools ? ['tools', 'Function definitions', <>With <code>tool_choice</code></>] : null,
+      caps.structured ? ['response_format', <code>{'{ type: "json_schema" }'}</code>, 'Output that matches a schema'] : null,
+      ['stream', <code>true | false</code>, 'Server-sent events'],
+      caps.webSearch ? ['venice_parameters.enable_web_search', <code>auto | on | off</code>, 'Web results and citations'] : null,
+      caps.xSearch ? ['venice_parameters.enable_x_search', <code>true | false</code>, 'Posts from X'] : null,
+      caps.logprobs ? ['logprobs', <code>true | false</code>, <>With <code>top_logprobs</code></>] : null
+    ].filter(Boolean);
+    return (
+      <div className="vx-table-wrap vxn-params">
+        <table className="vx-dtable">
+          <thead><tr><th>Parameter</th><th>Values</th><th className="vx-hide-sm">Notes</th></tr></thead>
+          <tbody>{rows.map(([name, values, note]) => <tr key={name}><td><code>{name}</code></td><td>{values}</td><td className="vx-muted vx-hide-sm">{note}</td></tr>)}</tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const NextSection = ({ id, title, lead, children }) => (
+    <section id={id} className="vxn-section" aria-labelledby={`${id}-title`}>
+      <div className="vxn-section-head">
+        <h2 id={`${id}-title`} className="vxn-h2">{title}</h2>
+        {lead ? <p className="vxn-lead">{lead}</p> : null}
+      </div>
+      <div className="vxn-section-body">{children}</div>
+    </section>
+  );
+
+  const ModelPageNext = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const [variantId, setVariantId] = useState(() => {
+      const v = readParams().get('v');
+      return v && models.some(m => m.id === v) ? v : family.primary;
+    });
+    const [endpointId, setEndpointId] = useState(null);
+    const now = useNow();
+    const { catalog } = useCatalog();
+    const model = models.find(m => m.id === variantId) || models[0];
+    const provider = providers[family.provider] || providers[model.provider];
+    const t = model.text || {};
+    const caps = t.caps || {};
+    const p = model.pricing || {};
+    const endpoints = (model.endpoints || []).filter(e => e.supported !== false);
+    const endpoint = endpoints.find(e => e.id === endpointId) || endpoints.find(e => e.recommended) || endpoints[0];
+    const source = safeUrl(model.source);
+    const similar = (related && related.similar) || [];
+    const versions = (related && related.versions) || [];
+    const supported = TEXT_CAPS.filter(c => c.key !== 'effort' && hasCap(model, c.key));
+    const missing = TEXT_CAPS.filter(c => !['effort', 'code'].includes(c.key) && !hasCap(model, c.key));
+    const inputs = ['Text', caps.vision && 'Image', caps.videoInput && 'Video', caps.audioInput && 'Audio'].filter(Boolean);
+    const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null].filter(Boolean);
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    // The section bar sticks below Mintlify's fixed header, whose height
+    // changes with the viewport.
+    const [headerHeight, setHeaderHeight] = useState(0);
+    useEffect(() => {
+      const header = document.getElementById('navbar');
+      if (!header) return undefined;
+      const update = () => setHeaderHeight(Math.round(header.getBoundingClientRect().height));
+      update();
+      window.addEventListener('resize', update);
+      return () => window.removeEventListener('resize', update);
+    }, []);
+    const selectVariant = id => {
+      setVariantId(id);
+      setEndpointId(null);
+      writeParams({ v: id === family.primary ? null : id });
+    };
+    const blended = item => (item.pricing && item.pricing.input != null ? (3 * item.pricing.input + item.pricing.output) / 4 : null);
+    const limits = id => ((catalog && catalog.models[id] && catalog.models[id].text) || {});
+    const compareRows = [{ key: model.id, name: family.name, current: true, pricing: p, text: t }]
+      .concat(similar.map(item => ({ key: item.slug, name: item.name, href: `/models/${item.slug}`, pricing: item.pricing || {}, text: limits(item.primary) })));
+
+    return (
+      <div className="vx vxn not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
+        <HoverTips />
+        <div className="vxn-top">
+          <nav className="vxn-crumbs" aria-label="Breadcrumb">
+            <a href="/models/overview">Models</a>
+            <Icon name="chevronRight" size={12} />
+            <a href="/models/text">Text</a>
+            <Icon name="chevronRight" size={12} />
+            <span aria-current="page">{family.name}</span>
+          </nav>
+          <AgentMenu brief={agentBrief(family, model, codeSamples(model, endpoint && endpoint.id).curl)} slug={family.slug} />
+        </div>
+
+        <header className="vxn-hero">
+          <div className="vxn-hero-main">
+            <div className="vxn-provider">
+              <ProviderLogo provider={provider} size={22} />
+              <span>{provider ? provider.name : family.provider}</span>
+              <span className="vxn-dot" />
+              <span>{fmtDate(model.created)}</span>
+              {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
+              {model.beta ? <Tag tone="beta">Beta</Tag> : null}
+            </div>
+            <h1 className="vxn-h1">{family.name}</h1>
+            <div className="vxn-meta">
+              <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
+              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {model.openWeights ? (source
+                ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
+                : <span className="vxn-meta-item">Open weights</span>) : null}
+              {model.uncensored ? <span className="vxn-meta-item">Uncensored</span> : null}
+            </div>
+            {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            <div className="vxn-figs">
+              {p.input != null ? <Figure value={<>{usd(p.input)}<span className="vxn-sep">/</span>{usd(p.output)}</>} label="per 1M in / out" /> : null}
+              {t.context ? <Figure value={tokens(t.context)} label="context window" /> : null}
+              {t.maxOutput ? <Figure value={tokens(t.maxOutput)} label="max output" /> : null}
+            </div>
+            {models.length > 1 ? (
+              <div className="vxn-variants">
+                <span className="vxn-variants-label">Variant</span>
+                <div className="vxn-switch" role="radiogroup" aria-label="Variant">
+                  {models.map(m => (
+                    <button key={m.id} type="button" role="radio" aria-checked={m.id === model.id} className={cls(m.id === model.id && 'is-active')} onClick={() => selectVariant(m.id)}>
+                      {VARIANT_LABELS[m.variant] || m.variant}<span className="vx-muted">{priceSummary(m).replace(/ per 1M$/, '')}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <div className="vxn-ctas">
+              <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
+              {model.task === 'chat' ? <a className="vxn-textlink" href={`https://venice.ai/chat?model=${encodeURIComponent(model.id)}`} target="_blank" rel="noopener noreferrer">Try in Venice<Icon name="arrowRight" size={14} /></a> : null}
+            </div>
+          </div>
+          <div className="vxn-hero-side">
+            <Standing model={model} catalog={catalog} />
+          </div>
+        </header>
+
+        <nav className="vxn-nav" aria-label="On this page">
+          {sections.map(([id, label]) => (
+            <a key={id} href={`#${id}`} className={cls(activeSection === id && 'is-active')}>{label}</a>
+          ))}
+        </nav>
+
+        <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
+          <CodePanel model={model} endpoint={endpoint} setEndpointId={setEndpointId} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamTable model={model} />
+          <div className="vxn-guides">
+            {supported.filter(cap => CAP_GUIDES[cap.key]).map(cap => (
+              <a key={cap.key} className="vxn-guide" href={CAP_GUIDES[cap.key]}><Icon name={cap.icon} size={16} /><span>{cap.label === 'Image input' ? 'Vision' : cap.label}</span><Icon name="arrowRight" size={14} /></a>
+            ))}
+          </div>
+        </NextSection>
+
+        <NextSection id="capabilities" title="Capabilities" lead="What the model takes in, returns and supports through the API.">
+          <IoFlow inputs={inputs} outputs={['Text']} />
+          <div className="vxn-tiles">
+            <div className="vxn-tile"><span className="vxn-tile-icon"><Icon name="bolt" size={16} /></span><span className="vxn-tile-text"><span className="vxn-tile-name">Streaming</span><span className="vxn-tile-detail"><code>stream: true</code></span></span></div>
+            {supported.map(cap => <CapTile key={cap.key} cap={cap} model={model} />)}
+            {Array.from({ length: (3 - ((supported.length + 1) % 3)) % 3 }, (_, i) => <span key={`fill-${i}`} className="vxn-tile is-empty" aria-hidden="true" />)}
+          </div>
+          {missing.length ? <p className="vxn-missing"><span>Not supported</span>{listText(missing.map(c => (c.key === 'xSearch' ? c.label : c.label.toLowerCase())))}</p> : null}
+        </NextSection>
+
+        <NextSection id="pricing" title="Pricing" lead="Billed per token in USD. Reasoning tokens bill as output.">
+          <div className="vxn-prices">
+            <div className="vxn-price"><span className="vxn-price-label">Input</span><span className="vxn-price-value">{usd(p.input)}</span><span className="vx-muted">per 1M tokens</span></div>
+            {p.cacheRead != null ? <div className="vxn-price"><span className="vxn-price-label">Cached input</span><span className="vxn-price-value">{usd(p.cacheRead)}</span><span className="vx-muted">{p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens'}</span></div> : null}
+            <div className="vxn-price"><span className="vxn-price-label">Output</span><span className="vxn-price-value">{usd(p.output)}</span><span className="vx-muted">per 1M tokens</span></div>
+          </div>
+          <div className="vxn-split">
+            <div>
+              <h3 className="vxn-h3">Estimate a workload</h3>
+              <Estimator pricing={p} />
+            </div>
+            {similar.length ? (
+              <div>
+                <h3 className="vxn-h3">Blended price against similar models</h3>
+                <Bars rows={compareRows.map(r => ({ key: r.key, name: r.name, href: r.href, current: r.current, value: blended(r) })).filter(r => r.value != null)}
+                  format={v => usd(v)} caption="Per 1M tokens at three input tokens for each output token." />
+              </div>
+            ) : null}
+          </div>
+        </NextSection>
+
+        <NextSection id="specs" title="Specs">
+          <dl className="vxn-sheet">
+            {[
+              ['Model ID', <code>{model.id}</code>],
+              endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+              ['Context window', t.context ? `${count(t.context)} tokens` : 'Not published'],
+              ['Max output', t.maxOutput ? `${count(t.maxOutput)} tokens` : 'Not published'],
+              ['Reasoning', !t.reasoning ? 'None' : t.reasoning.effort && t.reasoning.effort.length ? <><code>{t.reasoning.effort.join(' · ')}</code>{t.reasoning.defaultEffort ? <span className="vx-muted"> · default {t.reasoning.defaultEffort}</span> : null}</> : 'Always on'],
+              ['Precision', t.quantization ? QUANT_LABELS[t.quantization] || t.quantization : model.privacy === 'anonymized' ? 'Set by the provider' : 'Not disclosed'],
+              PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
+              ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
+              ['Added', fmtDate(model.created)]
+            ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+        </NextSection>
+
+
+        {similar.length || versions.length ? (
+          <NextSection id="compare" title="Compare">
+            {similar.length ? (
+              <div className="vx-table-wrap vxn-compare">
+                <table className="vx-dtable">
+                  <thead><tr><th>Model</th><th className="vx-al-right">Input</th><th className="vx-al-right">Output</th><th className="vx-al-right vx-hide-sm">Context</th><th className="vx-al-right vx-hide-sm">Max output</th></tr></thead>
+                  <tbody>
+                    {compareRows.map(row => (
+                      <tr key={row.key} className={cls(row.current && 'is-current')}>
+                        <td>{row.href ? <a href={row.href}>{row.name}</a> : <strong>{row.name}</strong>}</td>
+                        <td className="vx-al-right vx-num">{usd(row.pricing.input)}</td>
+                        <td className="vx-al-right vx-num">{usd(row.pricing.output)}</td>
+                        <td className="vx-al-right vx-num vx-hide-sm">{tokens(row.text.context)}</td>
+                        <td className="vx-al-right vx-num vx-hide-sm">{tokens(row.text.maxOutput)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+            {versions.length ? (
+              <div className="vxn-timeline">
+                <h3 className="vxn-h3">Other versions</h3>
+                <ol>
+                  {versions.concat([{ slug: family.slug, name: family.name, created: model.created, current: true }]).sort((a, b) => (a.created || 0) - (b.created || 0)).slice(-6).map(item => (
+                    <li key={item.slug} className={cls(item.current && 'is-current')}>
+                      <span className="vxn-timeline-dot" />
+                      {item.current ? <strong>{item.name}</strong> : <a href={`/models/${item.slug}`}>{item.name}</a>}
+                      <span className="vx-muted">{shortDate(item.created)}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+          </NextSection>
+        ) : null}
+      </div>
+    );
+  };
+
   // scripts/build-model-catalog.js writes each page's static text with these,
   // so it reads the same as the page.
   const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable, durationText, safeUrl, weightsName };
@@ -2933,5 +3433,5 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // the view opens on its results instead of a loading skeleton.
   const setCatalog = catalog => { store.catalog = catalog; };
 
-  return { ModelExplorer, ModelPage, codeSamples, helpers, setCatalog };
+  return { ModelExplorer, ModelPage, ModelPageNext, codeSamples, helpers, setCatalog };
 };
