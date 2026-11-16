@@ -77,7 +77,7 @@ catalog moves; the capability flags on each model are the authoritative answer.
 
 | Surface | Endpoints |
 | --- | --- |
-| Chat / text | `POST /chat/completions`; `POST /responses` (beta, see https://docs.venice.ai/guides/features/responses-api) |
+| Chat / text | `POST /chat/completions`; `POST /responses` (see https://docs.venice.ai/guides/features/responses-api) |
 | Images | `POST /image/generate`, `/image/edit`, `/image/multi-edit`, `/image/upscale`, `/image/background-remove`, `GET /image/styles`; OpenAI-style `POST /images/generations` |
 | Video (async) | `POST /video/quote`, `/video/queue`, `/video/retrieve` (JSON body `{model, queue_id}`), `/video/complete` |
 | Audio | `POST /audio/speech` (TTS), `POST /audio/voices` (voice cloning), `POST /audio/transcriptions` (STT) |
@@ -199,7 +199,7 @@ ln -s ~/src/venice-skills/skills ~/.claude/skills/venice
 | `venice-image-generate`, `venice-image-edit` | generation, edit, upscale |
 | `venice-video` | video generation, editing, upscaling, and async job lifecycle |
 | `venice-audio-speech`, `venice-audio-music`, `venice-audio-transcription` | TTS, voice cloning, music, STT |
-| `venice-embeddings`, `venice-characters`, `venice-responses` | embeddings, personas, the beta Responses API |
+| `venice-embeddings`, `venice-characters`, `venice-responses` | embeddings, personas, the Responses API |
 | `venice-augment` | document parsing and web search |
 | `venice-x402`, `venice-crypto-rpc` | wallet credits, JSON-RPC proxy |
 | `venice-billing`, `venice-api-keys` | balance, usage history, key management |
