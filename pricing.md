@@ -492,13 +492,13 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | Kling 2.5 Turbo Pro | `kling-2.5-turbo-pro-image-to-video` | Image to video | $0.0775 | Anonymized |
 | Kling 2.6 Pro | `kling-2.6-pro-text-to-video` | Text to video | $0.0775 to $0.154 | Anonymized |
 | Kling 2.6 Pro | `kling-2.6-pro-image-to-video` | Image to video | $0.0775 to $0.154 | Anonymized |
-| Kling 4.0 | `kling-v4-text-to-video` | Text to video | $0.1373 to $0.2056 | Anonymized |
-| Kling 4.0 | `kling-v4-image-to-video` | Image to video | $0.1373 to $0.2056 | Anonymized |
-| Kling 4.0 Flash | `kling-v4-flash-text-to-video` | Text to video | $0.0822 | Anonymized |
-| Kling 4.0 Flash | `kling-v4-flash-image-to-video` | Image to video | $0.0822 | Anonymized |
+| Kling 4.0 | `kling-v4-text-to-video` | Text to video | $0.1963 to $0.2938 | Anonymized |
+| Kling 4.0 | `kling-v4-image-to-video` | Image to video | $0.1963 to $0.2938 | Anonymized |
+| Kling 4.0 Flash | `kling-v4-flash-text-to-video` | Text to video | $0.1174 | Anonymized |
+| Kling 4.0 Flash | `kling-v4-flash-image-to-video` | Image to video | $0.1174 | Anonymized |
 | Kling 4.0 Flash Edit | `kling-v4-flash-video-to-video` | Video edit | Priced by source | Anonymized |
-| Kling 4.0 Flash R2V | `kling-v4-flash-reference-to-video` | Reference to video | $0.0822 | Anonymized |
-| Kling 4.0 R2V | `kling-v4-reference-to-video` | Reference to video | $0.1373 to $0.2056 | Anonymized |
+| Kling 4.0 Flash R2V | `kling-v4-flash-reference-to-video` | Reference to video | $0.1175 | Anonymized |
+| Kling 4.0 R2V | `kling-v4-reference-to-video` | Reference to video | $0.1963 to $0.2937 | Anonymized |
 | Kling O3 4K | `kling-o3-4k-text-to-video` | Text to video | $0.462 | Anonymized |
 | Kling O3 4K | `kling-o3-4k-image-to-video` | Image to video | $0.462 | Anonymized |
 | Kling O3 4K R2V | `kling-o3-4k-reference-to-video` | Reference to video | $0.462 | Anonymized |
@@ -564,14 +564,14 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | Seedance 2.0 Mini | `seedance-2-0-mini-image-to-video-basic` | Image to video | $0.042 to $0.0946 | Anonymized |
 | Seedance 2.0 Mini R2V | `seedance-2-0-mini-reference-to-video-basic` | Reference to video | $0.044 to $0.0948 | Anonymized |
 | Seedance 2.0 R2V | `seedance-2-0-reference-to-video-basic` | Reference to video | $0.0879 to $0.9783 | Anonymized |
-| Seedance 2.5 | `seedance-2-5-text-to-video-basic` | Text to video | $0.094 to $0.7995 | Anonymized |
-| Seedance 2.5 | `seedance-2-5-image-to-video-basic` | Image to video | $0.09 to $0.7995 | Anonymized |
+| Seedance 2.5 | `seedance-2-5-text-to-video-basic` | Text to video | $0.1343 to $1.1421 | Anonymized |
+| Seedance 2.5 | `seedance-2-5-image-to-video-basic` | Image to video | $0.1283 to $1.1421 | Anonymized |
 | Seedance 2.5 Edit | `seedance-2-5-edit-video-basic` | Video edit | Quote per job | Anonymized |
-| Seedance 2.5 Flash | `seedance-2-5-flash-text-to-video-basic` | Text to video | $0.0571 to $0.1235 | Anonymized |
-| Seedance 2.5 Flash | `seedance-2-5-flash-image-to-video-basic` | Image to video | $0.0546 to $0.1229 | Anonymized |
+| Seedance 2.5 Flash | `seedance-2-5-flash-text-to-video-basic` | Text to video | $0.0879 to $0.19 | Anonymized |
+| Seedance 2.5 Flash | `seedance-2-5-flash-image-to-video-basic` | Image to video | $0.084 to $0.189 | Anonymized |
 | Seedance 2.5 Flash Edit | `seedance-2-5-flash-edit-video-basic` | Video edit | Quote per job | Anonymized |
-| Seedance 2.5 Flash R2V | `seedance-2-5-flash-reference-to-video-basic` | Reference to video | $0.0571 to $0.1235 | Anonymized |
-| Seedance 2.5 R2V | `seedance-2-5-reference-to-video-basic` | Reference to video | $0.094 to $0.7995 | Anonymized |
+| Seedance 2.5 Flash R2V | `seedance-2-5-flash-reference-to-video-basic` | Reference to video | $0.0879 to $0.19 | Anonymized |
+| Seedance 2.5 R2V | `seedance-2-5-reference-to-video-basic` | Reference to video | $0.1343 to $1.1421 | Anonymized |
 | Topaz Video Upscale | `topaz-video-upscale` | Upscale | Priced by source | Anonymized |
 | Veo 3.1 Fast | `veo3.1-fast-text-to-video` | Text to video | $0.11 to $0.385 | Anonymized |
 | Veo 3.1 Fast | `veo3.1-fast-image-to-video` | Image to video | $0.11 to $0.385 | Anonymized |
@@ -591,18 +591,18 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | Wan 2.7 Enhanced | `wan-2-7-enhanced-text-to-video` | Text to video | $0.1287 to $0.198 | Anonymized |
 | Wan 2.7 Enhanced | `wan-2-7-enhanced-image-to-video` | Image to video | $0.1287 to $0.198 | Anonymized |
 | Wan 2.7 Reference | `wan-2-7-reference-to-video` | Reference to video | $0.11 to $0.14 | Anonymized |
-| Wan 3.0 | `wan-3-0-text-to-video` | Text to video | $0.0453 to $0.182 | Anonymized |
-| Wan 3.0 | `wan-3-0-image-to-video` | Image to video | $0.0453 to $0.182 | Anonymized |
-| Wan 3.0 Prime | `wan-3-0-prime-text-to-video` | Text to video | $0.062 to $0.2548 | Anonymized |
-| Wan 3.0 Prime | `wan-3-0-prime-image-to-video` | Image to video | $0.062 to $0.2548 | Anonymized |
-| Wan 3.0 Prime Pro | `wan-3-0-prime-pro-text-to-video` | Text to video | $0.3312 to $0.3787 | Anonymized |
-| Wan 3.0 Prime Pro | `wan-3-0-prime-pro-image-to-video` | Image to video | $0.3312 to $0.3787 | Anonymized |
-| Wan 3.0 Prime Pro Reference | `wan-3-0-prime-pro-reference-to-video` | Reference to video | $0.3312 to $0.3787 | Anonymized |
-| Wan 3.0 Prime Reference | `wan-3-0-prime-reference-to-video` | Reference to video | $0.062 to $0.2548 | Anonymized |
-| Wan 3.0 Pro | `wan-3-0-pro-text-to-video` | Text to video | $0.2367 to $0.296 | Anonymized |
-| Wan 3.0 Pro | `wan-3-0-pro-image-to-video` | Image to video | $0.2367 to $0.296 | Anonymized |
-| Wan 3.0 Pro Reference | `wan-3-0-pro-reference-to-video` | Reference to video | $0.2367 to $0.296 | Anonymized |
-| Wan 3.0 Reference | `wan-3-0-reference-to-video` | Reference to video | $0.0453 to $0.182 | Anonymized |
+| Wan 3.0 | `wan-3-0-text-to-video` | Text to video | $0.065 to $0.26 | Anonymized |
+| Wan 3.0 | `wan-3-0-image-to-video` | Image to video | $0.065 to $0.26 | Anonymized |
+| Wan 3.0 Prime | `wan-3-0-prime-text-to-video` | Text to video | $0.0884 to $0.364 | Anonymized |
+| Wan 3.0 Prime | `wan-3-0-prime-image-to-video` | Image to video | $0.0884 to $0.364 | Anonymized |
+| Wan 3.0 Prime Pro | `wan-3-0-prime-pro-text-to-video` | Text to video | $0.4733 to $0.5407 | Anonymized |
+| Wan 3.0 Prime Pro | `wan-3-0-prime-pro-image-to-video` | Image to video | $0.4733 to $0.5407 | Anonymized |
+| Wan 3.0 Prime Pro Reference | `wan-3-0-prime-pro-reference-to-video` | Reference to video | $0.4733 to $0.5407 | Anonymized |
+| Wan 3.0 Prime Reference | `wan-3-0-prime-reference-to-video` | Reference to video | $0.0884 to $0.364 | Anonymized |
+| Wan 3.0 Pro | `wan-3-0-pro-text-to-video` | Text to video | $0.338 to $0.4227 | Anonymized |
+| Wan 3.0 Pro | `wan-3-0-pro-image-to-video` | Image to video | $0.338 to $0.4227 | Anonymized |
+| Wan 3.0 Pro Reference | `wan-3-0-pro-reference-to-video` | Reference to video | $0.338 to $0.4227 | Anonymized |
+| Wan 3.0 Reference | `wan-3-0-reference-to-video` | Reference to video | $0.065 to $0.26 | Anonymized |
 
 ## Web search and tools
 
