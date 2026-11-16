@@ -247,11 +247,11 @@
   scanForRows();
 })();
 
-// Venice AI Model Browser & Pricing Tables - Fetches from API
+// Venice AI Model Tables & Voice Picker - Fetches from API
 (function() {
 
   // ========== FEATURE FLAGS ==========
-  const ENABLE_VIDEO = true;  // Video models on /models pages
+  const ENABLE_VIDEO = true;  // Include video models in the API fetch
   // ===================================
 
   // Configuration
@@ -938,8 +938,6 @@
       }
     }).catch(() => {});
   }
-
-  // ========== MODEL BROWSER FUNCTIONS ==========
 
   // ========== INITIALIZATION ==========
 

@@ -1,6 +1,7 @@
 /**
- * Model helpers shared by the static generators. model-search.js keeps a
- * browser copy of the same logic, so change both together.
+ * Model helpers shared by the static generators. model-search.js keeps
+ * browser copies of getRemovalDate (as getModelRemovalDate) and
+ * isDeprecatedModel, so change those in both places.
  */
 
 const fs = require('fs');
