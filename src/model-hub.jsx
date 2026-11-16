@@ -1720,7 +1720,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                 {query ? <button type="button" className="vx-icon-btn" onClick={() => setQuery('')} aria-label="Clear search"><Icon name="x" size={14} /></button> : <kbd aria-hidden="true">/</kbd>}
               </div>
               <select className="vx-select" value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
-                {['name', 'newest', 'price', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{SORTS[key].label}</option>)}
+                {['newest', 'name', 'price', ...(modality === 'text' ? ['context', 'input', 'output'] : [])].map(key => <option key={key} value={key}>{SORTS[key].label}</option>)}
               </select>
               <Segmented ariaLabel="View" value={shownView} onChange={setView}
                 options={[{ value: 'list', label: 'List' }, { value: 'table', label: 'Table' },
