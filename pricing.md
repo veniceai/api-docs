@@ -88,6 +88,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | GLM 5.3 | `z-ai-glm-5-3` | $1.75 | $5.50 | $0.325 | — | Private |
 | GLM 5.3 Flash | `e2ee-glm-5-3-flash` | $0.16 | $0.54 | $0.038 | — | E2EE |
 | GLM 5.3 Flash | `z-ai-glm-5-3-flash` | $0.15 | $0.50 | $0.03 | — | Private |
+| GLM 5.3 Flash Uncensored | `glm-5-3-flash-uncensored` | $0.165 | $0.55 | $0.033 | — | Private |
 | GLM 5V Turbo | `z-ai-glm-5v-turbo` | $1.50 | $5.00 | $0.30 | — | Anonymized |
 | Google Gemma 3 27B Instruct | `google-gemma-3-27b-it` | $0.12 | $0.20 | — | — | Private |
 | Google Gemma 4 26B A4B Instruct | `google-gemma-4-26b-a4b-it` | $0.13 | $0.40 | $0.05 | — | Private |
