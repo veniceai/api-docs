@@ -77,6 +77,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       return null;
     }
   };
+  const weightsName = href => {
+    const { hostname, pathname } = new URL(href);
+    const path = pathname.replace(/^\/+|\/+$/g, '');
+    return hostname === 'huggingface.co' && path ? path : [hostname, path].filter(Boolean).join('/');
+  };
 
   const copyText = text => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) return navigator.clipboard.writeText(text).catch(() => {});
@@ -2283,7 +2288,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       ...modalitySpecs(model),
       PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
       ['Added', fmtDate(model.created)],
-      model.openWeights ? ['Weights', `Open${model.license ? ` · ${model.license}` : ''}`] : null
+      model.openWeights ? ['Weights', <>{safeUrl(model.source)
+        ? <a href={safeUrl(model.source)} target="_blank" rel="noopener noreferrer">{weightsName(safeUrl(model.source))}<Icon name="external" size={12} /></a>
+        : 'Open'}{model.license ? ` · ${model.license}` : null}</>] : null
     ].filter(Boolean);
     return (
       <dl className="vx-kv vx-specs">
@@ -2920,7 +2927,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   // scripts/build-model-catalog.js writes each page's static text with these,
   // so it reads the same as the page.
-  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable, durationText };
+  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable, durationText, safeUrl, weightsName };
 
   // Hands over a catalog that loaded before the explorer's first render, so
   // the view opens on its results instead of a loading skeleton.
