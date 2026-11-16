@@ -873,10 +873,8 @@ function privacySummary(tiers) {
 
 function privacySentence(tiers) {
   if (tiers.includes('e2ee') && tiers.length > 1) return 'Private and end-to-end encrypted variants are available.';
-  if (tiers.includes('e2ee')) return 'It is end-to-end encrypted.';
-  if (tiers.includes('tee')) return 'It runs in a trusted execution environment.';
-  if (tiers.includes('private')) return 'It runs privately, with zero data retention.';
-  return 'Requests are anonymized, so the provider never sees your identity.';
+  const { PRIVACY } = hub().helpers;
+  return PRIVACY[['e2ee', 'tee', 'private'].find(tier => tiers.includes(tier)) || 'anonymized'].desc;
 }
 
 // The 720p, 5-second, silent clip the page's calculator opens on.

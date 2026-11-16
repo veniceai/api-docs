@@ -126,10 +126,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
   const MODE_SHORT = { t2v: 'T2V', i2v: 'I2V', r2v: 'R2V', flf: 'Keyframes', v2v: 'Edit', motion: 'Motion', transition: 'Transition', 'multi-angle': 'Multi-angle', upscale: 'Upscale' };
   const PRIVACY = {
-    e2ee: { label: 'E2EE', long: 'End-to-end encrypted', icon: 'lock', desc: 'Prompts are encrypted on your device and only decrypted inside an attested hardware enclave. Neither Venice nor the GPU provider can read them.' },
-    tee: { label: 'TEE', long: 'Trusted execution', icon: 'shield', desc: 'Runs inside a hardware-secured enclave with cryptographic attestation. No prompt data is stored or accessible outside the enclave.' },
-    private: { label: 'Private', long: 'Zero data retention', icon: 'eyeOff', desc: 'Zero data retention, enforced by contract. Prompts and outputs are processed for inference only and not retained after the request completes.' },
-    anonymized: { label: 'Anonymized', long: 'Anonymized proxy', icon: 'mask', desc: 'Proxied to the upstream provider without your identity. The provider may retain prompt data; use a Private, TEE or E2EE model for sensitive work.' }
+    e2ee: { label: 'E2EE', icon: 'lock', desc: "This model supports end-to-end encryption (E2EE) and runs in a Trusted Execution Environment (TEE). Your prompt is encrypted on your client and decrypted on the GPU within the TEE. The response is then encrypted and sent back to your client for decryption. Venice's system prompt and web search are disabled to preserve end-to-end encryption. Attestation evidence is available for independent verification." },
+    tee: { label: 'TEE', icon: 'shield', desc: 'This model runs in a Trusted Execution Environment (TEE). Attestation evidence is available for independent verification.' },
+    private: { label: 'Private', icon: 'eyeOff', desc: 'This model is private and no prompt data is stored in any capacity.' },
+    anonymized: { label: 'Anonymized', icon: 'mask', desc: 'The provider of this model may retain prompt data (though it is anonymized by Venice). For sensitive content, use a private model.' }
   };
   const PRIVACY_ORDER = ['e2ee', 'tee', 'private', 'anonymized'];
   const TEXT_CAPS = [
@@ -494,7 +494,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const PrivacyBadge = ({ tier }) => {
     const meta = PRIVACY[tier];
     if (!meta) return null;
-    return <span className={cls('vx-badge', `vx-privacy-${tier}`)} title={`${meta.long}. ${meta.desc}`} data-tip-label={meta.long} data-tip={meta.desc}>{meta.label}</span>;
+    return <span className={cls('vx-badge', `vx-privacy-${tier}`)} title={meta.desc}>{meta.label}</span>;
   };
 
   const PrivacyStack = ({ tiers }) => (
@@ -941,7 +941,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </FilterGroup>
 
           <FilterGroup title="Privacy" icon="shield">
-            {PRIVACY_ORDER.map(tier => option('privacy', tier, PRIVACY[tier].long, PRIVACY[tier].desc))}
+            {PRIVACY_ORDER.map(tier => option('privacy', tier, PRIVACY[tier].label, PRIVACY[tier].desc))}
           </FilterGroup>
 
           {modality === 'text' ? (
