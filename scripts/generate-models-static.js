@@ -26,9 +26,7 @@ const MODELS_START = '{/* AUTO-GENERATED:MODELS:START */}';
 const MODELS_END = '{/* AUTO-GENERATED:MODELS:END */}';
 const VOICES_START = '{/* AUTO-GENERATED:VOICES:START */}';
 const VOICES_END = '{/* AUTO-GENERATED:VOICES:END */}';
-// Static catalog wrapped by <ModelExplorer> on the English model pages. The
-// legacy browser in model-search.js mounts into #model-search-placeholder,
-// which the localized pages still use.
+// Static catalog wrapped by <HubMount view="ModelExplorer"> on the model pages.
 const CATALOG_ID = 'model-catalog-static';
 
 const PRIVATE_TYPES = new Set(['upscale']);
