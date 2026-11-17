@@ -116,6 +116,10 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | GPT-6.1 Sol | `openai-gpt-61-sol` | $2.00 | $10.00 | $0.10 | $2.50 | Anonymized |
 | GPT-6.1 Sol Ultrafast | `openai-gpt-61-sol-ultrafast` | $12.00 | $60.00 | $0.60 | $15.00 | Anonymized |
 | GPT-6.1 Terra | `openai-gpt-61-terra` | $1.00 | $5.00 | $0.05 | $1.25 | Anonymized |
+| GPT-6.2 Astra | `openai-gpt-62-astra` | $8.00 | $40.00 | $0.40 | $10.00 | Anonymized |
+| GPT-6.2 Astra Pro | `openai-gpt-62-astra-pro` | $8.00 | $40.00 | $0.40 | $10.00 | Anonymized |
+| GPT-6.2 Sol | `openai-gpt-62-sol` | $2.00 | $10.00 | $0.10 | $2.50 | Anonymized |
+| GPT-6.2 Sol Pro | `openai-gpt-62-sol-pro` | $2.00 | $10.00 | $0.10 | $2.50 | Anonymized |
 | Grok 4.20 | `grok-4-20` | $1.42 | $2.83 | $0.23 | — | Private |
 | Grok 4.20 Multi-Agent | `grok-4-20-multi-agent` | $1.42 | $2.83 | $0.23 | — | Private |
 | Grok 4.3 | `grok-4-3` | $1.42 | $2.83 | $0.23 | — | Private |
@@ -200,6 +204,10 @@ These models switch to higher rates once a request's input passes the threshold.
 | GPT-6.1 Sol | `openai-gpt-61-sol` | 272K tokens | $4.00 | $15.00 | $0.20 | $5.00 |
 | GPT-6.1 Sol Ultrafast | `openai-gpt-61-sol-ultrafast` | 272K tokens | $24.00 | $90.00 | $1.20 | $30.00 |
 | GPT-6.1 Terra | `openai-gpt-61-terra` | 272K tokens | $2.00 | $7.50 | $0.10 | $2.50 |
+| GPT-6.2 Astra | `openai-gpt-62-astra` | 272K tokens | $16.00 | $60.00 | $0.80 | $20.00 |
+| GPT-6.2 Astra Pro | `openai-gpt-62-astra-pro` | 272K tokens | $16.00 | $60.00 | $0.80 | $20.00 |
+| GPT-6.2 Sol | `openai-gpt-62-sol` | 272K tokens | $4.00 | $15.00 | $0.20 | $5.00 |
+| GPT-6.2 Sol Pro | `openai-gpt-62-sol-pro` | 272K tokens | $4.00 | $15.00 | $0.20 | $5.00 |
 | Grok 4.20 | `grok-4-20` | 200K tokens | $2.83 | $5.67 | $0.45 | — |
 | Grok 4.20 Multi-Agent | `grok-4-20-multi-agent` | 200K tokens | $2.83 | $5.67 | $0.45 | — |
 | Grok 4.3 | `grok-4-3` | 200K tokens | $2.83 | $5.67 | $0.45 | — |
