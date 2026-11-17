@@ -1893,6 +1893,16 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         typescript: `${tsHead}\nimport fs from "node:fs";\n\nconst transcript = await client.audio.transcriptions.create({\n  model: "${id}",\n  file: fs.createReadStream("meeting.mp3"),\n});\nconsole.log(transcript.text);`
       };
     }
+    if (model.audio && model.audio.voiceChanger) {
+      const a = model.audio;
+      const voice = a.defaultVoice || (a.voices || [])[0];
+      const file = `converted.${(a.formats || [])[0] || 'mp3'}`;
+      return {
+        curl: `# 1. Queue the conversion (returns a queue_id)\ncurl ${API}/audio/voice-changer/queue \\\n  -H "Authorization: Bearer ${key}" \\\n  -F model=${id} \\\n${voice ? `  -F voice=${voice} \\\n` : ''}  -F file=@take.wav\n\n# 2. Poll until the audio is ready (JSON with the status until then)\ncurl ${API}/audio/voice-changer/retrieve \\\n  ${auth} \\\n  -d '{ "model": "${id}", "queue_id": "<queue_id>" }' --output ${file}`,
+        python: `import time\n${reqHead}\nwith open("take.wav", "rb") as source:\n    res = requests.post(f"{API}/audio/voice-changer/queue", headers=HEADERS,\n                        data={"model": "${id}"${voice ? `, "voice": "${voice}"` : ''}}, files={"file": source})\nres.raise_for_status()\njob = res.json()\n\nwhile True:\n    res = requests.post(f"{API}/audio/voice-changer/retrieve", headers=HEADERS,\n                        json={"model": "${id}", "queue_id": job["queue_id"]})\n    res.raise_for_status()  # a failed job returns its error here\n    if not res.headers.get("content-type", "").startswith("application/json"):\n        open("${file}", "wb").write(res.content)\n        break\n    time.sleep(3)  # still processing`,
+        typescript: `${fetchHead}\nimport { readFile, writeFile } from "node:fs/promises";\n\nconst form = new FormData();\nform.append("model", "${id}");\n${voice ? `form.append("voice", "${voice}");\n` : ''}form.append("file", new Blob([await readFile("take.wav")]), "take.wav");\nconst queued = await fetch(\`\${API}/audio/voice-changer/queue\`, {\n  method: "POST",\n  headers: { Authorization: headers.Authorization },\n  body: form,\n});\nif (!queued.ok) throw new Error(await queued.text());\nconst job = await queued.json();\n\nlet res;\ndo {\n  await new Promise(r => setTimeout(r, 3000));\n  res = await fetch(\`\${API}/audio/voice-changer/retrieve\`, {\n    method: "POST",\n    headers,\n    body: JSON.stringify({ model: "${id}", queue_id: job.queue_id }),\n  });\n  if (!res.ok) throw new Error(await res.text()); // a failed job returns its error here\n} while (res.headers.get("content-type")?.startsWith("application/json"));\nawait writeFile("${file}", Buffer.from(await res.arrayBuffer()));`
+      };
+    }
     if (model.modality === 'audio') {
       const prompt = model.task === 'sfx' ? VARIANT_PROMPTS.sfx : VARIANT_PROMPTS.music;
       const isTts = model.task === 'tts';
