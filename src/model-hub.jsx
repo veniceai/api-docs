@@ -2778,7 +2778,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       : data.family.task === 'video' ? <VideoPageNext data={data} />
         : data.family.task === 'embedding' ? <EmbeddingPageNext data={data} />
           : data.family.task === 'tts' ? <SpeechPageNext data={data} />
-            : data.family.task === 'stt' ? <TranscriptionPageNext data={data} /> : <ModelPageClassic data={data} />);
+            : data.family.task === 'stt' ? <TranscriptionPageNext data={data} />
+              : data.family.task === 'music' || data.family.task === 'sfx' ? <SoundPageNext data={data} /> : <ModelPageClassic data={data} />);
 
   const ModelPageClassic = ({ data }) => {
     const { family, models, related, providers } = data;
@@ -4901,6 +4902,303 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <NextSection id="compare" title="Compare" lead="Every speech-to-text model on Venice, cheapest first.">
           <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'stt'} order={m => (m.pricing || {}).perHour || 0} columns={transcriptionColumns} />
         </NextSection>
+      </div>
+    );
+  };
+
+  /* ------------------------------------------------------------ music and sound page, next */
+
+  const lengthText = s => (s < 60 ? `${s}s` : s % 60 === 0 ? `${s / 60} min` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
+  // The lengths a job can ask for: listed options, a range, or, for the voice
+  // changer, the length of the source it accepts.
+  const soundLengths = a => (a.durationOptions ? { options: a.durationOptions, min: Math.min(...a.durationOptions), max: Math.max(...a.durationOptions) }
+    : a.voiceChanger && a.maxSourceSeconds ? { min: 1, max: a.maxSourceSeconds }
+      : a.maxDuration ? { min: a.minDuration || 1, max: a.maxDuration } : null);
+  const soundPrice = (p, seconds) => {
+    const value = p.kind === 'tiered' ? ((p.tiers || []).find(t => seconds <= t.upTo) || {}).usd
+      : p.kind === 'per-second' && p.perSecond != null ? p.perSecond * seconds
+        : p.kind === 'per-track' ? p.perTrack : null;
+    return value == null ? null : value;
+  };
+  // Tiers a minute wide charge by the started minute; others by length option.
+  const byMinute = p => p.kind === 'tiered' && (p.tiers || []).every((t, i, list) => t.upTo - (i ? list[i - 1].upTo : 0) === 60);
+  const isSfxModel = model => model.task === 'sfx';
+  const axisUsd = v => (v === 0 ? '$0' : usd(v));
+  const soundRate = p => (p.kind === 'per-track' ? `${usd(p.perTrack)} / track`
+    : p.kind === 'tiered' && !byMinute(p) && (p.tiers || []).length ? `from ${usd(p.tiers[0].usd)}`
+      : p.perMinute != null ? `${usd(p.perMinute)} / min` : '—');
+  const soundColumns = () => [
+    { label: 'Lengths', render: m => { const r = soundLengths(m.audio || {}); return r ? `${lengthText(r.min)} – ${lengthText(r.max)}` : 'Set by the model'; } },
+    { label: 'Takes', hide: true, render: m => { const a = m.audio || {}; return [a.lyrics && (a.lyricsRequired ? 'lyrics, required' : 'lyrics'), a.instrumental && 'instrumental', a.loop && 'loop'].filter(Boolean).join(', ') || '—'; } },
+    { label: 'Privacy', hide: true, render: m => (PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy) },
+    { label: 'Price', right: true, render: m => soundRate(m.pricing || {}) }
+  ];
+
+  // Price against length: steps for a price per started minute, a line for a
+  // price per second, flat for one price per track.
+  const PriceCurve = ({ pricing, range, options }) => {
+    const W = 320;
+    const H = 150;
+    const pad = { l: 44, r: 12, t: 12, b: 26 };
+    const xs = options || Array.from({ length: 61 }, (_, i) => Math.round(range.min + ((range.max - range.min) * i) / 60));
+    const points = (pricing.kind === 'tiered' && !options
+      ? (pricing.tiers || []).filter(t => t.upTo >= range.min).flatMap(t => [[Math.max(range.min, t.from || range.min), t.usd], [Math.min(range.max, t.upTo), t.usd]])
+      : xs.map(sec => [sec, soundPrice(pricing, sec)])).filter(([, v]) => v != null);
+    if (!points.length) return null;
+    const top = Math.max(...points.map(([, v]) => v)) || 1;
+    const x = sec => pad.l + ((sec - 0) / (range.max || 1)) * (W - pad.l - pad.r);
+    const y = v => H - pad.b - (v / top) * (H - pad.t - pad.b);
+    const path = points.map(([sec, v], i) => `${i ? 'L' : 'M'}${x(sec).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    const ticks = [0, range.max / 2, range.max].map(sec => Math.round(sec));
+    return (
+      <svg className="vxm-curve" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`From ${usd(points[0][1])} at ${lengthText(points[0][0])} to ${usd(points[points.length - 1][1])} at ${lengthText(points[points.length - 1][0])}`}>
+        {[0, 0.5, 1].map(f => <line key={f} className="vxm-grid" x1={pad.l} x2={W - pad.r} y1={y(top * f)} y2={y(top * f)} />)}
+        {[0, 0.5, 1].map(f => <text key={`y${f}`} className="vxm-label" x={pad.l - 8} y={y(top * f) + 4} textAnchor="end">{axisUsd(top * f)}</text>)}
+        {ticks.map((sec, i) => <text key={`x${sec}`} className="vxm-label" x={x(sec)} y={H - 6} textAnchor={i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle'}>{lengthText(sec)}</text>)}
+        {options ? points.map(([sec, v]) => <circle key={sec} className="vxm-dot" cx={x(sec)} cy={y(v)} r={3.5} />) : <path className="vxm-line" d={path} />}
+      </svg>
+    );
+  };
+
+  const SoundCard = ({ model }) => {
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    const range = soundLengths(a);
+    return (
+      <div className="vxm-card">
+        <div className="vxn-standing-head">
+          <span className="vxn-price-label">{a.voiceChanger ? 'Price by source length' : 'Price by length'}</span>
+          <span className="vx-muted">{byMinute(p) ? 'by the started minute' : p.kind === 'tiered' ? 'by length' : p.kind === 'per-second' ? 'by the second' : p.kind === 'per-track' ? 'one price per track' : ''}</span>
+        </div>
+        {range ? <PriceCurve pricing={p} range={range} options={a.durationOptions} />
+          : <p className="vxm-flat"><span className="vxn-est-value">{p.kind === 'per-track' ? usd(p.perTrack) : usd(p.perSecond)}</span><span className="vx-muted">{p.kind === 'per-track' ? 'per track. The model picks the length.' : 'per second of audio. The model picks the length.'}</span></p>}
+      </div>
+    );
+  };
+
+  const SoundEstimator = ({ model }) => {
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    const range = soundLengths(a);
+    const [jobs, setJobs] = useState(10);
+    const [seconds, setSeconds] = useState(() => (range ? (a.durationOptions ? a.durationOptions[0] : Math.min(range.max, Math.max(range.min, a.defaultDuration || 60))) : 0));
+    const each = range ? soundPrice(p, seconds) : p.kind === 'per-track' ? p.perTrack : null;
+    return (
+      <div className="vxn-est">
+        <div className="vxi-est-controls">
+          <label className="vxn-field"><span>{a.voiceChanger ? 'Recordings' : isSfxModel(model) ? 'Sounds' : 'Tracks'}</span><input type="number" min="0" step="1" value={jobs} onChange={e => setJobs(Math.max(0, Math.round(Number(e.target.value) || 0)))} /></label>
+          {range ? (
+            <div className="vxn-field"><span>Length</span>
+              {a.durationOptions
+                ? <Segmented ariaLabel="Length" value={seconds} onChange={setSeconds} options={a.durationOptions.map(o => ({ value: o, label: lengthText(o) }))} />
+                : (
+                  <span className="vx-range">
+                    <input type="range" min={range.min} max={range.max} step={1} value={seconds} aria-label="Length" aria-valuetext={lengthText(seconds)} onChange={e => setSeconds(Number(e.target.value))} />
+                    <span className="vx-range-value">{lengthText(seconds)}</span>
+                  </span>
+                )}
+            </div>
+          ) : null}
+        </div>
+        <div className="vxn-est-result" aria-live="polite">
+          <div><span className="vxn-est-value">{usd(each)}</span><span className="vx-muted">{a.voiceChanger ? 'per recording' : isSfxModel(model) ? 'per sound' : 'per track'}</span></div>
+          <div><span className="vxn-est-value is-total">{usd(each != null ? each * jobs : null)}</span><span className="vx-muted">for {count(jobs)} {a.voiceChanger ? 'recordings' : isSfxModel(model) ? 'sounds' : 'tracks'}</span></div>
+        </div>
+      </div>
+    );
+  };
+
+  // Everything an agent needs to queue a job with the model, as Markdown.
+  const soundBrief = (family, model, sample) => {
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    const range = soundLengths(a);
+    const base = a.voiceChanger ? '/audio/voice-changer' : '/audio';
+    return [
+      `# ${family.name} on the Venice API`,
+      '',
+      `- Model ID: \`${model.id}\``,
+      `- Flow: \`POST ${API}${base}/queue\` returns a \`queue_id\`; poll \`POST ${API}${base}/retrieve\` with the \`model\` and \`queue_id\` until it returns the audio. \`POST ${API}${base}/quote\` prices a job without charging for it.`,
+      '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
+      p.kind === 'tiered' ? `- Price by ${a.voiceChanger ? 'source ' : ''}length: ${(p.tiers || []).map(t => `up to ${lengthText(t.upTo)} ${usd(t.usd)}`).join(', ')}`
+        : p.kind === 'per-second' ? `- Price: ${usd(p.perSecond)} per second (${usd(p.perMinute)} per minute)`
+          : p.kind === 'per-track' ? `- Price: ${usd(p.perTrack)} per track` : '- Price: quote it first',
+      a.voiceChanger
+        ? `- Source: a ${listText(a.sourceFormats || [])} recording up to ${lengthText(a.maxSourceSeconds)} and 25 MB, as a multipart \`file\` or an \`audio_url\``
+        : range ? `- \`duration_seconds\`: ${a.durationOptions ? a.durationOptions.join(', ') : `${range.min} to ${range.max}`}${a.defaultDuration ? `, default ${a.defaultDuration}` : ''}` : '- Length: set by the model; it takes no `duration_seconds`',
+      a.voiceChanger ? `- Voices: ${(a.voices || []).map(v => `\`${v}\``).join(', ')}${a.customVoice ? '; any ElevenLabs voice ID also works' : ''}` : null,
+      a.voiceChanger && a.noiseRemoval ? '- `remove_background_noise: true` cleans the source first' : null,
+      a.lyrics ? `- \`lyrics_prompt\`: ${a.lyricsRequired ? 'required' : a.instrumental ? 'needed for vocals' : 'optional'}` : null,
+      a.instrumental ? '- `force_instrumental: true` makes a track without vocals' : null,
+      a.loop ? '- `loop: true` renders a seamless loop' : null,
+      a.promptLimit ? `- \`prompt\`: up to ${count(a.promptLimit)} characters` : null,
+      (a.formats || []).length ? `- Output: ${a.formats.join(', ')}` : null,
+      PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      `- Docs: https://docs.venice.ai/models/${family.slug}`,
+      '',
+      '```bash',
+      sample,
+      '```'
+    ].filter(line => line != null).join('\n');
+  };
+
+  const SoundPageNext = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const now = useNow();
+    const { catalog } = useCatalog();
+    const headerHeight = useHeaderHeight();
+    const model = models.find(m => m.id === family.primary) || models[0];
+    const provider = providers[family.provider] || providers[model.provider];
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    const range = soundLengths(a);
+    const source = safeUrl(model.source);
+    const endpoints = (model.endpoints || []).filter(ep => ep.supported !== false);
+    const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
+    const versions = (related && related.versions) || [];
+    const isSfx = isSfxModel(model);
+    const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], a.voiceChanger ? null : ['compare', 'Compare']].filter(Boolean);
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const sample = codeSamples(model, endpoint && endpoint.id).curl;
+    const voices = a.voices || [];
+    const params = a.voiceChanger ? [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['file', listText(a.sourceFormats || []), 'The recording, up to 25 MB; or send audio_url'],
+      ['audio_url', 'A public URL', 'Instead of file'],
+      voices.length ? ['voice', `${count(voices.length)} voices${a.customVoice ? ', or a voice ID' : ''}`, a.defaultVoice ? `Default ${a.defaultVoice}` : null] : null,
+      a.noiseRemoval ? ['remove_background_noise', <code>true | false</code>, 'Cleans the source first'] : null,
+      a.seed ? ['seed', 'Integer', 'Repeats a result'] : null
+    ].filter(Boolean) : [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['prompt', a.promptLimit ? `Up to ${count(a.promptLimit)} characters` : 'Text', 'Required'],
+      a.lyrics ? ['lyrics_prompt', 'Song lyrics', a.lyricsRequired ? 'Required' : a.instrumental ? 'Needed for vocals' : 'Optional'] : null,
+      range ? ['duration_seconds', a.durationOptions ? <code>{a.durationOptions.join(' | ')}</code> : `${range.min} to ${range.max}`, a.defaultDuration ? `Default ${a.defaultDuration}` : null] : null,
+      a.instrumental ? ['force_instrumental', <code>true | false</code>, 'A track without vocals'] : null,
+      a.loop ? ['loop', <code>true | false</code>, 'A seamless loop'] : null
+    ].filter(Boolean);
+    const tiles = (a.voiceChanger ? [
+      { key: 'source', icon: 'mic', name: 'Source', detail: `${listText(a.sourceFormats || [])}, up to ${lengthText(a.maxSourceSeconds)}` },
+      voices.length ? { key: 'voices', icon: 'volume', name: 'Voices', detail: `${count(voices.length)}${a.customVoice ? ', or any ElevenLabs voice ID' : ''}` } : null,
+      a.noiseRemoval ? { key: 'noise', icon: 'sliders', name: 'Noise removal', detail: <code>remove_background_noise</code> } : null,
+      a.seed ? { key: 'seed', icon: 'flask', name: 'Repeatable', detail: <code>seed</code> } : null
+    ] : [
+      a.lyrics ? { key: 'lyrics', icon: 'text', name: 'Lyrics', detail: a.lyricsRequired ? <><code>lyrics_prompt</code>, required</> : <code>lyrics_prompt</code> } : null,
+      a.instrumental ? { key: 'inst', icon: 'music', name: 'Instrumental', detail: <code>force_instrumental</code> } : null,
+      a.loop ? { key: 'loop', icon: 'activity', name: 'Seamless loop', detail: <code>loop: true</code> } : null,
+      { key: 'length', icon: 'clock', name: 'Lengths', detail: range ? (a.durationOptions ? a.durationOptions.map(lengthText).join(' · ') : `${lengthText(range.min)} to ${lengthText(range.max)}`) : 'Set by the model' }
+    ]).concat([
+      (a.formats || []).length ? { key: 'format', icon: 'music', name: 'Output', detail: a.formats.join(' · ') } : null,
+      { key: 'queue', icon: 'clock', name: 'Queued', detail: 'Quote, queue and retrieve' }
+    ]).filter(Boolean);
+    const figures = [
+      p.kind === 'per-track' ? <Figure key="price" value={usd(p.perTrack)} label="per track" />
+        : p.kind === 'tiered' && !byMinute(p) && (p.tiers || []).length ? <Figure key="price" value={<><span className="vxn-unit is-lead">from</span>{usd(p.tiers[0].usd)}</>} label={`for ${lengthText(p.tiers[0].upTo)}`} />
+          : p.perMinute != null ? <Figure key="price" value={usd(p.perMinute)} label={p.kind === 'tiered' ? 'per started minute' : 'per minute of audio'} tip={p.kind === 'per-second' ? `Billed by the second: ${usd(p.perSecond)} a second.` : null} /> : null,
+      range ? <Figure key="length" value={lengthText(range.max)} label={a.voiceChanger ? 'longest source' : `longest ${isSfx ? 'sound' : 'track'}, from ${lengthText(range.min)}`} /> : null,
+      a.voiceChanger && voices.length ? <Figure key="voices" value={count(voices.length)} label="voices" />
+        : a.promptLimit ? <Figure key="prompt" value={count(a.promptLimit)} label="prompt characters" /> : null
+    ].filter(Boolean);
+    const scope = isSfx ? 'Sound effects' : 'Music';
+
+    return (
+      <div className="vx vxn vxm not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
+        <HoverTips />
+        <NextTop scope={scope} scopeHref="/models/music" family={family} brief={soundBrief(family, model, sample)} />
+
+        <header className="vxn-hero">
+          <div className="vxn-hero-main">
+            <div className="vxn-provider">
+              <ProviderLogo provider={provider} size={22} />
+              <span>{provider ? provider.name : family.provider}</span>
+              <span className="vxn-dot" />
+              <span>{fmtDate(model.created)}</span>
+              {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
+              {model.beta ? <Tag tone="beta">Beta</Tag> : null}
+            </div>
+            <h1 className="vxn-h1">{family.name}</h1>
+            <div className="vxn-meta">
+              <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
+              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {model.openWeights ? (source
+                ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
+                : <span className="vxn-meta-item">Open weights</span>) : null}
+            </div>
+            {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            {figures.length ? <div className="vxn-figs">{figures}</div> : null}
+            <div className="vxn-ctas">
+              <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
+            </div>
+          </div>
+          <div className="vxn-hero-side">
+            <SoundCard model={model} />
+          </div>
+        </header>
+
+        <NextNav sections={sections} active={activeSection} />
+
+        <NextSection id="quickstart" title="Quickstart" lead={a.voiceChanger ? 'Upload a recording as a queued job, then poll for it in the new voice.' : 'Music and sound effects run as queued jobs: queue the prompt, then poll for the audio.'}>
+          <JobFlow base={a.voiceChanger ? '/audio/voice-changer' : '/audio'} noun="audio" />
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
+        </NextSection>
+
+        <NextSection id="capabilities" title="Capabilities">
+          <div className="vxn-tiles">
+            {tiles.map(tile => (
+              <div key={tile.key} className="vxn-tile">
+                <span className="vxn-tile-icon"><Icon name={tile.icon} size={16} /></span>
+                <span className="vxn-tile-text"><span className="vxn-tile-name">{tile.name}</span><span className="vxn-tile-detail">{tile.detail}</span></span>
+              </div>
+            ))}
+            {Array.from({ length: (3 - (tiles.length % 3)) % 3 }, (_, i) => <span key={`fill-${i}`} className="vxn-tile is-empty" aria-hidden="true" />)}
+          </div>
+        </NextSection>
+
+        <NextSection id="pricing" title="Pricing" lead={byMinute(p) ? `Billed by the started minute of ${a.voiceChanger ? 'the source' : 'audio'}, in USD.` : p.kind === 'tiered' ? 'Billed by the length you ask for, in USD.' : p.kind === 'per-second' ? 'Billed per second of audio, in USD.' : 'One price per track, in USD.'}>
+          {p.kind === 'tiered' ? (
+            <div className="vx-table-wrap vxm-tiers">
+              <table className="vx-dtable">
+                <thead><tr><th>{a.voiceChanger ? 'Source length' : 'Length'}</th>{(p.tiers || []).map(t => <th key={t.upTo} className="vx-al-right">{`up to ${lengthText(t.upTo)}`}</th>)}</tr></thead>
+                <tbody><tr><th scope="row">Price</th>{(p.tiers || []).map(t => <td key={t.upTo} className="vx-al-right vx-num">{usd(t.usd)}</td>)}</tr></tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="vxn-prices">
+              {p.kind === 'per-track' ? <div className="vxn-price"><span className="vxn-price-label">Per track</span><span className="vxn-price-value">{usd(p.perTrack)}</span><span className="vx-muted">{range ? `any length up to ${lengthText(range.max)}` : 'at the length the model picks'}</span></div> : null}
+              {p.kind === 'per-second' ? <div className="vxn-price"><span className="vxn-price-label">Per minute</span><span className="vxn-price-value">{usd(p.perMinute)}</span><span className="vx-muted">billed by the second, {usd(p.perSecond)} each</span></div> : null}
+            </div>
+          )}
+          <h3 className="vxn-h3 vxn-gap">Estimate a batch</h3>
+          <SoundEstimator model={model} />
+          <p className="vxn-caption">Quote a job with <code>POST {a.voiceChanger ? '/audio/voice-changer' : '/audio'}/quote</code> for its exact price before you queue it.</p>
+        </NextSection>
+
+        <NextSection id="specs" title="Specs">
+          <dl className="vxn-sheet">
+            {[
+              ['Model ID', <code>{model.id}</code>],
+              endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+              a.voiceChanger ? ['Source', `${listText(a.sourceFormats || [])}, up to ${lengthText(a.maxSourceSeconds)}`] : ['Lengths', range ? (a.durationOptions ? a.durationOptions.map(lengthText).join(', ') : `${lengthText(range.min)} to ${lengthText(range.max)}`) : 'Set by the model'],
+              a.voiceChanger ? ['Voices', `${count(voices.length)}${a.customVoice ? ', or any ElevenLabs voice ID' : ''}`] : null,
+              a.promptLimit ? ['Prompt', `Up to ${count(a.promptLimit)} characters`] : null,
+              a.voiceChanger ? null : ['Lyrics', a.lyrics ? (a.lyricsRequired ? 'Required' : 'Yes') : 'No'],
+              a.instrumental ? ['Instrumental', 'Yes'] : null,
+              a.loop ? ['Seamless loop', 'Yes'] : null,
+              (a.formats || []).length ? ['Output', a.formats.join(', ')] : null,
+              PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
+              ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
+              ['Added', fmtDate(model.created)]
+            ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+          {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+
+        {a.voiceChanger ? null : (
+          <NextSection id="compare" title="Compare" lead={`Every ${isSfx ? 'sound effects' : 'music'} model on Venice.`}>
+            <TaskCompare model={model} catalog={catalog} includes={m => m.task === model.task && !(m.audio || {}).voiceChanger} order={() => 0} columns={soundColumns} />
+          </NextSection>
+        )}
       </div>
     );
   };
