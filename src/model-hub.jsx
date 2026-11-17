@@ -1878,10 +1878,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     }
     if (model.task === 'tts' && !(model.audio && model.audio.async)) {
       const voice = (model.audio && model.audio.voices && model.audio.voices[0]) || 'default';
+      const format = (model.audio && (model.audio.defaultFormat || (model.audio.formats || [])[0])) || 'mp3';
       return {
-        curl: `curl ${API}/audio/speech \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    "input": "Private AI for everyone.",\n    "voice": "${voice}",\n    "response_format": "mp3"\n  }' --output speech.mp3`,
-        python: `${pyHead}\nwith client.audio.speech.with_streaming_response.create(\n    model="${id}",\n    voice="${voice}",\n    input="Private AI for everyone.",\n) as response:\n    response.stream_to_file("speech.mp3")`,
-        typescript: `${tsHead}\nimport { writeFile } from "node:fs/promises";\n\nconst speech = await client.audio.speech.create({\n  model: "${id}",\n  voice: "${voice}",\n  input: "Private AI for everyone.",\n});\nawait writeFile("speech.mp3", Buffer.from(await speech.arrayBuffer()));`
+        curl: `curl ${API}/audio/speech \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    "input": "Private AI for everyone.",\n    "voice": "${voice}",\n    "response_format": "${format}"\n  }' --output speech.${format}`,
+        python: `${pyHead}\nwith client.audio.speech.with_streaming_response.create(\n    model="${id}",\n    voice="${voice}",\n    input="Private AI for everyone.",\n    response_format="${format}",\n) as response:\n    response.stream_to_file("speech.${format}")`,
+        typescript: `${tsHead}\nimport { writeFile } from "node:fs/promises";\n\nconst speech = await client.audio.speech.create({\n  model: "${id}",\n  voice: "${voice}",\n  input: "Private AI for everyone.",\n  response_format: "${format}",\n});\nawait writeFile("speech.${format}", Buffer.from(await speech.arrayBuffer()));`
       };
     }
     if (model.task === 'stt') {
