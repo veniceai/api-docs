@@ -2756,7 +2756,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
 
   const ModelPage = ({ data }) => (data.family.task === 'chat' ? <ModelPageNext data={data} />
-    : data.family.task === 'image-generation' ? <ImagePageNext data={data} /> : <ModelPageClassic data={data} />);
+    : data.family.task === 'image-generation' ? <ImagePageNext data={data} />
+      : data.family.task === 'video' ? <VideoPageNext data={data} /> : <ModelPageClassic data={data} />);
 
   const ModelPageClassic = ({ data }) => {
     const { family, models, related, providers } = data;
@@ -3499,8 +3500,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const byRenderOrder = (a, b) => RENDER_ORDER.indexOf(a.prompt) - RENDER_ORDER.indexOf(b.prompt);
 
   const RenderFeature = ({ item, onOpen }) => (
-    <button type="button" className="vxi-feature" onClick={() => onOpen(item)} aria-label={`Open the ${item.title} render`}>
-      <img src={item.url} alt={item.caption || item.title} />
+    <button type="button" className={cls('vxi-feature', item.type === 'video' && 'is-video')} onClick={() => onOpen(item)} aria-label={`Open the ${item.title} render`}>
+      {item.type === 'video'
+        ? <HoverVideo key={item.url} src={item.url} className="vxv-media-el" autoPlay={!prefersReducedMotion()} />
+        : <img src={item.url} alt={item.caption || item.title} />}
       <span className="vxi-feature-cap"><strong>{item.title}</strong><span>{item.caption}</span></span>
     </button>
   );
@@ -3535,11 +3538,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return (
       <div className="vxi-compare">
         <div className="vxi-compare-head">
-          <div className="vxn-switch" role="radiogroup" aria-label="Reference prompt">
-            {renders.map(item => (
-              <button key={item.prompt} type="button" role="radio" aria-checked={item === render} className={cls(item === render && 'is-active')} onClick={() => onSelect(item)}>{item.title}</button>
-            ))}
-          </div>
+          {renders.length > 1 ? (
+            <div className="vxn-switch" role="radiogroup" aria-label="Reference prompt">
+              {renders.map(item => (
+                <button key={item.prompt} type="button" role="radio" aria-checked={item === render} className={cls(item === render && 'is-active')} onClick={() => onSelect(item)}>{item.title}</button>
+              ))}
+            </div>
+          ) : null}
           {render.caption ? <q className="vxi-prompt">{render.caption}</q> : null}
         </div>
         <div className="vxi-grid">
@@ -3784,6 +3789,408 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               ratios.length ? ['Aspect ratios', `${ratios.length}${image.defaultAspectRatio ? ` · default ${image.defaultAspectRatio}` : ''}`] : null,
               image.promptLimit ? ['Prompt limit', `${count(image.promptLimit)} characters`] : null,
               image.steps ? ['Steps', `default ${image.steps.default}, max ${image.steps.max}`] : null,
+              PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
+              ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
+              ['Added', fmtDate(model.created)]
+            ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+          {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+      </div>
+    );
+  };
+
+  /* ------------------------------------------------------------ video page, next */
+
+  const MODE_ORDER = ['t2v', 'i2v', 'r2v', 'flf', 'transition', 'motion', 'v2v', 'multi-angle', 'upscale'];
+  const MODE_ICONS = { t2v: 'text', i2v: 'image', r2v: 'layers', flf: 'film', transition: 'film', motion: 'activity', v2v: 'wand', 'multi-angle': 'eye', upscale: 'maximize' };
+  const VIDEO_RENDER_ORDER = ['cinematic-landscape', 'urban-night', 'ocean-loop', 'upscaled', 'recast', 'extended', 'bicubic', 'source'];
+  const VIDEO_SUITE = VIDEO_RENDER_ORDER.slice(0, 3);
+  const AUDIO_TEXT = { native: 'Generated with every clip', optional: 'Optional, on by default', none: 'None' };
+  const INPUT_FIELDS = [['image', 'image_url'], ['endImage', 'end_image_url'], ['reference', 'reference_image_urls'], ['video', 'video_url'], ['referenceVideo', 'reference_video_urls'], ['audio', 'audio_url']];
+  const VIDEO_FLOW = [
+    ['Quote', '/video/quote', 'Optional. Prices the job in USD without charging for it.'],
+    ['Queue', '/video/queue', 'Checks and charges the job, then returns a queue_id at once.'],
+    ['Retrieve', '/video/retrieve', 'Poll it with the queue_id until the video is ready.']
+  ];
+  const VIDEO_STANDING = [
+    { key: 'price', label: 'Price per second', better: 'cheaper', lowerIsBetter: true, format: v => usd(v), tip: 'The lowest rate across its resolutions and audio settings.' },
+    { key: 'length', label: 'Longest clip', better: 'longer', lowerIsBetter: false, format: v => `${v}s` }
+  ];
+  const videoStandingValues = model => ({
+    price: (model.pricing || {}).status === 'quoted' ? model.pricing.fromPerSecond : null,
+    length: maxVideoSeconds(model) || null
+  });
+  const prefersReducedMotion = () => typeof window !== 'undefined' && Boolean(window.matchMedia) && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const byVideoOrder = (a, b) => (VIDEO_RENDER_ORDER.indexOf(a.prompt) + 1 || 99) - (VIDEO_RENDER_ORDER.indexOf(b.prompt) + 1 || 99);
+  const videoRate = model => {
+    const p = model.pricing || {};
+    if (p.status !== 'quoted' || p.fromPerSecond == null) return null;
+    return `${p.toPerSecond > p.fromPerSecond ? 'from ' : ''}${usd(p.fromPerSecond)} / sec`;
+  };
+  const audioChangesPrice = model => {
+    const quotes = (model.pricing || {}).quotes || {};
+    return (model.video || {}).audio === 'optional' && Object.keys(quotes).some(k => k.endsWith('|on') && quotes[k] !== quotes[k.replace(/\|on$/, '|off')]);
+  };
+  const sortedResolutions = video => ((video && video.resolutions) || []).filter(r => r.height).sort((a, b) => a.height - b.height);
+  const timedDurations = video => ((video && video.durations) || []).filter(d => d.seconds).sort((a, b) => a.seconds - b.seconds);
+
+  // Everything an agent needs to generate with the family, as Markdown.
+  const videoBrief = (family, modes, model, sample) => {
+    const video = model.video || {};
+    const p = model.pricing || {};
+    const res = sortedResolutions(video);
+    const ratios = video.aspectRatios || [];
+    const rates = key => res.map(r => ((p.perSecond || {})[`${r.value}|${key}`] != null ? `${r.label} ${usd(p.perSecond[`${r.value}|${key}`])}` : null)).filter(Boolean).join(', ');
+    const price = p.status === 'quoted'
+      ? (audioChangesPrice(model) ? `- Price per second (USD): with audio ${rates('on')}; silent ${rates('off')}` : `- Price per second (USD): ${rates(video.audio === 'none' ? 'off' : 'on') || rates('off')}`)
+        + (p.quotedAt ? `, quoted ${fmtDate(Math.floor(new Date(p.quotedAt).getTime() / 1000))}` : '')
+      : p.status === 'input-dependent' ? '- Price: billed by the length of the source video; quote it with `POST /video/quote` and its `video_url`'
+        : '- Price: quote it with `POST /video/quote`';
+    const fields = [video.mode !== 'upscale' ? 'prompt' : null, ...INPUT_FIELDS.filter(([key]) => (video.inputs || {})[key]).map(([, field]) => field)].filter(Boolean);
+    return [
+      `# ${family.name} on the Venice API`,
+      '',
+      modes.length > 1
+        ? `- Model IDs: ${modes.map(m => `\`${m.id}\` (${(VARIANT_LABELS[m.variant] || m.variant).toLowerCase()})`).join(', ')}`
+        : `- Model ID: \`${model.id}\``,
+      `- Flow: \`POST ${API}/video/queue\` returns a \`queue_id\`. Poll \`POST ${API}/video/retrieve\` with the \`model\` and \`queue_id\` until it returns the MP4. When the queue response has a \`download_url\`, retrieve reports \`COMPLETED\` instead and the MP4 is at that URL. \`POST ${API}/video/quote\` prices a job without charging for it.`,
+      '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
+      modes.length > 1 ? `\n## ${model.id}\n` : null,
+      price,
+      timedDurations(video).length ? `- Lengths: ${durationText(video.durations)}; \`duration\` is required` : '- Length: matches the source video; omit `duration`',
+      res.length ? `- Resolutions: ${res.map(r => r.value).join(', ')}` : null,
+      ratios.length ? `- Aspect ratios: ${ratios.join(', ')}; \`aspect_ratio\` is required` : '- Aspect ratio: set by the input or the model; `aspect_ratio` is rejected',
+      `- Audio: ${(AUDIO_TEXT[video.audio] || 'none').toLowerCase()}${video.audio === 'optional' ? ' (`audio`)' : ''}`,
+      fields.length ? `- Inputs: ${listText(fields.map(f => `\`${f}\``))}` : null,
+      video.mode !== 'upscale' ? `- Prompt: up to ${count(video.promptLimit || 2500)} characters` : null,
+      PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      `- Docs: https://docs.venice.ai/models/${family.slug}`,
+      '',
+      '```bash',
+      sample,
+      '```'
+    ].filter(line => line != null).join('\n');
+  };
+
+  const VideoThumbs = ({ items, active, onSelect }) => (
+    <div className="vxv-thumbs" role="group" aria-label="Sample renders" style={{ '--vxv-n': Math.max(3, items.length) }}>
+      {items.map(item => (
+        <button key={item.url} type="button" aria-pressed={item === active} className={cls('vxv-thumb', item === active && 'is-active')} onClick={() => onSelect(item)}>
+          <span className="vxv-thumb-media"><HoverVideo src={item.url} className="vxv-media-el" /></span>
+          <span>{item.title}</span>
+        </button>
+      ))}
+    </div>
+  );
+
+  const CompareVideo = ({ item }) => <span className="vxv-tile-media"><HoverVideo src={item.url} className="vxv-media-el" /></span>;
+
+  // Each resolution drawn to scale as a frame playing the model's own render,
+  // and each length as a bar, priced per clip.
+  const VideoPriceGrid = ({ model, render, audio }) => {
+    const video = model.video || {};
+    const p = model.pricing || {};
+    const res = sortedResolutions(video);
+    const cols = res.length ? res : [{ value: '-', label: 'Default', height: 0 }];
+    const audioKey = video.audio === 'optional' ? audio : video.audio === 'native' ? 'on' : 'off';
+    const table = clipTable(model, cols, audioKey) || { rows: timedDurations(video), rates: null };
+    const top = Math.max(...cols.map(c => c.height || 0)) || 1;
+    const longest = Math.max(...table.rows.map(d => d.seconds), 1);
+    return (
+      <div className="vx-table-wrap">
+        <table className="vxi-price-grid">
+          <caption className="vx-sr-only">Price per clip by length and resolution{video.audio === 'optional' ? (audioKey === 'on' ? ', with audio' : ', silent') : ''}</caption>
+          <thead>
+            <tr>
+              <td />
+              {cols.map(c => (
+                <th key={c.value} scope="col">
+                  <span className="vxv-frame" style={{ '--vxv-side': (c.height || top) / top }} aria-hidden="true">
+                    {render ? <HoverVideo src={render.url} className="vxv-media-el" autoPlay={!prefersReducedMotion()} /> : null}
+                  </span>
+                  <span className="vxi-step-res">{c.label}</span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {table.rates ? (
+              <tr>
+                <th scope="row">Per second</th>
+                {table.rates.map((rate, i) => <td key={cols[i].value}>{usd(rate)}</td>)}
+              </tr>
+            ) : null}
+            {table.rows.map(d => (
+              <tr key={d.value}>
+                <th scope="row">{d.seconds}s clip<span className="vxv-len" aria-hidden="true"><span style={{ width: `${(d.seconds / longest) * 100}%` }} /></span></th>
+                {cols.map(c => <td key={c.value}>{usd((p.quotes || {})[`${c.value}|${d.value}|${audioKey}`])}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const VideoEstimator = ({ model, audio, onAudio }) => {
+    const video = model.video || {};
+    const res = sortedResolutions(video);
+    const durs = timedDurations(video);
+    const prefer = (list, key, want) => (list.find(x => x[key] === want) || list[0] || {})[key];
+    const [clips, setClips] = useState(10);
+    const [h, setH] = useState(() => prefer(res, 'height', 720) || 720);
+    const [s, setS] = useState(() => prefer(durs, 'seconds', 5) || 5);
+    useEffect(() => {
+      setH(prefer(res, 'height', 720) || 720);
+      setS(prefer(durs, 'seconds', 5) || 5);
+    }, [model.id]);
+    const vp = videoPrice(model, { h, s, a: audio });
+    const lengths = durationSteps(durs);
+    const slider = durs.length > 6 && lengths.step ? lengths : null;
+    return (
+      <div className="vxn-est">
+        <div className="vxi-est-controls">
+          <label className="vxn-field"><span>Clips</span><input type="number" min="0" step="1" value={clips} onChange={e => setClips(Math.max(0, Math.round(Number(e.target.value) || 0)))} /></label>
+          {res.length > 1 ? <div className="vxn-field"><span>Resolution</span><Segmented ariaLabel="Resolution" value={h} onChange={setH} options={res.map(r => ({ value: r.height, label: r.label }))} /></div> : null}
+          {durs.length > 1 ? (
+            <div className="vxn-field"><span>Length</span>
+              {slider ? (
+                <span className="vx-range">
+                  <input type="range" min={slider.secs[0]} max={slider.secs[slider.secs.length - 1]} step={slider.step} value={s} aria-label="Length" aria-valuetext={`${s} seconds`} onChange={e => setS(Number(e.target.value))} />
+                  <span className="vx-range-value">{s}s</span>
+                </span>
+              ) : <Segmented ariaLabel="Length" value={s} onChange={setS} options={durs.map(d => ({ value: d.seconds, label: `${d.seconds}s` }))} />}
+            </div>
+          ) : null}
+          {video.audio === 'optional' ? <div className="vxn-field"><span>Audio</span><Segmented ariaLabel="Audio" value={audio} onChange={onAudio} options={[{ value: 'on', label: 'With audio' }, { value: 'off', label: 'Silent' }]} /></div> : null}
+        </div>
+        <div className="vxn-est-result" aria-live="polite">
+          <div><span className="vxn-est-value">{usd(vp.clip)}</span><span className="vx-muted">per {vp.seconds ? `${vp.seconds}s ` : ''}clip</span></div>
+          <div><span className="vxn-est-value is-total">{usd(vp.clip != null ? vp.clip * clips : null)}</span><span className="vx-muted">for {count(clips)} clips</span></div>
+        </div>
+      </div>
+    );
+  };
+
+  const VideoFlow = () => (
+    <ol className="vxv-flow">
+      {VIDEO_FLOW.map(([name, path, note], i) => (
+        <li key={path}>
+          <span className="vxv-flow-head"><span className="vxv-flow-step">{i + 1}</span>{name}</span>
+          <code>POST {path}</code>
+          <span className="vx-muted">{note}</span>
+        </li>
+      ))}
+    </ol>
+  );
+
+  const videoParams = model => {
+    const video = model.video || {};
+    const inputs = video.inputs || {};
+    const upscale = video.mode === 'upscale';
+    const res = sortedResolutions(video);
+    const timed = timedDurations(video);
+    const ratios = video.aspectRatios || [];
+    return [
+      ['model', <code>{model.id}</code>, 'Required'],
+      upscale ? null : ['prompt', `Up to ${count(video.promptLimit || 2500)} characters`, video.mode === 'multi-angle' ? 'Optional' : 'Required'],
+      timed.length
+        ? ['duration', timed.length > 6 ? durationText(video.durations) : <code>{timed.map(d => d.value).join(' | ')}</code>, 'Required']
+        : ['duration', 'Omit it', 'Read from the source video'],
+      res.length ? ['resolution', <code>{res.map(r => r.value).join(' | ')}</code>, 'Optional'] : null,
+      upscale ? ['upscale_factor', <code>1 | 2 | 4</code>, '1 enhances without enlarging'] : null,
+      ratios.length ? ['aspect_ratio', <code>{ratios.join(' | ')}</code>, 'Required'] : null,
+      video.audio === 'optional' ? ['audio', <code>true | false</code>, 'Default true'] : null,
+      inputs.image ? ['image_url', 'URL or data URL', video.mode === 'motion' ? 'The character to animate' : 'The first frame'] : null,
+      inputs.endImage ? ['end_image_url', 'URL or data URL', ['flf', 'transition'].includes(video.mode) ? 'The last frame, required' : 'The last frame'] : null,
+      inputs.reference ? ['reference_image_urls', 'Image URLs', 'Characters or styles to keep'] : null,
+      inputs.video ? ['video_url', 'URL or data URL', 'The source video, required'] : null,
+      inputs.referenceVideo ? ['reference_video_urls', 'Video URLs', 'Reference clips, or the clip to edit'] : null,
+      inputs.audio ? ['audio_url', 'WAV or MP3 URL', 'Audio for the clip to follow'] : null
+    ].filter(Boolean);
+  };
+
+  const VideoPageNext = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const modes = [...models].sort((a, b) => MODE_ORDER.indexOf(a.variant) - MODE_ORDER.indexOf(b.variant));
+    const [variantId, setVariantId] = useState(() => {
+      const v = readParams().get('v');
+      return v && models.some(m => m.id === v) ? v : family.primary;
+    });
+    const [audio, setAudio] = useState('on');
+    const now = useNow();
+    const { catalog } = useCatalog();
+    const headerHeight = useHeaderHeight();
+    const primary = models.find(m => m.id === family.primary) || models[0];
+    const model = models.find(m => m.id === variantId) || primary;
+    const provider = providers[family.provider] || providers[model.provider];
+    const video = model.video || {};
+    const p = model.pricing || {};
+    const source = safeUrl(model.source);
+    const endpoints = (model.endpoints || []).filter(e => e.supported !== false);
+    const endpoint = endpoints.find(e => e.recommended) || endpoints[0];
+    const similar = (related && related.similar) || [];
+    const versions = (related && related.versions) || [];
+    const res = sortedResolutions(video);
+    const timed = timedDurations(video);
+    const ratios = video.aspectRatios || [];
+    const renders = [...(primary.media || [])].filter(item => item.type === 'video').sort(byVideoOrder);
+    const suite = renders.filter(item => VIDEO_SUITE.includes(item.prompt));
+    const [promptId, setPromptId] = useState(renders[0] ? renders[0].prompt : null);
+    const [opened, setOpened] = useState(null);
+    const render = renders.find(item => item.prompt === promptId) || renders[0];
+    const compared = suite.find(item => item.prompt === promptId) || suite[0];
+    const selectRender = item => setPromptId(item.prompt);
+    const selectMode = id => {
+      setVariantId(id);
+      writeParams({ v: id === family.primary ? null : id });
+    };
+    const sections = [compared ? ['compare', 'Same prompt'] : null, ['pricing', 'Pricing'], ['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['specs', 'Specs']].filter(Boolean);
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const sample = codeSamples(model, endpoint && endpoint.id).curl;
+    const figures = [
+      p.status === 'quoted' && p.fromPerSecond != null
+        ? <Figure key="price" value={<>{p.toPerSecond > p.fromPerSecond ? <span className="vxn-unit is-lead">from</span> : null}{usd(p.fromPerSecond)}</>} label="per second of video" />
+        : null,
+      res.length ? <Figure key="res" value={heightLabel(maxVideoHeight(model))} label={`max resolution${res.length > 1 ? `, ${res.length} sizes` : ''}`} /> : null,
+      timed.length ? <Figure key="length" value={`${maxVideoSeconds(model)}s`} label={timed.length > 1 ? `longest clip, from ${minVideoSeconds(model)}s` : 'clip length'} /> : null
+    ].filter(Boolean);
+    const tiles = [
+      ...modes.map(m => ({ key: m.id, icon: MODE_ICONS[m.variant] || 'video', name: VARIANT_LABELS[m.variant] || m.variant, active: m.id === model.id && modes.length > 1,
+        detail: <><code>{m.id}</code><br />Takes {listText(videoInputList(m.video))}</> })),
+      { key: 'audio', icon: video.audio === 'none' ? 'mute' : 'volume', name: video.audio === 'none' ? 'Silent' : 'Audio', detail: video.audio === 'optional' ? <code>audio: true | false</code> : AUDIO_TEXT[video.audio] || 'None' }
+    ];
+
+    return (
+      <div className="vx vxn vxi vxv not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
+        <HoverTips />
+        <NextTop scope="Video" scopeHref="/models/video" family={family} brief={videoBrief(family, modes, model, sample)} />
+
+        <header className="vxn-hero vxv-hero">
+          <div className="vxn-hero-main">
+            <div className="vxn-provider">
+              <ProviderLogo provider={provider} size={22} />
+              <span>{provider ? provider.name : family.provider}</span>
+              <span className="vxn-dot" />
+              <span>{fmtDate(model.created)}</span>
+              {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
+              {model.beta ? <Tag tone="beta">Beta</Tag> : null}
+            </div>
+            <h1 className="vxn-h1">{family.name}</h1>
+            <div className="vxn-meta">
+              <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
+              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {model.openWeights ? (source
+                ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
+                : <span className="vxn-meta-item">Open weights</span>) : null}
+              {model.uncensored ? <span className="vxn-meta-item">Uncensored</span> : null}
+            </div>
+            {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            {figures.length ? <div className="vxn-figs">{figures}</div> : null}
+            {modes.length > 1 ? (
+              <div className="vxn-variants vxv-modes">
+                <span className="vxn-variants-label">Mode</span>
+                <div className="vxn-switch" role="radiogroup" aria-label="Mode">
+                  {modes.map(m => (
+                    <button key={m.id} type="button" role="radio" aria-checked={m.id === model.id} className={cls(m.id === model.id && 'is-active')} onClick={() => selectMode(m.id)}>{VARIANT_LABELS[m.variant] || m.variant}</button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <div className="vxn-ctas">
+              <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
+              <a className="vxn-textlink" href={`https://venice.ai/studio/video?model=${encodeURIComponent(model.id)}`} target="_blank" rel="noopener noreferrer">Try in Venice<Icon name="arrowRight" size={14} /></a>
+            </div>
+          </div>
+          {render ? (
+            <div className="vxv-hero-side">
+              <RenderFeature item={render} onOpen={setOpened} />
+              {renders.length > 1 ? <VideoThumbs items={renders} active={render} onSelect={selectRender} /> : null}
+            </div>
+          ) : null}
+        </header>
+        <Lightbox item={opened} onClose={() => setOpened(null)} />
+
+        <NextNav sections={sections} active={activeSection} />
+
+        {compared ? (
+          <NextSection id="compare" title="Same prompt, other models" lead="Every video model renders the same reference prompts, so their clips line up side by side. Hover a clip to play it.">
+            <PromptCompare family={family} render={compared} renders={suite} onSelect={selectRender} catalog={catalog} similar={similar}
+              task="video" noun="video models" priceOf={videoRate} Media={CompareVideo} />
+          </NextSection>
+        ) : null}
+
+        <NextSection id="pricing" title="Pricing" lead={p.status === 'quoted' ? 'Billed per clip in USD, by length and resolution. Each resolution is drawn to scale.' : 'Quoted per job.'}>
+          {p.status === 'quoted' ? (
+            <>
+              {audioChangesPrice(model) ? (
+                <div className="vxv-audio">
+                  <Segmented ariaLabel="Audio" value={audio} onChange={setAudio} options={[{ value: 'on', label: 'With audio' }, { value: 'off', label: 'Silent' }]} />
+                </div>
+              ) : null}
+              <VideoPriceGrid model={model} render={suite[0] || render} audio={audio} />
+              <p className="vxn-caption">
+                {video.audio === 'optional' && !audioChangesPrice(model) ? 'Audio on or off costs the same. ' : video.audio === 'native' ? 'Every clip comes with audio. ' : ''}
+                Quoted from <code>POST /video/quote</code>{p.quotedAt ? ` on ${fmtDate(Math.floor(new Date(p.quotedAt).getTime() / 1000))}` : ''}. Prices can change, so quote a job before you queue it.
+              </p>
+              <div className="vxn-split vxn-gap">
+                <div>
+                  <h3 className="vxn-h3">Estimate a batch</h3>
+                  <VideoEstimator model={model} audio={audio} onAudio={setAudio} />
+                </div>
+                <div>
+                  <h3 className="vxn-h3">Against other video models</h3>
+                  <Standing model={model} catalog={catalog} task="video" noun="video models" metrics={VIDEO_STANDING} valuesOf={videoStandingValues} />
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="vx-text">
+              {p.status === 'input-dependent'
+                ? <>This mode bills by the length of the source video. Call <code>POST /video/quote</code> with your <code>video_url</code> for the price before you queue the job.</>
+                : <>Call <code>POST /video/quote</code> for this mode's price before you queue a job.</>}
+            </p>
+          )}
+        </NextSection>
+
+        <NextSection id="quickstart" title="Quickstart" lead="Video is asynchronous: queue a job, then poll for the clip.">
+          <VideoFlow />
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={videoParams(model)} />
+        </NextSection>
+
+        <NextSection id="capabilities" title="Capabilities" lead={modes.length > 1 ? `${modes.length} modes, each with its own model ID.` : 'What the model takes in and renders.'}>
+          <div className="vxn-tiles">
+            {tiles.map(tile => (
+              <div key={tile.key} className={cls('vxn-tile', tile.active && 'is-active')}>
+                <span className="vxn-tile-icon"><Icon name={tile.icon} size={16} /></span>
+                <span className="vxn-tile-text"><span className="vxn-tile-name">{tile.name}</span><span className="vxn-tile-detail">{tile.detail}</span></span>
+              </div>
+            ))}
+            {Array.from({ length: (3 - (tiles.length % 3)) % 3 }, (_, i) => <span key={`fill-${i}`} className="vxn-tile is-empty" aria-hidden="true" />)}
+          </div>
+          {ratios.length ? (
+            <>
+              <h3 className="vxn-h3 vxn-gap">Aspect ratios</h3>
+              <div className="vxi-ratios">{ratios.filter(r => /^\d/.test(r)).map(ratio => <AspectShape key={ratio} ratio={ratio} />)}</div>
+            </>
+          ) : null}
+        </NextSection>
+
+        <NextSection id="specs" title="Specs">
+          <dl className="vxn-sheet">
+            {[
+              ['Model ID', <code>{model.id}</code>],
+              modes.length > 1 ? ['Mode', VARIANT_LABELS[model.variant] || model.variant] : null,
+              endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+              res.length ? ['Resolutions', res.map(r => r.label).join(', ')] : null,
+              ['Lengths', timed.length ? durationText(video.durations) : 'Matches the source video'],
+              ['Aspect ratios', ratios.length ? ratios.join(', ') : 'Set by the input or the model'],
+              ['Audio', AUDIO_TEXT[video.audio] || 'None'],
+              ['Inputs', upperFirst(listText(videoInputList(video)))],
+              video.mode !== 'upscale' ? ['Prompt limit', `${count(video.promptLimit || 2500)} characters`] : null,
               PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
               ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
               ['Added', fmtDate(model.created)]
