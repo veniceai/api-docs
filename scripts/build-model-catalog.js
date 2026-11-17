@@ -586,6 +586,22 @@ function normalizeModel(model, ctx) {
         languages: spec.supports_language_code ? 'configurable' : null,
         async: model.type === 'music'
       };
+      if (spec.voice_cloning) {
+        const cloning = spec.voice_cloning;
+        entry.audio.cloning = { formats: cloning.accepted_formats || [], minSeconds: cloning.min_sample_seconds || null, retentionDays: cloning.retention_days || null };
+      }
+    } else if (spec.voice_changer) {
+      entry.audio = {
+        voiceChanger: true,
+        voices: spec.voices || [],
+        defaultVoice: spec.default_voice || null,
+        customVoice: Boolean(spec.supports_custom_voice_id),
+        sourceFormats: spec.accepted_audio_formats || [],
+        maxSourceSeconds: spec.max_source_audio_duration_seconds || null,
+        noiseRemoval: Boolean(spec.supports_background_noise_removal),
+        seed: Boolean(spec.supports_seed),
+        formats: spec.supported_formats || []
+      };
     } else if (task === 'music' || task === 'sfx') {
       entry.audio = {
         minDuration: spec.min_duration || null,
@@ -659,6 +675,10 @@ function endpointsFor(entry, overrides) {
     add('speech', 'POST', '/audio/speech', 'Create speech');
   } else if (task === 'stt') {
     add('transcriptions', 'POST', '/audio/transcriptions', 'Transcribe audio');
+  } else if (entry.audio?.voiceChanger) {
+    add('voice-changer-queue', 'POST', '/audio/voice-changer/queue', 'Queue conversion');
+    add('voice-changer-retrieve', 'POST', '/audio/voice-changer/retrieve', 'Retrieve result');
+    add('voice-changer-quote', 'POST', '/audio/voice-changer/quote', 'Quote price');
   } else if (modality === 'audio') {
     add('audio-queue', 'POST', '/audio/queue', 'Queue generation');
     add('audio-retrieve', 'POST', '/audio/retrieve', 'Retrieve result');
