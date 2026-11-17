@@ -4314,32 +4314,25 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  // The embedding models are few, so the table lists them all.
-  const EmbeddingCompare = ({ model, catalog }) => {
+  // A model type has few enough models to list them all.
+  const TaskCompare = ({ model, catalog, includes, order, columns }) => {
     const rows = useMemo(() => (catalog ? catalog.families
-      .filter(f => f.task === 'embedding' && catalog.models[f.primary])
+      .filter(f => catalog.models[f.primary] && includes(catalog.models[f.primary]))
       .map(f => ({ family: f, model: catalog.models[f.primary] }))
-      .sort((a, b) => ((a.model.pricing || {}).input || 0) - ((b.model.pricing || {}).input || 0) || a.family.name.localeCompare(b.family.name)) : []), [catalog]);
+      .sort((a, b) => order(a.model) - order(b.model) || a.family.name.localeCompare(b.family.name)) : []), [catalog]);
     if (!rows.length) return null;
-    const most = Math.max(...rows.map(row => (row.model.embedding || {}).dimensions || 0), 1);
+    const cols = columns(rows.map(row => row.model));
     return (
       <div className="vx-table-wrap vxn-compare">
         <table className="vx-dtable">
-          <thead><tr><th>Model</th><th>Dimensions</th><th className="vx-al-right vx-hide-sm">Max input</th><th className="vx-hide-sm">Privacy</th><th className="vx-al-right">Per 1M tokens</th></tr></thead>
+          <thead><tr><th>Model</th>{cols.map(c => <th key={c.label} className={cls(c.right && 'vx-al-right', c.hide && 'vx-hide-sm') || undefined}>{c.label}</th>)}</tr></thead>
           <tbody>
             {rows.map(({ family, model: m }) => {
-              const e = m.embedding || {};
               const current = m.id === model.id;
               return (
                 <tr key={family.slug} className={cls(current && 'is-current')}>
                   <td>{current ? <strong>{family.name}</strong> : <a href={`/models/${family.slug}`}>{family.name}</a>}</td>
-                  <td>
-                    <span className="vxe-dims"><span className="vxe-dims-track"><span style={{ width: `${((e.dimensions || 0) / most) * 100}%` }} /></span>
-                      <span className="vx-num">{e.dimensions ? count(e.dimensions) : '—'}</span>{e.customDimensions ? <span className="vx-muted vx-hide-sm">or fewer</span> : null}</span>
-                  </td>
-                  <td className="vx-al-right vx-num vx-hide-sm">{e.maxInputTokens ? count(e.maxInputTokens) : '—'}</td>
-                  <td className="vx-hide-sm">{PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy}</td>
-                  <td className="vx-al-right vx-num">{usd((m.pricing || {}).input)}</td>
+                  {cols.map(c => <td key={c.label} className={cls(c.right && 'vx-al-right vx-num', c.hide && 'vx-hide-sm') || undefined}>{c.render(m)}</td>)}
                 </tr>
               );
             })}
@@ -4347,6 +4340,22 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         </table>
       </div>
     );
+  };
+
+  const embeddingColumns = models => {
+    const most = Math.max(...models.map(m => (m.embedding || {}).dimensions || 0), 1);
+    return [
+      { label: 'Dimensions', render: m => {
+        const e = m.embedding || {};
+        return (
+          <span className="vxe-dims"><span className="vxe-dims-track"><span style={{ width: `${((e.dimensions || 0) / most) * 100}%` }} /></span>
+            <span className="vx-num">{e.dimensions ? count(e.dimensions) : '—'}</span>{e.customDimensions ? <span className="vx-muted vx-hide-sm">or fewer</span> : null}</span>
+        );
+      } },
+      { label: 'Max input', right: true, hide: true, render: m => ((m.embedding || {}).maxInputTokens ? count(m.embedding.maxInputTokens) : '—') },
+      { label: 'Privacy', hide: true, render: m => (PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy) },
+      { label: 'Per 1M tokens', right: true, render: m => usd((m.pricing || {}).input) }
+    ];
   };
 
   const EmbeddingPageNext = ({ data }) => {
@@ -4453,7 +4462,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         </NextSection>
 
         <NextSection id="compare" title="Compare" lead="Every embedding model on Venice, cheapest first.">
-          <EmbeddingCompare model={model} catalog={catalog} />
+          <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'embedding'} order={m => (m.pricing || {}).input || 0} columns={embeddingColumns} />
         </NextSection>
       </div>
     );
