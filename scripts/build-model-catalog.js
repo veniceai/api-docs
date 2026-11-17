@@ -140,6 +140,9 @@ const RESOLUTION_HEIGHTS = {
 // 150 words per minute ~ 825 characters, the conversion Artificial Analysis uses.
 const TTS_CHARS_PER_MINUTE = 825;
 const QUALITY_ORDER = ['low', 'medium', 'high'];
+// POST /embeddings turns away an input over 8,192 tokens, estimated from its
+// length, whatever the model itself can read.
+const EMBEDDING_INPUT_CAP = 8192;
 
 // ---------------------------------------------------------------- inputs
 
@@ -608,7 +611,10 @@ function normalizeModel(model, ctx) {
           ? { value: entry.pricing.perMinute, unit: 'per minute of audio', basis: 'minute' }
           : { value: entry.pricing.perTrack ?? null, unit: 'per track', basis: 'track' };
   } else if (modality === 'embedding') {
-    entry.embedding = { dimensions: spec.embeddingDimensions || null, maxInputTokens: spec.maxInputTokens || null };
+    const modelInput = spec.maxInputTokens || null;
+    entry.embedding = { dimensions: spec.embeddingDimensions || null, maxInputTokens: modelInput && Math.min(modelInput, EMBEDDING_INPUT_CAP) };
+    if (modelInput > EMBEDDING_INPUT_CAP) entry.embedding.modelInputTokens = modelInput;
+    if (spec.supportsCustomDimensions) entry.embedding.customDimensions = true;
     entry.pricing = { input: usd(pricing.input) };
     entry.headline = { value: entry.pricing.input, unit: 'per 1M tokens', basis: 'input' };
   }
