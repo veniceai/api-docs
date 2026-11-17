@@ -1789,10 +1789,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     videoRecast: 'Recast the person in the video as the person in the reference image',
     videoMotion: 'The character follows the movements in the source video',
     music: 'Warm lo-fi hip hop beat with soft piano and vinyl crackle',
+    lyrics: '[Verse]\\nCity lights are calling me home\\n[Chorus]\\nWe are the dreamers',
     sfx: 'Heavy wooden door creaking open in a stone hallway'
   };
 
-  const codeSamples = (model, endpointId) => {
+  const codeSamples = (model, endpointId, { voice: chosenVoice } = {}) => {
     const id = model.id;
     const key = '$VENICE_API_KEY';
     const auth = `-H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"`;
@@ -1877,11 +1878,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       };
     }
     if (model.task === 'tts' && !(model.audio && model.audio.async)) {
-      const voice = (model.audio && model.audio.voices && model.audio.voices[0]) || 'default';
+      const voice = chosenVoice || (model.audio && model.audio.voices && model.audio.voices[0]) || 'default';
+      const format = (model.audio && (model.audio.defaultFormat || (model.audio.formats || [])[0])) || 'mp3';
       return {
-        curl: `curl ${API}/audio/speech \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    "input": "Private AI for everyone.",\n    "voice": "${voice}",\n    "response_format": "mp3"\n  }' --output speech.mp3`,
-        python: `${pyHead}\nwith client.audio.speech.with_streaming_response.create(\n    model="${id}",\n    voice="${voice}",\n    input="Private AI for everyone.",\n) as response:\n    response.stream_to_file("speech.mp3")`,
-        typescript: `${tsHead}\nimport { writeFile } from "node:fs/promises";\n\nconst speech = await client.audio.speech.create({\n  model: "${id}",\n  voice: "${voice}",\n  input: "Private AI for everyone.",\n});\nawait writeFile("speech.mp3", Buffer.from(await speech.arrayBuffer()));`
+        curl: `curl ${API}/audio/speech \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    "input": "Private AI for everyone.",\n    "voice": "${voice}",\n    "response_format": "${format}"\n  }' --output speech.${format}`,
+        python: `${pyHead}\nwith client.audio.speech.with_streaming_response.create(\n    model="${id}",\n    voice="${voice}",\n    input="Private AI for everyone.",\n    response_format="${format}",\n) as response:\n    response.stream_to_file("speech.${format}")`,
+        typescript: `${tsHead}\nimport { writeFile } from "node:fs/promises";\n\nconst speech = await client.audio.speech.create({\n  model: "${id}",\n  voice: "${voice}",\n  input: "Private AI for everyone.",\n  response_format: "${format}",\n});\nawait writeFile("speech.${format}", Buffer.from(await speech.arrayBuffer()));`
       };
     }
     if (model.task === 'stt') {
@@ -1891,17 +1893,33 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         typescript: `${tsHead}\nimport fs from "node:fs";\n\nconst transcript = await client.audio.transcriptions.create({\n  model: "${id}",\n  file: fs.createReadStream("meeting.mp3"),\n});\nconsole.log(transcript.text);`
       };
     }
+    if (model.audio && model.audio.voiceChanger) {
+      const a = model.audio;
+      const voice = a.defaultVoice || (a.voices || [])[0];
+      const file = `converted.${(a.formats || [])[0] || 'mp3'}`;
+      return {
+        curl: `# 1. Queue the conversion (returns a queue_id)\ncurl ${API}/audio/voice-changer/queue \\\n  -H "Authorization: Bearer ${key}" \\\n  -F model=${id} \\\n${voice ? `  -F voice=${voice} \\\n` : ''}  -F file=@take.wav\n\n# 2. Poll until the audio is ready (JSON with the status until then)\ncurl ${API}/audio/voice-changer/retrieve \\\n  ${auth} \\\n  -d '{ "model": "${id}", "queue_id": "<queue_id>" }' --output ${file}`,
+        python: `import time\n${reqHead}\nwith open("take.wav", "rb") as source:\n    res = requests.post(f"{API}/audio/voice-changer/queue", headers=HEADERS,\n                        data={"model": "${id}"${voice ? `, "voice": "${voice}"` : ''}}, files={"file": source})\nres.raise_for_status()\njob = res.json()\n\nwhile True:\n    res = requests.post(f"{API}/audio/voice-changer/retrieve", headers=HEADERS,\n                        json={"model": "${id}", "queue_id": job["queue_id"]})\n    res.raise_for_status()  # a failed job returns its error here\n    if not res.headers.get("content-type", "").startswith("application/json"):\n        open("${file}", "wb").write(res.content)\n        break\n    time.sleep(3)  # still processing`,
+        typescript: `${fetchHead}\nimport { readFile, writeFile } from "node:fs/promises";\n\nconst form = new FormData();\nform.append("model", "${id}");\n${voice ? `form.append("voice", "${voice}");\n` : ''}form.append("file", new Blob([await readFile("take.wav")]), "take.wav");\nconst queued = await fetch(\`\${API}/audio/voice-changer/queue\`, {\n  method: "POST",\n  headers: { Authorization: headers.Authorization },\n  body: form,\n});\nif (!queued.ok) throw new Error(await queued.text());\nconst job = await queued.json();\n\nlet res;\ndo {\n  await new Promise(r => setTimeout(r, 3000));\n  res = await fetch(\`\${API}/audio/voice-changer/retrieve\`, {\n    method: "POST",\n    headers,\n    body: JSON.stringify({ model: "${id}", queue_id: job.queue_id }),\n  });\n  if (!res.ok) throw new Error(await res.text()); // a failed job returns its error here\n} while (res.headers.get("content-type")?.startsWith("application/json"));\nawait writeFile("${file}", Buffer.from(await res.arrayBuffer()));`
+      };
+    }
     if (model.modality === 'audio') {
       const prompt = model.task === 'sfx' ? VARIANT_PROMPTS.sfx : VARIANT_PROMPTS.music;
       const isTts = model.task === 'tts';
-      const input = isTts ? '"prompt": "Private AI for everyone."' : `"prompt": "${prompt}"`;
       const a = model.audio || {};
       const seconds = a.durationOptions ? a.durationOptions[0] : a.defaultDuration ? Math.max(a.minDuration || 1, Math.min(30, a.defaultDuration)) : null;
-      const duration = !isTts && seconds ? `,\n    "duration_seconds": ${seconds}` : '';
+      const file = `audio.${(a.formats || [])[0] || 'mp3'}`;
+      const fields = [
+        `"model": "${id}"`,
+        `"prompt": "${isTts ? 'Private AI for everyone.' : prompt}"`,
+        isTts && chosenVoice ? `"voice": "${chosenVoice}"` : null,
+        !isTts && seconds ? `"duration_seconds": ${seconds}` : null,
+        a.lyrics ? `"lyrics_prompt": "${VARIANT_PROMPTS.lyrics}"` : null
+      ].filter(Boolean);
       return {
-        curl: `# 1. Queue the job\ncurl ${API}/audio/queue \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    ${input}${duration}\n  }'\n\n# 2. Retrieve when ready\ncurl ${API}/audio/retrieve \\\n  ${auth} \\\n  -d '{ "model": "${id}", "queue_id": "<queue_id>" }' --output audio.mp3`,
-        python: `import time\n${reqHead}\njob = requests.post(f"{API}/audio/queue", headers=HEADERS, json={\n    "model": "${id}",\n    ${input}${duration.replace(/\n    /, '\n    ')},\n}).json()\n\nwhile True:\n    res = requests.post(f"{API}/audio/retrieve", headers=HEADERS,\n                        json={"model": "${id}", "queue_id": job["queue_id"]})\n    if res.headers.get("content-type", "").startswith("audio/"):\n        open("audio.mp3", "wb").write(res.content)\n        break\n    time.sleep(3)`,
-        typescript: `${fetchHead}\nconst job = await fetch(\`\${API}/audio/queue\`, {\n  method: "POST",\n  headers,\n  body: JSON.stringify({ model: "${id}", ${isTts ? 'prompt: "Private AI for everyone."' : `prompt: "${prompt}"`} }),\n}).then(r => r.json());\n// Poll POST /audio/retrieve with { model, queue_id: job.queue_id }`
+        curl: `# 1. Queue the job (returns a queue_id)\ncurl ${API}/audio/queue \\\n  ${auth} \\\n  -d '{\n    ${fields.join(',\n    ')}\n  }'\n\n# 2. Poll until the audio is ready (JSON with the status until then)\ncurl ${API}/audio/retrieve \\\n  ${auth} \\\n  -d '{ "model": "${id}", "queue_id": "<queue_id>" }' --output ${file}`,
+        python: `import time\n${reqHead}\nres = requests.post(f"{API}/audio/queue", headers=HEADERS, json={\n    ${fields.join(',\n    ')},\n})\nres.raise_for_status()\njob = res.json()\n\nwhile True:\n    res = requests.post(f"{API}/audio/retrieve", headers=HEADERS,\n                        json={"model": "${id}", "queue_id": job["queue_id"]})\n    res.raise_for_status()  # a failed job returns its error here\n    if not res.headers.get("content-type", "").startswith("application/json"):\n        open("${file}", "wb").write(res.content)\n        break\n    time.sleep(3)  # still processing`,
+        typescript: `${fetchHead}\nimport { writeFile } from "node:fs/promises";\n\nconst queued = await fetch(\`\${API}/audio/queue\`, {\n  method: "POST",\n  headers,\n  body: JSON.stringify({\n    ${fields.map(f => f.replace(/^"([a-z_]+)":/, '$1:')).join(',\n    ')},\n  }),\n});\nif (!queued.ok) throw new Error(await queued.text());\nconst job = await queued.json();\n\nlet res;\ndo {\n  await new Promise(r => setTimeout(r, 3000));\n  res = await fetch(\`\${API}/audio/retrieve\`, {\n    method: "POST",\n    headers,\n    body: JSON.stringify({ model: "${id}", queue_id: job.queue_id }),\n  });\n  if (!res.ok) throw new Error(await res.text()); // a failed job returns its error here\n} while (res.headers.get("content-type")?.startsWith("application/json"));\nawait writeFile("${file}", Buffer.from(await res.arrayBuffer()));`
       };
     }
     if (model.modality === 'embedding') {
@@ -2757,7 +2775,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   const ModelPage = ({ data }) => (data.family.task === 'chat' ? <ModelPageNext data={data} />
     : data.family.task === 'image-generation' ? <ImagePageNext data={data} />
-      : data.family.task === 'video' ? <VideoPageNext data={data} /> : <ModelPageClassic data={data} />);
+      : data.family.task === 'video' ? <VideoPageNext data={data} />
+        : data.family.task === 'embedding' ? <EmbeddingPageNext data={data} />
+          : data.family.task === 'tts' ? <SpeechPageNext data={data} />
+            : data.family.task === 'stt' ? <TranscriptionPageNext data={data} />
+              : data.family.task === 'music' || data.family.task === 'sfx' ? <SoundPageNext data={data} /> : <ModelPageClassic data={data} />);
 
   const ModelPageClassic = ({ data }) => {
     const { family, models, related, providers } = data;
@@ -2979,9 +3001,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     ].filter(line => line != null).join('\n');
   };
 
-  const CodePanel = ({ model, endpoint, setEndpointId, endpoints = (model.endpoints || []).filter(e => e.supported !== false) }) => {
+  const CodePanel = ({ model, endpoint, setEndpointId, endpoints = (model.endpoints || []).filter(e => e.supported !== false), options }) => {
     const [lang, setLang] = useState('curl');
-    const samples = codeSamples(model, endpoint && endpoint.id);
+    const samples = codeSamples(model, endpoint && endpoint.id, options);
     const langs = [['curl', 'cURL'], ['python', 'Python'], ['typescript', 'TypeScript']];
     return (
       <div className="vxn-code">
@@ -3808,10 +3830,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const VIDEO_SUITE = VIDEO_RENDER_ORDER.slice(0, 3);
   const AUDIO_TEXT = { native: 'Generated with every clip', optional: 'Optional, on by default', none: 'None' };
   const INPUT_FIELDS = [['image', 'image_url'], ['endImage', 'end_image_url'], ['reference', 'reference_image_urls'], ['video', 'video_url'], ['referenceVideo', 'reference_video_urls'], ['audio', 'audio_url']];
-  const VIDEO_FLOW = [
-    ['Quote', '/video/quote', 'Optional. Prices the job in USD without charging for it.'],
-    ['Queue', '/video/queue', 'Checks and charges the job, then returns a queue_id at once.'],
-    ['Retrieve', '/video/retrieve', 'Poll it with the queue_id until the video is ready.']
+  const JOB_FLOW = [
+    ['Quote', 'quote', 'Optional. Prices the job in USD without charging for it.'],
+    ['Queue', 'queue', 'Checks and charges the job, then returns a queue_id at once.'],
+    ['Retrieve', 'retrieve', 'Poll it with the queue_id until the {noun} is ready.']
   ];
   const VIDEO_STANDING = [
     { key: 'price', label: 'Price per second', better: 'cheaper', lowerIsBetter: true, format: v => usd(v), tip: 'The lowest rate across its resolutions and audio settings.' },
@@ -3973,13 +3995,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  const VideoFlow = () => (
+  const JobFlow = ({ base, noun }) => (
     <ol className="vxv-flow">
-      {VIDEO_FLOW.map(([name, path, note], i) => (
-        <li key={path}>
+      {JOB_FLOW.map(([name, step, note], i) => (
+        <li key={step}>
           <span className="vxv-flow-head"><span className="vxv-flow-step">{i + 1}</span>{name}</span>
-          <code>POST {path}</code>
-          <span className="vx-muted">{note}</span>
+          <code>POST {base}/{step}</code>
+          <span className="vx-muted">{note.replace('{noun}', noun)}</span>
         </li>
       ))}
     </ol>
@@ -4155,7 +4177,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         </NextSection>
 
         <NextSection id="quickstart" title="Quickstart" lead="Video is asynchronous: queue a job, then poll for the clip.">
-          <VideoFlow />
+          <JobFlow base="/video" noun="video" />
           <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
           <h3 className="vxn-h3 vxn-gap">Parameters</h3>
           <ParamRows rows={videoParams(model)} />
@@ -4198,6 +4220,985 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </dl>
           {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
         </NextSection>
+      </div>
+    );
+  };
+
+  /* ------------------------------------------------------------ embedding page, next */
+
+  // Each square of the vector grid stands for 64 dimensions, 16 to a row.
+  const VECTOR_CELL = 64;
+  const EMBEDDING_BATCH = 2048;
+  const EMBEDDING_STANDING = [
+    { key: 'price', label: 'Price', better: 'cheaper', lowerIsBetter: true, format: v => usd(v), tip: 'Per 1M input tokens.' },
+    { key: 'input', label: 'Max input', better: 'longer', lowerIsBetter: false, format: v => `${count(v)} tokens`, tip: 'Tokens per input string that Venice accepts.' }
+  ];
+  const embeddingStandingValues = model => ({ price: (model.pricing || {}).input, input: (model.embedding || {}).maxInputTokens });
+  const inputCapNote = e => (e.modelInputTokens
+    ? `The model reads up to ${count(e.modelInputTokens)} tokens, but Venice accepts up to ${count(e.maxInputTokens)} per input, estimated from its length: about 27,500 characters.`
+    : null);
+  const storageSize = n => (n >= 1e12 ? `${(n / 1e12).toFixed(1)} TB` : n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
+
+  // Everything an agent needs to embed with the model, as Markdown.
+  const embeddingBrief = (family, model, sample) => {
+    const e = model.embedding || {};
+    const p = model.pricing || {};
+    return [
+      `# ${family.name} on the Venice API`,
+      '',
+      `- Model ID: \`${model.id}\``,
+      `- Endpoint: \`POST ${API}/embeddings\`, OpenAI-compatible`,
+      '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
+      `- Price: ${usd(p.input)} per 1M input tokens`,
+      e.dimensions ? `- Dimensions: ${count(e.dimensions)}${e.customDimensions ? ', or fewer with `dimensions`' : ', fixed'}` : null,
+      `- Input: a string, or up to ${count(EMBEDDING_BATCH)} strings${e.maxInputTokens ? `, each up to ${count(e.maxInputTokens)} tokens` : ''}${e.modelInputTokens ? ` (Venice's cap, estimated from length; the model reads up to ${count(e.modelInputTokens)})` : ''}. Token-ID arrays are rejected, so set \`check_embedding_ctx_length=False\` on LangChain's \`OpenAIEmbeddings\``,
+      '- `encoding_format`: `float` (default) or `base64`, a smaller payload',
+      '- Similarities from different models are not comparable: store the model ID, and `dimensions` if set, with each vector',
+      PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      `- Docs: https://docs.venice.ai/models/${family.slug}`,
+      '',
+      '```bash',
+      sample,
+      '```'
+    ].filter(line => line != null).join('\n');
+  };
+
+  // The vector drawn as squares of 64 dimensions; with a shorter size asked
+  // for, the squares past it fade.
+  const VectorGrid = ({ native, kept }) => (
+    <div className="vxe-grid" role="img" aria-label={`${count(kept)} of ${count(native)} dimensions`}>
+      {Array.from({ length: Math.ceil(native / VECTOR_CELL) }, (_, i) => <span key={i} className={cls(i * VECTOR_CELL < kept && 'is-on')} />)}
+    </div>
+  );
+
+  const VectorStorage = ({ model }) => {
+    const e = model.embedding || {};
+    const native = e.dimensions || 0;
+    const sizes = e.customDimensions ? [...new Set([256, 512, 1024, 2048].filter(d => d < native).concat(native))] : [native];
+    const [kept, setKept] = useState(native);
+    const [vectors, setVectors] = useState(1000000);
+    useEffect(() => setKept(native), [model.id]);
+    if (!native) return null;
+    return (
+      <div className="vxe-vector">
+        <VectorGrid native={native} kept={kept} />
+        <p className="vxn-caption">Each square is {VECTOR_CELL} dimensions, and each row {count(VECTOR_CELL * 16)}.</p>
+        <div className="vxn-est vxn-gap">
+          <div className="vxi-est-controls">
+            <label className="vxn-field"><span>Vectors</span><input type="number" min="0" step="100000" value={vectors} onChange={ev => setVectors(Math.max(0, Math.round(Number(ev.target.value) || 0)))} /></label>
+            {sizes.length > 1 ? (
+              <div className="vxn-field"><span>Dimensions</span><Segmented ariaLabel="Dimensions" value={kept} onChange={setKept} options={sizes.map(d => ({ value: d, label: count(d) }))} /></div>
+            ) : null}
+          </div>
+          <div className="vxn-est-result" aria-live="polite">
+            <div><span className="vxn-est-value">{count(kept)}</span><span className="vx-muted">{kept < native ? `of ${count(native)} dimensions` : 'dimensions per vector'}</span></div>
+            <div><span className="vxn-est-value is-total">{storageSize(vectors * kept * 4)}</span><span className="vx-muted">for {count(vectors)} vectors as float32</span></div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const EmbeddingEstimator = ({ price }) => {
+    const [docs, setDocs] = useState(100000);
+    const [each, setEach] = useState(500);
+    const total = docs * each;
+    return (
+      <div className="vxn-est">
+        <div className="vxi-est-controls">
+          <label className="vxn-field"><span>Documents</span><input type="number" min="0" step="1000" value={docs} onChange={ev => setDocs(Math.max(0, Math.round(Number(ev.target.value) || 0)))} /></label>
+          <label className="vxn-field"><span>Tokens each</span><input type="number" min="0" step="100" value={each} onChange={ev => setEach(Math.max(0, Math.round(Number(ev.target.value) || 0)))} /></label>
+        </div>
+        <div className="vxn-est-result" aria-live="polite">
+          <div><span className="vxn-est-value">{tokens(total)}</span><span className="vx-muted">tokens</span></div>
+          <div><span className="vxn-est-value is-total">{usd(price != null ? (price * total) / 1e6 : null)}</span><span className="vx-muted">to embed them once</span></div>
+        </div>
+      </div>
+    );
+  };
+
+  // A model type has few enough models to list them all.
+  const TaskCompare = ({ model, catalog, includes, order, columns }) => {
+    const rows = useMemo(() => (catalog ? catalog.families
+      .filter(f => catalog.models[f.primary] && includes(catalog.models[f.primary]))
+      .map(f => ({ family: f, model: catalog.models[f.primary] }))
+      .sort((a, b) => order(a.model) - order(b.model) || a.family.name.localeCompare(b.family.name)) : []), [catalog]);
+    if (!rows.length) return null;
+    const cols = columns(rows.map(row => row.model));
+    return (
+      <div className="vx-table-wrap vxn-compare">
+        <table className="vx-dtable">
+          <thead><tr><th>Model</th>{cols.map(c => <th key={c.label} className={cls(c.right && 'vx-al-right', c.hide && 'vx-hide-sm') || undefined}>{c.label}</th>)}</tr></thead>
+          <tbody>
+            {rows.map(({ family, model: m }) => {
+              const current = m.id === model.id;
+              return (
+                <tr key={family.slug} className={cls(current && 'is-current')}>
+                  <td>{current ? <strong>{family.name}</strong> : <a href={`/models/${family.slug}`}>{family.name}</a>}</td>
+                  {cols.map(c => <td key={c.label} className={cls(c.right && 'vx-al-right vx-num', c.hide && 'vx-hide-sm') || undefined}>{c.render(m)}</td>)}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const embeddingColumns = models => {
+    const most = Math.max(...models.map(m => (m.embedding || {}).dimensions || 0), 1);
+    return [
+      { label: 'Dimensions', render: m => {
+        const e = m.embedding || {};
+        return (
+          <span className="vxe-dims"><span className="vxe-dims-track"><span style={{ width: `${((e.dimensions || 0) / most) * 100}%` }} /></span>
+            <span className="vx-num">{e.dimensions ? count(e.dimensions) : '—'}</span>{e.customDimensions ? <span className="vx-muted vx-hide-sm">or fewer</span> : null}</span>
+        );
+      } },
+      { label: 'Max input', right: true, hide: true, render: m => ((m.embedding || {}).maxInputTokens ? count(m.embedding.maxInputTokens) : '—') },
+      { label: 'Privacy', hide: true, render: m => (PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy) },
+      { label: 'Per 1M tokens', right: true, render: m => usd((m.pricing || {}).input) }
+    ];
+  };
+
+  const EmbeddingPageNext = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const now = useNow();
+    const { catalog } = useCatalog();
+    const headerHeight = useHeaderHeight();
+    const model = models.find(m => m.id === family.primary) || models[0];
+    const provider = providers[family.provider] || providers[model.provider];
+    const e = model.embedding || {};
+    const p = model.pricing || {};
+    const source = safeUrl(model.source);
+    const endpoints = (model.endpoints || []).filter(ep => ep.supported !== false);
+    const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
+    const versions = (related && related.versions) || [];
+    const sections = [['quickstart', 'Quickstart'], ['vectors', 'Vectors'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare']];
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const sample = codeSamples(model, endpoint && endpoint.id).curl;
+    const capNote = inputCapNote(e);
+    const params = [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['input', `A string, or up to ${count(EMBEDDING_BATCH)} strings`, e.maxInputTokens ? `Required, up to ${count(e.maxInputTokens)} tokens each` : 'Required'],
+      e.customDimensions ? ['dimensions', `Up to ${count(e.dimensions)}`, 'Returns a shorter vector'] : null,
+      ['encoding_format', <code>float | base64</code>, 'Default float; base64 is a smaller payload']
+    ].filter(Boolean);
+
+    return (
+      <div className="vx vxn vxe not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
+        <HoverTips />
+        <NextTop scope="Embeddings" scopeHref="/models/embeddings" family={family} brief={embeddingBrief(family, model, sample)} />
+
+        <header className="vxn-hero">
+          <div className="vxn-hero-main">
+            <div className="vxn-provider">
+              <ProviderLogo provider={provider} size={22} />
+              <span>{provider ? provider.name : family.provider}</span>
+              <span className="vxn-dot" />
+              <span>{fmtDate(model.created)}</span>
+              {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
+              {model.beta ? <Tag tone="beta">Beta</Tag> : null}
+            </div>
+            <h1 className="vxn-h1">{family.name}</h1>
+            <div className="vxn-meta">
+              <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
+              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {model.openWeights ? (source
+                ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
+                : <span className="vxn-meta-item">Open weights</span>) : null}
+            </div>
+            {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            <div className="vxn-figs">
+              {p.input != null ? <Figure value={usd(p.input)} label="per 1M input tokens" /> : null}
+              {e.dimensions ? <Figure value={count(e.dimensions)} label={e.customDimensions ? 'dimensions, or fewer' : 'dimensions'} /> : null}
+              {e.maxInputTokens ? <Figure value={count(e.maxInputTokens)} label="tokens per input" tip={capNote} /> : null}
+            </div>
+            <div className="vxn-ctas">
+              <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
+              <a className="vxn-textlink" href="/guides/features/embeddings">Embeddings guide<Icon name="arrowRight" size={14} /></a>
+            </div>
+          </div>
+          <div className="vxn-hero-side">
+            <Standing model={model} catalog={catalog} task="embedding" noun="embedding models" metrics={EMBEDDING_STANDING} valuesOf={embeddingStandingValues} />
+          </div>
+        </header>
+
+        <NextNav sections={sections} active={activeSection} />
+
+        <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
+          <p className="vxe-callout"><Icon name="info" size={14} /><span>LangChain's <code>OpenAIEmbeddings</code> sends token IDs, which Venice rejects. Set <code>check_embedding_ctx_length=False</code>.</span></p>
+        </NextSection>
+
+        <NextSection id="vectors" title="Vectors" lead={`Each input comes back as ${count(e.dimensions || 0)} numbers${e.customDimensions ? ', or fewer when you ask for them with dimensions' : ''}. Stored as float32, each number takes 4 bytes.`}>
+          <VectorStorage model={model} />
+          <p className="vxn-caption">Similarities from different models aren't comparable, so store the model ID{e.customDimensions ? ' and dimensions' : ''} with each vector.</p>
+        </NextSection>
+
+        <NextSection id="pricing" title="Pricing" lead="Billed per 1M input tokens, in USD.">
+          <div className="vxn-prices">
+            <div className="vxn-price"><span className="vxn-price-label">Input</span><span className="vxn-price-value">{usd(p.input)}</span><span className="vx-muted">per 1M tokens</span></div>
+          </div>
+          <h3 className="vxn-h3 vxn-gap">Estimate a corpus</h3>
+          <EmbeddingEstimator price={p.input} />
+        </NextSection>
+
+        <NextSection id="specs" title="Specs">
+          <dl className="vxn-sheet">
+            {[
+              ['Model ID', <code>{model.id}</code>],
+              endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+              e.dimensions ? ['Dimensions', e.customDimensions ? <>{count(e.dimensions)}, or fewer with <code>dimensions</code></> : count(e.dimensions)] : null,
+              e.maxInputTokens ? ['Max input', <>{count(e.maxInputTokens)} tokens per input{capNote ? <InfoTip text={capNote} /> : null}</>] : null,
+              ['Batch', `Up to ${count(EMBEDDING_BATCH)} inputs per request`],
+              ['Encodings', <><code>float</code> or <code>base64</code></>],
+              ['Input', 'Text only'],
+              PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
+              ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
+              ['Added', fmtDate(model.created)]
+            ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+          {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+
+        <NextSection id="compare" title="Compare" lead="Every embedding model on Venice, cheapest first.">
+          <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'embedding'} order={m => (m.pricing || {}).input || 0} columns={embeddingColumns} />
+        </NextSection>
+      </div>
+    );
+  };
+
+  /* ------------------------------------------------------------ speech page, next */
+
+  // POST /audio/speech takes up to 4,096 characters of input per request.
+  const SPEECH_INPUT_CAP = 4096;
+  // 150 words a minute, the conversion the catalog's per-minute prices use.
+  const TTS_CHARS_PER_MINUTE = 825;
+  const SPEECH_STANDING = [
+    { key: 'price', label: 'Price', better: 'cheaper', lowerIsBetter: true, format: v => usd(v), tip: 'Per 1M characters of input.' },
+    { key: 'voices', label: 'Voices', better: 'more', lowerIsBetter: false, format: v => count(v) }
+  ];
+  const voiceCount = model => (model.audio || {}).voiceCount || ((model.audio || {}).voices || []).length || null;
+  const speechStandingValues = model => ({ price: (model.pricing || {}).per1MChars, voices: voiceCount(model) });
+  const speechColumns = () => [
+    { label: 'Voices', right: true, render: m => (voiceCount(m) ? count(voiceCount(m)) : '—') },
+    { label: 'Formats', hide: true, render: m => ((m.audio || {}).formats || []).join(', ') || '—' },
+    { label: 'Privacy', hide: true, render: m => (PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy) },
+    { label: 'Per 1M characters', right: true, render: m => usd((m.pricing || {}).per1MChars) }
+  ];
+
+  // Everything an agent needs to speak with the model, as Markdown.
+  const speechBrief = (family, model, sample) => {
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    return [
+      `# ${family.name} on the Venice API`,
+      '',
+      `- Model ID: \`${model.id}\``,
+      a.async
+        ? `- Flow: \`POST ${API}/audio/queue\` with the text as \`prompt\` returns a \`queue_id\`; poll \`POST ${API}/audio/retrieve\` with the \`model\` and \`queue_id\` until it returns the audio. \`POST ${API}/audio/quote\` prices a job without charging for it.`
+        : `- Endpoint: \`POST ${API}/audio/speech\`, OpenAI-compatible; returns the audio`,
+      '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
+      `- Price: ${usd(p.per1MChars)} per 1M characters${p.perHour != null ? `, about ${usd(p.perHour)} per hour of speech at ${TTS_CHARS_PER_MINUTE} characters a minute` : ''}`,
+      (a.voices || []).length ? `- Voices (case-sensitive): ${a.voices.map(v => `\`${v}\``).join(', ')}${a.customVoice ? '; any ElevenLabs voice ID also works' : ''}` : null,
+      (a.formats || []).length ? `- Formats: ${a.formats.join(', ')}${a.defaultFormat ? `; default ${a.defaultFormat}` : ''}` : null,
+      a.async ? null : `- Input: up to ${count(SPEECH_INPUT_CAP)} characters per request; \`streaming: true\` streams the audio as it is generated`,
+      a.cloning ? `- Voice cloning: \`POST ${API}/audio/voices\` with a ${listText(a.cloning.formats)} sample of at least ${a.cloning.minSeconds} seconds returns a voice to pass as \`voice\`; it lasts ${a.cloning.retentionDays} days` : null,
+      PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      `- Docs: https://docs.venice.ai/models/${family.slug}`,
+      '',
+      '```bash',
+      sample,
+      '```'
+    ].filter(line => line != null).join('\n');
+  };
+
+  // Voice names are case-sensitive; picking one rewrites the request.
+  const VoiceBoard = ({ voices, value, onPick, customVoice }) => {
+    const [query, setQuery] = useState('');
+    const shown = query ? voices.filter(v => v.toLowerCase().includes(query.trim().toLowerCase())) : voices;
+    return (
+      <div className="vxs-voices">
+        <div className="vxn-standing-head">
+          <span className="vxn-price-label">{count(voices.length)} voices</span>
+          {voices.length > 16 ? <input className="vxs-voice-search" type="search" placeholder="Filter" value={query} onChange={e => setQuery(e.target.value)} aria-label="Filter voices" /> : null}
+        </div>
+        <div className="vxs-voice-list" role="radiogroup" aria-label="Voice">
+          {shown.map(v => <button key={v} type="button" role="radio" aria-checked={v === value} className={cls('vxs-voice', v === value && 'is-active')} onClick={() => onPick(v)}>{v}</button>)}
+          {shown.length ? null : <span className="vx-muted">No voice matches.</span>}
+        </div>
+        <p className="vxn-caption">Names are case-sensitive.{customVoice ? ' Any ElevenLabs voice ID works too.' : ''} Pick one to use it in the request below.</p>
+      </div>
+    );
+  };
+
+  const SpeechEstimator = ({ price }) => {
+    const [chars, setChars] = useState(100000);
+    return (
+      <div className="vxn-est">
+        <div className="vxi-est-controls">
+          <label className="vxn-field"><span>Characters</span><input type="number" min="0" step="10000" value={chars} onChange={e => setChars(Math.max(0, Math.round(Number(e.target.value) || 0)))} /></label>
+        </div>
+        <div className="vxn-est-result" aria-live="polite">
+          <div><span className="vxn-est-value">{count(Math.round(chars / TTS_CHARS_PER_MINUTE))} min</span><span className="vx-muted">of speech, estimated</span></div>
+          <div><span className="vxn-est-value is-total">{usd(price != null ? (price * chars) / 1e6 : null)}</span><span className="vx-muted">to speak them</span></div>
+        </div>
+      </div>
+    );
+  };
+
+  const SpeechPageNext = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const now = useNow();
+    const { catalog } = useCatalog();
+    const headerHeight = useHeaderHeight();
+    const model = models.find(m => m.id === family.primary) || models[0];
+    const provider = providers[family.provider] || providers[model.provider];
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    const voices = a.voices || [];
+    const [voice, setVoice] = useState(voices[0] || null);
+    const source = safeUrl(model.source);
+    const endpoints = (model.endpoints || []).filter(ep => ep.supported !== false);
+    const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
+    const versions = (related && related.versions) || [];
+    const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare']];
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const options = { voice: voice || undefined };
+    const sample = codeSamples(model, endpoint && endpoint.id, options).curl;
+    const perHourTip = `Estimated at ${TTS_CHARS_PER_MINUTE} characters a minute, about 150 spoken words.`;
+    const params = a.async ? [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['prompt', 'The text to speak', 'Required'],
+      voices.length ? ['voice', `${count(voices.length)} voices${a.customVoice ? ', or a voice ID' : ''}`, "The model's own by default"] : null
+    ].filter(Boolean) : [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['input', `Up to ${count(SPEECH_INPUT_CAP)} characters`, 'Required'],
+      voices.length ? ['voice', `${count(voices.length)} voices${a.customVoice ? ', or a voice ID' : ''}`, "The model's own by default"] : null,
+      (a.formats || []).length ? ['response_format', <code>{a.formats.join(' | ')}</code>, a.defaultFormat ? `Default ${a.defaultFormat}` : null] : null,
+      ['speed', <code>0.25 – 4.0</code>, 'Some models clamp it or ignore it'],
+      ['streaming', <code>true | false</code>, 'Streams the audio as it is generated']
+    ].filter(Boolean);
+    const tiles = [
+      (a.formats || []).length ? { key: 'formats', icon: 'music', name: 'Formats', detail: <>{a.formats.map(f => <code key={f}>{f}</code>).reduce((acc, el) => (acc.length ? [...acc, ' · ', el] : [el]), [])}{a.defaultFormat ? `, ${a.defaultFormat} by default` : ''}</> } : null,
+      a.async ? { key: 'queue', icon: 'clock', name: 'Queued', detail: 'Quote, queue and retrieve, like music' } : { key: 'stream', icon: 'activity', name: 'Streaming', detail: <code>streaming: true</code> },
+      a.async ? null : { key: 'openai', icon: 'code', name: 'OpenAI-compatible', detail: <code>client.audio.speech.create()</code> },
+      a.customVoice ? { key: 'custom', icon: 'mic', name: 'Any ElevenLabs voice', detail: 'Pass its voice ID as voice' } : null,
+      a.cloning ? { key: 'clone', icon: 'mic', name: 'Voice cloning', detail: <><code>POST /audio/voices</code><br />A {a.cloning.minSeconds}s+ sample; the voice lasts {a.cloning.retentionDays} days</> } : null
+    ].filter(Boolean);
+
+    return (
+      <div className="vx vxn vxs not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
+        <HoverTips />
+        <NextTop scope="Text to speech" scopeHref="/models/text-to-speech" family={family} brief={speechBrief(family, model, sample)} />
+
+        <header className="vxn-hero">
+          <div className="vxn-hero-main">
+            <div className="vxn-provider">
+              <ProviderLogo provider={provider} size={22} />
+              <span>{provider ? provider.name : family.provider}</span>
+              <span className="vxn-dot" />
+              <span>{fmtDate(model.created)}</span>
+              {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
+              {model.beta ? <Tag tone="beta">Beta</Tag> : null}
+            </div>
+            <h1 className="vxn-h1">{family.name}</h1>
+            <div className="vxn-meta">
+              <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
+              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {model.openWeights ? (source
+                ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
+                : <span className="vxn-meta-item">Open weights</span>) : null}
+            </div>
+            {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            <div className="vxn-figs">
+              {p.per1MChars != null ? <Figure value={usd(p.per1MChars)} label="per 1M characters" /> : null}
+              {p.perHour != null ? <Figure value={usd(p.perHour)} label="per hour of speech" tip={perHourTip} /> : null}
+              {voices.length ? <Figure value={count(voices.length)} label={a.customVoice ? 'voices, or any voice ID' : 'voices'} /> : null}
+            </div>
+            <div className="vxn-ctas">
+              <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
+            </div>
+          </div>
+          {voices.length ? (
+            <div className="vxn-hero-side">
+              <VoiceBoard voices={voices} value={voice} onPick={setVoice} customVoice={a.customVoice} />
+            </div>
+          ) : null}
+        </header>
+
+        <NextNav sections={sections} active={activeSection} />
+
+        <NextSection id="quickstart" title="Quickstart" lead={a.async ? 'This model runs as a queued job: queue the text, then poll for the audio.' : 'OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.'}>
+          {a.async ? <JobFlow base="/audio" noun="audio" /> : null}
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} options={options} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
+        </NextSection>
+
+        <NextSection id="capabilities" title="Capabilities">
+          <div className="vxn-tiles">
+            {tiles.map(tile => (
+              <div key={tile.key} className="vxn-tile">
+                <span className="vxn-tile-icon"><Icon name={tile.icon} size={16} /></span>
+                <span className="vxn-tile-text"><span className="vxn-tile-name">{tile.name}</span><span className="vxn-tile-detail">{tile.detail}</span></span>
+              </div>
+            ))}
+            {Array.from({ length: (3 - (tiles.length % 3)) % 3 }, (_, i) => <span key={`fill-${i}`} className="vxn-tile is-empty" aria-hidden="true" />)}
+          </div>
+        </NextSection>
+
+        <NextSection id="pricing" title="Pricing" lead="Billed per 1M characters of input, in USD.">
+          <div className="vxn-prices">
+            <div className="vxn-price"><span className="vxn-price-label">Input</span><span className="vxn-price-value">{usd(p.per1MChars)}</span><span className="vx-muted">per 1M characters</span></div>
+            {p.perMinute != null ? <div className="vxn-price"><span className="vxn-price-label">Speech, about</span><span className="vxn-price-value">{usd(p.perMinute)}</span><span className="vx-muted">per minute</span></div> : null}
+            {p.perHour != null ? <div className="vxn-price"><span className="vxn-price-label">Speech, about</span><span className="vxn-price-value">{usd(p.perHour)}</span><span className="vx-muted">per hour</span></div> : null}
+          </div>
+          <p className="vxn-caption">{perHourTip}</p>
+          <div className="vxn-split vxn-gap">
+            <div>
+              <h3 className="vxn-h3">Estimate a script</h3>
+              <SpeechEstimator price={p.per1MChars} />
+            </div>
+            <div>
+              <h3 className="vxn-h3">Against other speech models</h3>
+              <Standing model={model} catalog={catalog} task="tts" noun="speech models" metrics={SPEECH_STANDING} valuesOf={speechStandingValues} />
+            </div>
+          </div>
+        </NextSection>
+
+        <NextSection id="specs" title="Specs">
+          <dl className="vxn-sheet">
+            {[
+              ['Model ID', <code>{model.id}</code>],
+              endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+              voices.length ? ['Voices', `${count(voices.length)}${a.customVoice ? ', or any ElevenLabs voice ID' : ''}`] : null,
+              (a.formats || []).length ? ['Formats', `${a.formats.join(', ')}${a.defaultFormat ? ` · default ${a.defaultFormat}` : ''}`] : null,
+              a.async ? null : ['Input', `Up to ${count(SPEECH_INPUT_CAP)} characters per request`],
+              ['Streaming', a.async ? 'No, it runs as a queued job' : 'Yes'],
+              ['Voice cloning', a.cloning ? `Yes, kept ${a.cloning.retentionDays} days` : 'No'],
+              PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
+              ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
+              ['Added', fmtDate(model.created)]
+            ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+          {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+
+        <NextSection id="compare" title="Compare" lead="Every text-to-speech model on Venice, cheapest first.">
+          <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'tts'} order={m => (m.pricing || {}).per1MChars || 0} columns={speechColumns} />
+        </NextSection>
+      </div>
+    );
+  };
+
+  /* ------------------------------------------------------------ transcription page, next */
+
+  // POST /audio/transcriptions takes one file of up to 25 MB in these containers.
+  const STT_FILE_CAP = 25 * 1024 * 1024;
+  const STT_FORMATS = ['wav', 'flac', 'm4a', 'aac', 'mp4', 'mp3', 'ogg', 'webm'];
+  const FIT_BITRATES = [
+    ['Opus in OGG or WebM', '32 kbps', 32],
+    ['M4A or AAC', '64 kbps', 64],
+    ['MP3', '128 kbps', 128],
+    ['WAV', '16 kHz mono', 256],
+    ['WAV', '44.1 kHz stereo', 1411]
+  ];
+  const TRANSCRIPTION_STANDING = [
+    { key: 'price', label: 'Price', better: 'cheaper', lowerIsBetter: true, format: v => usd(v), tip: 'Per hour of audio.' }
+  ];
+  const transcriptionStandingValues = model => ({ price: (model.pricing || {}).perHour });
+  const transcriptionColumns = () => [
+    { label: 'Privacy', render: m => (PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy) },
+    { label: 'Per minute', right: true, hide: true, render: m => usd((m.pricing || {}).perMinute) },
+    { label: 'Per hour', right: true, render: m => usd((m.pricing || {}).perHour) }
+  ];
+
+  // Everything an agent needs to transcribe with the model, as Markdown.
+  const transcriptionBrief = (family, model, sample) => {
+    const p = model.pricing || {};
+    return [
+      `# ${family.name} on the Venice API`,
+      '',
+      `- Model ID: \`${model.id}\``,
+      `- Endpoint: \`POST ${API}/audio/transcriptions\`, OpenAI-compatible, \`multipart/form-data\` with the audio as \`file\``,
+      '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
+      `- Price: ${usd(p.perHour)} per hour of audio (${usd(p.perMinute)} per minute); failed transcriptions are not charged`,
+      `- File: ${STT_FORMATS.join(', ')}, up to 25 MB; split longer recordings and send each part`,
+      '- `response_format`: `json` (default) or `text`; `timestamps: true` adds word or segment times to the JSON; there is no SRT or VTT output',
+      '- `language`: an ISO 639-1 hint such as `en`; some models detect the language themselves',
+      PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      `- Docs: https://docs.venice.ai/models/${family.slug}`,
+      '',
+      '```bash',
+      sample,
+      '```'
+    ].filter(line => line != null).join('\n');
+  };
+
+  // How long a recording fits in one upload at common bitrates.
+  const FileFit = () => {
+    const rows = FIT_BITRATES.map(([name, note, kbps]) => ({ name, note, minutes: (STT_FILE_CAP * 8) / (kbps * 1000) / 60 }));
+    const most = Math.max(...rows.map(row => row.minutes));
+    return (
+      <div className="vxt-fit">
+        <div className="vxn-standing-head">
+          <span className="vxn-price-label">One file, up to 25 MB</span>
+          <span className="vx-muted">minutes of audio</span>
+        </div>
+        {rows.map(row => (
+          <div key={`${row.name} ${row.note}`} className="vxt-fit-row">
+            <span className="vxt-fit-name">{row.name}<span className="vx-muted">{row.note}</span></span>
+            <span className="vxt-fit-track"><span style={{ width: `${(row.minutes / most) * 100}%` }} /></span>
+            <span className="vxt-fit-value">{row.minutes >= 10 ? Math.round(row.minutes) : row.minutes.toFixed(1)}</span>
+          </div>
+        ))}
+        <p className="vxn-caption">Split a longer recording and send each part.</p>
+      </div>
+    );
+  };
+
+  const TranscriptionEstimator = ({ perHour }) => {
+    const [hours, setHours] = useState(100);
+    return (
+      <div className="vxn-est">
+        <div className="vxi-est-controls">
+          <label className="vxn-field"><span>Hours of audio</span><input type="number" min="0" step="10" value={hours} onChange={e => setHours(Math.max(0, Number(e.target.value) || 0))} /></label>
+        </div>
+        <div className="vxn-est-result" aria-live="polite">
+          <div><span className="vxn-est-value">{count(Math.round(hours * 60))} min</span><span className="vx-muted">of audio</span></div>
+          <div><span className="vxn-est-value is-total">{usd(perHour != null ? perHour * hours : null)}</span><span className="vx-muted">to transcribe it</span></div>
+        </div>
+      </div>
+    );
+  };
+
+  const TranscriptionPageNext = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const now = useNow();
+    const { catalog } = useCatalog();
+    const headerHeight = useHeaderHeight();
+    const model = models.find(m => m.id === family.primary) || models[0];
+    const provider = providers[family.provider] || providers[model.provider];
+    const p = model.pricing || {};
+    const source = safeUrl(model.source);
+    const endpoints = (model.endpoints || []).filter(ep => ep.supported !== false);
+    const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
+    const versions = (related && related.versions) || [];
+    const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare']];
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const sample = codeSamples(model, endpoint && endpoint.id).curl;
+    const params = [
+      ['file', STT_FORMATS.join(', '), 'Required, up to 25 MB'],
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['response_format', <code>json | text</code>, 'Default json'],
+      ['timestamps', <code>true | false</code>, 'Adds word or segment times to the JSON'],
+      ['language', 'An ISO 639-1 code, such as en', 'A hint; some models detect it themselves']
+    ];
+    const tiles = [
+      { key: 'formats', icon: 'music', name: 'Formats', detail: STT_FORMATS.join(' · ') },
+      { key: 'times', icon: 'clock', name: 'Timestamps', detail: <code>timestamps: true</code> },
+      { key: 'lang', icon: 'globe', name: 'Language hint', detail: <code>language: "en"</code> },
+      { key: 'openai', icon: 'code', name: 'OpenAI-compatible', detail: <code>client.audio.transcriptions.create()</code> },
+      { key: 'subs', icon: 'text', name: 'Subtitles', detail: 'Build them from timestamps; there is no SRT or VTT output' },
+      { key: 'refund', icon: 'check', name: 'Failures are free', detail: 'A failed transcription is not charged' }
+    ];
+
+    return (
+      <div className="vx vxn vxt not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
+        <HoverTips />
+        <NextTop scope="Speech to text" scopeHref="/models/speech-to-text" family={family} brief={transcriptionBrief(family, model, sample)} />
+
+        <header className="vxn-hero">
+          <div className="vxn-hero-main">
+            <div className="vxn-provider">
+              <ProviderLogo provider={provider} size={22} />
+              <span>{provider ? provider.name : family.provider}</span>
+              <span className="vxn-dot" />
+              <span>{fmtDate(model.created)}</span>
+              {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
+              {model.beta ? <Tag tone="beta">Beta</Tag> : null}
+            </div>
+            <h1 className="vxn-h1">{family.name}</h1>
+            <div className="vxn-meta">
+              <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
+              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {model.openWeights ? (source
+                ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
+                : <span className="vxn-meta-item">Open weights</span>) : null}
+            </div>
+            {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            <div className="vxn-figs">
+              {p.perHour != null ? <Figure value={usd(p.perHour)} label="per hour of audio" /> : null}
+              {p.perMinute != null ? <Figure value={usd(p.perMinute)} label="per minute" /> : null}
+              <Figure value="25 MB" label="per file" />
+            </div>
+            <div className="vxn-ctas">
+              <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
+            </div>
+          </div>
+          <div className="vxn-hero-side">
+            <FileFit />
+          </div>
+        </header>
+
+        <NextNav sections={sections} active={activeSection} />
+
+        <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: send the recording as a multipart file to the Venice base URL with a Venice API key.">
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
+        </NextSection>
+
+        <NextSection id="capabilities" title="Capabilities">
+          <div className="vxn-tiles">
+            {tiles.map(tile => (
+              <div key={tile.key} className="vxn-tile">
+                <span className="vxn-tile-icon"><Icon name={tile.icon} size={16} /></span>
+                <span className="vxn-tile-text"><span className="vxn-tile-name">{tile.name}</span><span className="vxn-tile-detail">{tile.detail}</span></span>
+              </div>
+            ))}
+          </div>
+        </NextSection>
+
+        <NextSection id="pricing" title="Pricing" lead="Billed per second of audio, in USD.">
+          <div className="vxn-prices">
+            {p.perHour != null ? <div className="vxn-price"><span className="vxn-price-label">Per hour</span><span className="vxn-price-value">{usd(p.perHour)}</span><span className="vx-muted">of audio</span></div> : null}
+            {p.perMinute != null ? <div className="vxn-price"><span className="vxn-price-label">Per minute</span><span className="vxn-price-value">{usd(p.perMinute)}</span><span className="vx-muted">of audio</span></div> : null}
+            {p.perSecond != null ? <div className="vxn-price"><span className="vxn-price-label">Per second</span><span className="vxn-price-value">{usd(p.perSecond)}</span><span className="vx-muted">as billed</span></div> : null}
+          </div>
+          <div className="vxn-split vxn-gap">
+            <div>
+              <h3 className="vxn-h3">Estimate an archive</h3>
+              <TranscriptionEstimator perHour={p.perHour} />
+            </div>
+            <div>
+              <h3 className="vxn-h3">Against other transcription models</h3>
+              <Standing model={model} catalog={catalog} task="stt" noun="transcription models" metrics={TRANSCRIPTION_STANDING} valuesOf={transcriptionStandingValues} />
+            </div>
+          </div>
+        </NextSection>
+
+        <NextSection id="specs" title="Specs">
+          <dl className="vxn-sheet">
+            {[
+              ['Model ID', <code>{model.id}</code>],
+              endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+              ['Formats', STT_FORMATS.join(', ')],
+              ['File', 'Up to 25 MB, sent as multipart'],
+              ['Output', <><code>json</code> or <code>text</code></>],
+              ['Timestamps', 'Word or segment, depending on the model'],
+              PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
+              ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
+              ['Added', fmtDate(model.created)]
+            ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+          {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+
+        <NextSection id="compare" title="Compare" lead="Every speech-to-text model on Venice, cheapest first.">
+          <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'stt'} order={m => (m.pricing || {}).perHour || 0} columns={transcriptionColumns} />
+        </NextSection>
+      </div>
+    );
+  };
+
+  /* ------------------------------------------------------------ music and sound page, next */
+
+  const lengthText = s => (s < 60 ? `${s}s` : s % 60 === 0 ? `${s / 60} min` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
+  // The lengths a job can ask for: listed options, a range, or, for the voice
+  // changer, the length of the source it accepts.
+  const soundLengths = a => (a.durationOptions ? { options: a.durationOptions, min: Math.min(...a.durationOptions), max: Math.max(...a.durationOptions) }
+    : a.voiceChanger && a.maxSourceSeconds ? { min: 1, max: a.maxSourceSeconds }
+      : a.maxDuration ? { min: a.minDuration || 1, max: a.maxDuration } : null);
+  const soundPrice = (p, seconds) => {
+    const value = p.kind === 'tiered' ? ((p.tiers || []).find(t => seconds <= t.upTo) || {}).usd
+      : p.kind === 'per-second' && p.perSecond != null ? p.perSecond * seconds
+        : p.kind === 'per-track' ? p.perTrack : null;
+    return value == null ? null : value;
+  };
+  // Tiers a minute wide charge by the started minute; others by length option.
+  const byMinute = p => p.kind === 'tiered' && (p.tiers || []).every((t, i, list) => t.upTo - (i ? list[i - 1].upTo : 0) === 60);
+  const isSfxModel = model => model.task === 'sfx';
+  const axisUsd = v => (v === 0 ? '$0' : usd(v));
+  const soundRate = p => (p.kind === 'per-track' ? `${usd(p.perTrack)} / track`
+    : p.kind === 'tiered' && !byMinute(p) && (p.tiers || []).length ? `from ${usd(p.tiers[0].usd)}`
+      : p.perMinute != null ? `${usd(p.perMinute)} / min` : '—');
+  const soundColumns = () => [
+    { label: 'Lengths', render: m => { const r = soundLengths(m.audio || {}); return r ? `${lengthText(r.min)} – ${lengthText(r.max)}` : 'Set by the model'; } },
+    { label: 'Takes', hide: true, render: m => { const a = m.audio || {}; return [a.lyrics && (a.lyricsRequired ? 'lyrics, required' : 'lyrics'), a.instrumental && 'instrumental', a.loop && 'loop'].filter(Boolean).join(', ') || '—'; } },
+    { label: 'Privacy', hide: true, render: m => (PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy) },
+    { label: 'Price', right: true, render: m => soundRate(m.pricing || {}) }
+  ];
+
+  // Price against length: steps for a price per started minute, a line for a
+  // price per second, flat for one price per track.
+  const PriceCurve = ({ pricing, range, options }) => {
+    const W = 320;
+    const H = 150;
+    const pad = { l: 44, r: 12, t: 12, b: 26 };
+    const xs = options || Array.from({ length: 61 }, (_, i) => Math.round(range.min + ((range.max - range.min) * i) / 60));
+    const points = (pricing.kind === 'tiered' && !options
+      ? (pricing.tiers || []).filter(t => t.upTo >= range.min).flatMap(t => [[Math.max(range.min, t.from || range.min), t.usd], [Math.min(range.max, t.upTo), t.usd]])
+      : xs.map(sec => [sec, soundPrice(pricing, sec)])).filter(([, v]) => v != null);
+    if (!points.length) return null;
+    const top = Math.max(...points.map(([, v]) => v)) || 1;
+    const x = sec => pad.l + ((sec - 0) / (range.max || 1)) * (W - pad.l - pad.r);
+    const y = v => H - pad.b - (v / top) * (H - pad.t - pad.b);
+    const path = points.map(([sec, v], i) => `${i ? 'L' : 'M'}${x(sec).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    const ticks = [0, range.max / 2, range.max].map(sec => Math.round(sec));
+    return (
+      <svg className="vxm-curve" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`From ${usd(points[0][1])} at ${lengthText(points[0][0])} to ${usd(points[points.length - 1][1])} at ${lengthText(points[points.length - 1][0])}`}>
+        {[0, 0.5, 1].map(f => <line key={f} className="vxm-grid" x1={pad.l} x2={W - pad.r} y1={y(top * f)} y2={y(top * f)} />)}
+        {[0, 0.5, 1].map(f => <text key={`y${f}`} className="vxm-label" x={pad.l - 8} y={y(top * f) + 4} textAnchor="end">{axisUsd(top * f)}</text>)}
+        {ticks.map((sec, i) => <text key={`x${sec}`} className="vxm-label" x={x(sec)} y={H - 6} textAnchor={i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle'}>{lengthText(sec)}</text>)}
+        {options ? points.map(([sec, v]) => <circle key={sec} className="vxm-dot" cx={x(sec)} cy={y(v)} r={3.5} />) : <path className="vxm-line" d={path} />}
+      </svg>
+    );
+  };
+
+  const SoundCard = ({ model }) => {
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    const range = soundLengths(a);
+    return (
+      <div className="vxm-card">
+        <div className="vxn-standing-head">
+          <span className="vxn-price-label">{a.voiceChanger ? 'Price by source length' : 'Price by length'}</span>
+          <span className="vx-muted">{byMinute(p) ? 'by the started minute' : p.kind === 'tiered' ? 'by length' : p.kind === 'per-second' ? 'by the second' : p.kind === 'per-track' ? 'one price per track' : ''}</span>
+        </div>
+        {range ? <PriceCurve pricing={p} range={range} options={a.durationOptions} />
+          : <p className="vxm-flat"><span className="vxn-est-value">{p.kind === 'per-track' ? usd(p.perTrack) : usd(p.perSecond)}</span><span className="vx-muted">{p.kind === 'per-track' ? 'per track. The model picks the length.' : 'per second of audio. The model picks the length.'}</span></p>}
+      </div>
+    );
+  };
+
+  const SoundEstimator = ({ model }) => {
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    const range = soundLengths(a);
+    const [jobs, setJobs] = useState(10);
+    const [seconds, setSeconds] = useState(() => (range ? (a.durationOptions ? a.durationOptions[0] : Math.min(range.max, Math.max(range.min, a.defaultDuration || 60))) : 0));
+    const each = range ? soundPrice(p, seconds) : p.kind === 'per-track' ? p.perTrack : null;
+    return (
+      <div className="vxn-est">
+        <div className="vxi-est-controls">
+          <label className="vxn-field"><span>{a.voiceChanger ? 'Recordings' : isSfxModel(model) ? 'Sounds' : 'Tracks'}</span><input type="number" min="0" step="1" value={jobs} onChange={e => setJobs(Math.max(0, Math.round(Number(e.target.value) || 0)))} /></label>
+          {range ? (
+            <div className="vxn-field"><span>Length</span>
+              {a.durationOptions
+                ? <Segmented ariaLabel="Length" value={seconds} onChange={setSeconds} options={a.durationOptions.map(o => ({ value: o, label: lengthText(o) }))} />
+                : (
+                  <span className="vx-range">
+                    <input type="range" min={range.min} max={range.max} step={1} value={seconds} aria-label="Length" aria-valuetext={lengthText(seconds)} onChange={e => setSeconds(Number(e.target.value))} />
+                    <span className="vx-range-value">{lengthText(seconds)}</span>
+                  </span>
+                )}
+            </div>
+          ) : null}
+        </div>
+        <div className="vxn-est-result" aria-live="polite">
+          <div><span className="vxn-est-value">{usd(each)}</span><span className="vx-muted">{a.voiceChanger ? 'per recording' : isSfxModel(model) ? 'per sound' : 'per track'}</span></div>
+          <div><span className="vxn-est-value is-total">{usd(each != null ? each * jobs : null)}</span><span className="vx-muted">for {count(jobs)} {a.voiceChanger ? 'recordings' : isSfxModel(model) ? 'sounds' : 'tracks'}</span></div>
+        </div>
+      </div>
+    );
+  };
+
+  // Everything an agent needs to queue a job with the model, as Markdown.
+  const soundBrief = (family, model, sample) => {
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    const range = soundLengths(a);
+    const base = a.voiceChanger ? '/audio/voice-changer' : '/audio';
+    return [
+      `# ${family.name} on the Venice API`,
+      '',
+      `- Model ID: \`${model.id}\``,
+      `- Flow: \`POST ${API}${base}/queue\` returns a \`queue_id\`; poll \`POST ${API}${base}/retrieve\` with the \`model\` and \`queue_id\` until it returns the audio. \`POST ${API}${base}/quote\` prices a job without charging for it.`,
+      '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
+      p.kind === 'tiered' ? `- Price by ${a.voiceChanger ? 'source ' : ''}length: ${(p.tiers || []).map(t => `up to ${lengthText(t.upTo)} ${usd(t.usd)}`).join(', ')}`
+        : p.kind === 'per-second' ? `- Price: ${usd(p.perSecond)} per second (${usd(p.perMinute)} per minute)`
+          : p.kind === 'per-track' ? `- Price: ${usd(p.perTrack)} per track` : '- Price: quote it first',
+      a.voiceChanger
+        ? `- Source: a ${listText(a.sourceFormats || [])} recording up to ${lengthText(a.maxSourceSeconds)} and 25 MB, as a multipart \`file\` or an \`audio_url\``
+        : range ? `- \`duration_seconds\`: ${a.durationOptions ? a.durationOptions.join(', ') : `${range.min} to ${range.max}`}${a.defaultDuration ? `, default ${a.defaultDuration}` : ''}` : '- Length: set by the model; it takes no `duration_seconds`',
+      a.voiceChanger ? `- Voices: ${(a.voices || []).map(v => `\`${v}\``).join(', ')}${a.customVoice ? '; any ElevenLabs voice ID also works' : ''}` : null,
+      a.voiceChanger && a.noiseRemoval ? '- `remove_background_noise: true` cleans the source first' : null,
+      a.lyrics ? `- \`lyrics_prompt\`: ${a.lyricsRequired ? 'required' : a.instrumental ? 'needed for vocals' : 'optional'}` : null,
+      a.instrumental ? '- `force_instrumental: true` makes a track without vocals' : null,
+      a.loop ? '- `loop: true` renders a seamless loop' : null,
+      a.promptLimit ? `- \`prompt\`: up to ${count(a.promptLimit)} characters` : null,
+      (a.formats || []).length ? `- Output: ${a.formats.join(', ')}` : null,
+      PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      `- Docs: https://docs.venice.ai/models/${family.slug}`,
+      '',
+      '```bash',
+      sample,
+      '```'
+    ].filter(line => line != null).join('\n');
+  };
+
+  const SoundPageNext = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const now = useNow();
+    const { catalog } = useCatalog();
+    const headerHeight = useHeaderHeight();
+    const model = models.find(m => m.id === family.primary) || models[0];
+    const provider = providers[family.provider] || providers[model.provider];
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    const range = soundLengths(a);
+    const source = safeUrl(model.source);
+    const endpoints = (model.endpoints || []).filter(ep => ep.supported !== false);
+    const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
+    const versions = (related && related.versions) || [];
+    const isSfx = isSfxModel(model);
+    const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], a.voiceChanger ? null : ['compare', 'Compare']].filter(Boolean);
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const sample = codeSamples(model, endpoint && endpoint.id).curl;
+    const voices = a.voices || [];
+    const params = a.voiceChanger ? [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['file', listText(a.sourceFormats || []), 'The recording, up to 25 MB; or send audio_url'],
+      ['audio_url', 'A public URL', 'Instead of file'],
+      voices.length ? ['voice', `${count(voices.length)} voices${a.customVoice ? ', or a voice ID' : ''}`, a.defaultVoice ? `Default ${a.defaultVoice}` : null] : null,
+      a.noiseRemoval ? ['remove_background_noise', <code>true | false</code>, 'Cleans the source first'] : null,
+      a.seed ? ['seed', 'Integer', 'Repeats a result'] : null
+    ].filter(Boolean) : [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['prompt', a.promptLimit ? `Up to ${count(a.promptLimit)} characters` : 'Text', 'Required'],
+      a.lyrics ? ['lyrics_prompt', 'Song lyrics', a.lyricsRequired ? 'Required' : a.instrumental ? 'Needed for vocals' : 'Optional'] : null,
+      range ? ['duration_seconds', a.durationOptions ? <code>{a.durationOptions.join(' | ')}</code> : `${range.min} to ${range.max}`, a.defaultDuration ? `Default ${a.defaultDuration}` : null] : null,
+      a.instrumental ? ['force_instrumental', <code>true | false</code>, 'A track without vocals'] : null,
+      a.loop ? ['loop', <code>true | false</code>, 'A seamless loop'] : null
+    ].filter(Boolean);
+    const tiles = (a.voiceChanger ? [
+      { key: 'source', icon: 'mic', name: 'Source', detail: `${listText(a.sourceFormats || [])}, up to ${lengthText(a.maxSourceSeconds)}` },
+      voices.length ? { key: 'voices', icon: 'volume', name: 'Voices', detail: `${count(voices.length)}${a.customVoice ? ', or any ElevenLabs voice ID' : ''}` } : null,
+      a.noiseRemoval ? { key: 'noise', icon: 'sliders', name: 'Noise removal', detail: <code>remove_background_noise</code> } : null,
+      a.seed ? { key: 'seed', icon: 'flask', name: 'Repeatable', detail: <code>seed</code> } : null
+    ] : [
+      a.lyrics ? { key: 'lyrics', icon: 'text', name: 'Lyrics', detail: a.lyricsRequired ? <><code>lyrics_prompt</code>, required</> : <code>lyrics_prompt</code> } : null,
+      a.instrumental ? { key: 'inst', icon: 'music', name: 'Instrumental', detail: <code>force_instrumental</code> } : null,
+      a.loop ? { key: 'loop', icon: 'activity', name: 'Seamless loop', detail: <code>loop: true</code> } : null,
+      { key: 'length', icon: 'clock', name: 'Lengths', detail: range ? (a.durationOptions ? a.durationOptions.map(lengthText).join(' · ') : `${lengthText(range.min)} to ${lengthText(range.max)}`) : 'Set by the model' }
+    ]).concat([
+      (a.formats || []).length ? { key: 'format', icon: 'music', name: 'Output', detail: a.formats.join(' · ') } : null,
+      { key: 'queue', icon: 'clock', name: 'Queued', detail: 'Quote, queue and retrieve' }
+    ]).filter(Boolean);
+    const figures = [
+      p.kind === 'per-track' ? <Figure key="price" value={usd(p.perTrack)} label="per track" />
+        : p.kind === 'tiered' && !byMinute(p) && (p.tiers || []).length ? <Figure key="price" value={<><span className="vxn-unit is-lead">from</span>{usd(p.tiers[0].usd)}</>} label={`for ${lengthText(p.tiers[0].upTo)}`} />
+          : p.perMinute != null ? <Figure key="price" value={usd(p.perMinute)} label={p.kind === 'tiered' ? 'per started minute' : 'per minute of audio'} tip={p.kind === 'per-second' ? `Billed by the second: ${usd(p.perSecond)} a second.` : null} /> : null,
+      range ? <Figure key="length" value={lengthText(range.max)} label={a.voiceChanger ? 'longest source' : `longest ${isSfx ? 'sound' : 'track'}, from ${lengthText(range.min)}`} /> : null,
+      a.voiceChanger && voices.length ? <Figure key="voices" value={count(voices.length)} label="voices" />
+        : a.promptLimit ? <Figure key="prompt" value={count(a.promptLimit)} label="prompt characters" /> : null
+    ].filter(Boolean);
+    const scope = isSfx ? 'Sound effects' : 'Music';
+
+    return (
+      <div className="vx vxn vxm not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
+        <HoverTips />
+        <NextTop scope={scope} scopeHref="/models/music" family={family} brief={soundBrief(family, model, sample)} />
+
+        <header className="vxn-hero">
+          <div className="vxn-hero-main">
+            <div className="vxn-provider">
+              <ProviderLogo provider={provider} size={22} />
+              <span>{provider ? provider.name : family.provider}</span>
+              <span className="vxn-dot" />
+              <span>{fmtDate(model.created)}</span>
+              {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
+              {model.beta ? <Tag tone="beta">Beta</Tag> : null}
+            </div>
+            <h1 className="vxn-h1">{family.name}</h1>
+            <div className="vxn-meta">
+              <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
+              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {model.openWeights ? (source
+                ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
+                : <span className="vxn-meta-item">Open weights</span>) : null}
+            </div>
+            {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            {figures.length ? <div className="vxn-figs">{figures}</div> : null}
+            <div className="vxn-ctas">
+              <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
+            </div>
+          </div>
+          <div className="vxn-hero-side">
+            <SoundCard model={model} />
+          </div>
+        </header>
+
+        <NextNav sections={sections} active={activeSection} />
+
+        <NextSection id="quickstart" title="Quickstart" lead={a.voiceChanger ? 'Upload a recording as a queued job, then poll for it in the new voice.' : 'Music and sound effects run as queued jobs: queue the prompt, then poll for the audio.'}>
+          <JobFlow base={a.voiceChanger ? '/audio/voice-changer' : '/audio'} noun="audio" />
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
+        </NextSection>
+
+        <NextSection id="capabilities" title="Capabilities">
+          <div className="vxn-tiles">
+            {tiles.map(tile => (
+              <div key={tile.key} className="vxn-tile">
+                <span className="vxn-tile-icon"><Icon name={tile.icon} size={16} /></span>
+                <span className="vxn-tile-text"><span className="vxn-tile-name">{tile.name}</span><span className="vxn-tile-detail">{tile.detail}</span></span>
+              </div>
+            ))}
+            {Array.from({ length: (3 - (tiles.length % 3)) % 3 }, (_, i) => <span key={`fill-${i}`} className="vxn-tile is-empty" aria-hidden="true" />)}
+          </div>
+        </NextSection>
+
+        <NextSection id="pricing" title="Pricing" lead={byMinute(p) ? `Billed by the started minute of ${a.voiceChanger ? 'the source' : 'audio'}, in USD.` : p.kind === 'tiered' ? 'Billed by the length you ask for, in USD.' : p.kind === 'per-second' ? 'Billed per second of audio, in USD.' : 'One price per track, in USD.'}>
+          {p.kind === 'tiered' ? (
+            <div className="vx-table-wrap vxm-tiers">
+              <table className="vx-dtable">
+                <thead><tr><th>{a.voiceChanger ? 'Source length' : 'Length'}</th>{(p.tiers || []).map(t => <th key={t.upTo} className="vx-al-right">{`up to ${lengthText(t.upTo)}`}</th>)}</tr></thead>
+                <tbody><tr><th scope="row">Price</th>{(p.tiers || []).map(t => <td key={t.upTo} className="vx-al-right vx-num">{usd(t.usd)}</td>)}</tr></tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="vxn-prices">
+              {p.kind === 'per-track' ? <div className="vxn-price"><span className="vxn-price-label">Per track</span><span className="vxn-price-value">{usd(p.perTrack)}</span><span className="vx-muted">{range ? `any length up to ${lengthText(range.max)}` : 'at the length the model picks'}</span></div> : null}
+              {p.kind === 'per-second' ? <div className="vxn-price"><span className="vxn-price-label">Per minute</span><span className="vxn-price-value">{usd(p.perMinute)}</span><span className="vx-muted">billed by the second, {usd(p.perSecond)} each</span></div> : null}
+            </div>
+          )}
+          <h3 className="vxn-h3 vxn-gap">Estimate a batch</h3>
+          <SoundEstimator model={model} />
+          <p className="vxn-caption">Quote a job with <code>POST {a.voiceChanger ? '/audio/voice-changer' : '/audio'}/quote</code> for its exact price before you queue it.</p>
+        </NextSection>
+
+        <NextSection id="specs" title="Specs">
+          <dl className="vxn-sheet">
+            {[
+              ['Model ID', <code>{model.id}</code>],
+              endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+              a.voiceChanger ? ['Source', `${listText(a.sourceFormats || [])}, up to ${lengthText(a.maxSourceSeconds)}`] : ['Lengths', range ? (a.durationOptions ? a.durationOptions.map(lengthText).join(', ') : `${lengthText(range.min)} to ${lengthText(range.max)}`) : 'Set by the model'],
+              a.voiceChanger ? ['Voices', `${count(voices.length)}${a.customVoice ? ', or any ElevenLabs voice ID' : ''}`] : null,
+              a.promptLimit ? ['Prompt', `Up to ${count(a.promptLimit)} characters`] : null,
+              a.voiceChanger ? null : ['Lyrics', a.lyrics ? (a.lyricsRequired ? 'Required' : 'Yes') : 'No'],
+              a.instrumental ? ['Instrumental', 'Yes'] : null,
+              a.loop ? ['Seamless loop', 'Yes'] : null,
+              (a.formats || []).length ? ['Output', a.formats.join(', ')] : null,
+              PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
+              ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
+              ['Added', fmtDate(model.created)]
+            ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+          {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+
+        {a.voiceChanger ? null : (
+          <NextSection id="compare" title="Compare" lead={`Every ${isSfx ? 'sound effects' : 'music'} model on Venice.`}>
+            <TaskCompare model={model} catalog={catalog} includes={m => m.task === model.task && !(m.audio || {}).voiceChanger} order={() => 0} columns={soundColumns} />
+          </NextSection>
+        )}
       </div>
     );
   };
