@@ -267,6 +267,7 @@ Prices per image. Models with resolution options list a price for each resolutio
 | Hunyuan Image 3.0 | `hunyuan-image-v3` | $0.09 | Private |
 | Ideogram V4 | `ideogram-v4` | $0.06 | Anonymized |
 | Ideogram V4.5 | `ideogram-v4-5` | 1K: $0.26, 2K: $0.26 | Anonymized |
+| Kling Image 4.0 | `kling-v4-text-to-image` | 2K: $0.08, 4K: $0.12 | Anonymized |
 | Krea 2 Turbo | `krea-2-turbo` | 1K: $0.04, 2K: $0.06 | Private |
 | Krea 3 | `krea-3` | 1K: $0.07, 2K: $0.10, 4K: $0.15 | Anonymized |
 | Krea v2 Large | `krea-v2-large` | $0.07 | Anonymized |
@@ -347,6 +348,7 @@ Prices per edit. The edit price covers the first input image. Models with an ext
 | Grok Imagine | `grok-imagine-edit` | 1K: $0.03, 2K: $0.04 | $0.0023 | Private |
 | Grok Imagine 2.0 | `grok-imagine-image-2-0-edit` | 1K: $0.07, 2K: $0.10 | $0.0115 | Private |
 | Ideogram V4.5 | `ideogram-v4-5-edit` | 1K: $0.26, 2K: $0.26 | — | Anonymized |
+| Kling Image 4.0 | `kling-v4-image-edit` | 2K: $0.08, 4K: $0.12 | $0.00368 | Anonymized |
 | Krea 3 | `krea-3-edit` | 1K: $0.07, 2K: $0.10, 4K: $0.15 | $0.02499985 | Anonymized |
 | Luma Uni-1 | `luma-uni-1-edit` | $0.06 | — | Anonymized |
 | Luma Uni-1 Max | `luma-uni-1-max-edit` | $0.13 | — | Anonymized |
