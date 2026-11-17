@@ -3219,6 +3219,19 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return height;
   };
 
+  const NextTop = ({ scope, scopeHref, family, brief }) => (
+    <div className="vxn-top">
+      <nav className="vxn-crumbs" aria-label="Breadcrumb">
+        <a href="/models/overview">Models</a>
+        <Icon name="chevronRight" size={12} />
+        <a href={scopeHref}>{scope}</a>
+        <Icon name="chevronRight" size={12} />
+        <span aria-current="page">{family.name}</span>
+      </nav>
+      <AgentMenu brief={brief} slug={family.slug} />
+    </div>
+  );
+
   const NextSection = ({ id, title, lead, children }) => (
     <section id={id} className="vxn-section" aria-labelledby={`${id}-title`}>
       <div className="vxn-section-head">
@@ -3267,16 +3280,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return (
       <div className="vx vxn not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
         <HoverTips />
-        <div className="vxn-top">
-          <nav className="vxn-crumbs" aria-label="Breadcrumb">
-            <a href="/models/overview">Models</a>
-            <Icon name="chevronRight" size={12} />
-            <a href="/models/text">Text</a>
-            <Icon name="chevronRight" size={12} />
-            <span aria-current="page">{family.name}</span>
-          </nav>
-          <AgentMenu brief={agentBrief(family, model, codeSamples(model, endpoint && endpoint.id).curl)} slug={family.slug} />
-        </div>
+        <NextTop scope="Text" scopeHref="/models/text" family={family} brief={agentBrief(family, model, codeSamples(model, endpoint && endpoint.id).curl)} />
 
         <header className="vxn-hero">
           <div className="vxn-hero-main">
