@@ -3194,15 +3194,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       caps.xSearch ? ['venice_parameters.enable_x_search', <code>true | false</code>, 'Posts from X'] : null,
       caps.logprobs ? ['logprobs', <code>true | false</code>, <>With <code>top_logprobs</code></>] : null
     ].filter(Boolean);
-    return (
-      <div className="vx-table-wrap vxn-params">
-        <table className="vx-dtable">
-          <thead><tr><th>Parameter</th><th>Values</th><th className="vx-hide-sm">Notes</th></tr></thead>
-          <tbody>{rows.map(([name, values, note]) => <tr key={name}><td><code>{name}</code></td><td>{values}</td><td className="vx-muted vx-hide-sm">{note}</td></tr>)}</tbody>
-        </table>
-      </div>
-    );
+    return <ParamRows rows={rows} />;
   };
+
+  const ParamRows = ({ rows }) => (
+    <div className="vx-table-wrap vxn-params">
+      <table className="vx-dtable">
+        <thead><tr><th>Parameter</th><th>Values</th><th className="vx-hide-sm">Notes</th></tr></thead>
+        <tbody>{rows.map(([name, values, note]) => <tr key={name}><td><code>{name}</code></td><td>{values}</td><td className="vx-muted vx-hide-sm">{note}</td></tr>)}</tbody>
+      </table>
+    </div>
+  );
 
   // The section bar sticks below Mintlify's fixed header, whose height
   // changes with the viewport.
