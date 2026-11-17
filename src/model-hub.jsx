@@ -2755,7 +2755,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  const ModelPage = ({ data }) => (data.family.task === 'chat' ? <ModelPageNext data={data} /> : <ModelPageClassic data={data} />);
+  const ModelPage = ({ data }) => (data.family.task === 'chat' ? <ModelPageNext data={data} />
+    : data.family.task === 'image-generation' ? <ImagePageNext data={data} /> : <ModelPageClassic data={data} />);
 
   const ModelPageClassic = ({ data }) => {
     const { family, models, related, providers } = data;
@@ -3438,6 +3439,356 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
           </NextSection>
         ) : null}
+      </div>
+    );
+  };
+
+  /* ------------------------------------------------------------ image page, next */
+
+  const RES_SIDE = { '1K': 1, '2K': 2, '4K': 4 };
+  const RENDER_ORDER = ['photoreal', 'style', 'text', 'composition'];
+  const QUALITY_LEVELS = ['low', 'medium', 'high'];
+  const imageQualities = pricing => {
+    const byQuality = pricing.byQuality || {};
+    return QUALITY_LEVELS.filter(level => Object.values(byQuality).some(row => row && row[level] != null));
+  };
+  const IMAGE_STANDING = [
+    { key: 'price', label: 'Price per image', better: 'cheaper', lowerIsBetter: true, format: v => usd(v), tip: 'At 1K and the default quality, or the single price of models without resolution tiers.' },
+    { key: 'prompt', label: 'Prompt limit', better: 'longer', lowerIsBetter: false, format: v => `${count(v)} characters` }
+  ];
+  const imageStandingValues = model => {
+    const p = model.pricing || {};
+    return { price: p.byResolution && p.byResolution['1K'] != null ? p.byResolution['1K'] : p.perImage, prompt: (model.image || {}).promptLimit };
+  };
+  const imagePrices = pricing => [...new Set([pricing.perImage, ...Object.values(pricing.byResolution || {}),
+    ...Object.values(pricing.byQuality || {}).flatMap(row => Object.values(row || {}))].filter(v => v != null))];
+
+  // Everything an agent needs to generate with the model, as Markdown.
+  const imageBrief = (family, model, editor, sample) => {
+    const p = model.pricing || {};
+    const image = model.image || {};
+    const endpoint = (model.endpoints || []).find(e => e.recommended) || (model.endpoints || [])[0];
+    const openai = (model.endpoints || []).find(e => e.id === 'images-generations');
+    const editEndpoint = editor && ((editor.endpoints || []).find(e => e.recommended) || (editor.endpoints || [])[0]);
+    const byRes = row => Object.entries(row || {}).filter(([, v]) => v != null).map(([res, v]) => `${res} ${usd(v)}`).join(', ');
+    const qualities = imageQualities(p);
+    const prices = qualities.length > 1
+      ? ['- Price per image, by quality:', ...qualities.map(level => `  - ${level}${level === p.defaultQuality ? ' (default)' : ''}: ${byRes(Object.fromEntries(Object.entries(p.byQuality).map(([res, row]) => [res, row[level]])))}`)]
+      : [`- Price per image: ${p.byResolution ? byRes(p.byResolution) : usd(p.perImage)}`];
+    const ratios = (image.aspectRatios || []).filter(r => r !== 'auto');
+    return [
+      `# ${family.name} on the Venice API`,
+      '',
+      `- Model ID: \`${model.id}\``,
+      endpoint ? `- Endpoint: \`${endpoint.method} ${API}${endpoint.path}\`${openai ? `, or the OpenAI-compatible \`${openai.method} ${API}${openai.path}\`` : ''}` : null,
+      editor ? `- Edit model ID: \`${editor.id}\`${editEndpoint ? `, on \`${editEndpoint.method} ${API}${editEndpoint.path}\`` : ''}` : null,
+      '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
+      ...prices,
+      image.resolutions && image.resolutions.length ? `- Resolutions: ${image.resolutions.join(', ')}${image.defaultResolution ? `, default ${image.defaultResolution}` : ''}` : null,
+      ratios.length ? `- Aspect ratios: ${ratios.join(', ')}${image.defaultAspectRatio ? `, default ${image.defaultAspectRatio}` : ''}` : null,
+      image.promptLimit ? `- Prompt: up to ${count(image.promptLimit)} characters` : null,
+      p.upscale ? `- Upscale: ${Object.entries(p.upscale).filter(([, v]) => v != null).map(([k, v]) => `${k} ${usd(v)}`).join(', ')}` : null,
+      PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      `- Docs: https://docs.venice.ai/models/${family.slug}`,
+      '',
+      '```bash',
+      sample,
+      '```'
+    ].filter(line => line != null).join('\n');
+  };
+
+  const byRenderOrder = (a, b) => RENDER_ORDER.indexOf(a.prompt) - RENDER_ORDER.indexOf(b.prompt);
+
+  const RenderFeature = ({ item, onOpen }) => (
+    <button type="button" className="vxi-feature" onClick={() => onOpen(item)} aria-label={`Open the ${item.title} render`}>
+      <img src={item.url} alt={item.caption || item.title} />
+      <span className="vxi-feature-cap"><strong>{item.title}</strong><span>{item.caption}</span></span>
+    </button>
+  );
+
+  const RenderThumbs = ({ items, active, onSelect }) => (
+    <div className="vxi-thumbs" role="group" aria-label="Sample renders">
+      {items.map(item => (
+        <button key={item.url} type="button" title={item.title} aria-pressed={item === active} className={cls('vxi-thumb', item === active && 'is-active')} onClick={() => onSelect(item)}>
+          <img src={item.url} alt={item.title} loading="lazy" />
+        </button>
+      ))}
+    </div>
+  );
+
+  // Every image model renders the same prompts, so one prompt lines them up.
+  const PromptCompare = ({ family, render, renders, onSelect, catalog, similar }) => {
+    const [all, setAll] = useState(false);
+    const others = useMemo(() => {
+      if (!catalog) return [];
+      const rank = new Map(similar.map((item, i) => [item.slug, i]));
+      const order = row => (rank.has(row.family.slug) ? rank.get(row.family.slug) : similar.length);
+      return catalog.families
+        .filter(f => f.task === 'image-generation' && f.slug !== family.slug)
+        .map(f => ({ family: f, model: catalog.models[f.primary], render: ((catalog.models[f.primary] || {}).media || []).find(item => item.prompt === render.prompt) }))
+        .filter(row => row.render)
+        .sort((a, b) => order(a) - order(b) || (b.family.created || 0) - (a.family.created || 0));
+    }, [catalog, render.prompt]);
+    const shown = all ? others : others.slice(0, 7);
+    return (
+      <div className="vxi-compare">
+        <div className="vxi-compare-head">
+          <div className="vxn-switch" role="radiogroup" aria-label="Reference prompt">
+            {renders.map(item => (
+              <button key={item.prompt} type="button" role="radio" aria-checked={item === render} className={cls(item === render && 'is-active')} onClick={() => onSelect(item)}>{item.title}</button>
+            ))}
+          </div>
+          {render.caption ? <q className="vxi-prompt">{render.caption}</q> : null}
+        </div>
+        <div className="vxi-grid">
+          <div className="vxi-tile is-current">
+            <img src={render.url} alt={`${family.name}: ${render.title}`} loading="lazy" />
+            <span className="vxi-tile-cap"><strong>{family.name}</strong><span>This model</span></span>
+          </div>
+          {shown.map(row => (
+            <a key={row.family.slug} className="vxi-tile" href={`/models/${row.family.slug}`}>
+              <img src={row.render.url} alt={`${row.family.name}: ${render.title}`} loading="lazy" />
+              <span className="vxi-tile-cap"><strong>{row.family.name}</strong><span>{row.model && row.model.headline ? `${usd(row.model.headline.value)} per image` : null}</span></span>
+            </a>
+          ))}
+        </div>
+        {others.length > 7 ? <button type="button" className="vxn-btn vxi-more" onClick={() => setAll(!all)}>{all ? 'Show fewer' : `Show all ${others.length + 1} image models`}</button> : null}
+      </div>
+    );
+  };
+
+  // Resolution tiers drawn to scale with the model's own render, priced at
+  // each quality.
+  const PriceGrid = ({ pricing, render }) => {
+    const resolutions = Object.keys(pricing.byResolution || {}).filter(res => pricing.byResolution[res] != null);
+    const qualities = imageQualities(pricing);
+    const columns = resolutions.length ? resolutions : [null];
+    const rows = qualities.length > 1
+      ? qualities.map(level => [level, upperFirst(level), res => (pricing.byQuality[res] || {})[level]])
+      : [['default', 'Per image', res => (res ? pricing.byResolution[res] : pricing.perImage)]];
+    const most = Math.max(...columns.map(res => RES_SIDE[res] || 1));
+    return (
+      <div className="vx-table-wrap">
+        <table className="vxi-price-grid">
+          <thead>
+            <tr>
+              <td />
+              {columns.map(res => (
+                <th key={res || 'any'} scope="col">
+                  <span className="vxi-step-box" style={{ '--vxi-side': (RES_SIDE[res] || most) / most, backgroundImage: render ? `url("${render.url}")` : null }} aria-hidden="true" />
+                  <span className="vxi-step-res">{res || 'Flat price'}{res && res === pricing.defaultResolution ? <span className="vx-hide-sm"> · default</span> : null}</span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([key, label, price]) => (
+              <tr key={key}>
+                <th scope="row">{label}{key === pricing.defaultQuality ? <span className="vx-muted"> · default</span> : null}</th>
+                {columns.map(res => <td key={res || 'any'}>{usd(price(res))}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const ImageEstimator = ({ pricing }) => {
+    const resolutions = Object.keys(pricing.byResolution || {});
+    const qualities = imageQualities(pricing);
+    const [images, setImages] = useState(1000);
+    const [res, setRes] = useState(pricing.defaultResolution || resolutions[0]);
+    const [quality, setQuality] = useState(pricing.defaultQuality || qualities[0]);
+    const each = quality && pricing.byQuality && pricing.byQuality[res] && pricing.byQuality[res][quality] != null ? pricing.byQuality[res][quality]
+      : pricing.byResolution && pricing.byResolution[res] != null ? pricing.byResolution[res] : pricing.perImage;
+    return (
+      <div className="vxn-est">
+        <div className="vxi-est-controls">
+          <label className="vxn-field"><span>Images</span><input type="number" min="0" step="100" value={images} onChange={e => setImages(Math.max(0, Number(e.target.value) || 0))} /></label>
+          {resolutions.length > 1 ? <div className="vxn-field"><span>Resolution</span><Segmented ariaLabel="Resolution" value={res} onChange={setRes} options={resolutions.map(r => ({ value: r, label: r }))} /></div> : null}
+          {qualities.length > 1 ? <div className="vxn-field"><span>Quality</span><Segmented ariaLabel="Quality" value={quality} onChange={setQuality} options={qualities.map(q => ({ value: q, label: upperFirst(q) }))} /></div> : null}
+        </div>
+        <div className="vxn-est-result">
+          <div><span className="vxn-est-value">{usd(each)}</span><span className="vx-muted">per image</span></div>
+          <div><span className="vxn-est-value is-total">{usd(each != null ? each * images : null)}</span><span className="vx-muted">for {count(images)} images</span></div>
+        </div>
+      </div>
+    );
+  };
+
+  const ImagePageNext = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const now = useNow();
+    const { catalog } = useCatalog();
+    const headerHeight = useHeaderHeight();
+    const [endpointId, setEndpointId] = useState(null);
+    const model = models.find(m => m.id === family.primary) || models[0];
+    const editor = models.find(m => m.task === 'image-edit');
+    const remover = models.find(m => m.task === 'background-removal');
+    const provider = providers[family.provider] || providers[model.provider];
+    const p = model.pricing || {};
+    const image = model.image || {};
+    const source = safeUrl(model.source);
+    const endpoints = (model.endpoints || []).filter(e => e.supported !== false);
+    const endpoint = endpoints.find(e => e.id === endpointId) || endpoints.find(e => e.recommended) || endpoints[0];
+    const similar = (related && related.similar) || [];
+    const versions = (related && related.versions) || [];
+    const qualities = imageQualities(p);
+    const resolutions = image.resolutions || Object.keys(p.byResolution || {});
+    const ratios = (image.aspectRatios || []).filter(r => r !== 'auto');
+    const upscale = Object.entries(p.upscale || {}).filter(([, v]) => v != null);
+    const editPrice = editor && editor.pricing ? (editor.pricing.edit != null ? editor.pricing.edit : editor.pricing.perImage) : null;
+    const renders = [...(model.media || [])].filter(item => item.type === 'image').sort(byRenderOrder);
+    const [promptId, setPromptId] = useState(renders[0] ? renders[0].prompt : null);
+    const [opened, setOpened] = useState(null);
+    const render = renders.find(item => item.prompt === promptId) || renders[0];
+    const selectRender = item => setPromptId(item.prompt);
+    const sections = [render ? ['compare', 'Same prompt'] : null, ['pricing', 'Pricing'], ['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['specs', 'Specs']].filter(Boolean);
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const brief = imageBrief(family, model, editor, codeSamples(model, endpoint && endpoint.id).curl);
+    const tasks = [
+      { key: 'generate', icon: 'image', name: 'Generate', detail: <code>{model.id}</code> },
+      editor ? { key: 'edit', icon: 'wand', name: 'Edit', detail: <><code>{editor.id}</code>{editor.image && editor.image.maxInputImages > 1 ? ` · up to ${editor.image.maxInputImages} images` : editor.image && editor.image.combineImages ? ' · combines images' : ''}</> } : null,
+      upscale.length ? { key: 'upscale', icon: 'maximize', name: 'Upscale', detail: upscale.map(([k, v]) => `${k} ${usd(v)}`).join(' · ') } : null,
+      remover ? { key: 'remove', icon: 'layers', name: 'Background removal', detail: <code>{remover.id}</code> } : null,
+      qualities.length > 1 ? { key: 'quality', icon: 'sliders', name: 'Quality', detail: <code>{qualities.join(' · ')}</code> } : null,
+      image.styleReferences ? { key: 'style', icon: 'sparkles', name: 'Style references', detail: <code>style_references</code> } : null,
+      image.webSearch ? { key: 'web', icon: 'globe', name: 'Web-grounded', detail: <code>enable_web_search</code> } : null,
+      { key: 'seed', icon: 'flask', name: 'Repeatable', detail: <code>seed</code> }
+    ].filter(Boolean);
+    const params = [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['prompt', image.promptLimit ? `Up to ${count(image.promptLimit)} characters` : 'Text', 'Required'],
+      resolutions.length ? ['resolution', <code>{resolutions.join(' | ')}</code>, image.defaultResolution ? `Default ${image.defaultResolution}` : null] : null,
+      ratios.length ? ['aspect_ratio', `${ratios.length} ratios`, image.defaultAspectRatio ? `Default ${image.defaultAspectRatio}` : null] : null,
+      qualities.length ? ['quality', <code>{qualities.join(' | ')}</code>, p.defaultQuality ? `Default ${p.defaultQuality}` : null] : null,
+      image.steps ? ['steps', `Up to ${image.steps.max}`, `Default ${image.steps.default}`] : null,
+      ['seed', 'Integer', 'Repeats a result'],
+      ['variants', <code>1 – 4</code>, 'Images per request'],
+      image.styleReferences ? ['style_references', 'Image URLs', 'Match a style'] : null,
+      image.webSearch ? ['enable_web_search', <code>true | false</code>, 'Ground the image in search results'] : null,
+      ['format', <code>webp | png | jpeg</code>, 'Default webp'],
+      ['safe_mode', <code>true | false</code>, 'Default true, which blurs adult content']
+    ].filter(Boolean);
+    const prices = imagePrices(p);
+    const top = resolutions[resolutions.length - 1];
+
+    return (
+      <div className="vx vxn vxi not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
+        <HoverTips />
+        <NextTop scope="Image" scopeHref="/models/image" family={family} brief={brief} />
+
+        <header className="vxn-hero vxi-hero">
+          <div className="vxn-hero-main">
+            <div className="vxn-provider">
+              <ProviderLogo provider={provider} size={22} />
+              <span>{provider ? provider.name : family.provider}</span>
+              <span className="vxn-dot" />
+              <span>{fmtDate(model.created)}</span>
+              {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
+              {model.beta ? <Tag tone="beta">Beta</Tag> : null}
+            </div>
+            <h1 className="vxn-h1">{family.name}</h1>
+            <div className="vxn-meta">
+              <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
+              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {model.openWeights ? (source
+                ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
+                : <span className="vxn-meta-item">Open weights</span>) : null}
+              {model.uncensored ? <span className="vxn-meta-item">Uncensored</span> : null}
+            </div>
+            {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            <div className="vxn-figs">
+              {prices.length ? <Figure value={<>{prices.length > 1 ? <span className="vxn-unit is-lead">from</span> : null}{usd(Math.min(...prices))}</>} label="per image" /> : null}
+              {top ? <Figure value={top} label={`max resolution${resolutions.length > 1 ? `, ${resolutions.length} sizes` : ''}`} /> : null}
+              {ratios.length ? <Figure value={ratios.length} label={`aspect ratios${image.defaultAspectRatio ? `, ${image.defaultAspectRatio} default` : ''}`} /> : null}
+            </div>
+            {renders.length > 1 ? <RenderThumbs items={renders} active={render} onSelect={selectRender} /> : null}
+            <div className="vxn-ctas">
+              <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
+              <a className="vxn-textlink" href={`https://venice.ai/studio/image?model=${encodeURIComponent(model.id)}`} target="_blank" rel="noopener noreferrer">Try in Venice<Icon name="arrowRight" size={14} /></a>
+            </div>
+          </div>
+          {render ? (
+            <div className="vxi-hero-side">
+              <RenderFeature item={render} onOpen={setOpened} />
+              {renders.length > 1 ? <RenderThumbs items={renders} active={render} onSelect={selectRender} /> : null}
+            </div>
+          ) : null}
+        </header>
+        <Lightbox item={opened} onClose={() => setOpened(null)} />
+
+        <NextNav sections={sections} active={activeSection} />
+
+        {render ? (
+          <NextSection id="compare" title="Same prompt, other models" lead="Every image model renders the same reference prompts, so their results line up side by side.">
+            <PromptCompare family={family} render={render} renders={renders} onSelect={selectRender} catalog={catalog} similar={similar} />
+          </NextSection>
+        ) : null}
+
+        <NextSection id="pricing" title="Pricing" lead={`Billed per image in USD${p.byResolution ? `, by resolution${qualities.length > 1 ? ' and quality' : ''}. Each resolution is drawn to scale` : ''}.`}>
+          <PriceGrid pricing={p} render={render} />
+          {editPrice != null || p.extraInputImage != null || upscale.length ? (
+            <div className="vxi-extras">
+              {editPrice != null ? <div className="vxi-extra"><span className="vxn-price-label">Edit</span><span>{usd(editPrice)}</span></div> : null}
+              {p.extraInputImage != null || (editor && editor.pricing && editor.pricing.extraInputImage != null) ? <div className="vxi-extra"><span className="vxn-price-label">Extra input image</span><span>{usd(p.extraInputImage != null ? p.extraInputImage : editor.pricing.extraInputImage)}</span></div> : null}
+              {upscale.map(([factor, value]) => <div key={factor} className="vxi-extra"><span className="vxn-price-label">{factor} upscale</span><span>{usd(value)}</span></div>)}
+            </div>
+          ) : null}
+          <div className="vxn-split">
+            <div>
+              <h3 className="vxn-h3">Estimate a batch</h3>
+              <ImageEstimator pricing={p} />
+            </div>
+            <div>
+              <h3 className="vxn-h3">Against other image models</h3>
+              <Standing model={model} catalog={catalog} task="image-generation" noun="image models" metrics={IMAGE_STANDING} valuesOf={imageStandingValues} />
+            </div>
+          </div>
+        </NextSection>
+
+        <NextSection id="quickstart" title="Quickstart" lead="Generate with Venice's image endpoint, or with the OpenAI-compatible one from any OpenAI SDK.">
+          <CodePanel model={model} endpoint={endpoint} setEndpointId={setEndpointId} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
+        </NextSection>
+
+        <NextSection id="capabilities" title="Capabilities" lead="What the family does, and every shape it renders.">
+          <div className="vxn-tiles">
+            {tasks.map(task => (
+              <div key={task.key} className="vxn-tile">
+                <span className="vxn-tile-icon"><Icon name={task.icon} size={16} /></span>
+                <span className="vxn-tile-text"><span className="vxn-tile-name">{task.name}</span><span className="vxn-tile-detail">{task.detail}</span></span>
+              </div>
+            ))}
+            {Array.from({ length: (3 - (tasks.length % 3)) % 3 }, (_, i) => <span key={`fill-${i}`} className="vxn-tile is-empty" aria-hidden="true" />)}
+          </div>
+          {ratios.length ? (
+            <>
+              <h3 className="vxn-h3 vxn-gap">Aspect ratios</h3>
+              <div className="vxi-ratios">{ratios.map(ratio => <AspectShape key={ratio} ratio={ratio} active={ratio === image.defaultAspectRatio} />)}</div>
+            </>
+          ) : null}
+        </NextSection>
+
+        <NextSection id="specs" title="Specs">
+          <dl className="vxn-sheet">
+            {[
+              ['Model ID', <code>{model.id}</code>],
+              editor ? ['Edit model ID', <code>{editor.id}</code>] : null,
+              endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+              resolutions.length ? ['Resolutions', `${resolutions.join(', ')}${image.defaultResolution ? ` · default ${image.defaultResolution}` : ''}`] : null,
+              ratios.length ? ['Aspect ratios', `${ratios.length}${image.defaultAspectRatio ? ` · default ${image.defaultAspectRatio}` : ''}`] : null,
+              image.promptLimit ? ['Prompt limit', `${count(image.promptLimit)} characters`] : null,
+              image.steps ? ['Steps', `default ${image.steps.default}, max ${image.steps.max}`] : null,
+              PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
+              ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
+              ['Added', fmtDate(model.created)]
+            ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+          {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
       </div>
     );
   };
