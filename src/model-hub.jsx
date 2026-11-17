@@ -2998,9 +2998,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     ].filter(line => line != null).join('\n');
   };
 
-  const CodePanel = ({ model, endpoint, setEndpointId, endpoints = (model.endpoints || []).filter(e => e.supported !== false) }) => {
+  const CodePanel = ({ model, endpoint, setEndpointId, endpoints = (model.endpoints || []).filter(e => e.supported !== false), options }) => {
     const [lang, setLang] = useState('curl');
-    const samples = codeSamples(model, endpoint && endpoint.id);
+    const samples = codeSamples(model, endpoint && endpoint.id, options);
     const langs = [['curl', 'cURL'], ['python', 'Python'], ['typescript', 'TypeScript']];
     return (
       <div className="vxn-code">
