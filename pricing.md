@@ -131,6 +131,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Kimi K3 | `e2ee-kimi-k3-p` | $3.75 | $18.75 | $0.375 | — | E2EE |
 | Kimi K3 | `kimi-k3` | $3.75 | $18.75 | $0.375 | — | Private |
 | Kimi K3 Fast | `kimi-k3-fast-api` | $4.50 | $22.50 | $0.45 | — | Private |
+| Kimi K3.1 Pro | `e2ee-kimi-k3-1-pro-p` | $2.50 | $12.50 | $0.25 | — | E2EE |
 | Kimi K3.1 Pro | `kimi-k3-1-pro` | $2.00 | $10.00 | $0.20 | — | Private |
 | Kimi K3.1 Pro Highspeed | `kimi-k3-1-pro-highspeed` | $5.00 | $25.00 | $0.375 | — | Anonymized |
 | Llama 3.2 3B | `llama-3.2-3b` | $0.15 | $0.60 | — | — | Private |
