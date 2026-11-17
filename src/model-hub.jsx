@@ -2757,7 +2757,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   const ModelPage = ({ data }) => (data.family.task === 'chat' ? <ModelPageNext data={data} />
     : data.family.task === 'image-generation' ? <ImagePageNext data={data} />
-      : data.family.task === 'video' ? <VideoPageNext data={data} /> : <ModelPageClassic data={data} />);
+      : data.family.task === 'video' ? <VideoPageNext data={data} />
+        : data.family.task === 'embedding' ? <EmbeddingPageNext data={data} /> : <ModelPageClassic data={data} />);
 
   const ModelPageClassic = ({ data }) => {
     const { family, models, related, providers } = data;
@@ -4197,6 +4198,244 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
           </dl>
           {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+      </div>
+    );
+  };
+
+  /* ------------------------------------------------------------ embedding page, next */
+
+  // Each square of the vector grid stands for 64 dimensions, 16 to a row.
+  const VECTOR_CELL = 64;
+  const EMBEDDING_BATCH = 2048;
+  const EMBEDDING_STANDING = [
+    { key: 'price', label: 'Price', better: 'cheaper', lowerIsBetter: true, format: v => usd(v), tip: 'Per 1M input tokens.' },
+    { key: 'input', label: 'Max input', better: 'longer', lowerIsBetter: false, format: v => `${count(v)} tokens`, tip: 'Tokens per input string that Venice accepts.' }
+  ];
+  const embeddingStandingValues = model => ({ price: (model.pricing || {}).input, input: (model.embedding || {}).maxInputTokens });
+  const inputCapNote = e => (e.modelInputTokens
+    ? `The model reads up to ${count(e.modelInputTokens)} tokens, but Venice accepts up to ${count(e.maxInputTokens)} per input, estimated from its length: about 27,500 characters.`
+    : null);
+  const storageSize = n => (n >= 1e12 ? `${(n / 1e12).toFixed(1)} TB` : n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
+
+  // Everything an agent needs to embed with the model, as Markdown.
+  const embeddingBrief = (family, model, sample) => {
+    const e = model.embedding || {};
+    const p = model.pricing || {};
+    return [
+      `# ${family.name} on the Venice API`,
+      '',
+      `- Model ID: \`${model.id}\``,
+      `- Endpoint: \`POST ${API}/embeddings\`, OpenAI-compatible`,
+      '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
+      `- Price: ${usd(p.input)} per 1M input tokens`,
+      e.dimensions ? `- Dimensions: ${count(e.dimensions)}${e.customDimensions ? ', or fewer with `dimensions`' : ', fixed'}` : null,
+      `- Input: a string, or up to ${count(EMBEDDING_BATCH)} strings${e.maxInputTokens ? `, each up to ${count(e.maxInputTokens)} tokens` : ''}${e.modelInputTokens ? ` (Venice's cap, estimated from length; the model reads up to ${count(e.modelInputTokens)})` : ''}. Token-ID arrays are rejected, so set \`check_embedding_ctx_length=False\` on LangChain's \`OpenAIEmbeddings\``,
+      '- `encoding_format`: `float` (default) or `base64`, a smaller payload',
+      '- Similarities from different models are not comparable: store the model ID, and `dimensions` if set, with each vector',
+      PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      `- Docs: https://docs.venice.ai/models/${family.slug}`,
+      '',
+      '```bash',
+      sample,
+      '```'
+    ].filter(line => line != null).join('\n');
+  };
+
+  // The vector drawn as squares of 64 dimensions; with a shorter size asked
+  // for, the squares past it fade.
+  const VectorGrid = ({ native, kept }) => (
+    <div className="vxe-grid" role="img" aria-label={`${count(kept)} of ${count(native)} dimensions`}>
+      {Array.from({ length: Math.ceil(native / VECTOR_CELL) }, (_, i) => <span key={i} className={cls(i * VECTOR_CELL < kept && 'is-on')} />)}
+    </div>
+  );
+
+  const VectorStorage = ({ model }) => {
+    const e = model.embedding || {};
+    const native = e.dimensions || 0;
+    const sizes = e.customDimensions ? [...new Set([256, 512, 1024, 2048].filter(d => d < native).concat(native))] : [native];
+    const [kept, setKept] = useState(native);
+    const [vectors, setVectors] = useState(1000000);
+    useEffect(() => setKept(native), [model.id]);
+    if (!native) return null;
+    return (
+      <div className="vxe-vector">
+        <VectorGrid native={native} kept={kept} />
+        <p className="vxn-caption">Each square is {VECTOR_CELL} dimensions, and each row {count(VECTOR_CELL * 16)}.</p>
+        <div className="vxn-est vxn-gap">
+          <div className="vxi-est-controls">
+            <label className="vxn-field"><span>Vectors</span><input type="number" min="0" step="100000" value={vectors} onChange={ev => setVectors(Math.max(0, Math.round(Number(ev.target.value) || 0)))} /></label>
+            {sizes.length > 1 ? (
+              <div className="vxn-field"><span>Dimensions</span><Segmented ariaLabel="Dimensions" value={kept} onChange={setKept} options={sizes.map(d => ({ value: d, label: count(d) }))} /></div>
+            ) : null}
+          </div>
+          <div className="vxn-est-result" aria-live="polite">
+            <div><span className="vxn-est-value">{count(kept)}</span><span className="vx-muted">{kept < native ? `of ${count(native)} dimensions` : 'dimensions per vector'}</span></div>
+            <div><span className="vxn-est-value is-total">{storageSize(vectors * kept * 4)}</span><span className="vx-muted">for {count(vectors)} vectors as float32</span></div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const EmbeddingEstimator = ({ price }) => {
+    const [docs, setDocs] = useState(100000);
+    const [each, setEach] = useState(500);
+    const total = docs * each;
+    return (
+      <div className="vxn-est">
+        <div className="vxi-est-controls">
+          <label className="vxn-field"><span>Documents</span><input type="number" min="0" step="1000" value={docs} onChange={ev => setDocs(Math.max(0, Math.round(Number(ev.target.value) || 0)))} /></label>
+          <label className="vxn-field"><span>Tokens each</span><input type="number" min="0" step="100" value={each} onChange={ev => setEach(Math.max(0, Math.round(Number(ev.target.value) || 0)))} /></label>
+        </div>
+        <div className="vxn-est-result" aria-live="polite">
+          <div><span className="vxn-est-value">{tokens(total)}</span><span className="vx-muted">tokens</span></div>
+          <div><span className="vxn-est-value is-total">{usd(price != null ? (price * total) / 1e6 : null)}</span><span className="vx-muted">to embed them once</span></div>
+        </div>
+      </div>
+    );
+  };
+
+  // The embedding models are few, so the table lists them all.
+  const EmbeddingCompare = ({ model, catalog }) => {
+    const rows = useMemo(() => (catalog ? catalog.families
+      .filter(f => f.task === 'embedding' && catalog.models[f.primary])
+      .map(f => ({ family: f, model: catalog.models[f.primary] }))
+      .sort((a, b) => ((a.model.pricing || {}).input || 0) - ((b.model.pricing || {}).input || 0) || a.family.name.localeCompare(b.family.name)) : []), [catalog]);
+    if (!rows.length) return null;
+    const most = Math.max(...rows.map(row => (row.model.embedding || {}).dimensions || 0), 1);
+    return (
+      <div className="vx-table-wrap vxn-compare">
+        <table className="vx-dtable">
+          <thead><tr><th>Model</th><th>Dimensions</th><th className="vx-al-right vx-hide-sm">Max input</th><th className="vx-hide-sm">Privacy</th><th className="vx-al-right">Per 1M tokens</th></tr></thead>
+          <tbody>
+            {rows.map(({ family, model: m }) => {
+              const e = m.embedding || {};
+              const current = m.id === model.id;
+              return (
+                <tr key={family.slug} className={cls(current && 'is-current')}>
+                  <td>{current ? <strong>{family.name}</strong> : <a href={`/models/${family.slug}`}>{family.name}</a>}</td>
+                  <td>
+                    <span className="vxe-dims"><span className="vxe-dims-track"><span style={{ width: `${((e.dimensions || 0) / most) * 100}%` }} /></span>
+                      <span className="vx-num">{e.dimensions ? count(e.dimensions) : '—'}</span>{e.customDimensions ? <span className="vx-muted vx-hide-sm">or fewer</span> : null}</span>
+                  </td>
+                  <td className="vx-al-right vx-num vx-hide-sm">{e.maxInputTokens ? count(e.maxInputTokens) : '—'}</td>
+                  <td className="vx-hide-sm">{PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy}</td>
+                  <td className="vx-al-right vx-num">{usd((m.pricing || {}).input)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const EmbeddingPageNext = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const now = useNow();
+    const { catalog } = useCatalog();
+    const headerHeight = useHeaderHeight();
+    const model = models.find(m => m.id === family.primary) || models[0];
+    const provider = providers[family.provider] || providers[model.provider];
+    const e = model.embedding || {};
+    const p = model.pricing || {};
+    const source = safeUrl(model.source);
+    const endpoints = (model.endpoints || []).filter(ep => ep.supported !== false);
+    const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
+    const versions = (related && related.versions) || [];
+    const sections = [['quickstart', 'Quickstart'], ['vectors', 'Vectors'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare']];
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const sample = codeSamples(model, endpoint && endpoint.id).curl;
+    const capNote = inputCapNote(e);
+    const params = [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['input', `A string, or up to ${count(EMBEDDING_BATCH)} strings`, e.maxInputTokens ? `Required, up to ${count(e.maxInputTokens)} tokens each` : 'Required'],
+      e.customDimensions ? ['dimensions', `Up to ${count(e.dimensions)}`, 'Returns a shorter vector'] : null,
+      ['encoding_format', <code>float | base64</code>, 'Default float; base64 is a smaller payload']
+    ].filter(Boolean);
+
+    return (
+      <div className="vx vxn vxe not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
+        <HoverTips />
+        <NextTop scope="Embeddings" scopeHref="/models/embeddings" family={family} brief={embeddingBrief(family, model, sample)} />
+
+        <header className="vxn-hero">
+          <div className="vxn-hero-main">
+            <div className="vxn-provider">
+              <ProviderLogo provider={provider} size={22} />
+              <span>{provider ? provider.name : family.provider}</span>
+              <span className="vxn-dot" />
+              <span>{fmtDate(model.created)}</span>
+              {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
+              {model.beta ? <Tag tone="beta">Beta</Tag> : null}
+            </div>
+            <h1 className="vxn-h1">{family.name}</h1>
+            <div className="vxn-meta">
+              <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
+              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {model.openWeights ? (source
+                ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
+                : <span className="vxn-meta-item">Open weights</span>) : null}
+            </div>
+            {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            <div className="vxn-figs">
+              {p.input != null ? <Figure value={usd(p.input)} label="per 1M input tokens" /> : null}
+              {e.dimensions ? <Figure value={count(e.dimensions)} label={e.customDimensions ? 'dimensions, or fewer' : 'dimensions'} /> : null}
+              {e.maxInputTokens ? <Figure value={count(e.maxInputTokens)} label="tokens per input" tip={capNote} /> : null}
+            </div>
+            <div className="vxn-ctas">
+              <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
+              <a className="vxn-textlink" href="/guides/features/embeddings">Embeddings guide<Icon name="arrowRight" size={14} /></a>
+            </div>
+          </div>
+          <div className="vxn-hero-side">
+            <Standing model={model} catalog={catalog} task="embedding" noun="embedding models" metrics={EMBEDDING_STANDING} valuesOf={embeddingStandingValues} />
+          </div>
+        </header>
+
+        <NextNav sections={sections} active={activeSection} />
+
+        <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
+          <p className="vxe-callout"><Icon name="info" size={14} /><span>LangChain's <code>OpenAIEmbeddings</code> sends token IDs, which Venice rejects. Set <code>check_embedding_ctx_length=False</code>.</span></p>
+        </NextSection>
+
+        <NextSection id="vectors" title="Vectors" lead={`Each input comes back as ${count(e.dimensions || 0)} numbers${e.customDimensions ? ', or fewer when you ask for them with dimensions' : ''}. Stored as float32, each number takes 4 bytes.`}>
+          <VectorStorage model={model} />
+          <p className="vxn-caption">Similarities from different models aren't comparable, so store the model ID{e.customDimensions ? ' and dimensions' : ''} with each vector.</p>
+        </NextSection>
+
+        <NextSection id="pricing" title="Pricing" lead="Billed per 1M input tokens, in USD.">
+          <div className="vxn-prices">
+            <div className="vxn-price"><span className="vxn-price-label">Input</span><span className="vxn-price-value">{usd(p.input)}</span><span className="vx-muted">per 1M tokens</span></div>
+          </div>
+          <h3 className="vxn-h3 vxn-gap">Estimate a corpus</h3>
+          <EmbeddingEstimator price={p.input} />
+        </NextSection>
+
+        <NextSection id="specs" title="Specs">
+          <dl className="vxn-sheet">
+            {[
+              ['Model ID', <code>{model.id}</code>],
+              endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+              e.dimensions ? ['Dimensions', e.customDimensions ? <>{count(e.dimensions)}, or fewer with <code>dimensions</code></> : count(e.dimensions)] : null,
+              e.maxInputTokens ? ['Max input', <>{count(e.maxInputTokens)} tokens per input{capNote ? <InfoTip text={capNote} /> : null}</>] : null,
+              ['Batch', `Up to ${count(EMBEDDING_BATCH)} inputs per request`],
+              ['Encodings', <><code>float</code> or <code>base64</code></>],
+              ['Input', 'Text only'],
+              PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
+              ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
+              ['Added', fmtDate(model.created)]
+            ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+          {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+
+        <NextSection id="compare" title="Compare" lead="Every embedding model on Venice, cheapest first.">
+          <EmbeddingCompare model={model} catalog={catalog} />
         </NextSection>
       </div>
     );
