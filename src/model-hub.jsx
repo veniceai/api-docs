@@ -3204,6 +3204,21 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
+  // The section bar sticks below Mintlify's fixed header, whose height
+  // changes with the viewport.
+  const useHeaderHeight = () => {
+    const [height, setHeight] = useState(0);
+    useEffect(() => {
+      const header = document.getElementById('navbar');
+      if (!header) return undefined;
+      const update = () => setHeight(Math.round(header.getBoundingClientRect().height));
+      update();
+      window.addEventListener('resize', update);
+      return () => window.removeEventListener('resize', update);
+    }, []);
+    return height;
+  };
+
   const NextSection = ({ id, title, lead, children }) => (
     <section id={id} className="vxn-section" aria-labelledby={`${id}-title`}>
       <div className="vxn-section-head">
@@ -3238,17 +3253,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const inputs = ['Text', caps.vision && 'Image', caps.videoInput && 'Video', caps.audioInput && 'Audio'].filter(Boolean);
     const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null].filter(Boolean);
     const activeSection = useScrollSpy(sections.map(([id]) => id));
-    // The section bar sticks below Mintlify's fixed header, whose height
-    // changes with the viewport.
-    const [headerHeight, setHeaderHeight] = useState(0);
-    useEffect(() => {
-      const header = document.getElementById('navbar');
-      if (!header) return undefined;
-      const update = () => setHeaderHeight(Math.round(header.getBoundingClientRect().height));
-      update();
-      window.addEventListener('resize', update);
-      return () => window.removeEventListener('resize', update);
-    }, []);
+    const headerHeight = useHeaderHeight();
     const selectVariant = id => {
       setVariantId(id);
       setEndpointId(null);
