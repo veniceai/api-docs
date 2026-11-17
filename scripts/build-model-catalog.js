@@ -586,6 +586,10 @@ function normalizeModel(model, ctx) {
         languages: spec.supports_language_code ? 'configurable' : null,
         async: model.type === 'music'
       };
+      if (spec.voice_cloning) {
+        const cloning = spec.voice_cloning;
+        entry.audio.cloning = { formats: cloning.accepted_formats || [], minSeconds: cloning.min_sample_seconds || null, retentionDays: cloning.retention_days || null };
+      }
     } else if (spec.voice_changer) {
       entry.audio = {
         voiceChanger: true,
