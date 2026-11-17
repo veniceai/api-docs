@@ -1793,7 +1793,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     sfx: 'Heavy wooden door creaking open in a stone hallway'
   };
 
-  const codeSamples = (model, endpointId) => {
+  const codeSamples = (model, endpointId, { voice: chosenVoice } = {}) => {
     const id = model.id;
     const key = '$VENICE_API_KEY';
     const auth = `-H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"`;
@@ -1878,7 +1878,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       };
     }
     if (model.task === 'tts' && !(model.audio && model.audio.async)) {
-      const voice = (model.audio && model.audio.voices && model.audio.voices[0]) || 'default';
+      const voice = chosenVoice || (model.audio && model.audio.voices && model.audio.voices[0]) || 'default';
       const format = (model.audio && (model.audio.defaultFormat || (model.audio.formats || [])[0])) || 'mp3';
       return {
         curl: `curl ${API}/audio/speech \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    "input": "Private AI for everyone.",\n    "voice": "${voice}",\n    "response_format": "${format}"\n  }' --output speech.${format}`,
@@ -1912,6 +1912,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       const fields = [
         `"model": "${id}"`,
         `"prompt": "${isTts ? 'Private AI for everyone.' : prompt}"`,
+        isTts && chosenVoice ? `"voice": "${chosenVoice}"` : null,
         !isTts && seconds ? `"duration_seconds": ${seconds}` : null,
         a.lyrics ? `"lyrics_prompt": "${VARIANT_PROMPTS.lyrics}"` : null
       ].filter(Boolean);
