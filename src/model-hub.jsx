@@ -2776,7 +2776,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const ModelPage = ({ data }) => (data.family.task === 'chat' ? <ModelPageNext data={data} />
     : data.family.task === 'image-generation' ? <ImagePageNext data={data} />
       : data.family.task === 'video' ? <VideoPageNext data={data} />
-        : data.family.task === 'embedding' ? <EmbeddingPageNext data={data} /> : <ModelPageClassic data={data} />);
+        : data.family.task === 'embedding' ? <EmbeddingPageNext data={data} />
+          : data.family.task === 'tts' ? <SpeechPageNext data={data} /> : <ModelPageClassic data={data} />);
 
   const ModelPageClassic = ({ data }) => {
     const { family, models, related, providers } = data;
@@ -4463,6 +4464,230 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
         <NextSection id="compare" title="Compare" lead="Every embedding model on Venice, cheapest first.">
           <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'embedding'} order={m => (m.pricing || {}).input || 0} columns={embeddingColumns} />
+        </NextSection>
+      </div>
+    );
+  };
+
+  /* ------------------------------------------------------------ speech page, next */
+
+  // POST /audio/speech takes up to 4,096 characters of input per request.
+  const SPEECH_INPUT_CAP = 4096;
+  // 150 words a minute, the conversion the catalog's per-minute prices use.
+  const TTS_CHARS_PER_MINUTE = 825;
+  const SPEECH_STANDING = [
+    { key: 'price', label: 'Price', better: 'cheaper', lowerIsBetter: true, format: v => usd(v), tip: 'Per 1M characters of input.' },
+    { key: 'voices', label: 'Voices', better: 'more', lowerIsBetter: false, format: v => count(v) }
+  ];
+  const voiceCount = model => (model.audio || {}).voiceCount || ((model.audio || {}).voices || []).length || null;
+  const speechStandingValues = model => ({ price: (model.pricing || {}).per1MChars, voices: voiceCount(model) });
+  const speechColumns = () => [
+    { label: 'Voices', right: true, render: m => (voiceCount(m) ? count(voiceCount(m)) : '—') },
+    { label: 'Formats', hide: true, render: m => ((m.audio || {}).formats || []).join(', ') || '—' },
+    { label: 'Privacy', hide: true, render: m => (PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy) },
+    { label: 'Per 1M characters', right: true, render: m => usd((m.pricing || {}).per1MChars) }
+  ];
+
+  // Everything an agent needs to speak with the model, as Markdown.
+  const speechBrief = (family, model, sample) => {
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    return [
+      `# ${family.name} on the Venice API`,
+      '',
+      `- Model ID: \`${model.id}\``,
+      a.async
+        ? `- Flow: \`POST ${API}/audio/queue\` with the text as \`prompt\` returns a \`queue_id\`; poll \`POST ${API}/audio/retrieve\` with the \`model\` and \`queue_id\` until it returns the audio. \`POST ${API}/audio/quote\` prices a job without charging for it.`
+        : `- Endpoint: \`POST ${API}/audio/speech\`, OpenAI-compatible; returns the audio`,
+      '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
+      `- Price: ${usd(p.per1MChars)} per 1M characters${p.perHour != null ? `, about ${usd(p.perHour)} per hour of speech at ${TTS_CHARS_PER_MINUTE} characters a minute` : ''}`,
+      (a.voices || []).length ? `- Voices (case-sensitive): ${a.voices.map(v => `\`${v}\``).join(', ')}${a.customVoice ? '; any ElevenLabs voice ID also works' : ''}` : null,
+      (a.formats || []).length ? `- Formats: ${a.formats.join(', ')}${a.defaultFormat ? `; default ${a.defaultFormat}` : ''}` : null,
+      a.async ? null : `- Input: up to ${count(SPEECH_INPUT_CAP)} characters per request; \`streaming: true\` streams the audio as it is generated`,
+      a.cloning ? `- Voice cloning: \`POST ${API}/audio/voices\` with a ${listText(a.cloning.formats)} sample of at least ${a.cloning.minSeconds} seconds returns a voice to pass as \`voice\`; it lasts ${a.cloning.retentionDays} days` : null,
+      PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      `- Docs: https://docs.venice.ai/models/${family.slug}`,
+      '',
+      '```bash',
+      sample,
+      '```'
+    ].filter(line => line != null).join('\n');
+  };
+
+  // Voice names are case-sensitive; picking one rewrites the request.
+  const VoiceBoard = ({ voices, value, onPick, customVoice }) => {
+    const [query, setQuery] = useState('');
+    const shown = query ? voices.filter(v => v.toLowerCase().includes(query.trim().toLowerCase())) : voices;
+    return (
+      <div className="vxs-voices">
+        <div className="vxn-standing-head">
+          <span className="vxn-price-label">{count(voices.length)} voices</span>
+          {voices.length > 16 ? <input className="vxs-voice-search" type="search" placeholder="Filter" value={query} onChange={e => setQuery(e.target.value)} aria-label="Filter voices" /> : null}
+        </div>
+        <div className="vxs-voice-list" role="radiogroup" aria-label="Voice">
+          {shown.map(v => <button key={v} type="button" role="radio" aria-checked={v === value} className={cls('vxs-voice', v === value && 'is-active')} onClick={() => onPick(v)}>{v}</button>)}
+          {shown.length ? null : <span className="vx-muted">No voice matches.</span>}
+        </div>
+        <p className="vxn-caption">Names are case-sensitive.{customVoice ? ' Any ElevenLabs voice ID works too.' : ''} Pick one to use it in the request below.</p>
+      </div>
+    );
+  };
+
+  const SpeechEstimator = ({ price }) => {
+    const [chars, setChars] = useState(100000);
+    return (
+      <div className="vxn-est">
+        <div className="vxi-est-controls">
+          <label className="vxn-field"><span>Characters</span><input type="number" min="0" step="10000" value={chars} onChange={e => setChars(Math.max(0, Math.round(Number(e.target.value) || 0)))} /></label>
+        </div>
+        <div className="vxn-est-result" aria-live="polite">
+          <div><span className="vxn-est-value">{count(Math.round(chars / TTS_CHARS_PER_MINUTE))} min</span><span className="vx-muted">of speech, estimated</span></div>
+          <div><span className="vxn-est-value is-total">{usd(price != null ? (price * chars) / 1e6 : null)}</span><span className="vx-muted">to speak them</span></div>
+        </div>
+      </div>
+    );
+  };
+
+  const SpeechPageNext = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const now = useNow();
+    const { catalog } = useCatalog();
+    const headerHeight = useHeaderHeight();
+    const model = models.find(m => m.id === family.primary) || models[0];
+    const provider = providers[family.provider] || providers[model.provider];
+    const a = model.audio || {};
+    const p = model.pricing || {};
+    const voices = a.voices || [];
+    const [voice, setVoice] = useState(voices[0] || null);
+    const source = safeUrl(model.source);
+    const endpoints = (model.endpoints || []).filter(ep => ep.supported !== false);
+    const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
+    const versions = (related && related.versions) || [];
+    const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare']];
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const options = { voice: voice || undefined };
+    const sample = codeSamples(model, endpoint && endpoint.id, options).curl;
+    const perHourTip = `Estimated at ${TTS_CHARS_PER_MINUTE} characters a minute, about 150 spoken words.`;
+    const params = a.async ? [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['prompt', 'The text to speak', 'Required'],
+      voices.length ? ['voice', `${count(voices.length)} voices${a.customVoice ? ', or a voice ID' : ''}`, "The model's own by default"] : null
+    ].filter(Boolean) : [
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['input', `Up to ${count(SPEECH_INPUT_CAP)} characters`, 'Required'],
+      voices.length ? ['voice', `${count(voices.length)} voices${a.customVoice ? ', or a voice ID' : ''}`, "The model's own by default"] : null,
+      (a.formats || []).length ? ['response_format', <code>{a.formats.join(' | ')}</code>, a.defaultFormat ? `Default ${a.defaultFormat}` : null] : null,
+      ['speed', <code>0.25 – 4.0</code>, 'Some models clamp it or ignore it'],
+      ['streaming', <code>true | false</code>, 'Streams the audio as it is generated']
+    ].filter(Boolean);
+    const tiles = [
+      (a.formats || []).length ? { key: 'formats', icon: 'music', name: 'Formats', detail: <>{a.formats.map(f => <code key={f}>{f}</code>).reduce((acc, el) => (acc.length ? [...acc, ' · ', el] : [el]), [])}{a.defaultFormat ? `, ${a.defaultFormat} by default` : ''}</> } : null,
+      a.async ? { key: 'queue', icon: 'clock', name: 'Queued', detail: 'Quote, queue and retrieve, like music' } : { key: 'stream', icon: 'activity', name: 'Streaming', detail: <code>streaming: true</code> },
+      a.async ? null : { key: 'openai', icon: 'code', name: 'OpenAI-compatible', detail: <code>client.audio.speech.create()</code> },
+      a.customVoice ? { key: 'custom', icon: 'mic', name: 'Any ElevenLabs voice', detail: 'Pass its voice ID as voice' } : null,
+      a.cloning ? { key: 'clone', icon: 'mic', name: 'Voice cloning', detail: <><code>POST /audio/voices</code><br />A {a.cloning.minSeconds}s+ sample; the voice lasts {a.cloning.retentionDays} days</> } : null
+    ].filter(Boolean);
+
+    return (
+      <div className="vx vxn vxs not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
+        <HoverTips />
+        <NextTop scope="Text to speech" scopeHref="/models/text-to-speech" family={family} brief={speechBrief(family, model, sample)} />
+
+        <header className="vxn-hero">
+          <div className="vxn-hero-main">
+            <div className="vxn-provider">
+              <ProviderLogo provider={provider} size={22} />
+              <span>{provider ? provider.name : family.provider}</span>
+              <span className="vxn-dot" />
+              <span>{fmtDate(model.created)}</span>
+              {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
+              {model.beta ? <Tag tone="beta">Beta</Tag> : null}
+            </div>
+            <h1 className="vxn-h1">{family.name}</h1>
+            <div className="vxn-meta">
+              <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
+              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {model.openWeights ? (source
+                ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
+                : <span className="vxn-meta-item">Open weights</span>) : null}
+            </div>
+            {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            <div className="vxn-figs">
+              {p.per1MChars != null ? <Figure value={usd(p.per1MChars)} label="per 1M characters" /> : null}
+              {p.perHour != null ? <Figure value={usd(p.perHour)} label="per hour of speech" tip={perHourTip} /> : null}
+              {voices.length ? <Figure value={count(voices.length)} label={a.customVoice ? 'voices, or any voice ID' : 'voices'} /> : null}
+            </div>
+            <div className="vxn-ctas">
+              <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
+            </div>
+          </div>
+          {voices.length ? (
+            <div className="vxn-hero-side">
+              <VoiceBoard voices={voices} value={voice} onPick={setVoice} customVoice={a.customVoice} />
+            </div>
+          ) : null}
+        </header>
+
+        <NextNav sections={sections} active={activeSection} />
+
+        <NextSection id="quickstart" title="Quickstart" lead={a.async ? 'This model runs as a queued job: queue the text, then poll for the audio.' : 'OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.'}>
+          {a.async ? <JobFlow base="/audio" noun="audio" /> : null}
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} options={options} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
+        </NextSection>
+
+        <NextSection id="capabilities" title="Capabilities">
+          <div className="vxn-tiles">
+            {tiles.map(tile => (
+              <div key={tile.key} className="vxn-tile">
+                <span className="vxn-tile-icon"><Icon name={tile.icon} size={16} /></span>
+                <span className="vxn-tile-text"><span className="vxn-tile-name">{tile.name}</span><span className="vxn-tile-detail">{tile.detail}</span></span>
+              </div>
+            ))}
+            {Array.from({ length: (3 - (tiles.length % 3)) % 3 }, (_, i) => <span key={`fill-${i}`} className="vxn-tile is-empty" aria-hidden="true" />)}
+          </div>
+        </NextSection>
+
+        <NextSection id="pricing" title="Pricing" lead="Billed per 1M characters of input, in USD.">
+          <div className="vxn-prices">
+            <div className="vxn-price"><span className="vxn-price-label">Input</span><span className="vxn-price-value">{usd(p.per1MChars)}</span><span className="vx-muted">per 1M characters</span></div>
+            {p.perMinute != null ? <div className="vxn-price"><span className="vxn-price-label">Speech, about</span><span className="vxn-price-value">{usd(p.perMinute)}</span><span className="vx-muted">per minute</span></div> : null}
+            {p.perHour != null ? <div className="vxn-price"><span className="vxn-price-label">Speech, about</span><span className="vxn-price-value">{usd(p.perHour)}</span><span className="vx-muted">per hour</span></div> : null}
+          </div>
+          <p className="vxn-caption">{perHourTip}</p>
+          <div className="vxn-split vxn-gap">
+            <div>
+              <h3 className="vxn-h3">Estimate a script</h3>
+              <SpeechEstimator price={p.per1MChars} />
+            </div>
+            <div>
+              <h3 className="vxn-h3">Against other speech models</h3>
+              <Standing model={model} catalog={catalog} task="tts" noun="speech models" metrics={SPEECH_STANDING} valuesOf={speechStandingValues} />
+            </div>
+          </div>
+        </NextSection>
+
+        <NextSection id="specs" title="Specs">
+          <dl className="vxn-sheet">
+            {[
+              ['Model ID', <code>{model.id}</code>],
+              endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+              voices.length ? ['Voices', `${count(voices.length)}${a.customVoice ? ', or any ElevenLabs voice ID' : ''}`] : null,
+              (a.formats || []).length ? ['Formats', `${a.formats.join(', ')}${a.defaultFormat ? ` · default ${a.defaultFormat}` : ''}`] : null,
+              a.async ? null : ['Input', `Up to ${count(SPEECH_INPUT_CAP)} characters per request`],
+              ['Streaming', a.async ? 'No, it runs as a queued job' : 'Yes'],
+              ['Voice cloning', a.cloning ? `Yes, kept ${a.cloning.retentionDays} days` : 'No'],
+              PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
+              ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
+              ['Added', fmtDate(model.created)]
+            ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+          {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+
+        <NextSection id="compare" title="Compare" lead="Every text-to-speech model on Venice, cheapest first.">
+          <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'tts'} order={m => (m.pricing || {}).per1MChars || 0} columns={speechColumns} />
         </NextSection>
       </div>
     );
