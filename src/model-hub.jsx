@@ -2777,7 +2777,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     : data.family.task === 'image-generation' ? <ImagePageNext data={data} />
       : data.family.task === 'video' ? <VideoPageNext data={data} />
         : data.family.task === 'embedding' ? <EmbeddingPageNext data={data} />
-          : data.family.task === 'tts' ? <SpeechPageNext data={data} /> : <ModelPageClassic data={data} />);
+          : data.family.task === 'tts' ? <SpeechPageNext data={data} />
+            : data.family.task === 'stt' ? <TranscriptionPageNext data={data} /> : <ModelPageClassic data={data} />);
 
   const ModelPageClassic = ({ data }) => {
     const { family, models, related, providers } = data;
@@ -4688,6 +4689,217 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
         <NextSection id="compare" title="Compare" lead="Every text-to-speech model on Venice, cheapest first.">
           <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'tts'} order={m => (m.pricing || {}).per1MChars || 0} columns={speechColumns} />
+        </NextSection>
+      </div>
+    );
+  };
+
+  /* ------------------------------------------------------------ transcription page, next */
+
+  // POST /audio/transcriptions takes one file of up to 25 MB in these containers.
+  const STT_FILE_CAP = 25 * 1024 * 1024;
+  const STT_FORMATS = ['wav', 'flac', 'm4a', 'aac', 'mp4', 'mp3', 'ogg', 'webm'];
+  const FIT_BITRATES = [
+    ['Opus in OGG or WebM', '32 kbps', 32],
+    ['M4A or AAC', '64 kbps', 64],
+    ['MP3', '128 kbps', 128],
+    ['WAV', '16 kHz mono', 256],
+    ['WAV', '44.1 kHz stereo', 1411]
+  ];
+  const TRANSCRIPTION_STANDING = [
+    { key: 'price', label: 'Price', better: 'cheaper', lowerIsBetter: true, format: v => usd(v), tip: 'Per hour of audio.' }
+  ];
+  const transcriptionStandingValues = model => ({ price: (model.pricing || {}).perHour });
+  const transcriptionColumns = () => [
+    { label: 'Privacy', render: m => (PRIVACY[m.privacy] ? PRIVACY[m.privacy].label : m.privacy) },
+    { label: 'Per minute', right: true, hide: true, render: m => usd((m.pricing || {}).perMinute) },
+    { label: 'Per hour', right: true, render: m => usd((m.pricing || {}).perHour) }
+  ];
+
+  // Everything an agent needs to transcribe with the model, as Markdown.
+  const transcriptionBrief = (family, model, sample) => {
+    const p = model.pricing || {};
+    return [
+      `# ${family.name} on the Venice API`,
+      '',
+      `- Model ID: \`${model.id}\``,
+      `- Endpoint: \`POST ${API}/audio/transcriptions\`, OpenAI-compatible, \`multipart/form-data\` with the audio as \`file\``,
+      '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
+      `- Price: ${usd(p.perHour)} per hour of audio (${usd(p.perMinute)} per minute); failed transcriptions are not charged`,
+      `- File: ${STT_FORMATS.join(', ')}, up to 25 MB; split longer recordings and send each part`,
+      '- `response_format`: `json` (default) or `text`; `timestamps: true` adds word or segment times to the JSON; there is no SRT or VTT output',
+      '- `language`: an ISO 639-1 hint such as `en`; some models detect the language themselves',
+      PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      `- Docs: https://docs.venice.ai/models/${family.slug}`,
+      '',
+      '```bash',
+      sample,
+      '```'
+    ].filter(line => line != null).join('\n');
+  };
+
+  // How long a recording fits in one upload at common bitrates.
+  const FileFit = () => {
+    const rows = FIT_BITRATES.map(([name, note, kbps]) => ({ name, note, minutes: (STT_FILE_CAP * 8) / (kbps * 1000) / 60 }));
+    const most = Math.max(...rows.map(row => row.minutes));
+    return (
+      <div className="vxt-fit">
+        <div className="vxn-standing-head">
+          <span className="vxn-price-label">One file, up to 25 MB</span>
+          <span className="vx-muted">minutes of audio</span>
+        </div>
+        {rows.map(row => (
+          <div key={`${row.name} ${row.note}`} className="vxt-fit-row">
+            <span className="vxt-fit-name">{row.name}<span className="vx-muted">{row.note}</span></span>
+            <span className="vxt-fit-track"><span style={{ width: `${(row.minutes / most) * 100}%` }} /></span>
+            <span className="vxt-fit-value">{row.minutes >= 10 ? Math.round(row.minutes) : row.minutes.toFixed(1)}</span>
+          </div>
+        ))}
+        <p className="vxn-caption">Split a longer recording and send each part.</p>
+      </div>
+    );
+  };
+
+  const TranscriptionEstimator = ({ perHour }) => {
+    const [hours, setHours] = useState(100);
+    return (
+      <div className="vxn-est">
+        <div className="vxi-est-controls">
+          <label className="vxn-field"><span>Hours of audio</span><input type="number" min="0" step="10" value={hours} onChange={e => setHours(Math.max(0, Number(e.target.value) || 0))} /></label>
+        </div>
+        <div className="vxn-est-result" aria-live="polite">
+          <div><span className="vxn-est-value">{count(Math.round(hours * 60))} min</span><span className="vx-muted">of audio</span></div>
+          <div><span className="vxn-est-value is-total">{usd(perHour != null ? perHour * hours : null)}</span><span className="vx-muted">to transcribe it</span></div>
+        </div>
+      </div>
+    );
+  };
+
+  const TranscriptionPageNext = ({ data }) => {
+    const { family, models, related, providers } = data;
+    const now = useNow();
+    const { catalog } = useCatalog();
+    const headerHeight = useHeaderHeight();
+    const model = models.find(m => m.id === family.primary) || models[0];
+    const provider = providers[family.provider] || providers[model.provider];
+    const p = model.pricing || {};
+    const source = safeUrl(model.source);
+    const endpoints = (model.endpoints || []).filter(ep => ep.supported !== false);
+    const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
+    const versions = (related && related.versions) || [];
+    const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare']];
+    const activeSection = useScrollSpy(sections.map(([id]) => id));
+    const sample = codeSamples(model, endpoint && endpoint.id).curl;
+    const params = [
+      ['file', STT_FORMATS.join(', '), 'Required, up to 25 MB'],
+      ['model', <code>{model.id}</code>, 'Required'],
+      ['response_format', <code>json | text</code>, 'Default json'],
+      ['timestamps', <code>true | false</code>, 'Adds word or segment times to the JSON'],
+      ['language', 'An ISO 639-1 code, such as en', 'A hint; some models detect it themselves']
+    ];
+    const tiles = [
+      { key: 'formats', icon: 'music', name: 'Formats', detail: STT_FORMATS.join(' · ') },
+      { key: 'times', icon: 'clock', name: 'Timestamps', detail: <code>timestamps: true</code> },
+      { key: 'lang', icon: 'globe', name: 'Language hint', detail: <code>language: "en"</code> },
+      { key: 'openai', icon: 'code', name: 'OpenAI-compatible', detail: <code>client.audio.transcriptions.create()</code> },
+      { key: 'subs', icon: 'text', name: 'Subtitles', detail: 'Build them from timestamps; there is no SRT or VTT output' },
+      { key: 'refund', icon: 'check', name: 'Failures are free', detail: 'A failed transcription is not charged' }
+    ];
+
+    return (
+      <div className="vx vxn vxt not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
+        <HoverTips />
+        <NextTop scope="Speech to text" scopeHref="/models/speech-to-text" family={family} brief={transcriptionBrief(family, model, sample)} />
+
+        <header className="vxn-hero">
+          <div className="vxn-hero-main">
+            <div className="vxn-provider">
+              <ProviderLogo provider={provider} size={22} />
+              <span>{provider ? provider.name : family.provider}</span>
+              <span className="vxn-dot" />
+              <span>{fmtDate(model.created)}</span>
+              {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
+              {model.beta ? <Tag tone="beta">Beta</Tag> : null}
+            </div>
+            <h1 className="vxn-h1">{family.name}</h1>
+            <div className="vxn-meta">
+              <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
+              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {model.openWeights ? (source
+                ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
+                : <span className="vxn-meta-item">Open weights</span>) : null}
+            </div>
+            {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            <div className="vxn-figs">
+              {p.perHour != null ? <Figure value={usd(p.perHour)} label="per hour of audio" /> : null}
+              {p.perMinute != null ? <Figure value={usd(p.perMinute)} label="per minute" /> : null}
+              <Figure value="25 MB" label="per file" />
+            </div>
+            <div className="vxn-ctas">
+              <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
+            </div>
+          </div>
+          <div className="vxn-hero-side">
+            <FileFit />
+          </div>
+        </header>
+
+        <NextNav sections={sections} active={activeSection} />
+
+        <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: send the recording as a multipart file to the Venice base URL with a Venice API key.">
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
+        </NextSection>
+
+        <NextSection id="capabilities" title="Capabilities">
+          <div className="vxn-tiles">
+            {tiles.map(tile => (
+              <div key={tile.key} className="vxn-tile">
+                <span className="vxn-tile-icon"><Icon name={tile.icon} size={16} /></span>
+                <span className="vxn-tile-text"><span className="vxn-tile-name">{tile.name}</span><span className="vxn-tile-detail">{tile.detail}</span></span>
+              </div>
+            ))}
+          </div>
+        </NextSection>
+
+        <NextSection id="pricing" title="Pricing" lead="Billed per second of audio, in USD.">
+          <div className="vxn-prices">
+            {p.perHour != null ? <div className="vxn-price"><span className="vxn-price-label">Per hour</span><span className="vxn-price-value">{usd(p.perHour)}</span><span className="vx-muted">of audio</span></div> : null}
+            {p.perMinute != null ? <div className="vxn-price"><span className="vxn-price-label">Per minute</span><span className="vxn-price-value">{usd(p.perMinute)}</span><span className="vx-muted">of audio</span></div> : null}
+            {p.perSecond != null ? <div className="vxn-price"><span className="vxn-price-label">Per second</span><span className="vxn-price-value">{usd(p.perSecond)}</span><span className="vx-muted">as billed</span></div> : null}
+          </div>
+          <div className="vxn-split vxn-gap">
+            <div>
+              <h3 className="vxn-h3">Estimate an archive</h3>
+              <TranscriptionEstimator perHour={p.perHour} />
+            </div>
+            <div>
+              <h3 className="vxn-h3">Against other transcription models</h3>
+              <Standing model={model} catalog={catalog} task="stt" noun="transcription models" metrics={TRANSCRIPTION_STANDING} valuesOf={transcriptionStandingValues} />
+            </div>
+          </div>
+        </NextSection>
+
+        <NextSection id="specs" title="Specs">
+          <dl className="vxn-sheet">
+            {[
+              ['Model ID', <code>{model.id}</code>],
+              endpoint ? ['Endpoint', <code>{endpoint.method} /api/v1{endpoint.path}</code>] : null,
+              ['Formats', STT_FORMATS.join(', ')],
+              ['File', 'Up to 25 MB, sent as multipart'],
+              ['Output', <><code>json</code> or <code>text</code></>],
+              ['Timestamps', 'Word or segment, depending on the model'],
+              PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
+              ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
+              ['Added', fmtDate(model.created)]
+            ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
+          </dl>
+          {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+
+        <NextSection id="compare" title="Compare" lead="Every speech-to-text model on Venice, cheapest first.">
+          <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'stt'} order={m => (m.pricing || {}).perHour || 0} columns={transcriptionColumns} />
         </NextSection>
       </div>
     );
