@@ -1895,14 +1895,18 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     if (model.modality === 'audio') {
       const prompt = model.task === 'sfx' ? VARIANT_PROMPTS.sfx : VARIANT_PROMPTS.music;
       const isTts = model.task === 'tts';
-      const input = isTts ? '"prompt": "Private AI for everyone."' : `"prompt": "${prompt}"`;
       const a = model.audio || {};
       const seconds = a.durationOptions ? a.durationOptions[0] : a.defaultDuration ? Math.max(a.minDuration || 1, Math.min(30, a.defaultDuration)) : null;
-      const duration = !isTts && seconds ? `,\n    "duration_seconds": ${seconds}` : '';
+      const file = `audio.${(a.formats || [])[0] || 'mp3'}`;
+      const fields = [
+        `"model": "${id}"`,
+        `"prompt": "${isTts ? 'Private AI for everyone.' : prompt}"`,
+        !isTts && seconds ? `"duration_seconds": ${seconds}` : null
+      ].filter(Boolean);
       return {
-        curl: `# 1. Queue the job\ncurl ${API}/audio/queue \\\n  ${auth} \\\n  -d '{\n    "model": "${id}",\n    ${input}${duration}\n  }'\n\n# 2. Retrieve when ready\ncurl ${API}/audio/retrieve \\\n  ${auth} \\\n  -d '{ "model": "${id}", "queue_id": "<queue_id>" }' --output audio.mp3`,
-        python: `import time\n${reqHead}\njob = requests.post(f"{API}/audio/queue", headers=HEADERS, json={\n    "model": "${id}",\n    ${input}${duration.replace(/\n    /, '\n    ')},\n}).json()\n\nwhile True:\n    res = requests.post(f"{API}/audio/retrieve", headers=HEADERS,\n                        json={"model": "${id}", "queue_id": job["queue_id"]})\n    if res.headers.get("content-type", "").startswith("audio/"):\n        open("audio.mp3", "wb").write(res.content)\n        break\n    time.sleep(3)`,
-        typescript: `${fetchHead}\nconst job = await fetch(\`\${API}/audio/queue\`, {\n  method: "POST",\n  headers,\n  body: JSON.stringify({ model: "${id}", ${isTts ? 'prompt: "Private AI for everyone."' : `prompt: "${prompt}"`} }),\n}).then(r => r.json());\n// Poll POST /audio/retrieve with { model, queue_id: job.queue_id }`
+        curl: `# 1. Queue the job (returns a queue_id)\ncurl ${API}/audio/queue \\\n  ${auth} \\\n  -d '{\n    ${fields.join(',\n    ')}\n  }'\n\n# 2. Poll until the audio is ready (JSON with the status until then)\ncurl ${API}/audio/retrieve \\\n  ${auth} \\\n  -d '{ "model": "${id}", "queue_id": "<queue_id>" }' --output ${file}`,
+        python: `import time\n${reqHead}\nres = requests.post(f"{API}/audio/queue", headers=HEADERS, json={\n    ${fields.join(',\n    ')},\n})\nres.raise_for_status()\njob = res.json()\n\nwhile True:\n    res = requests.post(f"{API}/audio/retrieve", headers=HEADERS,\n                        json={"model": "${id}", "queue_id": job["queue_id"]})\n    res.raise_for_status()  # a failed job returns its error here\n    if not res.headers.get("content-type", "").startswith("application/json"):\n        open("${file}", "wb").write(res.content)\n        break\n    time.sleep(3)  # still processing`,
+        typescript: `${fetchHead}\nimport { writeFile } from "node:fs/promises";\n\nconst queued = await fetch(\`\${API}/audio/queue\`, {\n  method: "POST",\n  headers,\n  body: JSON.stringify({\n    ${fields.map(f => f.replace(/^"([a-z_]+)":/, '$1:')).join(',\n    ')},\n  }),\n});\nif (!queued.ok) throw new Error(await queued.text());\nconst job = await queued.json();\n\nlet res;\ndo {\n  await new Promise(r => setTimeout(r, 3000));\n  res = await fetch(\`\${API}/audio/retrieve\`, {\n    method: "POST",\n    headers,\n    body: JSON.stringify({ model: "${id}", queue_id: job.queue_id }),\n  });\n  if (!res.ok) throw new Error(await res.text()); // a failed job returns its error here\n} while (res.headers.get("content-type")?.startsWith("application/json"));\nawait writeFile("${file}", Buffer.from(await res.arrayBuffer()));`
       };
     }
     if (model.modality === 'embedding') {
