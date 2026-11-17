@@ -3515,15 +3515,18 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </div>
   );
 
-  // Every image model renders the same prompts, so one prompt lines them up.
-  const PromptCompare = ({ family, render, renders, onSelect, catalog, similar }) => {
+  // Models of one type render the same reference prompts, so one prompt lines
+  // them up.
+  const CompareImage = ({ item, alt }) => <img src={item.url} alt={alt} loading="lazy" />;
+  const imagePriceLabel = model => (model.headline ? `${usd(model.headline.value)} per image` : null);
+  const PromptCompare = ({ family, render, renders, onSelect, catalog, similar, task = 'image-generation', noun = 'image models', priceOf = imagePriceLabel, Media = CompareImage }) => {
     const [all, setAll] = useState(false);
     const others = useMemo(() => {
       if (!catalog) return [];
       const rank = new Map(similar.map((item, i) => [item.slug, i]));
       const order = row => (rank.has(row.family.slug) ? rank.get(row.family.slug) : similar.length);
       return catalog.families
-        .filter(f => f.task === 'image-generation' && f.slug !== family.slug)
+        .filter(f => f.task === task && f.slug !== family.slug)
         .map(f => ({ family: f, model: catalog.models[f.primary], render: ((catalog.models[f.primary] || {}).media || []).find(item => item.prompt === render.prompt) }))
         .filter(row => row.render)
         .sort((a, b) => order(a) - order(b) || (b.family.created || 0) - (a.family.created || 0));
@@ -3541,17 +3544,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         </div>
         <div className="vxi-grid">
           <div className="vxi-tile is-current">
-            <img src={render.url} alt={`${family.name}: ${render.title}`} loading="lazy" />
+            <Media item={render} alt={`${family.name}: ${render.title}`} />
             <span className="vxi-tile-cap"><strong>{family.name}</strong><span>This model</span></span>
           </div>
           {shown.map(row => (
             <a key={row.family.slug} className="vxi-tile" href={`/models/${row.family.slug}`}>
-              <img src={row.render.url} alt={`${row.family.name}: ${render.title}`} loading="lazy" />
-              <span className="vxi-tile-cap"><strong>{row.family.name}</strong><span>{row.model && row.model.headline ? `${usd(row.model.headline.value)} per image` : null}</span></span>
+              <Media item={row.render} alt={`${row.family.name}: ${render.title}`} />
+              <span className="vxi-tile-cap"><strong>{row.family.name}</strong><span>{row.model ? priceOf(row.model) : null}</span></span>
             </a>
           ))}
         </div>
-        {others.length > 7 ? <button type="button" className="vxn-btn vxi-more" onClick={() => setAll(!all)}>{all ? 'Show fewer' : `Show all ${others.length + 1} image models`}</button> : null}
+        {others.length > 7 ? <button type="button" className="vxn-btn vxi-more" onClick={() => setAll(!all)}>{all ? 'Show fewer' : `Show all ${others.length + 1} ${noun}`}</button> : null}
       </div>
     );
   };
