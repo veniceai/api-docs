@@ -3232,6 +3232,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </div>
   );
 
+  const NextNav = ({ sections, active }) => (
+    <nav className="vxn-nav" aria-label="On this page">
+      {sections.map(([id, label]) => (
+        <a key={id} href={`#${id}`} className={cls(active === id && 'is-active')}>{label}</a>
+      ))}
+    </nav>
+  );
+
   const NextSection = ({ id, title, lead, children }) => (
     <section id={id} className="vxn-section" aria-labelledby={`${id}-title`}>
       <div className="vxn-section-head">
@@ -3329,11 +3337,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
         </header>
 
-        <nav className="vxn-nav" aria-label="On this page">
-          {sections.map(([id, label]) => (
-            <a key={id} href={`#${id}`} className={cls(activeSection === id && 'is-active')}>{label}</a>
-          ))}
-        </nav>
+        <NextNav sections={sections} active={activeSection} />
 
         <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
           <CodePanel model={model} endpoint={endpoint} setEndpointId={setEndpointId} />
