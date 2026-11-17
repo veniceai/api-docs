@@ -3240,6 +3240,21 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </nav>
   );
 
+  const VersionTimeline = ({ family, versions, created }) => (
+    <div className="vxn-timeline">
+      <h3 className="vxn-h3">Other versions</h3>
+      <ol>
+        {versions.concat([{ slug: family.slug, name: family.name, created, current: true }]).sort((a, b) => (a.created || 0) - (b.created || 0)).slice(-6).map(item => (
+          <li key={item.slug} className={cls(item.current && 'is-current')}>
+            <span className="vxn-timeline-dot" />
+            {item.current ? <strong>{item.name}</strong> : <a href={`/models/${item.slug}`}>{item.name}</a>}
+            <span className="vx-muted">{shortDate(item.created)}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+
   const NextSection = ({ id, title, lead, children }) => (
     <section id={id} className="vxn-section" aria-labelledby={`${id}-title`}>
       <div className="vxn-section-head">
@@ -3418,20 +3433,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                 </table>
               </div>
             ) : null}
-            {versions.length ? (
-              <div className="vxn-timeline">
-                <h3 className="vxn-h3">Other versions</h3>
-                <ol>
-                  {versions.concat([{ slug: family.slug, name: family.name, created: model.created, current: true }]).sort((a, b) => (a.created || 0) - (b.created || 0)).slice(-6).map(item => (
-                    <li key={item.slug} className={cls(item.current && 'is-current')}>
-                      <span className="vxn-timeline-dot" />
-                      {item.current ? <strong>{item.name}</strong> : <a href={`/models/${item.slug}`}>{item.name}</a>}
-                      <span className="vx-muted">{shortDate(item.created)}</span>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            ) : null}
+            {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
           </NextSection>
         ) : null}
       </div>
