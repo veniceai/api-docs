@@ -3827,10 +3827,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const VIDEO_SUITE = VIDEO_RENDER_ORDER.slice(0, 3);
   const AUDIO_TEXT = { native: 'Generated with every clip', optional: 'Optional, on by default', none: 'None' };
   const INPUT_FIELDS = [['image', 'image_url'], ['endImage', 'end_image_url'], ['reference', 'reference_image_urls'], ['video', 'video_url'], ['referenceVideo', 'reference_video_urls'], ['audio', 'audio_url']];
-  const VIDEO_FLOW = [
-    ['Quote', '/video/quote', 'Optional. Prices the job in USD without charging for it.'],
-    ['Queue', '/video/queue', 'Checks and charges the job, then returns a queue_id at once.'],
-    ['Retrieve', '/video/retrieve', 'Poll it with the queue_id until the video is ready.']
+  const JOB_FLOW = [
+    ['Quote', 'quote', 'Optional. Prices the job in USD without charging for it.'],
+    ['Queue', 'queue', 'Checks and charges the job, then returns a queue_id at once.'],
+    ['Retrieve', 'retrieve', 'Poll it with the queue_id until the {noun} is ready.']
   ];
   const VIDEO_STANDING = [
     { key: 'price', label: 'Price per second', better: 'cheaper', lowerIsBetter: true, format: v => usd(v), tip: 'The lowest rate across its resolutions and audio settings.' },
@@ -3992,13 +3992,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  const VideoFlow = () => (
+  const JobFlow = ({ base, noun }) => (
     <ol className="vxv-flow">
-      {VIDEO_FLOW.map(([name, path, note], i) => (
-        <li key={path}>
+      {JOB_FLOW.map(([name, step, note], i) => (
+        <li key={step}>
           <span className="vxv-flow-head"><span className="vxv-flow-step">{i + 1}</span>{name}</span>
-          <code>POST {path}</code>
-          <span className="vx-muted">{note}</span>
+          <code>POST {base}/{step}</code>
+          <span className="vx-muted">{note.replace('{noun}', noun)}</span>
         </li>
       ))}
     </ol>
@@ -4174,7 +4174,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         </NextSection>
 
         <NextSection id="quickstart" title="Quickstart" lead="Video is asynchronous: queue a job, then poll for the clip.">
-          <VideoFlow />
+          <JobFlow base="/video" noun="video" />
           <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
           <h3 className="vxn-h3 vxn-gap">Parameters</h3>
           <ParamRows rows={videoParams(model)} />
