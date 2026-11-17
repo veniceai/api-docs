@@ -1789,6 +1789,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     videoRecast: 'Recast the person in the video as the person in the reference image',
     videoMotion: 'The character follows the movements in the source video',
     music: 'Warm lo-fi hip hop beat with soft piano and vinyl crackle',
+    lyrics: '[Verse]\\nCity lights are calling me home\\n[Chorus]\\nWe are the dreamers',
     sfx: 'Heavy wooden door creaking open in a stone hallway'
   };
 
@@ -1901,7 +1902,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       const fields = [
         `"model": "${id}"`,
         `"prompt": "${isTts ? 'Private AI for everyone.' : prompt}"`,
-        !isTts && seconds ? `"duration_seconds": ${seconds}` : null
+        !isTts && seconds ? `"duration_seconds": ${seconds}` : null,
+        a.lyrics ? `"lyrics_prompt": "${VARIANT_PROMPTS.lyrics}"` : null
       ].filter(Boolean);
       return {
         curl: `# 1. Queue the job (returns a queue_id)\ncurl ${API}/audio/queue \\\n  ${auth} \\\n  -d '{\n    ${fields.join(',\n    ')}\n  }'\n\n# 2. Poll until the audio is ready (JSON with the status until then)\ncurl ${API}/audio/retrieve \\\n  ${auth} \\\n  -d '{ "model": "${id}", "queue_id": "<queue_id>" }' --output ${file}`,
