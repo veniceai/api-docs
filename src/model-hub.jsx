@@ -2978,9 +2978,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     ].filter(line => line != null).join('\n');
   };
 
-  const CodePanel = ({ model, endpoint, setEndpointId }) => {
+  const CodePanel = ({ model, endpoint, setEndpointId, endpoints = (model.endpoints || []).filter(e => e.supported !== false) }) => {
     const [lang, setLang] = useState('curl');
-    const list = (model.endpoints || []).filter(e => e.supported !== false);
     const samples = codeSamples(model, endpoint && endpoint.id);
     const langs = [['curl', 'cURL'], ['python', 'Python'], ['typescript', 'TypeScript']];
     return (
@@ -2991,9 +2990,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               <button key={key} type="button" role="tab" aria-selected={lang === key} className={cls('vxn-tab', lang === key && 'is-active')} onClick={() => setLang(key)}>{label}</button>
             ))}
           </div>
-          {list.length > 1 ? (
+          {endpoints.length > 1 ? (
             <div className="vxn-switch" role="radiogroup" aria-label="Endpoint">
-              {list.map(e => (
+              {endpoints.map(e => (
                 <button key={e.id} type="button" role="radio" aria-checked={endpoint && e.id === endpoint.id} className={cls(endpoint && e.id === endpoint.id && 'is-active')} onClick={() => setEndpointId(e.id)}>{e.name}</button>
               ))}
             </div>
