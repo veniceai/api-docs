@@ -3054,18 +3054,18 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       maxOutput: t.maxOutput
     };
   };
-  const Standing = ({ model, catalog }) => {
+  const Standing = ({ model, catalog, task = 'chat', noun = 'text models', metrics = STANDING, valuesOf = standingValues }) => {
     const others = useMemo(() => (catalog ? catalog.families
-      .filter(f => f.task === 'chat' && !f.deprecated && f.primary !== model.id)
-      .map(f => ({ slug: f.slug, name: f.name, values: standingValues(catalog.models[f.primary] || {}) })) : []), [catalog, model.id]);
-    const mine = standingValues(model);
-    const rows = STANDING.filter(m => mine[m.key] != null);
+      .filter(f => f.task === task && !f.deprecated && f.primary !== model.id)
+      .map(f => ({ slug: f.slug, name: f.name, values: valuesOf(catalog.models[f.primary] || {}) })) : []), [catalog, model.id]);
+    const mine = valuesOf(model);
+    const rows = metrics.filter(m => mine[m.key] != null);
     const hash = text => [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
     return (
       <div className="vxn-standing">
         <div className="vxn-standing-head">
           <span className="vxn-price-label">How it compares</span>
-          <span className="vx-muted">{catalog ? `among ${others.length + 1} text models` : 'among text models'}</span>
+          <span className="vx-muted">{catalog ? `among ${others.length + 1} ${noun}` : `among ${noun}`}</span>
         </div>
         {rows.map(metric => {
           const values = others.map(o => o.values[metric.key]).filter(v => v != null && v > 0);
