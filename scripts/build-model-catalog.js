@@ -614,6 +614,7 @@ function normalizeModel(model, ctx) {
     const modelInput = spec.maxInputTokens || null;
     entry.embedding = { dimensions: spec.embeddingDimensions || null, maxInputTokens: modelInput && Math.min(modelInput, EMBEDDING_INPUT_CAP) };
     if (modelInput > EMBEDDING_INPUT_CAP) entry.embedding.modelInputTokens = modelInput;
+    if (spec.supportsCustomDimensions) entry.embedding.customDimensions = true;
     entry.pricing = { input: usd(pricing.input) };
     entry.headline = { value: entry.pricing.input, unit: 'per 1M tokens', basis: 'input' };
   }
