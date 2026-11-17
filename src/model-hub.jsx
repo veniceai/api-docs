@@ -3312,7 +3312,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const supported = TEXT_CAPS.filter(c => c.key !== 'effort' && hasCap(model, c.key));
     const missing = TEXT_CAPS.filter(c => !['effort', 'code'].includes(c.key) && !hasCap(model, c.key));
     const inputs = ['Text', caps.vision && 'Image', caps.videoInput && 'Video', caps.audioInput && 'Audio'].filter(Boolean);
-    const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null].filter(Boolean);
+    const sections = [['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null, ['quickstart', 'Quickstart']].filter(Boolean);
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const headerHeight = useHeaderHeight();
     const selectVariant = id => {
@@ -3378,17 +3378,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         </header>
 
         <NextNav sections={sections} active={activeSection} />
-
-        <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
-          <CodePanel model={model} endpoint={endpoint} setEndpointId={setEndpointId} />
-          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
-          <ParamTable model={model} />
-          <div className="vxn-guides">
-            {supported.filter(cap => CAP_GUIDES[cap.key]).map(cap => (
-              <a key={cap.key} className="vxn-guide" href={CAP_GUIDES[cap.key]}><Icon name={cap.icon} size={16} /><span>{cap.label === 'Image input' ? 'Vision' : cap.label}</span><Icon name="arrowRight" size={14} /></a>
-            ))}
-          </div>
-        </NextSection>
 
         <NextSection id="capabilities" title="Capabilities" lead="What the model takes in, returns and supports through the API.">
           <IoFlow inputs={inputs} outputs={['Text']} />
@@ -3461,6 +3450,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
           </NextSection>
         ) : null}
+
+        <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
+          <CodePanel model={model} endpoint={endpoint} setEndpointId={setEndpointId} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamTable model={model} />
+          <div className="vxn-guides">
+            {supported.filter(cap => CAP_GUIDES[cap.key]).map(cap => (
+              <a key={cap.key} className="vxn-guide" href={CAP_GUIDES[cap.key]}><Icon name={cap.icon} size={16} /><span>{cap.label === 'Image input' ? 'Vision' : cap.label}</span><Icon name="arrowRight" size={14} /></a>
+            ))}
+          </div>
+        </NextSection>
       </div>
     );
   };
@@ -3673,7 +3673,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const [opened, setOpened] = useState(null);
     const render = renders.find(item => item.prompt === promptId) || renders[0];
     const selectRender = item => setPromptId(item.prompt);
-    const sections = [render ? ['compare', 'Same prompt'] : null, ['pricing', 'Pricing'], ['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['specs', 'Specs']].filter(Boolean);
+    const sections = [render ? ['compare', 'Same prompt'] : null, ['pricing', 'Pricing'], ['capabilities', 'Capabilities'], ['specs', 'Specs'], ['quickstart', 'Quickstart']].filter(Boolean);
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const brief = imageBrief(family, model, editor, codeSamples(model, endpoint && endpoint.id).curl);
     const tasks = [
@@ -3777,12 +3777,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
         </NextSection>
 
-        <NextSection id="quickstart" title="Quickstart" lead="Generate with Venice's image endpoint, or with the OpenAI-compatible one from any OpenAI SDK.">
-          <CodePanel model={model} endpoint={endpoint} setEndpointId={setEndpointId} />
-          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
-          <ParamRows rows={params} />
-        </NextSection>
-
         <NextSection id="capabilities" title="Capabilities" lead="What the family does, and every shape it renders.">
           <div className="vxn-tiles">
             {tasks.map(task => (
@@ -3817,6 +3811,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
           </dl>
           {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+
+        <NextSection id="quickstart" title="Quickstart" lead="Generate with Venice's image endpoint, or with the OpenAI-compatible one from any OpenAI SDK.">
+          <CodePanel model={model} endpoint={endpoint} setEndpointId={setEndpointId} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
         </NextSection>
       </div>
     );
@@ -4068,7 +4068,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       setVariantId(id);
       writeParams({ v: id === family.primary ? null : id });
     };
-    const sections = [compared ? ['compare', 'Same prompt'] : null, ['pricing', 'Pricing'], ['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['specs', 'Specs']].filter(Boolean);
+    const sections = [compared ? ['compare', 'Same prompt'] : null, ['pricing', 'Pricing'], ['capabilities', 'Capabilities'], ['specs', 'Specs'], ['quickstart', 'Quickstart']].filter(Boolean);
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const sample = codeSamples(model, endpoint && endpoint.id).curl;
     const figures = [
@@ -4176,13 +4176,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           )}
         </NextSection>
 
-        <NextSection id="quickstart" title="Quickstart" lead="Video is asynchronous: queue a job, then poll for the clip.">
-          <JobFlow base="/video" noun="video" />
-          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
-          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
-          <ParamRows rows={videoParams(model)} />
-        </NextSection>
-
         <NextSection id="capabilities" title="Capabilities" lead={modes.length > 1 ? `${modes.length} modes, each with its own model ID.` : 'What the model takes in and renders.'}>
           <div className="vxn-tiles">
             {tiles.map(tile => (
@@ -4219,6 +4212,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             ].filter(Boolean).map(([label, value]) => <div key={label} className="vxn-sheet-row"><dt>{label}</dt><dd>{value}</dd></div>)}
           </dl>
           {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
+        </NextSection>
+
+        <NextSection id="quickstart" title="Quickstart" lead="Video is asynchronous: queue a job, then poll for the clip.">
+          <JobFlow base="/video" noun="video" />
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={videoParams(model)} />
         </NextSection>
       </div>
     );
@@ -4374,7 +4374,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const endpoints = (model.endpoints || []).filter(ep => ep.supported !== false);
     const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
     const versions = (related && related.versions) || [];
-    const sections = [['quickstart', 'Quickstart'], ['vectors', 'Vectors'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare']];
+    const sections = [['vectors', 'Vectors'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare'], ['quickstart', 'Quickstart']];
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const sample = codeSamples(model, endpoint && endpoint.id).curl;
     const capNote = inputCapNote(e);
@@ -4426,13 +4426,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
         <NextNav sections={sections} active={activeSection} />
 
-        <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
-          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
-          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
-          <ParamRows rows={params} />
-          <p className="vxe-callout"><Icon name="info" size={14} /><span>LangChain's <code>OpenAIEmbeddings</code> sends token IDs, which Venice rejects. Set <code>check_embedding_ctx_length=False</code>.</span></p>
-        </NextSection>
-
         <NextSection id="vectors" title="Vectors" lead={`Each input comes back as ${count(e.dimensions || 0)} numbers${e.customDimensions ? ', or fewer when you ask for them with dimensions' : ''}. Stored as float32, each number takes 4 bytes.`}>
           <VectorStorage model={model} />
           <p className="vxn-caption">Similarities from different models aren't comparable, so store the model ID{e.customDimensions ? ' and dimensions' : ''} with each vector.</p>
@@ -4466,6 +4459,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
         <NextSection id="compare" title="Compare" lead="Every embedding model on Venice, cheapest first.">
           <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'embedding'} order={m => (m.pricing || {}).input || 0} columns={embeddingColumns} />
+        </NextSection>
+
+        <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
+          <p className="vxe-callout"><Icon name="info" size={14} /><span>LangChain's <code>OpenAIEmbeddings</code> sends token IDs, which Venice rejects. Set <code>check_embedding_ctx_length=False</code>.</span></p>
         </NextSection>
       </div>
     );
@@ -4565,7 +4565,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const endpoints = (model.endpoints || []).filter(ep => ep.supported !== false);
     const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
     const versions = (related && related.versions) || [];
-    const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare']];
+    const sections = [['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare'], ['quickstart', 'Quickstart']];
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const options = { voice: voice || undefined };
     const sample = codeSamples(model, endpoint && endpoint.id, options).curl;
@@ -4632,13 +4632,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
         <NextNav sections={sections} active={activeSection} />
 
-        <NextSection id="quickstart" title="Quickstart" lead={a.async ? 'This model runs as a queued job: queue the text, then poll for the audio.' : 'OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.'}>
-          {a.async ? <JobFlow base="/audio" noun="audio" /> : null}
-          <CodePanel model={model} endpoint={endpoint} endpoints={[]} options={options} />
-          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
-          <ParamRows rows={params} />
-        </NextSection>
-
         <NextSection id="capabilities" title="Capabilities">
           <div className="vxn-tiles">
             {tiles.map(tile => (
@@ -4690,6 +4683,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
         <NextSection id="compare" title="Compare" lead="Every text-to-speech model on Venice, cheapest first.">
           <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'tts'} order={m => (m.pricing || {}).per1MChars || 0} columns={speechColumns} />
+        </NextSection>
+
+        <NextSection id="quickstart" title="Quickstart" lead={a.async ? 'This model runs as a queued job: queue the text, then poll for the audio.' : 'OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.'}>
+          {a.async ? <JobFlow base="/audio" noun="audio" /> : null}
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} options={options} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
         </NextSection>
       </div>
     );
@@ -4788,7 +4788,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const endpoints = (model.endpoints || []).filter(ep => ep.supported !== false);
     const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
     const versions = (related && related.versions) || [];
-    const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare']];
+    const sections = [['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], ['compare', 'Compare'], ['quickstart', 'Quickstart']];
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const sample = codeSamples(model, endpoint && endpoint.id).curl;
     const params = [
@@ -4847,12 +4847,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
         <NextNav sections={sections} active={activeSection} />
 
-        <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: send the recording as a multipart file to the Venice base URL with a Venice API key.">
-          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
-          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
-          <ParamRows rows={params} />
-        </NextSection>
-
         <NextSection id="capabilities" title="Capabilities">
           <div className="vxn-tiles">
             {tiles.map(tile => (
@@ -4901,6 +4895,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
         <NextSection id="compare" title="Compare" lead="Every speech-to-text model on Venice, cheapest first.">
           <TaskCompare model={model} catalog={catalog} includes={m => m.task === 'stt'} order={m => (m.pricing || {}).perHour || 0} columns={transcriptionColumns} />
+        </NextSection>
+
+        <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: send the recording as a multipart file to the Venice base URL with a Venice API key.">
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
         </NextSection>
       </div>
     );
@@ -5057,7 +5057,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const endpoint = endpoints.find(ep => ep.recommended) || endpoints[0];
     const versions = (related && related.versions) || [];
     const isSfx = isSfxModel(model);
-    const sections = [['quickstart', 'Quickstart'], ['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], a.voiceChanger ? null : ['compare', 'Compare']].filter(Boolean);
+    const sections = [['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], a.voiceChanger ? null : ['compare', 'Compare'], ['quickstart', 'Quickstart']].filter(Boolean);
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const sample = codeSamples(model, endpoint && endpoint.id).curl;
     const voices = a.voices || [];
@@ -5136,13 +5136,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
         <NextNav sections={sections} active={activeSection} />
 
-        <NextSection id="quickstart" title="Quickstart" lead={a.voiceChanger ? 'Upload a recording as a queued job, then poll for it in the new voice.' : 'Music and sound effects run as queued jobs: queue the prompt, then poll for the audio.'}>
-          <JobFlow base={a.voiceChanger ? '/audio/voice-changer' : '/audio'} noun="audio" />
-          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
-          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
-          <ParamRows rows={params} />
-        </NextSection>
-
         <NextSection id="capabilities" title="Capabilities">
           <div className="vxn-tiles">
             {tiles.map(tile => (
@@ -5199,6 +5192,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <TaskCompare model={model} catalog={catalog} includes={m => m.task === model.task && !(m.audio || {}).voiceChanger} order={() => 0} columns={soundColumns} />
           </NextSection>
         )}
+
+        <NextSection id="quickstart" title="Quickstart" lead={a.voiceChanger ? 'Upload a recording as a queued job, then poll for it in the new voice.' : 'Music and sound effects run as queued jobs: queue the prompt, then poll for the audio.'}>
+          <JobFlow base={a.voiceChanger ? '/audio/voice-changer' : '/audio'} noun="audio" />
+          <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
+          <h3 className="vxn-h3 vxn-gap">Parameters</h3>
+          <ParamRows rows={params} />
+        </NextSection>
       </div>
     );
   };
