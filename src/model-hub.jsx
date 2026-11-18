@@ -1504,12 +1504,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         const description = display.description || family.description;
         const type = TYPE_LABELS[display.task] || family.modality;
         const spec = rowSummary(display);
-        const details = [showType ? type : null, privacySummary(family.privacy), spec === type || spec === TASK_LABELS[display.task] ? null : spec].filter(Boolean).join(' · ');
+        const details = [showType ? type : null, display.privacy === 'e2ee' ? null : privacySummary(family.privacy), spec === type || spec === TASK_LABELS[display.task] ? null : spec].filter(Boolean).join(' · ');
         return (
           <li key={family.slug} className="vx-list-row">
             <div className="vx-list-top">
               <ProviderLogo provider={provider} size={22} />
-              <a className="vx-list-name" href={modelHref(family, display.id)}>{family.name}</a>
+              <a className="vx-list-name" href={modelHref(family, display.id)}>{display.privacy === 'e2ee' ? <>{family.name.replace(/ E2EE$/, '')} <Tag tone="e2ee" title={PRIVACY.e2ee.desc}><Icon name="lock" size={10} />E2EE</Tag></> : family.name}</a>
               <TypeBadge family={family} />
               <StatusTags item={family} now={now} />
               <span className="vx-list-price">{rowPrice(row)}</span>
@@ -3572,10 +3572,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
               {model.beta ? <Tag tone="beta">Beta</Tag> : null}
             </div>
-            <h1 className="vxn-h1">{family.name}</h1>
+            <h1 className="vxn-h1">{model.privacy === 'e2ee' ? <>{family.name.replace(/ E2EE$/, '')} <span className="vxn-h1-tag" title={PRIVACY.e2ee.desc}><Icon name="lock" size={13} />E2EE</span></> : family.name}</h1>
             <div className="vxn-meta">
               <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
-              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {PRIVACY[model.privacy] && model.privacy !== 'e2ee' ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
               {model.openWeights ? (source
                 ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
                 : <span className="vxn-meta-item">Open weights</span>) : null}
