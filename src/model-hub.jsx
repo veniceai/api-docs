@@ -3020,7 +3020,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
 
   // Everything an agent needs to call the model, as Markdown.
-  const agentBrief = (family, model, sample) => {
+  const agentBrief = (family, model, sample, measured) => {
     const t = model.text || {};
     const p = model.pricing || {};
     const r = t.reasoning;
@@ -3037,6 +3037,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       r && r.effort && r.effort.length ? `- Reasoning: \`reasoning_effort\` ${r.effort.join(' | ')}${r.defaultEffort ? `, default ${r.defaultEffort}` : ''}` : null,
       supports.length ? `- Supports: ${listText(supports)}` : null,
       PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      measured,
       `- Docs: https://docs.venice.ai/models/${family.slug}`,
       '',
       '```bash',
@@ -3476,6 +3477,22 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
   const performanceValues = fresh => model => ({ ...standingValues(model), ...dayFigures(fresh, model.id) });
 
+  // The brief's performance line carries its date, since a brief is read
+  // long after it's copied.
+  const measuredLine = (fresh, id) => {
+    const f = fresh && fresh.models ? fresh.models[id] : null;
+    if (!f) return null;
+    const day = dayFigures(fresh, id);
+    const p90 = f.ttftMs && f.ttftMs['24h'] ? f.ttftMs['24h'].p90 : null;
+    const parts = [
+      day.ttftMs != null ? `first token ${fmtMs(day.ttftMs)} median${p90 != null ? `, ${fmtMs(p90)} at p90` : ''}` : null,
+      day.tokensPerSecond != null ? `output ${fmtSpeed(day.tokensPerSecond)}` : null,
+      day.uptime != null ? `uptime ${fmtUptime(day.uptime)}` : null
+    ].filter(Boolean);
+    const end = fresh.window.end.slice(0, 16).replace('T', ' ');
+    return parts.length ? `- Measured on Venice API traffic in the 24 hours to ${end} UTC: ${parts.join('; ')}. Hourly figures: https://docs.venice.ai/data/model-performance.json` : null;
+  };
+
   const ModelPageNext = ({ data }) => {
     const { family, models, related, providers } = data;
     const [variantId, setVariantId] = useState(() => {
@@ -3519,7 +3536,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return (
       <div className="vx vxn not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
         <HoverTips />
-        <NextTop scope="Text" scopeHref="/models/text" family={family} brief={agentBrief(family, model, codeSamples(model, endpoint && endpoint.id).curl)} />
+        <NextTop scope="Text" scopeHref="/models/text" family={family} brief={agentBrief(family, model, codeSamples(model, endpoint && endpoint.id).curl, measuredLine(fresh, model.id))} />
 
         <header className="vxn-hero">
           <div className="vxn-hero-main">
