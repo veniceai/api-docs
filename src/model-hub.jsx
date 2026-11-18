@@ -1247,7 +1247,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const modelHref = (family, id) => `/models/${family.slug}${id !== family.primary ? `?v=${encodeURIComponent(id)}` : ''}`;
   const privacySummary = tiers => privacyTiers(tiers).map(tier => (PRIVACY[tier] ? PRIVACY[tier].label : tier)).join(', ');
 
-  const ModelCell = ({ row, providers, now }) => {
+  const ModelCell = ({ row, providers, now, showScope }) => {
     const { family, display } = row;
     const provider = providers[family.provider];
     const extra = family.variants.length - 1;
@@ -1257,7 +1257,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <div className="vx-mcell-body">
           <div className="vx-mcell-top">
             <a className="vx-mcell-name" href={modelHref(family, display.id)}>{family.name}</a>
-            <TypeBadge family={family} />
+            {showScope ? <TypeBadge family={family} /> : null}
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-mcell-sub">
@@ -1379,7 +1379,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </>
   );
 
-  const ExplorerTable = ({ rows, columns, sort, setSort, providers, now }) => (
+  const ExplorerTable = ({ rows, columns, sort, setSort, providers, now, showScope }) => (
     <div className="vx-table-wrap">
       <table className="vx-table">
         <thead>
@@ -1405,7 +1405,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <tbody>
           {rows.map(row => (
             <tr key={row.family.slug}>
-              <td className="vx-td-model"><ModelCell row={row} providers={providers} now={now} /></td>
+              <td className="vx-td-model"><ModelCell row={row} providers={providers} now={now} showScope={showScope} /></td>
               {columns.map(col => <td key={col.key} className={cls(col.align && `vx-al-${col.align}`, hideCls(col))}>{col.render(row)}</td>)}
             </tr>
           ))}
@@ -1414,7 +1414,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </div>
   );
 
-  const ExplorerCard = ({ row, now, catalog }) => {
+  const ExplorerCard = ({ row, now, catalog, showScope }) => {
     const { family, display } = row;
     const isVideo = family.modality === 'video';
     const media = galleryMedia(family, display, catalog);
@@ -1432,7 +1432,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <div className="vx-card-body">
           <div className="vx-card-top">
             <a className="vx-card-name" href={href} title={family.name}>{family.name}</a>
-            <TypeBadge family={family} />
+            {showScope ? <TypeBadge family={family} /> : null}
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-card-id">
@@ -1495,7 +1495,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  const ExplorerList = ({ rows, providers, now, showType }) => (
+  const ExplorerList = ({ rows, providers, now, showType, showScope }) => (
     <ul className="vx-list">
       {rows.map(row => {
         const { family, display } = row;
@@ -1510,7 +1510,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <div className="vx-list-top">
               <ProviderLogo provider={provider} size={22} />
               <a className="vx-list-name" href={modelHref(family, display.id)}>{display.privacy === 'e2ee' ? <>{family.name.replace(/ E2EE$/, '')} <Tag tone="e2ee" title={PRIVACY.e2ee.desc}><Icon name="lock" size={10} />E2EE</Tag></> : family.name}</a>
-              <TypeBadge family={family} />
+              {showScope ? <TypeBadge family={family} /> : null}
               <StatusTags item={family} now={now} />
               <span className="vx-list-price">{rowPrice(row)}</span>
             </div>
@@ -1528,7 +1528,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   // Families with nothing on the gallery's prompt go in a table under it
   // rather than as tiles of another scene, so the grid compares like with like.
-  const Gallery = ({ rows, columns, sort, setSort, providers, now, catalog, modality }) => {
+  const Gallery = ({ rows, columns, sort, setSort, providers, now, catalog, modality, showScope }) => {
     const rendered = rows.filter(row => galleryMedia(row.family, row.display, catalog));
     const pending = rows.filter(row => !galleryMedia(row.family, row.display, catalog));
     const prompt = ((catalog.mediaSuite || {})[modality] || []).find(item => item.id === GALLERY_PROMPTS[modality]);
@@ -1544,13 +1544,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         ) : null}
         {rendered.length ? (
           <div className={cls('vx-cards', modality === 'video' && 'is-video')}>
-            {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} now={now} catalog={catalog} />)}
+            {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} now={now} catalog={catalog} showScope={showScope} />)}
           </div>
         ) : null}
         {pending.length ? (
           <section className="vx-unrendered" aria-labelledby="vx-unrendered-title">
             <h3 id="vx-unrendered-title" className="vx-h3">{prompt ? `Not rendered on the ${prompt.title.toLowerCase()} prompt` : 'No reference renders yet'} <span className="vx-muted">{plural(pending.length, 'family')}</span></h3>
-            <ExplorerTable rows={pending} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} />
+            <ExplorerTable rows={pending} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} showScope={showScope} />
           </section>
         ) : null}
       </>
@@ -1725,6 +1725,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const canGrid = modality === 'image' || modality === 'video';
     // A gallery link opened with text or audio in scope falls back to the list.
     const shownView = view === 'grid' && !canGrid ? 'list' : view;
+    // A type badge only tells rows apart when the list mixes types.
+    const showScope = new Set(rows.map(row => familyScope(row.family))).size > 1;
     const filterCount = activeFilterCount(filters);
     const scopeKey = scope || 'all';
     const unitNote = settingNote(modality, filters) || (shownView !== 'grid' ? UNIT_NOTES[scopeKey] : null);
@@ -1792,11 +1794,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                     <button type="button" className="vx-btn vx-btn-sm" onClick={() => { setFilters(EMPTY_FILTERS); setQuery(''); }}>Clear {query && filterCount ? 'search and filters' : query ? 'search' : 'filters'}</button>
                   </Empty>
                 ) : shownView === 'grid' ? (
-                  <Gallery rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} catalog={catalog} modality={modality} />
+                  <Gallery rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} catalog={catalog} modality={modality} showScope={showScope} />
                 ) : shownView === 'table' ? (
-                  <ExplorerTable rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} />
+                  <ExplorerTable rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} showScope={showScope} />
                 ) : (
-                  <ExplorerList rows={page} providers={providers} now={now} showType={new Set(rows.map(row => row.display.task)).size > 1} />
+                  <ExplorerList rows={page} providers={providers} now={now} showType={new Set(rows.map(row => row.display.task)).size > 1} showScope={showScope} />
                 )}
 
                 {remaining > 0 ? (
