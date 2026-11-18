@@ -75,7 +75,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Gemini 4 Carbon | `gemini-4-carbon` | $2.50 | $12.50 | $0.125 | — | Anonymized |
 | Gemini 4 Hydrogen | `gemini-4-hydrogen` | $1.875 | $9.375 | $0.09375 | — | Anonymized |
 | Gemma 4 26B A4B Uncensored | `e2ee-gemma-4-26b-a4b-uncensored-p` | $0.19 | $0.88 | — | — | E2EE |
-| Gemma 4 Uncensored (Retiring) | `gemma-4-uncensored` | $0.1625 | $0.50 | — | — | Private |
 | GLM 4.6 | `zai-org-glm-4.6` | $0.43 | $1.75 | $0.08 | — | Private |
 | GLM 4.7 | `zai-org-glm-4.7` | $0.55 | $2.65 | $0.11 | — | Private |
 | GLM 4.7 Flash Heretic | `olafangensan-glm-4.7-flash-heretic` | $0.07 | $0.40 | $0.035 | — | Private |
@@ -128,7 +127,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Grok 4.7 | `grok-4-7` | $2.27 | $6.80 | $0.57 | — | Private |
 | Grok Build 0.1 | `grok-build-0-1` | $1.00 | $2.00 | $0.20 | — | Private |
 | Hy4 Preview | `hy4-preview` | $1.0425 | $3.12625 | $0.0525 | — | Private |
-| Kimi K2.5 (Retiring) | `kimi-k2-5` | $0.56 | $3.50 | $0.22 | — | Private |
 | Kimi K2.6 | `e2ee-kimi-k2-6` | $0.87 | $4.12 | $0.44 | — | E2EE |
 | Kimi K2.6 | `kimi-k2-6` | $0.75 | $3.50 | $0.16 | — | Private |
 | Kimi K2.7 Code | `kimi-k2-7-code` | $0.75 | $3.50 | $0.16 | — | Private |
