@@ -75,7 +75,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Gemini 4 Carbon | `gemini-4-carbon` | $2.50 | $12.50 | $0.125 | — | Anonymized |
 | Gemini 4 Hydrogen | `gemini-4-hydrogen` | $1.875 | $9.375 | $0.09375 | — | Anonymized |
 | Gemma 4 26B A4B Uncensored | `e2ee-gemma-4-26b-a4b-uncensored-p` | $0.19 | $0.88 | — | — | E2EE |
-| Gemma 4 Uncensored (Retiring) | `gemma-4-uncensored` | $0.1625 | $0.50 | — | — | Private |
+| Gemma 4 Uncensored | `gemma-4-uncensored` | $0.1625 | $0.50 | — | — | Private |
 | GLM 4.6 | `zai-org-glm-4.6` | $0.43 | $1.75 | $0.08 | — | Private |
 | GLM 4.7 | `zai-org-glm-4.7` | $0.55 | $2.65 | $0.11 | — | Private |
 | GLM 4.7 Flash Heretic | `olafangensan-glm-4.7-flash-heretic` | $0.07 | $0.40 | $0.035 | — | Private |
@@ -116,6 +116,10 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | GPT-6.1 Sol | `openai-gpt-61-sol` | $2.00 | $10.00 | $0.10 | $2.50 | Anonymized |
 | GPT-6.1 Sol Ultrafast | `openai-gpt-61-sol-ultrafast` | $12.00 | $60.00 | $0.60 | $15.00 | Anonymized |
 | GPT-6.1 Terra | `openai-gpt-61-terra` | $1.00 | $5.00 | $0.05 | $1.25 | Anonymized |
+| GPT-6.2 Astra | `openai-gpt-62-astra` | $8.00 | $40.00 | $0.40 | $10.00 | Anonymized |
+| GPT-6.2 Astra Pro | `openai-gpt-62-astra-pro` | $8.00 | $40.00 | $0.40 | $10.00 | Anonymized |
+| GPT-6.2 Sol | `openai-gpt-62-sol` | $2.00 | $10.00 | $0.10 | $2.50 | Anonymized |
+| GPT-6.2 Sol Pro | `openai-gpt-62-sol-pro` | $2.00 | $10.00 | $0.10 | $2.50 | Anonymized |
 | Grok 4.20 | `grok-4-20` | $1.42 | $2.83 | $0.23 | — | Private |
 | Grok 4.20 Multi-Agent | `grok-4-20-multi-agent` | $1.42 | $2.83 | $0.23 | — | Private |
 | Grok 4.3 | `grok-4-3` | $1.42 | $2.83 | $0.23 | — | Private |
@@ -124,13 +128,13 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Grok 4.7 | `grok-4-7` | $2.27 | $6.80 | $0.57 | — | Private |
 | Grok Build 0.1 | `grok-build-0-1` | $1.00 | $2.00 | $0.20 | — | Private |
 | Hy4 Preview | `hy4-preview` | $1.0425 | $3.12625 | $0.0525 | — | Private |
-| Kimi K2.5 (Retiring) | `kimi-k2-5` | $0.56 | $3.50 | $0.22 | — | Private |
 | Kimi K2.6 | `e2ee-kimi-k2-6` | $0.87 | $4.12 | $0.44 | — | E2EE |
 | Kimi K2.6 | `kimi-k2-6` | $0.75 | $3.50 | $0.16 | — | Private |
 | Kimi K2.7 Code | `kimi-k2-7-code` | $0.75 | $3.50 | $0.16 | — | Private |
 | Kimi K3 | `e2ee-kimi-k3-p` | $3.75 | $18.75 | $0.375 | — | E2EE |
 | Kimi K3 | `kimi-k3` | $3.75 | $18.75 | $0.375 | — | Private |
 | Kimi K3 Fast | `kimi-k3-fast-api` | $4.50 | $22.50 | $0.45 | — | Private |
+| Kimi K3.1 Pro | `e2ee-kimi-k3-1-pro-p` | $2.50 | $12.50 | $0.25 | — | E2EE |
 | Kimi K3.1 Pro | `kimi-k3-1-pro` | $2.00 | $10.00 | $0.20 | — | Private |
 | Kimi K3.1 Pro Highspeed | `kimi-k3-1-pro-highspeed` | $5.00 | $25.00 | $0.375 | — | Anonymized |
 | Llama 3.2 3B | `llama-3.2-3b` | $0.15 | $0.60 | — | — | Private |
@@ -199,6 +203,10 @@ These models switch to higher rates once a request's input passes the threshold.
 | GPT-6.1 Sol | `openai-gpt-61-sol` | 272K tokens | $4.00 | $15.00 | $0.20 | $5.00 |
 | GPT-6.1 Sol Ultrafast | `openai-gpt-61-sol-ultrafast` | 272K tokens | $24.00 | $90.00 | $1.20 | $30.00 |
 | GPT-6.1 Terra | `openai-gpt-61-terra` | 272K tokens | $2.00 | $7.50 | $0.10 | $2.50 |
+| GPT-6.2 Astra | `openai-gpt-62-astra` | 272K tokens | $16.00 | $60.00 | $0.80 | $20.00 |
+| GPT-6.2 Astra Pro | `openai-gpt-62-astra-pro` | 272K tokens | $16.00 | $60.00 | $0.80 | $20.00 |
+| GPT-6.2 Sol | `openai-gpt-62-sol` | 272K tokens | $4.00 | $15.00 | $0.20 | $5.00 |
+| GPT-6.2 Sol Pro | `openai-gpt-62-sol-pro` | 272K tokens | $4.00 | $15.00 | $0.20 | $5.00 |
 | Grok 4.20 | `grok-4-20` | 200K tokens | $2.83 | $5.67 | $0.45 | — |
 | Grok 4.20 Multi-Agent | `grok-4-20-multi-agent` | 200K tokens | $2.83 | $5.67 | $0.45 | — |
 | Grok 4.3 | `grok-4-3` | 200K tokens | $2.83 | $5.67 | $0.45 | — |
@@ -258,6 +266,7 @@ Prices per image. Models with resolution options list a price for each resolutio
 | Hunyuan Image 3.0 | `hunyuan-image-v3` | $0.09 | Private |
 | Ideogram V4 | `ideogram-v4` | $0.06 | Anonymized |
 | Ideogram V4.5 | `ideogram-v4-5` | 1K: $0.26, 2K: $0.26 | Anonymized |
+| Kling Image 4.0 | `kling-v4-text-to-image` | 2K: $0.08, 4K: $0.12 | Anonymized |
 | Krea 2 Turbo | `krea-2-turbo` | 1K: $0.04, 2K: $0.06 | Private |
 | Krea 3 | `krea-3` | 1K: $0.07, 2K: $0.10, 4K: $0.15 | Anonymized |
 | Krea v2 Large | `krea-v2-large` | $0.07 | Anonymized |
@@ -267,6 +276,8 @@ Prices per image. Models with resolution options list a price for each resolutio
 | Lustify SDXL | `lustify-sdxl` | $0.01 | Private |
 | Lustify v7 | `lustify-v7` | $0.01 | Private |
 | Lustify v8 | `lustify-v8` | $0.01 | Private |
+| MAI Image 2.7 | `mai-image-2-7` | 1K: $0.05, 2K: $0.17 | Anonymized |
+| MAI Image 2.7 Flash | `mai-image-2-7-flash` | 1K: $0.02, 2K: $0.05 | Anonymized |
 | MiniMax H3 Image | `minimax-h3-image` | 1K: $0.04, 2K: $0.04, 4K: $0.10 | Anonymized |
 | Muse Image | `muse-image` | $0.02 | Anonymized |
 | Nano Banana 2 | `nano-banana-2` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | Anonymized |
@@ -338,9 +349,12 @@ Prices per edit. The edit price covers the first input image. Models with an ext
 | Grok Imagine | `grok-imagine-edit` | 1K: $0.03, 2K: $0.04 | $0.0023 | Private |
 | Grok Imagine 2.0 | `grok-imagine-image-2-0-edit` | 1K: $0.07, 2K: $0.10 | $0.0115 | Private |
 | Ideogram V4.5 | `ideogram-v4-5-edit` | 1K: $0.26, 2K: $0.26 | — | Anonymized |
+| Kling Image 4.0 | `kling-v4-image-edit` | 2K: $0.08, 4K: $0.12 | $0.00368 | Anonymized |
 | Krea 3 | `krea-3-edit` | 1K: $0.07, 2K: $0.10, 4K: $0.15 | $0.02499985 | Anonymized |
 | Luma Uni-1 | `luma-uni-1-edit` | $0.06 | — | Anonymized |
 | Luma Uni-1 Max | `luma-uni-1-max-edit` | $0.13 | — | Anonymized |
+| MAI Image 2.7 | `mai-image-2-7-edit` | 1K: $0.06, 2K: $0.18 | $0.00943 | Anonymized |
+| MAI Image 2.7 Flash | `mai-image-2-7-flash-edit` | 1K: $0.02, 2K: $0.06 | $0.00299 | Anonymized |
 | MiniMax H3 Image | `minimax-h3-image-edit` | 1K: $0.06, 2K: $0.06, 4K: $0.12 | $0.01937405 | Anonymized |
 | Muse Image | `muse-image-edit` | $0.02 | — | Anonymized |
 | Nano Banana 2 | `nano-banana-2-edit` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | — | Anonymized |
