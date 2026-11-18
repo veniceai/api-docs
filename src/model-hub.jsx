@@ -3494,8 +3494,23 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return parts.length ? `- Measured on Venice API traffic in the 24 hours to ${end} UTC: ${parts.join('; ')}. Hourly figures: https://docs.venice.ai/data/model-performance.json` : null;
   };
 
+  // The same model called the other way: a model's E2EE build, or an E2EE
+  // build's model.
+  const Counterpart = ({ item }) => {
+    if (!item) return null;
+    const e2ee = item.privacy.includes('e2ee');
+    return (
+      <a className="vxn-counterpart" href={`/models/${item.slug}`}>
+        {e2ee ? <Icon name="lock" size={12} /> : null}
+        <span className="vxn-counterpart-name">{e2ee ? 'Also available end-to-end encrypted' : 'Also available without end-to-end encryption'}</span>
+        <span className="vxn-counterpart-sub">{relatedPrice(item)}</span>
+        <Icon name="arrowRight" size={12} />
+      </a>
+    );
+  };
+
   const ModelPageNext = ({ data }) => {
-    const { family, models, related, providers } = data;
+    const { family, models, related, counterpart, providers } = data;
     const [variantId, setVariantId] = useState(() => {
       const v = readParams().get('v');
       return v && models.some(m => m.id === v) ? v : family.primary;
@@ -3503,6 +3518,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const [endpointId, setEndpointId] = useState(null);
     const now = useNow();
     const { catalog } = useCatalog();
+    // A ?v= link naming a model on another page, such as an E2EE build from
+    // before it had a page of its own, goes to that page.
+    useEffect(() => {
+      const v = readParams().get('v');
+      if (!v || models.some(m => m.id === v)) return;
+      const home = counterpart && counterpart.primary === v ? counterpart.slug : catalog && catalog.models[v] ? catalog.models[v].family : null;
+      if (home && home !== family.slug) window.location.replace(`/models/${home}`);
+    }, [catalog]);
     const performance = usePerformance();
     const fresh = freshPerformance(performance.data, now);
     const performanceStatus = fresh ? 'fresh' : performance.data || performance.failed ? 'unavailable' : 'loading';
@@ -3576,6 +3599,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                 </div>
               </div>
             ) : null}
+            <Counterpart item={counterpart} />
             <div className="vxn-ctas">
               <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
               {model.task === 'chat' ? <a className="vxn-textlink" href={`https://venice.ai/chat?model=${encodeURIComponent(model.id)}`} target="_blank" rel="noopener noreferrer">Try in Venice<Icon name="arrowRight" size={14} /></a> : null}
