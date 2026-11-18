@@ -3494,6 +3494,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return parts.length ? `- Measured on Venice API traffic in the 24 hours to ${end} UTC: ${parts.join('; ')}. Hourly figures: https://docs.venice.ai/data/model-performance.json` : null;
   };
 
+  const E2eeSummary = ({ model }) => (model.privacy === 'e2ee' ? (
+    <ul className="vxn-e2ee">
+      <li><Icon name="shieldCheck" size={16} /><span>Prompts are decrypted only inside an attested TEE on the GPU.</span></li>
+      <li><Icon name="terminal" size={16} /><span>Calls need the E2EE handshake. Without it, requests reach Venice as plaintext and run TEE-only. <a href="/guides/features/tee-e2ee-models#e2ee-models">How to call an E2EE model</a></span></li>
+    </ul>
+  ) : null);
+
   // The same model called the other way: a model's E2EE build, or an E2EE
   // build's model.
   const Counterpart = ({ item }) => {
@@ -3582,6 +3589,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               {model.uncensored ? <span className="vxn-meta-item">Uncensored</span> : null}
             </div>
             {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            <E2eeSummary model={model} />
             <div className="vxn-figs">
               {p.input != null ? <Figure value={<>{usd(p.input)}<span className="vxn-sep">/</span>{usd(p.output)}</>} label="per 1M in / out" /> : null}
               {t.context ? <Figure value={tokens(t.context)} label="context window" /> : null}
