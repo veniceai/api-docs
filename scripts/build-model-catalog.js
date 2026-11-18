@@ -1089,6 +1089,7 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   if (samples && samples.curl) {
     lines.push('', `### How to use the ${name} API`, '');
     if (recommended) lines.push(`Send requests to \`${recommended.method} https://api.venice.ai/api/v1${recommended.path}\` with \`"model": "${primary.id}"\` and your API key.`, '');
+    if (primary.privacy === 'e2ee') lines.push('This sample sends the prompt as plaintext, so the request runs TEE-only. For end-to-end encryption, send encrypted messages with the E2EE headers, as the [TEE and E2EE guide](/guides/features/tee-e2ee-models#e2ee-models) shows.', '');
     lines.push('```bash', samples.curl, '```');
   }
 

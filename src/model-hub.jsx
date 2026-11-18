@@ -3037,6 +3037,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       r && r.effort && r.effort.length ? `- Reasoning: \`reasoning_effort\` ${r.effort.join(' | ')}${r.defaultEffort ? `, default ${r.defaultEffort}` : ''}` : null,
       supports.length ? `- Supports: ${listText(supports)}` : null,
       PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      model.privacy === 'e2ee' ? '- The request below sends the prompt as plaintext, so it runs TEE-only. For end-to-end encryption, send encrypted messages with the E2EE headers: https://docs.venice.ai/guides/features/tee-e2ee-models#e2ee-models' : null,
       measured,
       `- Docs: https://docs.venice.ai/models/${family.slug}`,
       '',
@@ -3667,6 +3668,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
         <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
           <CodePanel model={model} endpoint={endpoint} setEndpointId={setEndpointId} />
+          {model.privacy === 'e2ee' ? <p className="vxn-callout"><Icon name="lock" size={14} /><span>These samples send the prompt as plaintext, so the request runs TEE-only. For end-to-end encryption, send encrypted messages with the E2EE headers, as the <a href="/guides/features/tee-e2ee-models#e2ee-models">TEE and E2EE guide</a> shows.</span></p> : null}
           <h3 className="vxn-h3 vxn-gap">Parameters</h3>
           <ParamTable model={model} />
           <div className="vxn-guides">
