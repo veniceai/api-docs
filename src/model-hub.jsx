@@ -51,6 +51,33 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return state;
   };
 
+  // Performance figures change every hour, so model pages load them rather
+  // than carry them in their data.
+  const PERFORMANCE_PATH = '/data/model-performance.json';
+  const performanceStore = { data: null, promise: null };
+
+  const loadPerformance = () => {
+    if (performanceStore.data) return Promise.resolve(performanceStore.data);
+    if (performanceStore.promise) return performanceStore.promise;
+    performanceStore.promise = fetchData(PERFORMANCE_PATH)
+      .then(data => { performanceStore.data = data; return data; })
+      .catch(err => { performanceStore.promise = null; throw err; });
+    return performanceStore.promise;
+  };
+
+  const usePerformance = () => {
+    const [state, setState] = useState({ data: performanceStore.data, failed: false });
+    useEffect(() => {
+      if (state.data) return undefined;
+      let alive = true;
+      loadPerformance()
+        .then(data => alive && setState({ data, failed: false }))
+        .catch(() => alive && setState({ data: null, failed: true }));
+      return () => { alive = false; };
+    }, []);
+    return state;
+  };
+
   const useNow = () => useState(() => (typeof clock === 'function' ? clock() : clock))[0];
 
   const readParams = () => (typeof window === 'undefined' ? new URLSearchParams() : new URLSearchParams(window.location.search));
@@ -190,6 +217,23 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     if (!ts) return '—';
     const d = new Date(ts * 1000);
     return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  };
+  const fmtMs = ms => {
+    if (ms == null || !Number.isFinite(ms)) return '—';
+    if (ms < 1000) return `${Math.round(ms)} ms`;
+    return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
+  };
+  const fmtSpeed = v => (v == null || !Number.isFinite(v) ? '—' : `${v < 10 ? v.toFixed(1) : Math.round(v).toLocaleString('en-US')} tok/s`);
+  const fmtUptime = pct => (pct == null || !Number.isFinite(pct) ? '—' : `${pct}%`);
+  // In the reader's time zone, since the figures run up to the last hour.
+  const fmtClock = ms => new Date(ms).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const fmtTime = ms => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const fmtAgo = ms => {
+    const minutes = Math.max(0, Math.round(ms / 60000));
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+    const hours = Math.round(minutes / 60);
+    return `${hours} hour${hours === 1 ? '' : 's'} ago`;
   };
   const isNew = (ts, now) => Boolean(now && ts && (now - ts * 1000) / 86400000 <= 30);
   const plural = (n, word) => `${n.toLocaleString('en-US')} ${n === 1 ? word : word.endsWith('y') ? `${word.slice(0, -1)}ies` : `${word}s`}`;
@@ -3288,6 +3332,138 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </section>
   );
 
+  // Older figures read as unavailable rather than as the last 24 hours.
+  const PERFORMANCE_MAX_AGE = 6 * 3600 * 1000;
+  const DAY_MINUTES = 1440;
+  const freshPerformance = (data, now) => (data && data.window && Date.parse(data.window.end) > now - PERFORMANCE_MAX_AGE ? data : null);
+
+  // A label every six hours on the viewer's clock, naming the day at midnight.
+  // Labels near either end are left out, so they never run past the card.
+  const timeTicks = (start, end) => {
+    if (!(end > start)) return [];
+    const hour = 3600 * 1000;
+    const first = new Date(start);
+    first.setMinutes(0, 0, 0);
+    let t = first.getTime() < start ? first.getTime() + hour : first.getTime();
+    while (new Date(t).getHours() % 6) t += hour;
+    const ticks = [];
+    for (; t < end; t += 6 * hour) {
+      const at = ((t - start) / (end - start)) * 100;
+      if (at < 8 || at > 92) continue;
+      const d = new Date(t);
+      ticks.push([at, d.getHours() ? d.toLocaleTimeString('en-US', { hour: 'numeric' }) : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })]);
+    }
+    return ticks;
+  };
+
+  // The period under the pointer: hovering with a mouse, or pressing and
+  // dragging on a touch screen. Lifting or leaving clears it.
+  const scrub = (count, set) => {
+    const at = e => {
+      const r = e.currentTarget.getBoundingClientRect();
+      set(Math.max(0, Math.min(count - 1, Math.floor(((e.clientX - r.left) / r.width) * count))));
+    };
+    const clear = () => set(null);
+    return { onPointerDown: at, onPointerMove: at, onPointerLeave: clear, onPointerCancel: clear };
+  };
+
+  // Each period flat across its own span, easing into the next, so a quiet
+  // model reads as steady steps and a busy one as a line.
+  const periodPath = (values, minutes, y) => {
+    const ease = Math.min(minutes / 4, 30);
+    return values.reduce((d, v, k) => {
+      if (k === values.length - 1) return `${d}H${DAY_MINUTES}`;
+      const edge = (k + 1) * minutes;
+      return `${d}H${edge - ease}C${edge},${y(v)} ${edge},${y(values[k + 1])} ${edge + ease},${y(values[k + 1])}`;
+    }, `M0,${y(values[0])}`);
+  };
+
+  // The median period sits halfway up, and one more than twice the median is
+  // drawn at the top.
+  const medianScale = values => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const top = 2 * sorted[Math.floor((sorted.length - 1) / 2)] || 1;
+    return v => 100 - (Math.min(v, top) / top) * 100;
+  };
+  // From 80%, where a period reads as down, to 100%, for every model alike.
+  const uptimeScale = () => v => 100 - ((Math.max(v, 80) - 80) / 20) * 100;
+
+  const PeriodLine = ({ chart, at, scale }) => {
+    const y = chart ? scale(chart.values) : null;
+    const d = chart ? periodPath(chart.values, chart.minutes, y) : null;
+    const x = chart && at != null ? `${(((at + 0.5) * chart.minutes) / DAY_MINUTES) * 100}%` : null;
+    return (
+      <>
+        <svg className="vxn-perf-svg" viewBox={`0 0 ${DAY_MINUTES} 100`} preserveAspectRatio="none" aria-hidden="true">
+          <line className="vxn-perf-base" x1="0" x2={DAY_MINUTES} y1="100" y2="100" vectorEffect="non-scaling-stroke" />
+          {d ? <path className="vxn-perf-fill" d={`${d}V100H0Z`} /> : null}
+          {d ? <path className="vxn-perf-line" d={d} vectorEffect="non-scaling-stroke" /> : null}
+        </svg>
+        {x ? <span className="vxn-perf-guide" style={{ left: x }} /> : null}
+        {x ? <span className="vxn-perf-dot" style={{ left: x, top: `${y(chart.values[at])}%` }} /> : null}
+      </>
+    );
+  };
+
+  // What a card without a figure says: the job publishes none for a model
+  // with too little traffic, and stale or unloadable figures say nothing.
+  const PERF_MISSING = { fresh: 'not enough traffic', unavailable: 'unavailable' };
+
+  const PERF_METRICS = [
+    { key: 'ttftMs', name: 'Time to first token', format: fmtMs, day: f => (f.ttftMs && f.ttftMs['24h'] ? f.ttftMs['24h'].p50 : null),
+      tail: f => (f && f.ttftMs && f.ttftMs['24h'] && f.ttftMs['24h'].p90 != null ? `p90 ${fmtMs(f.ttftMs['24h'].p90)}` : null), scale: medianScale },
+    { key: 'tokensPerSecond', name: 'Output speed', format: fmtSpeed, day: f => (f.tokensPerSecond ? f.tokensPerSecond['24h'] : null), scale: medianScale },
+    { key: 'uptime', name: 'Uptime', format: fmtUptime, day: f => f.uptime, scale: uptimeScale }
+  ];
+
+  // One figure at rest. While scrubbing, the label gives the period's time
+  // and the figure its value, so the card needs no legend or caption. A figure
+  // always has a line: without periods, the day is a single period.
+  const PerfCard = ({ metric, figures, status, start, end }) => {
+    const [hovered, setHovered] = useState(null);
+    const day = figures ? metric.day(figures) : null;
+    const periods = figures && figures.periods ? figures.periods[metric.key] : null;
+    const chart = periods || (day != null ? { minutes: DAY_MINUTES, values: [day] } : null);
+    const at = chart && hovered != null && hovered < chart.values.length ? hovered : null;
+    const step = chart ? chart.minutes * 60000 : 0;
+    const span = k => (chart.minutes === DAY_MINUTES
+      ? `${fmtClock(start)} \u2013 ${fmtClock(end)}`
+      : `${fmtClock(start + k * step)} \u2013 ${fmtTime(start + (k + 1) * step)}`);
+    const tail = at != null ? null : day == null ? PERF_MISSING[status] || null : metric.tail ? metric.tail(figures) : null;
+    const range = chart && chart.values.length > 1 ? `, ranging from ${metric.format(Math.min(...chart.values))} to ${metric.format(Math.max(...chart.values))}` : '';
+    const scrubbing = chart ? { ...scrub(chart.values.length, setHovered), role: 'img', 'aria-label': `${metric.name} over the last 24 hours: ${day != null ? metric.format(day) : PERF_MISSING.fresh}${range}` } : {};
+    return (
+      <div className="vxn-perf">
+        <span className="vxn-perf-label">{at != null ? span(at) : metric.name}</span>
+        <span className="vxn-perf-figure">
+          <span className="vxn-perf-value">{metric.format(at != null ? chart.values[at] : day)}</span>
+          {tail ? <span className="vxn-perf-tail">{tail}</span> : null}
+        </span>
+        <div className="vxn-perf-chart" {...scrubbing}><PeriodLine chart={chart} at={at} scale={metric.scale} /></div>
+        <div className="vxn-perf-ticks" aria-hidden="true">
+          {timeTicks(start, chart ? end : 0).map(([pos, text]) => <span key={text} style={{ left: `${pos}%` }}>{text}</span>)}
+        </div>
+      </div>
+    );
+  };
+
+  // The first screen, a failed load, stale figures and a model without any
+  // all draw the same frame, so figures arriving don't move the page.
+  const PerformanceCards = ({ model, fresh, status, now }) => {
+    const figures = fresh && fresh.models ? fresh.models[model.id] || null : null;
+    const start = fresh ? Date.parse(fresh.window.start) : 0;
+    const end = fresh ? Date.parse(fresh.window.end) : 0;
+    const updated = fresh && fresh.generatedAt ? now - Date.parse(fresh.generatedAt) : null;
+    return (
+      <>
+        <div className="vxn-perfs">
+          {PERF_METRICS.map(metric => <PerfCard key={metric.key} metric={metric} figures={figures} status={status} start={start} end={end} />)}
+        </div>
+        <p className="vxn-caption">{updated != null ? `Updated ${fmtAgo(updated)}. ` : ''}<a href="/models/methodology#performance">How it's measured</a></p>
+      </>
+    );
+  };
+
   const ModelPageNext = ({ data }) => {
     const { family, models, related, providers } = data;
     const [variantId, setVariantId] = useState(() => {
@@ -3297,6 +3473,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const [endpointId, setEndpointId] = useState(null);
     const now = useNow();
     const { catalog } = useCatalog();
+    const performance = usePerformance();
+    const fresh = freshPerformance(performance.data, now);
+    const performanceStatus = fresh ? 'fresh' : performance.data || performance.failed ? 'unavailable' : 'loading';
     const model = models.find(m => m.id === variantId) || models[0];
     const provider = providers[family.provider] || providers[model.provider];
     const t = model.text || {};
@@ -3310,7 +3489,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const supported = TEXT_CAPS.filter(c => c.key !== 'effort' && hasCap(model, c.key));
     const missing = TEXT_CAPS.filter(c => !['effort', 'code'].includes(c.key) && !hasCap(model, c.key));
     const inputs = ['Text', caps.vision && 'Image', caps.videoInput && 'Video', caps.audioInput && 'Audio'].filter(Boolean);
-    const sections = [['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null, ['quickstart', 'Quickstart']].filter(Boolean);
+    const sections = [['capabilities', 'Capabilities'], ['performance', 'Performance'], ['pricing', 'Pricing'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null, ['quickstart', 'Quickstart']].filter(Boolean);
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const headerHeight = useHeaderHeight();
     const selectVariant = id => {
@@ -3385,6 +3564,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {Array.from({ length: (3 - ((supported.length + 1) % 3)) % 3 }, (_, i) => <span key={`fill-${i}`} className="vxn-tile is-empty" aria-hidden="true" />)}
           </div>
           {missing.length ? <p className="vxn-missing"><span>Not supported</span>{listText(missing.map(c => (c.key === 'xSearch' ? c.label : c.label.toLowerCase())))}</p> : null}
+        </NextSection>
+
+        <NextSection id="performance" title="Performance" lead="Measured on Venice API traffic over the last 24 hours.">
+          <PerformanceCards model={model} fresh={fresh} status={performanceStatus} now={now} />
         </NextSection>
 
         <NextSection id="pricing" title="Pricing" lead="Billed per token in USD. Reasoning tokens bill as output.">
