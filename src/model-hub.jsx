@@ -4679,7 +4679,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
           <h3 className="vxn-h3 vxn-gap">Parameters</h3>
           <ParamRows rows={params} />
-          <p className="vxe-callout"><Icon name="info" size={14} /><span>LangChain's <code>OpenAIEmbeddings</code> sends token IDs, which Venice rejects. Set <code>check_embedding_ctx_length=False</code>.</span></p>
+          <p className="vxn-callout"><Icon name="info" size={14} /><span>LangChain's <code>OpenAIEmbeddings</code> sends token IDs, which Venice rejects. Set <code>check_embedding_ctx_length=False</code>.</span></p>
         </NextSection>
       </div>
     );
