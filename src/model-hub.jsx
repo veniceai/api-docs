@@ -3105,10 +3105,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  // Where the model falls among every text model on price and limits, each
-  // drawn so that further right is better.
+  // Where the model falls among every text model on price, speed and limits,
+  // each drawn so that further right is better. The measured rows keep their
+  // place until the figures load, so the card doesn't grow when they arrive.
   const STANDING = [
     { key: 'price', label: 'Price', better: 'cheaper', lowerIsBetter: true, format: v => `$${v.toFixed(v >= 0.1 ? 2 : 3)}`, tip: 'Blended price per 1M tokens, at three input tokens for each output token.' },
+    { key: 'ttftMs', label: 'First token', better: 'quicker', lowerIsBetter: true, format: fmtMs, keep: true, tip: 'Median time to first token over the last 24 hours of Venice API traffic.' },
+    { key: 'tokensPerSecond', label: 'Output speed', better: 'faster', lowerIsBetter: false, format: fmtSpeed, keep: true, tip: 'Median output tokens per second over the last 24 hours of Venice API traffic.' },
     { key: 'context', label: 'Context window', better: 'larger', lowerIsBetter: false, format: v => tokens(v) }
   ];
   const standingValues = model => {
@@ -3122,9 +3125,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const Standing = ({ model, catalog, task = 'chat', noun = 'text models', metrics = STANDING, valuesOf = standingValues }) => {
     const others = useMemo(() => (catalog ? catalog.families
       .filter(f => f.task === task && !f.deprecated && f.primary !== model.id)
-      .map(f => ({ slug: f.slug, name: f.name, values: valuesOf(catalog.models[f.primary] || {}) })) : []), [catalog, model.id]);
+      .map(f => ({ slug: f.slug, name: f.name, values: valuesOf(catalog.models[f.primary] || {}) })) : []), [catalog, model.id, valuesOf]);
     const mine = valuesOf(model);
-    const rows = metrics.filter(m => mine[m.key] != null);
+    const rows = metrics.filter(m => m.keep || mine[m.key] != null);
     const hash = text => [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
     return (
       <div className="vxn-standing">
@@ -3133,28 +3136,30 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <span className="vx-muted">{catalog ? `among ${others.length + 1} ${noun}` : `among ${noun}`}</span>
         </div>
         {rows.map(metric => {
+          const mineValue = mine[metric.key];
           const values = others.map(o => o.values[metric.key]).filter(v => v != null && v > 0);
-          const all = values.concat([mine[metric.key]]);
+          const all = mineValue != null ? values.concat([mineValue]) : values;
           const lo = Math.log(Math.min(...all));
           const hi = Math.log(Math.max(...all));
           const at = v => {
             const x = hi > lo ? (Math.log(v) - lo) / (hi - lo) : 0.5;
             return (metric.lowerIsBetter ? 1 - x : x) * 100;
           };
-          const worse = values.filter(v => (metric.lowerIsBetter ? v > mine[metric.key] : v < mine[metric.key])).length;
+          const worse = values.filter(v => (metric.lowerIsBetter ? v > mineValue : v < mineValue)).length;
           return (
             <div key={metric.key} className="vxn-standing-row">
               <div className="vxn-standing-line">
                 <span className="vxn-standing-name">{metric.label}{metric.tip ? <InfoTip text={metric.tip} size={11} /> : null}</span>
-                {values.length ? <span className="vx-muted">{metric.better} than {Math.round((worse / values.length) * 100)}%</span> : null}
-                <span className="vxn-standing-value">{metric.format(mine[metric.key])}</span>
+                {mineValue != null && values.length ? <span className="vx-muted">{metric.better} than {Math.round((worse / values.length) * 100)}%</span>
+                  : mineValue == null && metric.missing ? <span className="vx-muted">{metric.missing}</span> : null}
+                <span className="vxn-standing-value">{mineValue != null ? metric.format(mineValue) : '—'}</span>
               </div>
               <div className="vxn-strip">
                 {others.filter(o => o.values[metric.key] != null && o.values[metric.key] > 0).map(o => (
                   <a key={o.slug} className="vxn-strip-dot" href={`/models/${o.slug}`} title={`${o.name}: ${metric.format(o.values[metric.key])}`}
                     style={{ left: `${at(o.values[metric.key])}%`, top: `${6 + (hash(o.slug + metric.key) % 3) * 5}px` }} />
                 ))}
-                <span className="vxn-strip-mine" style={{ left: `${at(mine[metric.key])}%` }} />
+                {mineValue != null ? <span className="vxn-strip-mine" style={{ left: `${at(mineValue)}%` }} /> : null}
               </div>
             </div>
           );
@@ -3464,6 +3469,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
+  // A model's figure for each Performance card, keyed like the cards.
+  const dayFigures = (fresh, id) => {
+    const f = fresh && fresh.models ? fresh.models[id] : null;
+    return Object.fromEntries(PERF_METRICS.map(m => [m.key, f ? m.day(f) : null]));
+  };
+  const performanceValues = fresh => model => ({ ...standingValues(model), ...dayFigures(fresh, model.id) });
+
   const ModelPageNext = ({ data }) => {
     const { family, models, related, providers } = data;
     const [variantId, setVariantId] = useState(() => {
@@ -3476,6 +3488,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const performance = usePerformance();
     const fresh = freshPerformance(performance.data, now);
     const performanceStatus = fresh ? 'fresh' : performance.data || performance.failed ? 'unavailable' : 'loading';
+    const standingOf = useMemo(() => performanceValues(fresh), [fresh]);
+    const standingMetrics = useMemo(() => STANDING.map(m => (m.keep ? { ...m, missing: PERF_MISSING[performanceStatus] } : m)), [performanceStatus]);
     const model = models.find(m => m.id === variantId) || models[0];
     const provider = providers[family.provider] || providers[model.provider];
     const t = model.text || {};
@@ -3550,7 +3564,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             </div>
           </div>
           <div className="vxn-hero-side">
-            <Standing model={model} catalog={catalog} />
+            <Standing model={model} catalog={catalog} metrics={standingMetrics} valuesOf={standingOf} />
           </div>
         </header>
 
