@@ -1504,12 +1504,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         const description = display.description || family.description;
         const type = TYPE_LABELS[display.task] || family.modality;
         const spec = rowSummary(display);
-        const details = [showType ? type : null, privacySummary(family.privacy), spec === type || spec === TASK_LABELS[display.task] ? null : spec].filter(Boolean).join(' · ');
+        const details = [showType ? type : null, display.privacy === 'e2ee' ? null : privacySummary(family.privacy), spec === type || spec === TASK_LABELS[display.task] ? null : spec].filter(Boolean).join(' · ');
         return (
           <li key={family.slug} className="vx-list-row">
             <div className="vx-list-top">
               <ProviderLogo provider={provider} size={22} />
-              <a className="vx-list-name" href={modelHref(family, display.id)}>{family.name}</a>
+              <a className="vx-list-name" href={modelHref(family, display.id)}>{display.privacy === 'e2ee' ? <>{family.name.replace(/ E2EE$/, '')} <Tag tone="e2ee" title={PRIVACY.e2ee.desc}><Icon name="lock" size={10} />E2EE</Tag></> : family.name}</a>
               <TypeBadge family={family} />
               <StatusTags item={family} now={now} />
               <span className="vx-list-price">{rowPrice(row)}</span>
@@ -3037,6 +3037,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       r && r.effort && r.effort.length ? `- Reasoning: \`reasoning_effort\` ${r.effort.join(' | ')}${r.defaultEffort ? `, default ${r.defaultEffort}` : ''}` : null,
       supports.length ? `- Supports: ${listText(supports)}` : null,
       PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
+      model.privacy === 'e2ee' ? '- The request below sends the prompt as plaintext, so it runs TEE-only. For end-to-end encryption, send encrypted messages with the E2EE headers: https://docs.venice.ai/guides/features/tee-e2ee-models#e2ee-models' : null,
       measured,
       `- Docs: https://docs.venice.ai/models/${family.slug}`,
       '',
@@ -3493,8 +3494,30 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return parts.length ? `- Measured on Venice API traffic in the 24 hours to ${end} UTC: ${parts.join('; ')}. Hourly figures: https://docs.venice.ai/data/model-performance.json` : null;
   };
 
+  const E2eeSummary = ({ model }) => (model.privacy === 'e2ee' ? (
+    <ul className="vxn-e2ee">
+      <li><Icon name="shieldCheck" size={16} /><span>Prompts are decrypted only inside an attested TEE on the GPU.</span></li>
+      <li><Icon name="terminal" size={16} /><span>Calls need the E2EE handshake. Without it, requests reach Venice as plaintext and run TEE-only. <a href="/guides/features/tee-e2ee-models#e2ee-models">How to call an E2EE model</a></span></li>
+    </ul>
+  ) : null);
+
+  // The same model called the other way: a model's E2EE build, or an E2EE
+  // build's model.
+  const Counterpart = ({ item }) => {
+    if (!item) return null;
+    const e2ee = item.privacy.includes('e2ee');
+    return (
+      <a className="vxn-counterpart" href={`/models/${item.slug}`}>
+        {e2ee ? <Icon name="lock" size={12} /> : null}
+        <span className="vxn-counterpart-name">{e2ee ? 'Also available end-to-end encrypted' : 'Also available without end-to-end encryption'}</span>
+        <span className="vxn-counterpart-sub">{relatedPrice(item)}</span>
+        <Icon name="arrowRight" size={12} />
+      </a>
+    );
+  };
+
   const ModelPageNext = ({ data }) => {
-    const { family, models, related, providers } = data;
+    const { family, models, related, counterpart, providers } = data;
     const [variantId, setVariantId] = useState(() => {
       const v = readParams().get('v');
       return v && models.some(m => m.id === v) ? v : family.primary;
@@ -3502,6 +3525,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const [endpointId, setEndpointId] = useState(null);
     const now = useNow();
     const { catalog } = useCatalog();
+    // A ?v= link naming a model on another page, such as an E2EE build from
+    // before it had a page of its own, goes to that page.
+    useEffect(() => {
+      const v = readParams().get('v');
+      if (!v || models.some(m => m.id === v)) return;
+      const home = counterpart && counterpart.primary === v ? counterpart.slug : catalog && catalog.models[v] ? catalog.models[v].family : null;
+      if (home && home !== family.slug) window.location.replace(`/models/${home}`);
+    }, [catalog]);
     const performance = usePerformance();
     const fresh = freshPerformance(performance.data, now);
     const performanceStatus = fresh ? 'fresh' : performance.data || performance.failed ? 'unavailable' : 'loading';
@@ -3548,16 +3579,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               {isNew(model.created, now) ? <Tag tone="new">New</Tag> : null}
               {model.beta ? <Tag tone="beta">Beta</Tag> : null}
             </div>
-            <h1 className="vxn-h1">{family.name}</h1>
+            <h1 className="vxn-h1">{model.privacy === 'e2ee' ? <>{family.name.replace(/ E2EE$/, '')} <span className="vxn-h1-tag" title={PRIVACY.e2ee.desc}><Icon name="lock" size={13} />E2EE</span></> : family.name}</h1>
             <div className="vxn-meta">
               <span className="vxn-meta-id"><code>{model.id}</code><CopyButton text={model.id} iconOnly label={`Copy model ID ${model.id}`} /></span>
-              {PRIVACY[model.privacy] ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
+              {PRIVACY[model.privacy] && model.privacy !== 'e2ee' ? <span className="vxn-meta-item">{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} size={12} /></span> : null}
               {model.openWeights ? (source
                 ? <a className="vxn-meta-item" href={source} target="_blank" rel="noopener noreferrer">Open weights<Icon name="external" size={12} /></a>
                 : <span className="vxn-meta-item">Open weights</span>) : null}
               {model.uncensored ? <span className="vxn-meta-item">Uncensored</span> : null}
             </div>
             {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
+            <E2eeSummary model={model} />
             <div className="vxn-figs">
               {p.input != null ? <Figure value={<>{usd(p.input)}<span className="vxn-sep">/</span>{usd(p.output)}</>} label="per 1M in / out" /> : null}
               {t.context ? <Figure value={tokens(t.context)} label="context window" /> : null}
@@ -3575,6 +3607,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                 </div>
               </div>
             ) : null}
+            <Counterpart item={counterpart} />
             <div className="vxn-ctas">
               <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
               {model.task === 'chat' ? <a className="vxn-textlink" href={`https://venice.ai/chat?model=${encodeURIComponent(model.id)}`} target="_blank" rel="noopener noreferrer">Try in Venice<Icon name="arrowRight" size={14} /></a> : null}
@@ -3667,6 +3700,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
         <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
           <CodePanel model={model} endpoint={endpoint} setEndpointId={setEndpointId} />
+          {model.privacy === 'e2ee' ? <p className="vxn-callout"><Icon name="lock" size={14} /><span>These samples send the prompt as plaintext, so the request runs TEE-only. For end-to-end encryption, send encrypted messages with the E2EE headers, as the <a href="/guides/features/tee-e2ee-models#e2ee-models">TEE and E2EE guide</a> shows.</span></p> : null}
           <h3 className="vxn-h3 vxn-gap">Parameters</h3>
           <ParamTable model={model} />
           <div className="vxn-guides">
@@ -4679,7 +4713,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <CodePanel model={model} endpoint={endpoint} endpoints={[]} />
           <h3 className="vxn-h3 vxn-gap">Parameters</h3>
           <ParamRows rows={params} />
-          <p className="vxe-callout"><Icon name="info" size={14} /><span>LangChain's <code>OpenAIEmbeddings</code> sends token IDs, which Venice rejects. Set <code>check_embedding_ctx_length=False</code>.</span></p>
+          <p className="vxn-callout"><Icon name="info" size={14} /><span>LangChain's <code>OpenAIEmbeddings</code> sends token IDs, which Venice rejects. Set <code>check_embedding_ctx_length=False</code>.</span></p>
         </NextSection>
       </div>
     );
