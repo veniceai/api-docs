@@ -1433,10 +1433,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <div className="vx-card-top">
             <a className="vx-card-name" href={href} title={family.name}>{family.name}</a>
             {showScope ? <TypeBadge family={family} /> : null}
+            <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} className="vx-row-copy" />
             <StatusTags item={family} now={now} />
           </div>
-          <div className="vx-card-id">
-            <IdChip id={display.id} />
+          <div className="vx-card-variants">
             {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
           </div>
           <div className="vx-card-foot">
