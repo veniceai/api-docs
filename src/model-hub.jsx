@@ -3099,7 +3099,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // Where the model falls among every text model on price and limits, each
   // drawn so that further right is better.
   const STANDING = [
-    { key: 'price', label: 'Price', better: 'cheaper', lowerIsBetter: true, format: v => `$${v.toFixed(v >= 0.1 ? 2 : 3)}`, tip: 'Blended price per 1M tokens, at three input tokens for each output token.' },
+    { key: 'price', label: 'Blended price', better: 'cheaper', lowerIsBetter: true, format: v => `$${v.toFixed(v >= 0.1 ? 2 : 3)}`, tip: 'Per 1M tokens, at three input tokens for each output token.' },
     { key: 'context', label: 'Context window', better: 'larger', lowerIsBetter: false, format: v => tokens(v) }
   ];
   const standingValues = model => {
