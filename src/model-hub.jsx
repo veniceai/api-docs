@@ -3402,11 +3402,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const parts = [['d', 'degraded'], ['x', 'down'], ['-', 'without requests']].filter(([c]) => count(c)).map(([c, word]) => `${word} for ${count(c)}`);
     return parts.length ? `, ${listText(parts)} of ${QUARTERS} quarter hours` : ', up every quarter hour';
   };
-  const QuarterStrip = ({ statuses, at }) => (
+  // On a quiet model whose quarter hours without requests are scattered,
+  // they shrink to a thin line, so its active stretches read as bursts.
+  const QuarterStrip = ({ statuses, at, sparse }) => (
     <svg className={cls('vxn-perf-strip', at != null && 'is-scrubbing')} viewBox={`0 0 ${QUARTERS * 6} 1`} preserveAspectRatio="none" aria-hidden="true">
       {Array.from({ length: QUARTERS * 2 }, (_, k) => {
-        const q = Math.floor(k / 2);
-        return <rect key={k} x={k * 3} width="2" height="1" className={cls(QUARTER_STATUS[statuses ? statuses[q] : '-'][0], k === at && 'is-at')} />;
+        const state = statuses ? statuses[Math.floor(k / 2)] : '-';
+        const thin = sparse && state === '-';
+        return <rect key={k} x={k * 3} y={thin ? 0.45 : 0} width="2" height={thin ? 0.1 : 1} className={cls(QUARTER_STATUS[state][0], k === at && 'is-at')} />;
       })}
     </svg>
   );
@@ -3425,10 +3428,35 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // the other text models.
   const figureNote = (metric, day, peers) => {
     if (metric.strip) return null;
-    const values = peers.map(f => f[metric.key]).filter(v => v != null && v > 0);
+    const values = peers.map(p => p.values[metric.key]).filter(v => v != null && v > 0);
     if (!values.length) return null;
     const worse = values.filter(v => (metric.lowerIsBetter ? v > day : v < day)).length;
     return `${metric.better} than ${Math.round((worse / values.length) * 100)}% of models`;
+  };
+
+  // A line needs hourly or finer periods to say more than its daily figure,
+  // so a quieter card places its figure among the other text models' instead,
+  // as the comparison card places price and limits: further right is better.
+  const readableStrip = statuses => statuses.split('-').length - 1 <= QUARTERS / 8 || /^-*[^-]*$/.test(statuses);
+  const RankStrip = ({ metric, day, peers }) => {
+    const ranked = peers.filter(p => p.values[metric.key] != null && p.values[metric.key] > 0);
+    const all = ranked.map(p => p.values[metric.key]).concat([day]);
+    const lo = Math.log(Math.min(...all));
+    const hi = Math.log(Math.max(...all));
+    const at = v => {
+      const x = hi > lo ? (Math.log(v) - lo) / (hi - lo) : 0.5;
+      return (metric.lowerIsBetter ? 1 - x : x) * 100;
+    };
+    const hash = text => [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+    return (
+      <div className="vxn-strip" aria-hidden="true">
+        {ranked.map(p => (
+          <a key={p.slug} className="vxn-strip-dot" href={`/models/${p.slug}`} tabIndex={-1} title={`${p.name}: ${metric.format(p.values[metric.key])}`}
+            style={{ left: `${at(p.values[metric.key])}%`, top: `${6 + (hash(p.slug + metric.key) % 3) * 5}px` }} />
+        ))}
+        <span className="vxn-strip-mine" style={{ left: `${at(day)}%` }} />
+      </div>
+    );
   };
 
   // A formatted figure as its number and its unit, so the unit can be set
@@ -3448,7 +3476,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const statuses = metric.strip && figures ? quarterStatuses(metric.strip(figures)) : null;
     const periods = figures && figures.periods ? figures.periods[metric.key] : null;
     const chart = metric.strip ? null : periods || (day != null ? { minutes: DAY_MINUTES, values: [day] } : null);
-    const count = statuses ? QUARTERS * 2 : chart ? chart.values.length : 0;
+    const charted = !figures || metric.strip || (chart != null && chart.minutes <= 60);
+    const count = !charted ? 0 : statuses ? QUARTERS * 2 : chart ? chart.values.length : 0;
     const at = hovered != null && hovered < count ? hovered : null;
     const quarter = statuses && at != null ? Math.floor(at / 2) : null;
     const state = quarter != null ? statuses[quarter] : null;
@@ -3468,8 +3497,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <span className="vxn-perf-label">{metric.name}</span>
         <span className="vxn-perf-value">{number}{unit ? <span className={cls('vxn-perf-unit', unit === '%' && 'is-tight')}>{unit}</span> : null}</span>
         <span className="vxn-perf-note">{note || '\u00a0'}</span>
-        <div className={cls('vxn-perf-chart', metric.strip && 'is-strip')} {...scrubbing}>
-          {metric.strip ? <QuarterStrip statuses={statuses} at={at} /> : <PeriodLine chart={chart} at={at} scale={metric.scale} />}
+        <div className={cls('vxn-perf-chart', !charted ? 'is-rank' : metric.strip && 'is-strip')} {...scrubbing}>
+          {!charted ? <RankStrip metric={metric} day={day} peers={peers} />
+            : metric.strip ? <QuarterStrip statuses={statuses} at={at} sparse={statuses != null && !readableStrip(statuses)} /> : <PeriodLine chart={chart} at={at} scale={metric.scale} />}
         </div>
       </div>
     );
@@ -3479,15 +3509,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // all draw the same frame, so figures arriving don't move the page.
   const PerformanceCards = ({ model, catalog, fresh, status, now }) => {
     const figures = fresh && fresh.models ? fresh.models[model.id] || null : null;
+    const shown = status === 'loading' ? PERF_METRICS : figures ? PERF_METRICS.filter(m => m.day(figures) != null) : [];
     const peers = useMemo(() => (catalog && fresh ? catalog.families
       .filter(f => f.task === 'chat' && !f.deprecated && f.primary !== model.id)
-      .map(f => dayFigures(fresh, f.primary)) : []), [catalog, fresh, model.id]);
+      .map(f => ({ slug: f.slug, name: f.name, values: dayFigures(fresh, f.primary) })) : []), [catalog, fresh, model.id]);
     const start = fresh ? Date.parse(fresh.window.start) : 0;
     const updated = fresh && fresh.generatedAt ? now - Date.parse(fresh.generatedAt) : null;
+    if (!shown.length) return null;
     return (
       <>
-        <div className="vxn-perfs">
-          {PERF_METRICS.map(metric => <PerfCard key={metric.key} metric={metric} figures={figures} peers={peers} status={status} start={start} />)}
+        <div className={cls('vxn-perfs', shown.length < 3 && `is-${shown.length}`)}>
+          {shown.map(metric => <PerfCard key={metric.key} metric={metric} figures={figures} peers={peers} status={status} start={start} />)}
         </div>
         <p className="vxn-caption"><span>{`Last 24 hours of Venice traffic${updated != null ? `, updated ${fmtAgo(updated)}` : ''}.`}</span><a href="/models/methodology#performance">How it's measured</a></p>
       </>
