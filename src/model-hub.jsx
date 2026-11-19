@@ -3292,8 +3292,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </div>
   );
 
-  const NextNav = ({ sections, active }) => (
+  // The model's name leads the nav, so it stays on screen once the nav sticks.
+  const NextNav = ({ title, sections, active }) => (
     <nav className="vxn-nav" aria-label="On this page">
+      <span className="vxn-nav-title" aria-hidden="true">{title}</span>
       {sections.map(([id, label]) => (
         <a key={id} href={`#${id}`} className={cls(active === id && 'is-active')}>{label}</a>
       ))}
@@ -3685,7 +3687,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <PerformanceCards model={model} catalog={catalog} fresh={fresh} status={performanceStatus} now={now} />
         </section>
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         <NextSection id="capabilities" title="Capabilities" lead="What the model takes in, returns and supports through the API.">
           <IoFlow inputs={inputs} outputs={['Text']} />
@@ -4059,7 +4061,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         </header>
         <Lightbox item={opened} onClose={() => setOpened(null)} />
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         {render ? (
           <NextSection id="compare" title="Same prompt, other models" lead="Every image model renders the same reference prompts, so their results line up side by side.">
@@ -4445,7 +4447,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         </header>
         <Lightbox item={opened} onClose={() => setOpened(null)} />
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         {compared ? (
           <NextSection id="compare" title="Same prompt, other models" lead="Every video model renders the same reference prompts, so their clips line up side by side. Hover a clip to play it.">
@@ -4735,7 +4737,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
         </header>
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         <NextSection id="vectors" title="Vectors" lead={`Each input comes back as ${count(e.dimensions || 0)} numbers${e.customDimensions ? ', or fewer when you ask for them with dimensions' : ''}. Stored as float32, each number takes 4 bytes.`}>
           <VectorStorage model={model} />
@@ -4941,7 +4943,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           ) : null}
         </header>
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         <NextSection id="capabilities" title="Capabilities">
           <div className="vxn-tiles">
@@ -5156,7 +5158,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
         </header>
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         <NextSection id="capabilities" title="Capabilities">
           <div className="vxn-tiles">
@@ -5445,7 +5447,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
         </header>
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         <NextSection id="capabilities" title="Capabilities">
           <div className="vxn-tiles">
