@@ -3469,7 +3469,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // The title stays put. While scrubbing, the number gives the hovered
   // period's figure and the line under it that period's time, so the card
   // needs no legend. Without periods, the day is a single period. Uptime
-  // scrubs bar by bar and gives each quarter hour's status.
+  // scrubs bar by bar: a quarter hour gives its uptime, or its status where
+  // the performance file has none for it.
   const PerfCard = ({ metric, figures, peers, status, start }) => {
     const [hovered, setHovered] = useState(null);
     const day = figures ? metric.day(figures) : null;
@@ -3481,12 +3482,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const at = hovered != null && hovered < count ? hovered : null;
     const quarter = statuses && at != null ? Math.floor(at / 2) : null;
     const state = quarter != null ? statuses[quarter] : null;
-    const word = state && state !== '-' ? QUARTER_STATUS[state][1] : null;
-    const figure = at == null || statuses ? null : chart.values[at];
+    const percent = quarter != null && figures.uptimeQuarters ? figures.uptimeQuarters[quarter] : null;
+    const word = state && state !== '-' && percent == null ? QUARTER_STATUS[state][1] : null;
+    const figure = at == null ? null : statuses ? percent : chart.values[at];
     const span = (k, minutes) => (minutes === DAY_MINUTES ? 'last 24 hours'
       : `${fmtTime(start + k * minutes * 60000)} \u2013 ${fmtTime(start + (k + 1) * minutes * 60000)}`);
     const note = at == null ? (day == null ? PERF_MISSING[status] || null : figureNote(metric, day, peers))
-      : statuses ? `${span(quarter, 15)}${state === '-' ? ' \u00b7 no requests' : ''}`
+      : statuses ? `${span(quarter, 15)}${percent != null ? ` \u00b7 ${QUARTER_STATUS[state][1]}` : state === '-' ? ' \u00b7 no requests' : ''}`
         : `${span(at, chart.minutes)}${figure == null ? ' \u00b7 no requests' : ''}`;
     const known = chart ? chart.values.filter(v => v != null) : [];
     const range = statuses ? quarterSummary(statuses) : known.length > 1 ? `, ranging from ${metric.format(Math.min(...known))} to ${metric.format(Math.max(...known))}` : '';
