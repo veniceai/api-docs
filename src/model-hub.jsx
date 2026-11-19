@@ -3340,14 +3340,24 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
 
   // Each period flat across its own span, easing into the next, so a quiet
-  // model reads as steady steps and a busy one as a line.
-  const periodPath = (values, minutes, y) => {
+  // model reads as steady steps and a busy one as a line. A period without
+  // requests breaks the line.
+  const periodRuns = values => values.reduce((runs, v, k) => {
+    if (v == null) return runs;
+    const run = runs[runs.length - 1];
+    if (run && run.end === k) {
+      run.values.push(v);
+      run.end = k + 1;
+    } else runs.push({ start: k, end: k + 1, values: [v] });
+    return runs;
+  }, []);
+  const periodPath = (run, minutes, y) => {
     const ease = Math.min(minutes / 4, 30);
-    return values.reduce((d, v, k) => {
-      if (k === values.length - 1) return `${d}H${DAY_MINUTES}`;
-      const edge = (k + 1) * minutes;
-      return `${d}H${edge - ease}C${edge},${y(v)} ${edge},${y(values[k + 1])} ${edge + ease},${y(values[k + 1])}`;
-    }, `M0,${y(values[0])}`);
+    return run.values.reduce((d, v, i) => {
+      if (i === run.values.length - 1) return `${d}H${run.end * minutes}`;
+      const edge = (run.start + i + 1) * minutes;
+      return `${d}H${edge - ease}C${edge},${y(v)} ${edge},${y(run.values[i + 1])} ${edge + ease},${y(run.values[i + 1])}`;
+    }, `M${run.start * minutes},${y(run.values[0])}`);
   };
 
   // The median period sits halfway up, and one more than twice the median is
@@ -3359,14 +3369,20 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
 
   const PeriodLine = ({ chart, at, scale }) => {
-    const y = chart ? scale(chart.values) : null;
-    const d = chart ? periodPath(chart.values, chart.minutes, y) : null;
-    const x = chart && at != null ? `${(((at + 0.5) * chart.minutes) / DAY_MINUTES) * 100}%` : null;
+    const known = chart ? chart.values.filter(v => v != null) : [];
+    const y = known.length ? scale(known) : null;
+    const runs = y ? periodRuns(chart.values) : [];
+    const x = at != null && chart.values[at] != null ? `${(((at + 0.5) * chart.minutes) / DAY_MINUTES) * 100}%` : null;
     return (
       <>
         <svg className="vxn-perf-svg" viewBox={`0 0 ${DAY_MINUTES} 100`} preserveAspectRatio="none" aria-hidden="true">
-          {d ? <path className="vxn-perf-fill" d={`${d}V100H0Z`} /> : null}
-          {d ? <path className="vxn-perf-line" d={d} vectorEffect="non-scaling-stroke" /> : null}
+          {runs.map(run => {
+            const d = periodPath(run, chart.minutes, y);
+            return [
+              <path key={`f${run.start}`} className="vxn-perf-fill" d={`${d}V100H${run.start * chart.minutes}Z`} />,
+              <path key={`l${run.start}`} className="vxn-perf-line" d={d} vectorEffect="non-scaling-stroke" />
+            ];
+          })}
         </svg>
         {x ? <span className="vxn-perf-guide" style={{ left: x }} /> : null}
         {x ? <span className="vxn-perf-dot" style={{ left: x, top: `${y(chart.values[at])}%` }} /> : null}
@@ -3442,8 +3458,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       : `${fmtTime(start + k * minutes * 60000)} \u2013 ${fmtTime(start + (k + 1) * minutes * 60000)}`);
     const note = at == null ? (day == null ? PERF_MISSING[status] || null : figureNote(metric, day, peers))
       : statuses ? `${span(quarter, 15)}${state === '-' ? ' \u00b7 no requests' : ''}`
-        : span(at, chart.minutes);
-    const range = statuses ? quarterSummary(statuses) : chart && chart.values.length > 1 ? `, ranging from ${metric.format(Math.min(...chart.values))} to ${metric.format(Math.max(...chart.values))}` : '';
+        : `${span(at, chart.minutes)}${figure == null ? ' \u00b7 no requests' : ''}`;
+    const known = chart ? chart.values.filter(v => v != null) : [];
+    const range = statuses ? quarterSummary(statuses) : known.length > 1 ? `, ranging from ${metric.format(Math.min(...known))} to ${metric.format(Math.max(...known))}` : '';
     const scrubbing = count ? { ...scrub(count, setHovered), role: 'img', 'aria-label': `${metric.name} over the last 24 hours: ${day != null ? metric.format(day) : PERF_MISSING.fresh}${range}` } : {};
     const [number, unit] = figureParts(word ? upperFirst(word) : figure != null ? metric.format(figure) : state === '-' ? '\u2014' : metric.format(day));
     return (
