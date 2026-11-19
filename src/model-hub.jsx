@@ -3424,10 +3424,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     { key: 'uptime', name: 'Uptime', format: fmtUptime, day: f => f.uptime, strip: f => f.uptimeStatus }
   ];
 
+  // Quarter hours as a duration: "45m", "3h", "3h 30m".
+  const quarterTime = n => (n < 4 ? `${n * 15}m` : `${Math.floor(n / 4)}h${n % 4 ? ` ${(n % 4) * 15}m` : ''}`);
+
   // What a figure means, on the line under it: where the model ranks among
-  // the other text models.
-  const figureNote = (metric, day, peers) => {
-    if (metric.strip) return null;
+  // the other text models, or for uptime how long it was down or degraded.
+  const figureNote = (metric, day, peers, statuses) => {
+    if (metric.strip) {
+      if (!statuses || !/[udx]/.test(statuses)) return null;
+      const parts = [['x', 'down'], ['d', 'degraded']].filter(([c]) => statuses.includes(c)).map(([c, word]) => `${word} ${quarterTime(statuses.split(c).length - 1)}`);
+      return parts.length ? parts.join(' \u00b7 ') : 'no outages';
+    }
     const values = peers.map(p => p.values[metric.key]).filter(v => v != null && v > 0);
     if (!values.length) return null;
     const worse = values.filter(v => (metric.lowerIsBetter ? v > day : v < day)).length;
@@ -3487,7 +3494,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const figure = at == null ? null : statuses ? percent : chart.values[at];
     const span = (k, minutes) => (minutes === DAY_MINUTES ? 'last 24 hours'
       : `${fmtTime(start + k * minutes * 60000)} \u2013 ${fmtTime(start + (k + 1) * minutes * 60000)}`);
-    const note = at == null ? (day == null ? PERF_MISSING[status] || null : figureNote(metric, day, peers))
+    const note = at == null ? (day == null ? PERF_MISSING[status] || null : figureNote(metric, day, peers, statuses))
       : statuses ? `${span(quarter, 15)}${percent != null ? ` \u00b7 ${QUARTER_STATUS[state][1]}` : state === '-' ? ' \u00b7 no requests' : ''}`
         : `${span(at, chart.minutes)}${figure == null ? ' \u00b7 no requests' : ''}`;
     const known = chart ? chart.values.filter(v => v != null) : [];
