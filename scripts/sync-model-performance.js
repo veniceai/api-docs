@@ -101,6 +101,19 @@ function quarters(buckets, id) {
   }).join('');
 }
 
+// Each quarter hour's uptime, which the job publishes as a whole percent
+// from 100 requests, as 100 below that where nothing failed, and otherwise
+// as null. Left out when none has one.
+function quarterPercents(buckets, id) {
+  if (buckets == null) return null;
+  const values = buckets.map(bar => {
+    const v = bar.uptime_percent == null ? null : bar.uptime_percent;
+    expect(v === null || (Number.isInteger(v) && v >= 0 && v <= 100), `${id} has an uptime bar at ${v}`);
+    return v;
+  });
+  return values.some(v => v !== null) ? values : null;
+}
+
 function modelFigures(summary, detail) {
   expect(detail && detail.schema_version === SCHEMA_VERSION, `${summary.detail_path} has schema_version ${detail && detail.schema_version}`);
   expect(detail.model && detail.model.id === summary.id, `${summary.detail_path} describes ${detail.model && detail.model.id}`);
@@ -114,7 +127,8 @@ function modelFigures(summary, detail) {
       tokensPerSecond: chart(periods.tokens_per_second, summary.id, 'output speed', Infinity),
       uptime: chart(periods.uptime, summary.id, 'uptime', 100)
     }),
-    uptimeStatus: quarters(detail.uptime && detail.uptime.buckets, summary.id)
+    uptimeStatus: quarters(detail.uptime && detail.uptime.buckets, summary.id),
+    uptimeQuarters: quarterPercents(detail.uptime && detail.uptime.buckets, summary.id)
   });
 }
 

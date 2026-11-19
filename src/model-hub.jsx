@@ -1258,13 +1258,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <div className="vx-mcell-top">
             <a className="vx-mcell-name" href={modelHref(family, display.id)}>{family.name}</a>
             {showScope ? <TypeBadge family={family} /> : null}
+            <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} className="vx-row-copy" />
             <StatusTags item={family} now={now} />
           </div>
-          <div className="vx-mcell-sub">
-            <code className="vx-mcell-id" title={display.id}>{display.id}</code>
-            <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} />
-            {extra > 0 ? <span className="vx-mcell-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
-          </div>
+          {extra > 0 ? <div className="vx-mcell-sub"><span className="vx-mcell-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span></div> : null}
           <div className="vx-mcell-mobile">{[keySpec(display), privacySummary(family.privacy)].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
@@ -1433,10 +1430,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <div className="vx-card-top">
             <a className="vx-card-name" href={href} title={family.name}>{family.name}</a>
             {showScope ? <TypeBadge family={family} /> : null}
+            <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} className="vx-row-copy" />
             <StatusTags item={family} now={now} />
           </div>
-          <div className="vx-card-id">
-            <IdChip id={display.id} />
+          <div className="vx-card-variants">
             {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
           </div>
           <div className="vx-card-foot">
@@ -1485,16 +1482,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     ].filter(Boolean).join(' · ');
   };
 
-  const IdChip = ({ id }) => {
-    const [done, setDone] = useState(false);
-    return (
-      <button type="button" className={cls('vx-idchip', done && 'is-done')} title={id} aria-label={`Copy model ID ${id}`}
-        onClick={() => copyText(id).then(() => { setDone(true); setTimeout(() => setDone(false), 1400); })}>
-        <span>{id}</span>{done ? <Icon name="check" size={12} /> : null}
-      </button>
-    );
-  };
-
   const ExplorerList = ({ rows, providers, now, showType, showScope }) => (
     <ul className="vx-list">
       {rows.map(row => {
@@ -1511,12 +1498,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               <ProviderLogo provider={provider} size={22} />
               <a className="vx-list-name" href={modelHref(family, display.id)}>{display.privacy === 'e2ee' ? <>{family.name.replace(/ E2EE$/, '')} <Tag tone="e2ee" title={PRIVACY.e2ee.desc}><Icon name="lock" size={10} />E2EE</Tag></> : family.name}</a>
               {showScope ? <TypeBadge family={family} /> : null}
+              <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} className="vx-row-copy" />
               <StatusTags item={family} now={now} />
               <span className="vx-list-price">{rowPrice(row)}</span>
             </div>
             {description ? <p className="vx-list-desc">{description}</p> : null}
             <div className="vx-list-sum">
-              <IdChip id={display.id} />
               {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
               <span>{details}</span>
             </div>
