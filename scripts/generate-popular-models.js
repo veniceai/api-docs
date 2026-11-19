@@ -21,6 +21,8 @@ const path = require('path');
 const { isDeprecatedModel: isDeprecated, providerLogo } = require('./model-helpers');
 
 const SNAPSHOT_PATH = path.join(__dirname, '..', 'data', 'static-models.json');
+const MODEL_CATALOG_PATH = path.join(__dirname, '..', 'data', 'model-catalog.json');
+const MODELS_DIR = path.join(__dirname, '..', 'models');
 const PAGE_PATH = path.join(__dirname, '..', 'overview', 'about-venice.mdx');
 const CATALOG_HREF = '/models/overview';
 
@@ -73,6 +75,14 @@ function loadSnapshot() {
   }
 
   return JSON.parse(fs.readFileSync(SNAPSHOT_PATH, 'utf-8'));
+}
+
+function loadCatalogFamilies() {
+  if (!fs.existsSync(MODEL_CATALOG_PATH)) {
+    throw new Error('Missing data/model-catalog.json; run node scripts/build-model-catalog.js first');
+  }
+
+  return JSON.parse(fs.readFileSync(MODEL_CATALOG_PATH, 'utf-8')).families || [];
 }
 
 // Model names and ids are the only untrusted text we interpolate. Braces would
@@ -156,6 +166,16 @@ function resolveLogo(fileName) {
   return providerLogo(fileName);
 }
 
+// A featured card opens its model page, found through the catalog family that
+// lists the model id, or the catalog when the family has no page.
+function modelHref(model, families) {
+  const family = families.find(entry => (entry.variants || []).includes(model.id));
+  if (family && fs.existsSync(path.join(MODELS_DIR, `${family.slug}.mdx`))) {
+    return `/models/${family.slug}`;
+  }
+  return CATALOG_HREF;
+}
+
 // Single-color marks take the card's text color through a mask; the rest are
 // images in their own colors.
 function renderLogo({ logo, mono }) {
@@ -165,7 +185,7 @@ function renderLogo({ logo, mono }) {
   return `      <img noZoom className="venice-model-card-logo" src="${logo}" width="28" height="28" alt="" aria-hidden="true" />`;
 }
 
-function renderCard(model) {
+function renderCard(model, families) {
   const spec = model.model_spec || {};
   const provider = findProvider(model);
   const logo = resolveLogo(provider ? provider.icon : 'venice.svg');
@@ -183,7 +203,7 @@ function renderCard(model) {
   stats.push(`      <span className="${privacyClass}">${escapeJsxText(privacy)}</span>`);
 
   return [
-    `  <a className="venice-model-card" href="${CATALOG_HREF}">`,
+    `  <a className="venice-model-card" href="${modelHref(model, families)}">`,
     `    <span className="venice-model-card-top">`,
     renderLogo(logo),
     `      <span className="venice-model-card-head">`,
@@ -208,6 +228,7 @@ function renderCatalogCount(models) {
 
 function main() {
   const snapshot = loadSnapshot();
+  const families = loadCatalogFamilies();
   const featured = resolveFeatured(snapshot);
   if (featured.length === 0) {
     throw new Error('No featured models resolved. Refusing to write an empty grid.');
@@ -216,7 +237,7 @@ function main() {
   const block = [
     START_MARKER,
     '<div className="venice-models-grid">',
-    ...featured.map(renderCard),
+    ...featured.map(model => renderCard(model, families)),
     '</div>',
     END_MARKER
   ].join('\n');
