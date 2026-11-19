@@ -3372,7 +3372,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return (
       <>
         <svg className="vxn-perf-svg" viewBox={`0 0 ${DAY_MINUTES} 100`} preserveAspectRatio="none" aria-hidden="true">
-          <line className="vxn-perf-base" x1="0" x2={DAY_MINUTES} y1="100" y2="100" vectorEffect="non-scaling-stroke" />
           {d ? <path className="vxn-perf-fill" d={`${d}V100H0Z`} /> : null}
           {d ? <path className="vxn-perf-line" d={d} vectorEffect="non-scaling-stroke" /> : null}
         </svg>
