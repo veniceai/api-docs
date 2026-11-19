@@ -3406,8 +3406,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const PERF_MISSING = { fresh: 'not enough traffic', unavailable: 'unavailable' };
 
   const PERF_METRICS = [
-    { key: 'ttftMs', name: 'Time to first token', format: fmtMs, day: f => (f.ttftMs && f.ttftMs['24h'] ? f.ttftMs['24h'].p50 : null),
-      tail: f => (f && f.ttftMs && f.ttftMs['24h'] && f.ttftMs['24h'].p90 != null ? `p90 ${fmtMs(f.ttftMs['24h'].p90)}` : null), scale: medianScale },
+    { key: 'ttftMs', name: 'Time to first token', format: fmtMs, day: f => (f.ttftMs && f.ttftMs['24h'] ? f.ttftMs['24h'].p50 : null), scale: medianScale },
     { key: 'tokensPerSecond', name: 'Output speed', format: fmtSpeed, day: f => (f.tokensPerSecond ? f.tokensPerSecond['24h'] : null), scale: medianScale },
     { key: 'uptime', name: 'Uptime', format: fmtUptime, day: f => f.uptime, scale: uptimeScale }
   ];
