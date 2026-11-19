@@ -3333,25 +3333,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const DAY_MINUTES = 1440;
   const freshPerformance = (data, now) => (data && data.window && Date.parse(data.window.end) > now - PERFORMANCE_MAX_AGE ? data : null);
 
-  // A label every six hours on the viewer's clock, naming the day at midnight.
-  // Labels near either end are left out, so they never run past the card.
-  const timeTicks = (start, end) => {
-    if (!(end > start)) return [];
-    const hour = 3600 * 1000;
-    const first = new Date(start);
-    first.setMinutes(0, 0, 0);
-    let t = first.getTime() < start ? first.getTime() + hour : first.getTime();
-    while (new Date(t).getHours() % 6) t += hour;
-    const ticks = [];
-    for (; t < end; t += 6 * hour) {
-      const at = ((t - start) / (end - start)) * 100;
-      if (at < 8 || at > 92) continue;
-      const d = new Date(t);
-      ticks.push([at, d.getHours() ? d.toLocaleTimeString('en-US', { hour: 'numeric' }) : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })]);
-    }
-    return ticks;
-  };
-
   // The period under the pointer: hovering with a mouse, or pressing and
   // dragging on a touch screen. Lifting or leaving clears it.
   const scrub = (count, set) => {
@@ -3435,9 +3416,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           {tail ? <span className="vxn-perf-tail">{tail}</span> : null}
         </span>
         <div className="vxn-perf-chart" {...scrubbing}><PeriodLine chart={chart} at={at} scale={metric.scale} /></div>
-        <div className="vxn-perf-ticks" aria-hidden="true">
-          {timeTicks(start, chart ? end : 0).map(([pos, text]) => <span key={text} style={{ left: `${pos}%` }}>{text}</span>)}
-        </div>
       </div>
     );
   };
