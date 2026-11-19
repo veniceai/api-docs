@@ -3417,11 +3417,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return m ? [m[1], m[2]] : [text, null];
   };
 
-  // One figure at rest. While scrubbing, the label gives the period's time
-  // and the figure its value, so the card needs no legend or caption. A figure
-  // always has a line: without periods, the day is a single period. Uptime
+  // The title stays put. While scrubbing, the number gives the hovered
+  // period's figure and the line under it that period's time, so the card
+  // needs no legend. Without periods, the day is a single period. Uptime
   // scrubs bar by bar and gives each quarter hour's status.
-  const PerfCard = ({ metric, figures, status, start, end }) => {
+  const PerfCard = ({ metric, figures, status, start }) => {
     const [hovered, setHovered] = useState(null);
     const day = figures ? metric.day(figures) : null;
     const statuses = metric.strip && figures ? quarterStatuses(metric.strip(figures)) : null;
@@ -3433,23 +3433,19 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const state = quarter != null ? statuses[quarter] : null;
     const word = state && state !== '-' ? QUARTER_STATUS[state][1] : null;
     const figure = at == null || statuses ? null : chart.values[at];
-    const span = (k, minutes) => (minutes === DAY_MINUTES
-      ? `${fmtClock(start)} \u2013 ${fmtClock(end)}`
-      : `${fmtClock(start + k * minutes * 60000)} \u2013 ${fmtTime(start + (k + 1) * minutes * 60000)}`);
-    const label = at == null ? metric.name
+    const span = (k, minutes) => (minutes === DAY_MINUTES ? 'last 24 hours'
+      : `${fmtTime(start + k * minutes * 60000)} \u2013 ${fmtTime(start + (k + 1) * minutes * 60000)}`);
+    const note = at == null ? (day == null ? PERF_MISSING[status] || null : null)
       : statuses ? `${span(quarter, 15)}${state === '-' ? ' \u00b7 no requests' : ''}`
         : span(at, chart.minutes);
-    const tail = at != null ? null : day == null ? PERF_MISSING[status] || null : metric.tail ? metric.tail(figures) : null;
     const range = statuses ? quarterSummary(statuses) : chart && chart.values.length > 1 ? `, ranging from ${metric.format(Math.min(...chart.values))} to ${metric.format(Math.max(...chart.values))}` : '';
     const scrubbing = count ? { ...scrub(count, setHovered), role: 'img', 'aria-label': `${metric.name} over the last 24 hours: ${day != null ? metric.format(day) : PERF_MISSING.fresh}${range}` } : {};
     const [number, unit] = figureParts(word ? upperFirst(word) : figure != null ? metric.format(figure) : state === '-' ? '\u2014' : metric.format(day));
     return (
       <div className="vxn-perf">
-        <span className="vxn-perf-label">{label}</span>
-        <span className="vxn-perf-figure">
-          <span className="vxn-perf-value">{number}{unit ? <span className={cls('vxn-perf-unit', unit === '%' && 'is-tight')}>{unit}</span> : null}</span>
-          {tail ? <span className="vxn-perf-tail">{tail}</span> : null}
-        </span>
+        <span className="vxn-perf-label">{metric.name}</span>
+        <span className="vxn-perf-value">{number}{unit ? <span className={cls('vxn-perf-unit', unit === '%' && 'is-tight')}>{unit}</span> : null}</span>
+        <span className="vxn-perf-note">{note || '\u00a0'}</span>
         <div className={cls('vxn-perf-chart', metric.strip && 'is-strip')} {...scrubbing}>
           {metric.strip ? <QuarterStrip statuses={statuses} at={at} /> : <PeriodLine chart={chart} at={at} scale={metric.scale} />}
         </div>
@@ -3462,12 +3458,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const PerformanceCards = ({ model, fresh, status, now }) => {
     const figures = fresh && fresh.models ? fresh.models[model.id] || null : null;
     const start = fresh ? Date.parse(fresh.window.start) : 0;
-    const end = fresh ? Date.parse(fresh.window.end) : 0;
     const updated = fresh && fresh.generatedAt ? now - Date.parse(fresh.generatedAt) : null;
     return (
       <>
         <div className="vxn-perfs">
-          {PERF_METRICS.map(metric => <PerfCard key={metric.key} metric={metric} figures={figures} status={status} start={start} end={end} />)}
+          {PERF_METRICS.map(metric => <PerfCard key={metric.key} metric={metric} figures={figures} status={status} start={start} />)}
         </div>
         <p className="vxn-caption"><span>{`Last 24 hours of Venice API traffic${updated != null ? `, updated ${fmtAgo(updated)}` : ''}.`}</span><a href="/models/methodology#performance">How it's measured</a></p>
       </>
