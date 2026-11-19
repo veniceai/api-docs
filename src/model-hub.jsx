@@ -3432,7 +3432,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <div className="vxn-perfs">
           {PERF_METRICS.map(metric => <PerfCard key={metric.key} metric={metric} figures={figures} status={status} start={start} end={end} />)}
         </div>
-        <p className="vxn-caption">{updated != null ? `Updated ${fmtAgo(updated)}. ` : ''}<a href="/models/methodology#performance">How it's measured</a></p>
+        <p className="vxn-caption"><span>{`Last 24 hours of Venice API traffic${updated != null ? `, updated ${fmtAgo(updated)}` : ''}.`}</span><a href="/models/methodology#performance">How it's measured</a></p>
       </>
     );
   };
@@ -3517,7 +3517,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const supported = TEXT_CAPS.filter(c => c.key !== 'effort' && hasCap(model, c.key));
     const missing = TEXT_CAPS.filter(c => !['effort', 'code'].includes(c.key) && !hasCap(model, c.key));
     const inputs = ['Text', caps.vision && 'Image', caps.videoInput && 'Video', caps.audioInput && 'Audio'].filter(Boolean);
-    const sections = [['capabilities', 'Capabilities'], ['performance', 'Performance'], ['pricing', 'Pricing'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null, ['quickstart', 'Quickstart']].filter(Boolean);
+    const sections = [['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null, ['quickstart', 'Quickstart']].filter(Boolean);
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const headerHeight = useHeaderHeight();
     const selectVariant = id => {
@@ -3584,6 +3584,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
         </header>
 
+        <section id="performance" className="vxn-band" aria-label="Performance">
+          <PerformanceCards model={model} fresh={fresh} status={performanceStatus} now={now} />
+        </section>
+
         <NextNav sections={sections} active={activeSection} />
 
         <NextSection id="capabilities" title="Capabilities" lead="What the model takes in, returns and supports through the API.">
@@ -3594,10 +3598,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {Array.from({ length: (3 - ((supported.length + 1) % 3)) % 3 }, (_, i) => <span key={`fill-${i}`} className="vxn-tile is-empty" aria-hidden="true" />)}
           </div>
           {missing.length ? <p className="vxn-missing"><span>Not supported</span>{listText(missing.map(c => (c.key === 'xSearch' ? c.label : c.label.toLowerCase())))}</p> : null}
-        </NextSection>
-
-        <NextSection id="performance" title="Performance" lead="Measured on Venice API traffic over the last 24 hours.">
-          <PerformanceCards model={model} fresh={fresh} status={performanceStatus} now={now} />
         </NextSection>
 
         <NextSection id="pricing" title="Pricing" lead="Billed per token in USD. Reasoning tokens bill as output.">
