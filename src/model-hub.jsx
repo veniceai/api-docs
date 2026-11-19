@@ -3362,8 +3362,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const top = 2 * sorted[Math.floor((sorted.length - 1) / 2)] || 1;
     return v => 100 - (Math.min(v, top) / top) * 100;
   };
-  // From 80%, where a period reads as down, to 100%, for every model alike.
-  const uptimeScale = () => v => 100 - ((Math.max(v, 80) - 80) / 20) * 100;
 
   const PeriodLine = ({ chart, at, scale }) => {
     const y = chart ? scale(chart.values) : null;
@@ -3381,6 +3379,27 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
+  // Uptime sits near 100%, where a line hides how often it dipped, so each
+  // quarter hour of the day gets two thin bars in the status the metrics job
+  // gives it: up, degraded (under 95%), down (under 80%), or grey without
+  // requests. A model without figures is grey throughout.
+  const QUARTERS = DAY_MINUTES / 15;
+  const QUARTER_STATUS = { u: ['is-up', 'up'], d: ['is-dip', 'degraded'], x: ['is-low', 'down'], '-': ['is-none', 'no requests'] };
+  const quarterStatuses = text => (typeof text === 'string' && text.length === QUARTERS && [...text].every(c => QUARTER_STATUS[c]) ? text : null);
+  const quarterSummary = statuses => {
+    const count = c => statuses.split(c).length - 1;
+    const parts = [['d', 'degraded'], ['x', 'down'], ['-', 'without requests']].filter(([c]) => count(c)).map(([c, word]) => `${word} for ${count(c)}`);
+    return parts.length ? `, ${listText(parts)} of ${QUARTERS} quarter hours` : ', up every quarter hour';
+  };
+  const QuarterStrip = ({ statuses, at }) => (
+    <svg className={cls('vxn-perf-strip', at != null && 'is-scrubbing')} viewBox={`0 0 ${QUARTERS * 6} 1`} preserveAspectRatio="none" aria-hidden="true">
+      {Array.from({ length: QUARTERS * 2 }, (_, k) => {
+        const q = Math.floor(k / 2);
+        return <rect key={k} x={k * 3} width="2" height="1" className={cls(QUARTER_STATUS[statuses ? statuses[q] : '-'][0], k === at && 'is-at')} />;
+      })}
+    </svg>
+  );
+
   // What a card without a figure says: the job publishes none for a model
   // with too little traffic, and stale or unloadable figures say nothing.
   const PERF_MISSING = { fresh: 'not enough traffic', unavailable: 'unavailable' };
@@ -3388,7 +3407,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const PERF_METRICS = [
     { key: 'ttftMs', name: 'Time to first token', format: fmtMs, day: f => (f.ttftMs && f.ttftMs['24h'] ? f.ttftMs['24h'].p50 : null), scale: medianScale },
     { key: 'tokensPerSecond', name: 'Output speed', format: fmtSpeed, day: f => (f.tokensPerSecond ? f.tokensPerSecond['24h'] : null), scale: medianScale },
-    { key: 'uptime', name: 'Uptime', format: fmtUptime, day: f => f.uptime, scale: uptimeScale }
+    { key: 'uptime', name: 'Uptime', format: fmtUptime, day: f => f.uptime, strip: f => f.uptimeStatus }
   ];
 
   // A formatted figure as its number and its unit, so the unit can be set
@@ -3400,29 +3419,40 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   // One figure at rest. While scrubbing, the label gives the period's time
   // and the figure its value, so the card needs no legend or caption. A figure
-  // always has a line: without periods, the day is a single period.
+  // always has a line: without periods, the day is a single period. Uptime
+  // scrubs bar by bar and gives each quarter hour's status.
   const PerfCard = ({ metric, figures, status, start, end }) => {
     const [hovered, setHovered] = useState(null);
     const day = figures ? metric.day(figures) : null;
+    const statuses = metric.strip && figures ? quarterStatuses(metric.strip(figures)) : null;
     const periods = figures && figures.periods ? figures.periods[metric.key] : null;
-    const chart = periods || (day != null ? { minutes: DAY_MINUTES, values: [day] } : null);
-    const at = chart && hovered != null && hovered < chart.values.length ? hovered : null;
-    const step = chart ? chart.minutes * 60000 : 0;
-    const span = k => (chart.minutes === DAY_MINUTES
+    const chart = metric.strip ? null : periods || (day != null ? { minutes: DAY_MINUTES, values: [day] } : null);
+    const count = statuses ? QUARTERS * 2 : chart ? chart.values.length : 0;
+    const at = hovered != null && hovered < count ? hovered : null;
+    const quarter = statuses && at != null ? Math.floor(at / 2) : null;
+    const state = quarter != null ? statuses[quarter] : null;
+    const word = state && state !== '-' ? QUARTER_STATUS[state][1] : null;
+    const figure = at == null || statuses ? null : chart.values[at];
+    const span = (k, minutes) => (minutes === DAY_MINUTES
       ? `${fmtClock(start)} \u2013 ${fmtClock(end)}`
-      : `${fmtClock(start + k * step)} \u2013 ${fmtTime(start + (k + 1) * step)}`);
+      : `${fmtClock(start + k * minutes * 60000)} \u2013 ${fmtTime(start + (k + 1) * minutes * 60000)}`);
+    const label = at == null ? metric.name
+      : statuses ? `${span(quarter, 15)}${state === '-' ? ' \u00b7 no requests' : ''}`
+        : span(at, chart.minutes);
     const tail = at != null ? null : day == null ? PERF_MISSING[status] || null : metric.tail ? metric.tail(figures) : null;
-    const range = chart && chart.values.length > 1 ? `, ranging from ${metric.format(Math.min(...chart.values))} to ${metric.format(Math.max(...chart.values))}` : '';
-    const scrubbing = chart ? { ...scrub(chart.values.length, setHovered), role: 'img', 'aria-label': `${metric.name} over the last 24 hours: ${day != null ? metric.format(day) : PERF_MISSING.fresh}${range}` } : {};
-    const [number, unit] = figureParts(metric.format(at != null ? chart.values[at] : day));
+    const range = statuses ? quarterSummary(statuses) : chart && chart.values.length > 1 ? `, ranging from ${metric.format(Math.min(...chart.values))} to ${metric.format(Math.max(...chart.values))}` : '';
+    const scrubbing = count ? { ...scrub(count, setHovered), role: 'img', 'aria-label': `${metric.name} over the last 24 hours: ${day != null ? metric.format(day) : PERF_MISSING.fresh}${range}` } : {};
+    const [number, unit] = figureParts(word ? upperFirst(word) : figure != null ? metric.format(figure) : state === '-' ? '\u2014' : metric.format(day));
     return (
       <div className="vxn-perf">
-        <span className="vxn-perf-label">{at != null ? span(at) : metric.name}</span>
+        <span className="vxn-perf-label">{label}</span>
         <span className="vxn-perf-figure">
           <span className="vxn-perf-value">{number}{unit ? <span className={cls('vxn-perf-unit', unit === '%' && 'is-tight')}>{unit}</span> : null}</span>
           {tail ? <span className="vxn-perf-tail">{tail}</span> : null}
         </span>
-        <div className="vxn-perf-chart" {...scrubbing}><PeriodLine chart={chart} at={at} scale={metric.scale} /></div>
+        <div className={cls('vxn-perf-chart', metric.strip && 'is-strip')} {...scrubbing}>
+          {metric.strip ? <QuarterStrip statuses={statuses} at={at} /> : <PeriodLine chart={chart} at={at} scale={metric.scale} />}
+        </div>
       </div>
     );
   };
