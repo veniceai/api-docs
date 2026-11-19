@@ -549,7 +549,13 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | LTX Video 2.5 Pro | `ltx-2-5-pro-image-to-video` | Image to video | $0.132 to $0.187 | Anonymized |
 | MiniMax H3 | `minimax-h3-text-to-video` | Text to video | $0.10 to $0.1627 | Anonymized |
 | MiniMax H3 | `minimax-h3-image-to-video` | Image to video | $0.10 to $0.1627 | Anonymized |
+| MiniMax H3 Chili (Prodia) | `minimax-h3-chili-text-to-video` | Text to video | $0.0347 | Anonymized |
+| MiniMax H3 Chili (Prodia) | `minimax-h3-chili-image-to-video` | Image to video | $0.0394 | Anonymized |
+| MiniMax H3 Chili R2V (Prodia) | `minimax-h3-chili-reference-to-video` | Reference to video | $0.0483 | Anonymized |
 | MiniMax H3 Enhanced | `minimax-h3-enhanced-text-to-video` | Text to video | $0.10 to $0.1627 | Anonymized |
+| MiniMax H3 Hyper (Prodia) | `minimax-h3-hyper-text-to-video` | Text to video | $0.0305 | Anonymized |
+| MiniMax H3 Hyper (Prodia) | `minimax-h3-hyper-image-to-video` | Image to video | $0.0342 | Anonymized |
+| MiniMax H3 Hyper R2V (Prodia) | `minimax-h3-hyper-reference-to-video` | Reference to video | $0.0593 | Anonymized |
 | MiniMax H3 Max | `minimax-h3-max-text-to-video` | Text to video | $0.045 to $0.144 | Private |
 | MiniMax H3 Max | `minimax-h3-max-image-to-video` | Image to video | $0.045 to $0.144 | Private |
 | MiniMax H3 Max Multi-Angle | `minimax-h3-max-multi-angle` | Multi-angle | $0.045 to $0.144 | Private |
