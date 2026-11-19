@@ -1258,13 +1258,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <div className="vx-mcell-top">
             <a className="vx-mcell-name" href={modelHref(family, display.id)}>{family.name}</a>
             {showScope ? <TypeBadge family={family} /> : null}
+            <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} className="vx-row-copy" />
             <StatusTags item={family} now={now} />
           </div>
-          <div className="vx-mcell-sub">
-            <code className="vx-mcell-id" title={display.id}>{display.id}</code>
-            <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} />
-            {extra > 0 ? <span className="vx-mcell-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
-          </div>
+          {extra > 0 ? <div className="vx-mcell-sub"><span className="vx-mcell-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span></div> : null}
           <div className="vx-mcell-mobile">{[keySpec(display), privacySummary(family.privacy)].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
