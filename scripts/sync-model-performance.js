@@ -88,6 +88,19 @@ function chart(value, id, name, max) {
   return { minutes: value.minutes, values: value.values };
 }
 
+// The uptime strip: each quarter hour of the window, oldest first, as one
+// character for the status the job gives it.
+const QUARTER_STATUS = { up: 'u', degraded: 'd', down: 'x', no_data: '-' };
+
+function quarters(buckets, id) {
+  if (buckets == null) return null;
+  expect(Array.isArray(buckets) && buckets.length === 96, `${id} has ${buckets && buckets.length} uptime bars`);
+  return buckets.map(bar => {
+    expect(bar && Object.hasOwn(QUARTER_STATUS, bar.status), `${id} has an uptime bar reading ${bar && bar.status}`);
+    return QUARTER_STATUS[bar.status];
+  }).join('');
+}
+
 function modelFigures(summary, detail) {
   expect(detail && detail.schema_version === SCHEMA_VERSION, `${summary.detail_path} has schema_version ${detail && detail.schema_version}`);
   expect(detail.model && detail.model.id === summary.id, `${summary.detail_path} describes ${detail.model && detail.model.id}`);
@@ -100,7 +113,8 @@ function modelFigures(summary, detail) {
       ttftMs: chart(periods.ttft_ms, summary.id, 'time to first token', Infinity),
       tokensPerSecond: chart(periods.tokens_per_second, summary.id, 'output speed', Infinity),
       uptime: chart(periods.uptime, summary.id, 'uptime', 100)
-    })
+    }),
+    uptimeStatus: quarters(detail.uptime && detail.uptime.buckets, summary.id)
   });
 }
 
