@@ -3392,6 +3392,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     { key: 'uptime', name: 'Uptime', format: fmtUptime, day: f => f.uptime, scale: uptimeScale }
   ];
 
+  // A formatted figure as its number and its unit, so the unit can be set
+  // smaller: "798 ms", "214 tok/s", "99.7%". A dash has no unit.
+  const figureParts = text => {
+    const m = /^(.+?) ?(ms|s|tok\/s|%)$/.exec(text);
+    return m ? [m[1], m[2]] : [text, null];
+  };
+
   // One figure at rest. While scrubbing, the label gives the period's time
   // and the figure its value, so the card needs no legend or caption. A figure
   // always has a line: without periods, the day is a single period.
@@ -3408,11 +3415,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const tail = at != null ? null : day == null ? PERF_MISSING[status] || null : metric.tail ? metric.tail(figures) : null;
     const range = chart && chart.values.length > 1 ? `, ranging from ${metric.format(Math.min(...chart.values))} to ${metric.format(Math.max(...chart.values))}` : '';
     const scrubbing = chart ? { ...scrub(chart.values.length, setHovered), role: 'img', 'aria-label': `${metric.name} over the last 24 hours: ${day != null ? metric.format(day) : PERF_MISSING.fresh}${range}` } : {};
+    const [number, unit] = figureParts(metric.format(at != null ? chart.values[at] : day));
     return (
       <div className="vxn-perf">
         <span className="vxn-perf-label">{at != null ? span(at) : metric.name}</span>
         <span className="vxn-perf-figure">
-          <span className="vxn-perf-value">{metric.format(at != null ? chart.values[at] : day)}</span>
+          <span className="vxn-perf-value">{number}{unit ? <span className={cls('vxn-perf-unit', unit === '%' && 'is-tight')}>{unit}</span> : null}</span>
           {tail ? <span className="vxn-perf-tail">{tail}</span> : null}
         </span>
         <div className="vxn-perf-chart" {...scrubbing}><PeriodLine chart={chart} at={at} scale={metric.scale} /></div>
