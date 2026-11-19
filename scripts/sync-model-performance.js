@@ -79,12 +79,14 @@ function byWindow(performance, pick) {
 // The period lengths a chart can use, from the job's period rule.
 const PERIOD_MINUTES = [15, 60, 180, 360, 1440];
 
-// A chart is a period length and one figure per period of the day, oldest first.
+// A chart is a period length and one figure per period of the day, oldest
+// first, with null for a period without requests.
 function chart(value, id, name, max) {
   if (value == null) return null;
   expect(PERIOD_MINUTES.includes(value.minutes), `${id} has ${name} periods of ${value.minutes} minutes`);
   expect(Array.isArray(value.values) && value.values.length === 1440 / value.minutes, `${id} has ${value.values && value.values.length} ${name} periods of ${value.minutes} minutes`);
-  value.values.forEach(v => expect(Number.isFinite(v) && v >= 0 && v <= max, `${id} has a ${name} period at ${v}`));
+  value.values.forEach(v => expect(v === null || (Number.isFinite(v) && v >= 0 && v <= max), `${id} has a ${name} period at ${v}`));
+  expect(value.values.some(v => v !== null), `${id} has ${name} periods without a figure`);
   return { minutes: value.minutes, values: value.values };
 }
 

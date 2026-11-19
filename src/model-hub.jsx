@@ -3096,29 +3096,28 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  // Where the model falls among every text model on price, speed and limits,
-  // each drawn so that further right is better. The measured rows keep their
-  // place until the figures load, so the card doesn't grow when they arrive.
+  // Where the model falls among every text model on price and limits, each
+  // drawn so that further right is better.
   const STANDING = [
-    { key: 'price', label: 'Price', better: 'cheaper', lowerIsBetter: true, format: v => `$${v.toFixed(v >= 0.1 ? 2 : 3)}`, tip: 'Blended price per 1M tokens, at three input tokens for each output token.' },
-    { key: 'ttftMs', label: 'First token', better: 'quicker', lowerIsBetter: true, format: fmtMs, keep: true, tip: 'Median time to first token over the last 24 hours of Venice API traffic.' },
-    { key: 'tokensPerSecond', label: 'Output speed', better: 'faster', lowerIsBetter: false, format: fmtSpeed, keep: true, tip: 'Median output tokens per second over the last 24 hours of Venice API traffic.' },
-    { key: 'context', label: 'Context window', better: 'larger', lowerIsBetter: false, format: v => tokens(v) }
+    { key: 'price', label: 'Blended price', better: 'cheaper', lowerIsBetter: true, format: v => `$${v.toFixed(v >= 0.1 ? 2 : 3)}`, tip: 'Per 1M tokens, at three input tokens for each output token.' },
+    { key: 'context', label: 'Context window', better: 'larger', lowerIsBetter: false, format: v => tokens(v) },
+    { key: 'maxOutput', label: 'Max output', better: 'larger', lowerIsBetter: false, format: v => tokens(v) }
   ];
   const standingValues = model => {
     const p = model.pricing || {};
     const t = model.text || {};
     return {
       price: p.input != null && p.output != null ? (3 * p.input + p.output) / 4 : null,
-      context: t.context
+      context: t.context,
+      maxOutput: t.maxOutput
     };
   };
   const Standing = ({ model, catalog, task = 'chat', noun = 'text models', metrics = STANDING, valuesOf = standingValues }) => {
     const others = useMemo(() => (catalog ? catalog.families
       .filter(f => f.task === task && !f.deprecated && f.primary !== model.id)
-      .map(f => ({ slug: f.slug, name: f.name, values: valuesOf(catalog.models[f.primary] || {}) })) : []), [catalog, model.id, valuesOf]);
+      .map(f => ({ slug: f.slug, name: f.name, values: valuesOf(catalog.models[f.primary] || {}) })) : []), [catalog, model.id]);
     const mine = valuesOf(model);
-    const rows = metrics.filter(m => m.keep || mine[m.key] != null);
+    const rows = metrics.filter(m => mine[m.key] != null);
     const hash = text => [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
     return (
       <div className="vxn-standing">
@@ -3127,30 +3126,28 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <span className="vx-muted">{catalog ? `among ${others.length + 1} ${noun}` : `among ${noun}`}</span>
         </div>
         {rows.map(metric => {
-          const mineValue = mine[metric.key];
           const values = others.map(o => o.values[metric.key]).filter(v => v != null && v > 0);
-          const all = mineValue != null ? values.concat([mineValue]) : values;
+          const all = values.concat([mine[metric.key]]);
           const lo = Math.log(Math.min(...all));
           const hi = Math.log(Math.max(...all));
           const at = v => {
             const x = hi > lo ? (Math.log(v) - lo) / (hi - lo) : 0.5;
             return (metric.lowerIsBetter ? 1 - x : x) * 100;
           };
-          const worse = values.filter(v => (metric.lowerIsBetter ? v > mineValue : v < mineValue)).length;
+          const worse = values.filter(v => (metric.lowerIsBetter ? v > mine[metric.key] : v < mine[metric.key])).length;
           return (
             <div key={metric.key} className="vxn-standing-row">
               <div className="vxn-standing-line">
                 <span className="vxn-standing-name">{metric.label}{metric.tip ? <InfoTip text={metric.tip} size={11} /> : null}</span>
-                {mineValue != null && values.length ? <span className="vx-muted">{metric.better} than {Math.round((worse / values.length) * 100)}%</span>
-                  : mineValue == null && metric.missing ? <span className="vx-muted">{metric.missing}</span> : null}
-                <span className="vxn-standing-value">{mineValue != null ? metric.format(mineValue) : '—'}</span>
+                {values.length ? <span className="vx-muted">{metric.better} than {Math.round((worse / values.length) * 100)}%</span> : null}
+                <span className="vxn-standing-value">{metric.format(mine[metric.key])}</span>
               </div>
               <div className="vxn-strip">
                 {others.filter(o => o.values[metric.key] != null && o.values[metric.key] > 0).map(o => (
                   <a key={o.slug} className="vxn-strip-dot" href={`/models/${o.slug}`} title={`${o.name}: ${metric.format(o.values[metric.key])}`}
                     style={{ left: `${at(o.values[metric.key])}%`, top: `${6 + (hash(o.slug + metric.key) % 3) * 5}px` }} />
                 ))}
-                {mineValue != null ? <span className="vxn-strip-mine" style={{ left: `${at(mineValue)}%` }} /> : null}
+                <span className="vxn-strip-mine" style={{ left: `${at(mine[metric.key])}%` }} />
               </div>
             </div>
           );
@@ -3295,8 +3292,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </div>
   );
 
-  const NextNav = ({ sections, active }) => (
+  // The model's name leads the nav, so it stays on screen once the nav sticks.
+  const NextNav = ({ title, sections, active }) => (
     <nav className="vxn-nav" aria-label="On this page">
+      <span className="vxn-nav-title" aria-hidden="true">{title}</span>
       {sections.map(([id, label]) => (
         <a key={id} href={`#${id}`} className={cls(active === id && 'is-active')}>{label}</a>
       ))}
@@ -3333,25 +3332,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const DAY_MINUTES = 1440;
   const freshPerformance = (data, now) => (data && data.window && Date.parse(data.window.end) > now - PERFORMANCE_MAX_AGE ? data : null);
 
-  // A label every six hours on the viewer's clock, naming the day at midnight.
-  // Labels near either end are left out, so they never run past the card.
-  const timeTicks = (start, end) => {
-    if (!(end > start)) return [];
-    const hour = 3600 * 1000;
-    const first = new Date(start);
-    first.setMinutes(0, 0, 0);
-    let t = first.getTime() < start ? first.getTime() + hour : first.getTime();
-    while (new Date(t).getHours() % 6) t += hour;
-    const ticks = [];
-    for (; t < end; t += 6 * hour) {
-      const at = ((t - start) / (end - start)) * 100;
-      if (at < 8 || at > 92) continue;
-      const d = new Date(t);
-      ticks.push([at, d.getHours() ? d.toLocaleTimeString('en-US', { hour: 'numeric' }) : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })]);
-    }
-    return ticks;
-  };
-
   // The period under the pointer: hovering with a mouse, or pressing and
   // dragging on a touch screen. Lifting or leaving clears it.
   const scrub = (count, set) => {
@@ -3364,14 +3344,24 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
 
   // Each period flat across its own span, easing into the next, so a quiet
-  // model reads as steady steps and a busy one as a line.
-  const periodPath = (values, minutes, y) => {
+  // model reads as steady steps and a busy one as a line. A period without
+  // requests breaks the line.
+  const periodRuns = values => values.reduce((runs, v, k) => {
+    if (v == null) return runs;
+    const run = runs[runs.length - 1];
+    if (run && run.end === k) {
+      run.values.push(v);
+      run.end = k + 1;
+    } else runs.push({ start: k, end: k + 1, values: [v] });
+    return runs;
+  }, []);
+  const periodPath = (run, minutes, y) => {
     const ease = Math.min(minutes / 4, 30);
-    return values.reduce((d, v, k) => {
-      if (k === values.length - 1) return `${d}H${DAY_MINUTES}`;
-      const edge = (k + 1) * minutes;
-      return `${d}H${edge - ease}C${edge},${y(v)} ${edge},${y(values[k + 1])} ${edge + ease},${y(values[k + 1])}`;
-    }, `M0,${y(values[0])}`);
+    return run.values.reduce((d, v, i) => {
+      if (i === run.values.length - 1) return `${d}H${run.end * minutes}`;
+      const edge = (run.start + i + 1) * minutes;
+      return `${d}H${edge - ease}C${edge},${y(v)} ${edge},${y(run.values[i + 1])} ${edge + ease},${y(run.values[i + 1])}`;
+    }, `M${run.start * minutes},${y(run.values[0])}`);
   };
 
   // The median period sits halfway up, and one more than twice the median is
@@ -3381,19 +3371,22 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const top = 2 * sorted[Math.floor((sorted.length - 1) / 2)] || 1;
     return v => 100 - (Math.min(v, top) / top) * 100;
   };
-  // From 80%, where a period reads as down, to 100%, for every model alike.
-  const uptimeScale = () => v => 100 - ((Math.max(v, 80) - 80) / 20) * 100;
 
   const PeriodLine = ({ chart, at, scale }) => {
-    const y = chart ? scale(chart.values) : null;
-    const d = chart ? periodPath(chart.values, chart.minutes, y) : null;
-    const x = chart && at != null ? `${(((at + 0.5) * chart.minutes) / DAY_MINUTES) * 100}%` : null;
+    const known = chart ? chart.values.filter(v => v != null) : [];
+    const y = known.length ? scale(known) : null;
+    const runs = y ? periodRuns(chart.values) : [];
+    const x = at != null && chart.values[at] != null ? `${(((at + 0.5) * chart.minutes) / DAY_MINUTES) * 100}%` : null;
     return (
       <>
         <svg className="vxn-perf-svg" viewBox={`0 0 ${DAY_MINUTES} 100`} preserveAspectRatio="none" aria-hidden="true">
-          <line className="vxn-perf-base" x1="0" x2={DAY_MINUTES} y1="100" y2="100" vectorEffect="non-scaling-stroke" />
-          {d ? <path className="vxn-perf-fill" d={`${d}V100H0Z`} /> : null}
-          {d ? <path className="vxn-perf-line" d={d} vectorEffect="non-scaling-stroke" /> : null}
+          {runs.map(run => {
+            const d = periodPath(run, chart.minutes, y);
+            return [
+              <path key={`f${run.start}`} className="vxn-perf-fill" d={`${d}V100H${run.start * chart.minutes}Z`} />,
+              <path key={`l${run.start}`} className="vxn-perf-line" d={d} vectorEffect="non-scaling-stroke" />
+            ];
+          })}
         </svg>
         {x ? <span className="vxn-perf-guide" style={{ left: x }} /> : null}
         {x ? <span className="vxn-perf-dot" style={{ left: x, top: `${y(chart.values[at])}%` }} /> : null}
@@ -3401,43 +3394,125 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
+  // Uptime sits near 100%, where a line hides how often it dipped, so each
+  // quarter hour of the day gets two thin bars in the status the metrics job
+  // gives it: up, degraded (under 95%), down (under 80%), or grey without
+  // requests. A model without figures is grey throughout.
+  const QUARTERS = DAY_MINUTES / 15;
+  const QUARTER_STATUS = { u: ['is-up', 'up'], d: ['is-dip', 'degraded'], x: ['is-low', 'down'], '-': ['is-none', 'no requests'] };
+  const quarterStatuses = text => (typeof text === 'string' && text.length === QUARTERS && [...text].every(c => QUARTER_STATUS[c]) ? text : null);
+  const quarterSummary = statuses => {
+    const count = c => statuses.split(c).length - 1;
+    const parts = [['d', 'degraded'], ['x', 'down'], ['-', 'without requests']].filter(([c]) => count(c)).map(([c, word]) => `${word} for ${count(c)}`);
+    return parts.length ? `, ${listText(parts)} of ${QUARTERS} quarter hours` : ', up every quarter hour';
+  };
+  // On a quiet model whose quarter hours without requests are scattered,
+  // they shrink to a thin line, so its active stretches read as bursts.
+  const QuarterStrip = ({ statuses, at, sparse }) => (
+    <svg className={cls('vxn-perf-strip', at != null && 'is-scrubbing')} viewBox={`0 0 ${QUARTERS * 6} 1`} preserveAspectRatio="none" aria-hidden="true">
+      {Array.from({ length: QUARTERS * 2 }, (_, k) => {
+        const state = statuses ? statuses[Math.floor(k / 2)] : '-';
+        const thin = sparse && state === '-';
+        return <rect key={k} x={k * 3} y={thin ? 0.45 : 0} width="2" height={thin ? 0.1 : 1} className={cls(QUARTER_STATUS[state][0], k === at && 'is-at')} />;
+      })}
+    </svg>
+  );
+
   // What a card without a figure says: the job publishes none for a model
   // with too little traffic, and stale or unloadable figures say nothing.
   const PERF_MISSING = { fresh: 'not enough traffic', unavailable: 'unavailable' };
 
   const PERF_METRICS = [
-    { key: 'ttftMs', name: 'Time to first token', format: fmtMs, day: f => (f.ttftMs && f.ttftMs['24h'] ? f.ttftMs['24h'].p50 : null),
-      tail: f => (f && f.ttftMs && f.ttftMs['24h'] && f.ttftMs['24h'].p90 != null ? `p90 ${fmtMs(f.ttftMs['24h'].p90)}` : null), scale: medianScale },
-    { key: 'tokensPerSecond', name: 'Output speed', format: fmtSpeed, day: f => (f.tokensPerSecond ? f.tokensPerSecond['24h'] : null), scale: medianScale },
-    { key: 'uptime', name: 'Uptime', format: fmtUptime, day: f => f.uptime, scale: uptimeScale }
+    { key: 'ttftMs', name: 'Time to first token', format: fmtMs, better: 'quicker', lowerIsBetter: true, day: f => (f.ttftMs && f.ttftMs['24h'] ? f.ttftMs['24h'].p50 : null), scale: medianScale },
+    { key: 'tokensPerSecond', name: 'Output speed', format: fmtSpeed, better: 'faster', lowerIsBetter: false, day: f => (f.tokensPerSecond ? f.tokensPerSecond['24h'] : null), scale: medianScale },
+    { key: 'uptime', name: 'Uptime', format: fmtUptime, day: f => f.uptime, strip: f => f.uptimeStatus }
   ];
 
-  // One figure at rest. While scrubbing, the label gives the period's time
-  // and the figure its value, so the card needs no legend or caption. A figure
-  // always has a line: without periods, the day is a single period.
-  const PerfCard = ({ metric, figures, status, start, end }) => {
+  // Quarter hours as a duration: "45m", "3h", "3h 30m".
+  const quarterTime = n => (n < 4 ? `${n * 15}m` : `${Math.floor(n / 4)}h${n % 4 ? ` ${(n % 4) * 15}m` : ''}`);
+
+  // What a figure means, on the line under it: where the model ranks among
+  // the other text models, or for uptime how long it was down or degraded.
+  const figureNote = (metric, day, peers, statuses) => {
+    if (metric.strip) {
+      if (!statuses || !/[udx]/.test(statuses)) return null;
+      const parts = [['x', 'down'], ['d', 'degraded']].filter(([c]) => statuses.includes(c)).map(([c, word]) => `${word} ${quarterTime(statuses.split(c).length - 1)}`);
+      return parts.length ? parts.join(' \u00b7 ') : 'no outages';
+    }
+    const values = peers.map(p => p.values[metric.key]).filter(v => v != null && v > 0);
+    if (!values.length) return null;
+    const worse = values.filter(v => (metric.lowerIsBetter ? v > day : v < day)).length;
+    return `${metric.better} than ${Math.round((worse / values.length) * 100)}% of models`;
+  };
+
+  // A line needs hourly or finer periods to say more than its daily figure,
+  // so a quieter card places its figure among the other text models' instead,
+  // as the comparison card places price and limits: further right is better.
+  const readableStrip = statuses => statuses.split('-').length - 1 <= QUARTERS / 8 || /^-*[^-]*$/.test(statuses);
+  const RankStrip = ({ metric, day, peers }) => {
+    const ranked = peers.filter(p => p.values[metric.key] != null && p.values[metric.key] > 0);
+    const all = ranked.map(p => p.values[metric.key]).concat([day]);
+    const lo = Math.log(Math.min(...all));
+    const hi = Math.log(Math.max(...all));
+    const at = v => {
+      const x = hi > lo ? (Math.log(v) - lo) / (hi - lo) : 0.5;
+      return (metric.lowerIsBetter ? 1 - x : x) * 100;
+    };
+    const hash = text => [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+    return (
+      <div className="vxn-strip" aria-hidden="true">
+        {ranked.map(p => (
+          <a key={p.slug} className="vxn-strip-dot" href={`/models/${p.slug}`} tabIndex={-1} title={`${p.name}: ${metric.format(p.values[metric.key])}`}
+            style={{ left: `${at(p.values[metric.key])}%`, top: `${6 + (hash(p.slug + metric.key) % 3) * 5}px` }} />
+        ))}
+        <span className="vxn-strip-mine" style={{ left: `${at(day)}%` }} />
+      </div>
+    );
+  };
+
+  // A formatted figure as its number and its unit, so the unit can be set
+  // smaller: "798 ms", "214 tok/s", "99.7%". A dash has no unit.
+  const figureParts = text => {
+    const m = /^(.+?) ?(ms|s|tok\/s|%)$/.exec(text);
+    return m ? [m[1], m[2]] : [text, null];
+  };
+
+  // The title stays put. While scrubbing, the number gives the hovered
+  // period's figure and the line under it that period's time, so the card
+  // needs no legend. Without periods, the day is a single period. Uptime
+  // scrubs bar by bar: a quarter hour gives its uptime, or its status where
+  // the performance file has none for it.
+  const PerfCard = ({ metric, figures, peers, status, start }) => {
     const [hovered, setHovered] = useState(null);
     const day = figures ? metric.day(figures) : null;
+    const statuses = metric.strip && figures ? quarterStatuses(metric.strip(figures)) : null;
     const periods = figures && figures.periods ? figures.periods[metric.key] : null;
-    const chart = periods || (day != null ? { minutes: DAY_MINUTES, values: [day] } : null);
-    const at = chart && hovered != null && hovered < chart.values.length ? hovered : null;
-    const step = chart ? chart.minutes * 60000 : 0;
-    const span = k => (chart.minutes === DAY_MINUTES
-      ? `${fmtClock(start)} \u2013 ${fmtClock(end)}`
-      : `${fmtClock(start + k * step)} \u2013 ${fmtTime(start + (k + 1) * step)}`);
-    const tail = at != null ? null : day == null ? PERF_MISSING[status] || null : metric.tail ? metric.tail(figures) : null;
-    const range = chart && chart.values.length > 1 ? `, ranging from ${metric.format(Math.min(...chart.values))} to ${metric.format(Math.max(...chart.values))}` : '';
-    const scrubbing = chart ? { ...scrub(chart.values.length, setHovered), role: 'img', 'aria-label': `${metric.name} over the last 24 hours: ${day != null ? metric.format(day) : PERF_MISSING.fresh}${range}` } : {};
+    const chart = metric.strip ? null : periods || (day != null ? { minutes: DAY_MINUTES, values: [day] } : null);
+    const charted = !figures || metric.strip || (chart != null && chart.minutes <= 60);
+    const count = !charted ? 0 : statuses ? QUARTERS * 2 : chart ? chart.values.length : 0;
+    const at = hovered != null && hovered < count ? hovered : null;
+    const quarter = statuses && at != null ? Math.floor(at / 2) : null;
+    const state = quarter != null ? statuses[quarter] : null;
+    const percent = quarter != null && figures.uptimeQuarters ? figures.uptimeQuarters[quarter] : null;
+    const word = state && state !== '-' && percent == null ? QUARTER_STATUS[state][1] : null;
+    const figure = at == null ? null : statuses ? percent : chart.values[at];
+    const span = (k, minutes) => (minutes === DAY_MINUTES ? 'last 24 hours'
+      : `${fmtTime(start + k * minutes * 60000)} \u2013 ${fmtTime(start + (k + 1) * minutes * 60000)}`);
+    const note = at == null ? (day == null ? PERF_MISSING[status] || null : figureNote(metric, day, peers, statuses))
+      : statuses ? `${span(quarter, 15)}${percent != null ? ` \u00b7 ${QUARTER_STATUS[state][1]}` : state === '-' ? ' \u00b7 no requests' : ''}`
+        : `${span(at, chart.minutes)}${figure == null ? ' \u00b7 no requests' : ''}`;
+    const known = chart ? chart.values.filter(v => v != null) : [];
+    const range = statuses ? quarterSummary(statuses) : known.length > 1 ? `, ranging from ${metric.format(Math.min(...known))} to ${metric.format(Math.max(...known))}` : '';
+    const scrubbing = count ? { ...scrub(count, setHovered), role: 'img', 'aria-label': `${metric.name} over the last 24 hours: ${day != null ? metric.format(day) : PERF_MISSING.fresh}${range}` } : {};
+    const [number, unit] = figureParts(word ? upperFirst(word) : figure != null ? metric.format(figure) : state === '-' ? '\u2014' : metric.format(day));
     return (
       <div className="vxn-perf">
-        <span className="vxn-perf-label">{at != null ? span(at) : metric.name}</span>
-        <span className="vxn-perf-figure">
-          <span className="vxn-perf-value">{metric.format(at != null ? chart.values[at] : day)}</span>
-          {tail ? <span className="vxn-perf-tail">{tail}</span> : null}
-        </span>
-        <div className="vxn-perf-chart" {...scrubbing}><PeriodLine chart={chart} at={at} scale={metric.scale} /></div>
-        <div className="vxn-perf-ticks" aria-hidden="true">
-          {timeTicks(start, chart ? end : 0).map(([pos, text]) => <span key={text} style={{ left: `${pos}%` }}>{text}</span>)}
+        <span className="vxn-perf-label">{metric.name}</span>
+        <span className="vxn-perf-value">{number}{unit ? <span className={cls('vxn-perf-unit', unit === '%' && 'is-tight')}>{unit}</span> : null}</span>
+        <span className="vxn-perf-note">{note || '\u00a0'}</span>
+        <div className={cls('vxn-perf-chart', !charted ? 'is-rank' : metric.strip && 'is-strip')} {...scrubbing}>
+          {!charted ? <RankStrip metric={metric} day={day} peers={peers} />
+            : metric.strip ? <QuarterStrip statuses={statuses} at={at} sparse={statuses != null && !readableStrip(statuses)} /> : <PeriodLine chart={chart} at={at} scale={metric.scale} />}
         </div>
       </div>
     );
@@ -3445,17 +3520,21 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   // The first screen, a failed load, stale figures and a model without any
   // all draw the same frame, so figures arriving don't move the page.
-  const PerformanceCards = ({ model, fresh, status, now }) => {
+  const PerformanceCards = ({ model, catalog, fresh, status, now }) => {
     const figures = fresh && fresh.models ? fresh.models[model.id] || null : null;
+    const shown = status === 'loading' ? PERF_METRICS : figures ? PERF_METRICS.filter(m => m.day(figures) != null) : [];
+    const peers = useMemo(() => (catalog && fresh ? catalog.families
+      .filter(f => f.task === 'chat' && !f.deprecated && f.primary !== model.id)
+      .map(f => ({ slug: f.slug, name: f.name, values: dayFigures(fresh, f.primary) })) : []), [catalog, fresh, model.id]);
     const start = fresh ? Date.parse(fresh.window.start) : 0;
-    const end = fresh ? Date.parse(fresh.window.end) : 0;
     const updated = fresh && fresh.generatedAt ? now - Date.parse(fresh.generatedAt) : null;
+    if (!shown.length) return null;
     return (
       <>
-        <div className="vxn-perfs">
-          {PERF_METRICS.map(metric => <PerfCard key={metric.key} metric={metric} figures={figures} status={status} start={start} end={end} />)}
+        <div className={cls('vxn-perfs', shown.length < 3 && `is-${shown.length}`)}>
+          {shown.map(metric => <PerfCard key={metric.key} metric={metric} figures={figures} peers={peers} status={status} start={start} />)}
         </div>
-        <p className="vxn-caption">{updated != null ? `Updated ${fmtAgo(updated)}. ` : ''}<a href="/models/methodology#performance">How it's measured</a></p>
+        <p className="vxn-caption"><span>{`Last 24 hours of Venice traffic${updated != null ? `, updated ${fmtAgo(updated)}` : ''}.`}</span><a href="/models/methodology#performance">How it's measured</a></p>
       </>
     );
   };
@@ -3465,7 +3544,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const f = fresh && fresh.models ? fresh.models[id] : null;
     return Object.fromEntries(PERF_METRICS.map(m => [m.key, f ? m.day(f) : null]));
   };
-  const performanceValues = fresh => model => ({ ...standingValues(model), ...dayFigures(fresh, model.id) });
 
   // The brief's performance line carries its date, since a brief is read
   // long after it's copied.
@@ -3480,7 +3558,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       day.uptime != null ? `uptime ${fmtUptime(day.uptime)}` : null
     ].filter(Boolean);
     const end = fresh.window.end.slice(0, 16).replace('T', ' ');
-    return parts.length ? `- Measured on Venice API traffic in the 24 hours to ${end} UTC: ${parts.join('; ')}. Hourly figures: https://docs.venice.ai/data/model-performance.json` : null;
+    return parts.length ? `- Measured on Venice traffic in the 24 hours to ${end} UTC: ${parts.join('; ')}. Hourly figures: https://docs.venice.ai/data/model-performance.json` : null;
   };
 
   const E2eeSummary = ({ model }) => (model.privacy === 'e2ee' ? (
@@ -3525,8 +3603,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const performance = usePerformance();
     const fresh = freshPerformance(performance.data, now);
     const performanceStatus = fresh ? 'fresh' : performance.data || performance.failed ? 'unavailable' : 'loading';
-    const standingOf = useMemo(() => performanceValues(fresh), [fresh]);
-    const standingMetrics = useMemo(() => STANDING.map(m => (m.keep ? { ...m, missing: PERF_MISSING[performanceStatus] } : m)), [performanceStatus]);
     const model = models.find(m => m.id === variantId) || models[0];
     const provider = providers[family.provider] || providers[model.provider];
     const t = model.text || {};
@@ -3540,7 +3616,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const supported = TEXT_CAPS.filter(c => c.key !== 'effort' && hasCap(model, c.key));
     const missing = TEXT_CAPS.filter(c => !['effort', 'code'].includes(c.key) && !hasCap(model, c.key));
     const inputs = ['Text', caps.vision && 'Image', caps.videoInput && 'Video', caps.audioInput && 'Audio'].filter(Boolean);
-    const sections = [['capabilities', 'Capabilities'], ['performance', 'Performance'], ['pricing', 'Pricing'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null, ['quickstart', 'Quickstart']].filter(Boolean);
+    const sections = [['capabilities', 'Capabilities'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null, ['pricing', 'Pricing'], ['quickstart', 'Quickstart']].filter(Boolean);
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const headerHeight = useHeaderHeight();
     const selectVariant = id => {
@@ -3603,11 +3679,15 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             </div>
           </div>
           <div className="vxn-hero-side">
-            <Standing model={model} catalog={catalog} metrics={standingMetrics} valuesOf={standingOf} />
+            <Standing model={model} catalog={catalog} />
           </div>
         </header>
 
-        <NextNav sections={sections} active={activeSection} />
+        <section id="performance" className="vxn-band" aria-label="Performance">
+          <PerformanceCards model={model} catalog={catalog} fresh={fresh} status={performanceStatus} now={now} />
+        </section>
+
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         <NextSection id="capabilities" title="Capabilities" lead="What the model takes in, returns and supports through the API.">
           <IoFlow inputs={inputs} outputs={['Text']} />
@@ -3617,31 +3697,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {Array.from({ length: (3 - ((supported.length + 1) % 3)) % 3 }, (_, i) => <span key={`fill-${i}`} className="vxn-tile is-empty" aria-hidden="true" />)}
           </div>
           {missing.length ? <p className="vxn-missing"><span>Not supported</span>{listText(missing.map(c => (c.key === 'xSearch' ? c.label : c.label.toLowerCase())))}</p> : null}
-        </NextSection>
-
-        <NextSection id="performance" title="Performance" lead="Measured on Venice API traffic over the last 24 hours.">
-          <PerformanceCards model={model} fresh={fresh} status={performanceStatus} now={now} />
-        </NextSection>
-
-        <NextSection id="pricing" title="Pricing" lead="Billed per token in USD. Reasoning tokens bill as output.">
-          <div className="vxn-prices">
-            <div className="vxn-price"><span className="vxn-price-label">Input</span><span className="vxn-price-value">{usd(p.input)}</span><span className="vx-muted">per 1M tokens</span></div>
-            {p.cacheRead != null ? <div className="vxn-price"><span className="vxn-price-label">Cached input</span><span className="vxn-price-value">{usd(p.cacheRead)}</span><span className="vx-muted">{p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens'}</span></div> : null}
-            <div className="vxn-price"><span className="vxn-price-label">Output</span><span className="vxn-price-value">{usd(p.output)}</span><span className="vx-muted">per 1M tokens</span></div>
-          </div>
-          <div className="vxn-split">
-            <div>
-              <h3 className="vxn-h3">Estimate a workload</h3>
-              <Estimator pricing={p} />
-            </div>
-            {similar.length ? (
-              <div>
-                <h3 className="vxn-h3">Blended price against similar models</h3>
-                <Bars rows={compareRows.map(r => ({ key: r.key, name: r.name, href: r.href, current: r.current, value: blended(r) })).filter(r => r.value != null)}
-                  format={v => usd(v)} caption="Per 1M tokens at three input tokens for each output token." />
-              </div>
-            ) : null}
-          </div>
         </NextSection>
 
         <NextSection id="specs" title="Specs">
@@ -3686,6 +3741,27 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
           </NextSection>
         ) : null}
+
+        <NextSection id="pricing" title="Pricing" lead="Billed per token in USD. Reasoning tokens bill as output.">
+          <div className="vxn-prices">
+            <div className="vxn-price"><span className="vxn-price-label">Input</span><span className="vxn-price-value">{usd(p.input)}</span><span className="vx-muted">per 1M tokens</span></div>
+            {p.cacheRead != null ? <div className="vxn-price"><span className="vxn-price-label">Cached input</span><span className="vxn-price-value">{usd(p.cacheRead)}</span><span className="vx-muted">{p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens'}</span></div> : null}
+            <div className="vxn-price"><span className="vxn-price-label">Output</span><span className="vxn-price-value">{usd(p.output)}</span><span className="vx-muted">per 1M tokens</span></div>
+          </div>
+          <div className="vxn-split">
+            <div>
+              <h3 className="vxn-h3">Estimate a workload</h3>
+              <Estimator pricing={p} />
+            </div>
+            {similar.length ? (
+              <div>
+                <h3 className="vxn-h3">Blended price against similar models</h3>
+                <Bars rows={compareRows.map(r => ({ key: r.key, name: r.name, href: r.href, current: r.current, value: blended(r) })).filter(r => r.value != null)}
+                  format={v => usd(v)} caption="Per 1M tokens at three input tokens for each output token." />
+              </div>
+            ) : null}
+          </div>
+        </NextSection>
 
         <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
           <CodePanel model={model} endpoint={endpoint} setEndpointId={setEndpointId} />
@@ -3985,7 +4061,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         </header>
         <Lightbox item={opened} onClose={() => setOpened(null)} />
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         {render ? (
           <NextSection id="compare" title="Same prompt, other models" lead="Every image model renders the same reference prompts, so their results line up side by side.">
@@ -4371,7 +4447,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         </header>
         <Lightbox item={opened} onClose={() => setOpened(null)} />
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         {compared ? (
           <NextSection id="compare" title="Same prompt, other models" lead="Every video model renders the same reference prompts, so their clips line up side by side. Hover a clip to play it.">
@@ -4661,7 +4737,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
         </header>
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         <NextSection id="vectors" title="Vectors" lead={`Each input comes back as ${count(e.dimensions || 0)} numbers${e.customDimensions ? ', or fewer when you ask for them with dimensions' : ''}. Stored as float32, each number takes 4 bytes.`}>
           <VectorStorage model={model} />
@@ -4867,7 +4943,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           ) : null}
         </header>
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         <NextSection id="capabilities" title="Capabilities">
           <div className="vxn-tiles">
@@ -5082,7 +5158,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
         </header>
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         <NextSection id="capabilities" title="Capabilities">
           <div className="vxn-tiles">
@@ -5371,7 +5447,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
         </header>
 
-        <NextNav sections={sections} active={activeSection} />
+        <NextNav title={family.name} sections={sections} active={activeSection} />
 
         <NextSection id="capabilities" title="Capabilities">
           <div className="vxn-tiles">
