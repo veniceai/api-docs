@@ -3100,14 +3100,16 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // drawn so that further right is better.
   const STANDING = [
     { key: 'price', label: 'Blended price', better: 'cheaper', lowerIsBetter: true, format: v => `$${v.toFixed(v >= 0.1 ? 2 : 3)}`, tip: 'Per 1M tokens, at three input tokens for each output token.' },
-    { key: 'context', label: 'Context window', better: 'larger', lowerIsBetter: false, format: v => tokens(v) }
+    { key: 'context', label: 'Context window', better: 'larger', lowerIsBetter: false, format: v => tokens(v) },
+    { key: 'maxOutput', label: 'Max output', better: 'larger', lowerIsBetter: false, format: v => tokens(v) }
   ];
   const standingValues = model => {
     const p = model.pricing || {};
     const t = model.text || {};
     return {
       price: p.input != null && p.output != null ? (3 * p.input + p.output) / 4 : null,
-      context: t.context
+      context: t.context,
+      maxOutput: t.maxOutput
     };
   };
   const Standing = ({ model, catalog, task = 'chat', noun = 'text models', metrics = STANDING, valuesOf = standingValues }) => {
