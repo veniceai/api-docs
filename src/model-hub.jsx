@@ -3489,7 +3489,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <div className="vxn-perfs">
           {PERF_METRICS.map(metric => <PerfCard key={metric.key} metric={metric} figures={figures} peers={peers} status={status} start={start} />)}
         </div>
-        <p className="vxn-caption"><span>{`Last 24 hours of Venice API traffic${updated != null ? `, updated ${fmtAgo(updated)}` : ''}.`}</span><a href="/models/methodology#performance">How it's measured</a></p>
+        <p className="vxn-caption"><span>{`Last 24 hours of Venice traffic${updated != null ? `, updated ${fmtAgo(updated)}` : ''}.`}</span><a href="/models/methodology#performance">How it's measured</a></p>
       </>
     );
   };
@@ -3513,7 +3513,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       day.uptime != null ? `uptime ${fmtUptime(day.uptime)}` : null
     ].filter(Boolean);
     const end = fresh.window.end.slice(0, 16).replace('T', ' ');
-    return parts.length ? `- Measured on Venice API traffic in the 24 hours to ${end} UTC: ${parts.join('; ')}. Hourly figures: https://docs.venice.ai/data/model-performance.json` : null;
+    return parts.length ? `- Measured on Venice traffic in the 24 hours to ${end} UTC: ${parts.join('; ')}. Hourly figures: https://docs.venice.ai/data/model-performance.json` : null;
   };
 
   const E2eeSummary = ({ model }) => (model.privacy === 'e2ee' ? (
