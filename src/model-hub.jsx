@@ -3517,7 +3517,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const supported = TEXT_CAPS.filter(c => c.key !== 'effort' && hasCap(model, c.key));
     const missing = TEXT_CAPS.filter(c => !['effort', 'code'].includes(c.key) && !hasCap(model, c.key));
     const inputs = ['Text', caps.vision && 'Image', caps.videoInput && 'Video', caps.audioInput && 'Audio'].filter(Boolean);
-    const sections = [['capabilities', 'Capabilities'], ['pricing', 'Pricing'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null, ['quickstart', 'Quickstart']].filter(Boolean);
+    const sections = [['capabilities', 'Capabilities'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null, ['pricing', 'Pricing'], ['quickstart', 'Quickstart']].filter(Boolean);
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const headerHeight = useHeaderHeight();
     const selectVariant = id => {
@@ -3600,27 +3600,6 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           {missing.length ? <p className="vxn-missing"><span>Not supported</span>{listText(missing.map(c => (c.key === 'xSearch' ? c.label : c.label.toLowerCase())))}</p> : null}
         </NextSection>
 
-        <NextSection id="pricing" title="Pricing" lead="Billed per token in USD. Reasoning tokens bill as output.">
-          <div className="vxn-prices">
-            <div className="vxn-price"><span className="vxn-price-label">Input</span><span className="vxn-price-value">{usd(p.input)}</span><span className="vx-muted">per 1M tokens</span></div>
-            {p.cacheRead != null ? <div className="vxn-price"><span className="vxn-price-label">Cached input</span><span className="vxn-price-value">{usd(p.cacheRead)}</span><span className="vx-muted">{p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens'}</span></div> : null}
-            <div className="vxn-price"><span className="vxn-price-label">Output</span><span className="vxn-price-value">{usd(p.output)}</span><span className="vx-muted">per 1M tokens</span></div>
-          </div>
-          <div className="vxn-split">
-            <div>
-              <h3 className="vxn-h3">Estimate a workload</h3>
-              <Estimator pricing={p} />
-            </div>
-            {similar.length ? (
-              <div>
-                <h3 className="vxn-h3">Blended price against similar models</h3>
-                <Bars rows={compareRows.map(r => ({ key: r.key, name: r.name, href: r.href, current: r.current, value: blended(r) })).filter(r => r.value != null)}
-                  format={v => usd(v)} caption="Per 1M tokens at three input tokens for each output token." />
-              </div>
-            ) : null}
-          </div>
-        </NextSection>
-
         <NextSection id="specs" title="Specs">
           <dl className="vxn-sheet">
             {[
@@ -3663,6 +3642,27 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {versions.length ? <VersionTimeline family={family} versions={versions} created={model.created} /> : null}
           </NextSection>
         ) : null}
+
+        <NextSection id="pricing" title="Pricing" lead="Billed per token in USD. Reasoning tokens bill as output.">
+          <div className="vxn-prices">
+            <div className="vxn-price"><span className="vxn-price-label">Input</span><span className="vxn-price-value">{usd(p.input)}</span><span className="vx-muted">per 1M tokens</span></div>
+            {p.cacheRead != null ? <div className="vxn-price"><span className="vxn-price-label">Cached input</span><span className="vxn-price-value">{usd(p.cacheRead)}</span><span className="vx-muted">{p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens'}</span></div> : null}
+            <div className="vxn-price"><span className="vxn-price-label">Output</span><span className="vxn-price-value">{usd(p.output)}</span><span className="vx-muted">per 1M tokens</span></div>
+          </div>
+          <div className="vxn-split">
+            <div>
+              <h3 className="vxn-h3">Estimate a workload</h3>
+              <Estimator pricing={p} />
+            </div>
+            {similar.length ? (
+              <div>
+                <h3 className="vxn-h3">Blended price against similar models</h3>
+                <Bars rows={compareRows.map(r => ({ key: r.key, name: r.name, href: r.href, current: r.current, value: blended(r) })).filter(r => r.value != null)}
+                  format={v => usd(v)} caption="Per 1M tokens at three input tokens for each output token." />
+              </div>
+            ) : null}
+          </div>
+        </NextSection>
 
         <NextSection id="quickstart" title="Quickstart" lead="OpenAI-compatible: point any OpenAI SDK at the Venice base URL with a Venice API key.">
           <CodePanel model={model} endpoint={endpoint} setEndpointId={setEndpointId} />
