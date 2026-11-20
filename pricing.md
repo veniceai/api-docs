@@ -61,7 +61,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | DeepSeek V4.1 Flash | `deepseek-v4-1-flash` | $0.30 | $1.20 | $0.0075 | — | Private |
 | DeepSeek v4.1 Flash (1017) | `deepseek-v4-1-flash-1017` | $0.30 | $1.20 | $0.0075 | — | Private |
 | DeepSeek V4.1 Flash 1017 Abliterated | `e2ee-deepseek-v4-1-flash-1017-abliterated` | $0.375 | $1.50 | $0.0075 | — | E2EE |
-| DeepSeek V4.1 Flash 1017 Ultrafast | `deepseek-v4-1-flash-1017-ultrafast` | $3.00 | $12.00 | $0.06 | — | Private |
+| DeepSeek V4.1 Flash 1017 Ultrafast | `deepseek-v4-1-flash-1017-ultrafast` | $1.50 | $6.00 | $0.03 | — | Private |
 | DeepSeek V4.1 Flash 1017 Uncensored | `deepseek-v4-1-flash-1017-uncensored` | $0.33 | $1.32 | $0.00825 | — | Private |
 | DeepSeek V4.1 Flash Uncensored | `deepseek-v4-1-flash-uncensored` | $0.33 | $1.32 | $0.00825 | — | Private |
 | Gemini 3 Flash Preview | `gemini-3-flash-preview` | $0.70 | $3.75 | $0.07 | — | Anonymized |
@@ -358,9 +358,9 @@ Prices per edit. The edit price covers the first input image. Models with an ext
 | MAI Image 2.7 Flash | `mai-image-2-7-flash-edit` | 1K: $0.02, 2K: $0.06 | $0.00299 | Anonymized |
 | MiniMax H3 Image | `minimax-h3-image-edit` | 1K: $0.06, 2K: $0.06, 4K: $0.12 | $0.01937405 | Anonymized |
 | Muse Image | `muse-image-edit` | $0.02 | — | Anonymized |
-| Nano Banana 2 | `nano-banana-2-edit` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | — | Anonymized |
-| Nano Banana 2 Lite | `nano-banana-2-lite-edit` | $0.06 | — | Anonymized |
-| Nano Banana 2.1 | `nano-banana-2-1-edit` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | — | Anonymized |
+| Nano Banana 2 | `nano-banana-2-edit` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | $0.000644 | Anonymized |
+| Nano Banana 2 Lite | `nano-banana-2-lite-edit` | $0.06 | $0.000322 | Anonymized |
+| Nano Banana 2.1 | `nano-banana-2-1-edit` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | $0.001932 | Anonymized |
 | Nano Banana Pro | `nano-banana-pro-edit` | 1K: $0.18, 2K: $0.23, 4K: $0.35 | — | Anonymized |
 | Qwen Edit Uncensored | `qwen-edit-uncensored` | $0.04 | — | Private |
 | Qwen Image 2 | `qwen-image-2-edit` | $0.05 | — | Anonymized |
