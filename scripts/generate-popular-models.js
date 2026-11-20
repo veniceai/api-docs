@@ -39,9 +39,9 @@ const COUNT_ROUNDING = 10;
 // patterns takes the slot, so the grid never renders a card for a model that
 // can no longer be called.
 const FEATURED = [
-  { id: 'kimi-k3', patterns: ['kimi', 'moonshot'] },
-  { id: 'claude-fable-5', patterns: ['claude', 'anthropic'] },
-  { id: 'zai-org-glm-5-2', patterns: ['glm', 'zai-org', 'z-ai'] }
+  { id: 'kimi-k3-1-pro', patterns: ['kimi', 'moonshot'] },
+  { id: 'claude-fable-5-2', patterns: ['claude', 'anthropic'] },
+  { id: 'z-ai-glm-5-3', patterns: ['glm', 'zai-org', 'z-ai'] }
 ];
 
 // Provider label and logo, matched against (id + name) lowercased. Logos are

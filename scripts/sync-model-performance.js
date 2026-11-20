@@ -79,12 +79,14 @@ function byWindow(performance, pick) {
 // The period lengths a chart can use, from the job's period rule.
 const PERIOD_MINUTES = [15, 60, 180, 360, 1440];
 
-// A chart is a period length and one figure per period of the day, oldest first.
+// A chart is a period length and one figure per period of the day, oldest
+// first, with null for a period without requests.
 function chart(value, id, name, max) {
   if (value == null) return null;
   expect(PERIOD_MINUTES.includes(value.minutes), `${id} has ${name} periods of ${value.minutes} minutes`);
   expect(Array.isArray(value.values) && value.values.length === 1440 / value.minutes, `${id} has ${value.values && value.values.length} ${name} periods of ${value.minutes} minutes`);
-  value.values.forEach(v => expect(Number.isFinite(v) && v >= 0 && v <= max, `${id} has a ${name} period at ${v}`));
+  value.values.forEach(v => expect(v === null || (Number.isFinite(v) && v >= 0 && v <= max), `${id} has a ${name} period at ${v}`));
+  expect(value.values.some(v => v !== null), `${id} has ${name} periods without a figure`);
   return { minutes: value.minutes, values: value.values };
 }
 
@@ -101,6 +103,19 @@ function quarters(buckets, id) {
   }).join('');
 }
 
+// Each quarter hour's uptime, which the job publishes as a whole percent
+// from 100 requests, as 100 below that where nothing failed, and otherwise
+// as null. Left out when none has one.
+function quarterPercents(buckets, id) {
+  if (buckets == null) return null;
+  const values = buckets.map(bar => {
+    const v = bar.uptime_percent == null ? null : bar.uptime_percent;
+    expect(v === null || (Number.isInteger(v) && v >= 0 && v <= 100), `${id} has an uptime bar at ${v}`);
+    return v;
+  });
+  return values.some(v => v !== null) ? values : null;
+}
+
 function modelFigures(summary, detail) {
   expect(detail && detail.schema_version === SCHEMA_VERSION, `${summary.detail_path} has schema_version ${detail && detail.schema_version}`);
   expect(detail.model && detail.model.id === summary.id, `${summary.detail_path} describes ${detail.model && detail.model.id}`);
@@ -114,7 +129,8 @@ function modelFigures(summary, detail) {
       tokensPerSecond: chart(periods.tokens_per_second, summary.id, 'output speed', Infinity),
       uptime: chart(periods.uptime, summary.id, 'uptime', 100)
     }),
-    uptimeStatus: quarters(detail.uptime && detail.uptime.buckets, summary.id)
+    uptimeStatus: quarters(detail.uptime && detail.uptime.buckets, summary.id),
+    uptimeQuarters: quarterPercents(detail.uptime && detail.uptime.buckets, summary.id)
   });
 }
 
