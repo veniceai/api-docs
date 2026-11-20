@@ -61,7 +61,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | DeepSeek V4.1 Flash | `deepseek-v4-1-flash` | $0.30 | $1.20 | $0.0075 | — | Private |
 | DeepSeek v4.1 Flash (1017) | `deepseek-v4-1-flash-1017` | $0.30 | $1.20 | $0.0075 | — | Private |
 | DeepSeek V4.1 Flash 1017 Abliterated | `e2ee-deepseek-v4-1-flash-1017-abliterated` | $0.375 | $1.50 | $0.0075 | — | E2EE |
-| DeepSeek V4.1 Flash 1017 Ultrafast | `deepseek-v4-1-flash-1017-ultrafast` | $1.50 | $6.00 | $0.03 | — | Private |
+| DeepSeek V4.1 Flash 1017 Ultrafast | `deepseek-v4-1-flash-1017-ultrafast` | $3.00 | $12.00 | $0.06 | — | Private |
 | DeepSeek V4.1 Flash 1017 Uncensored | `deepseek-v4-1-flash-1017-uncensored` | $0.33 | $1.32 | $0.00825 | — | Private |
 | DeepSeek V4.1 Flash Uncensored | `deepseek-v4-1-flash-uncensored` | $0.33 | $1.32 | $0.00825 | — | Private |
 | Gemini 3 Flash Preview | `gemini-3-flash-preview` | $0.70 | $3.75 | $0.07 | — | Anonymized |
