@@ -3164,8 +3164,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  const Figure = ({ value, label, tip }) => (
-    <div className="vxn-fig">
+  // A wide figure takes a row of its own on phones.
+  const Figure = ({ value, label, tip, wide }) => (
+    <div className={cls('vxn-fig', wide && 'is-wide')}>
       <div className="vxn-fig-value">{value}</div>
       <div className="vxn-fig-label">{label}{tip ? <InfoTip text={tip} size={11} /> : null}</div>
     </div>
@@ -3782,7 +3783,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
             <E2eeSummary model={model} />
             <div className="vxn-figs">
-              {p.input != null ? <Figure value={<>{usd(p.input)}<span className="vxn-sep">/</span>{usd(p.output)}</>} label="per 1M in / out" /> : null}
+              {p.input != null ? (
+                <Figure
+                  value={textPrices(p).flatMap((value, i) => (i ? [<span key={i} className="vxn-sep">/</span>, usd(value)] : [usd(value)]))}
+                  label={p.cacheRead != null ? 'per 1M in / out / cached' : 'per 1M in / out'}
+                  wide={p.cacheRead != null}
+                />
+              ) : null}
               {t.context ? <Figure value={tokens(t.context)} label="context window" /> : null}
               {t.maxOutput ? <Figure value={tokens(t.maxOutput)} label="max output" /> : null}
             </div>
