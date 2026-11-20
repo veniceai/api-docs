@@ -23,7 +23,8 @@ const GUIDES = [
   require('./guides/image-generation'),
   require('./guides/video-generation'),
   require('./guides/embeddings'),
-  require('./guides/speech-to-text')
+  require('./guides/speech-to-text'),
+  require('./guides/music-and-sound-effects')
 ];
 
 function main() {
