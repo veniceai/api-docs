@@ -3595,12 +3595,15 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return `${n}${['th', 'st', 'nd', 'rd'][(v - 20) % 10] || ['th', 'st', 'nd', 'rd'][v] || 'th'}`;
   };
 
-  // A model's score: its run made the way the API runs it by default, or its
-  // best run until it has one.
+  // A model's score: its best run with reasoning on, at its default or a set
+  // effort, the default winning a tie. A run with reasoning off counts only
+  // while the model has no other, so it can't win on noise.
   const headlineRun = (model, key) => {
     const runs = model && model.benchmarks ? model.benchmarks[key] : null;
     if (!runs || !runs.length) return null;
-    return runs.find(r => r.reasoning === 'default') || runs.reduce((a, b) => (b.accuracy > a.accuracy ? b : a));
+    const reasoned = runs.filter(r => r.reasoning !== 'off');
+    return (reasoned.length ? reasoned : runs).reduce((a, b) =>
+      (b.accuracy > a.accuracy || (b.accuracy === a.accuracy && b.reasoning === 'default') ? b : a));
   };
   const hasBenchmarks = model => BENCHMARKS.some(b => headlineRun(model, b.key));
 
