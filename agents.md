@@ -92,6 +92,7 @@ Feature suffixes also work on model IDs as `key=value` pairs, e.g. `venice-uncen
 - Model catalog methodology (families, normalized prices, privacy tiers): https://docs.venice.ai/models/methodology.md
 - Machine-readable model catalog: https://docs.venice.ai/data/model-catalog.json, a JSON object with `families` (array of model families), `models` (keyed by model ID), `providers`, `counts` and `generatedAt`, rebuilt hourly from `GET /models`. Still call `GET /models` at runtime to pick a model.
 - Model performance: https://docs.venice.ai/data/model-performance.json, each text model's 24-hour uptime and its time to first token and output speed over the last hour, 4 hours and 24 hours, with the periods each chart draws, keyed by model ID and refreshed hourly. How they're measured: https://docs.venice.ai/models/methodology.md
+- Model benchmarks: https://docs.venice.ai/data/model-benchmarks.json, Venice's own GPQA Diamond scores for text models, run through the Venice API, one run per reasoning setting with its accuracy, 95% confidence interval, token use and date, keyed by model ID. How they're run: https://docs.venice.ai/models/methodology.md
 
 ## Documentation repo (this project)
 

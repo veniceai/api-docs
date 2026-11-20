@@ -3028,6 +3028,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
       model.privacy === 'e2ee' ? '- The request below sends the prompt as plaintext, so it runs TEE-only. For end-to-end encryption, send encrypted messages with the E2EE headers: https://docs.venice.ai/guides/features/tee-e2ee-models#e2ee-models' : null,
       measured,
+      ...benchmarkSummaries(model).map(([name, text]) => `- ${name}: ${text}. How it's run: https://docs.venice.ai/models/methodology#benchmarks`),
       `- Docs: https://docs.venice.ai/models/${family.slug}`,
       '',
       '```bash',
@@ -3583,6 +3584,120 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
+  /* ------------------------------------------------------------ benchmarks */
+
+  // The benchmarks pages show, in order. One the data adds before the page
+  // knows it stays off the page.
+  const BENCHMARKS = [{ key: 'gpqa-diamond', name: 'GPQA Diamond' }];
+  const fmtAccuracy = v => (v == null ? '—' : `${v.toFixed(1)}%`);
+  const ordinal = n => {
+    const v = n % 100;
+    return `${n}${['th', 'st', 'nd', 'rd'][(v - 20) % 10] || ['th', 'st', 'nd', 'rd'][v] || 'th'}`;
+  };
+
+  // A model's score: its run made the way the API runs it by default, or its
+  // best run until it has one.
+  const headlineRun = (model, key) => {
+    const runs = model && model.benchmarks ? model.benchmarks[key] : null;
+    if (!runs || !runs.length) return null;
+    return runs.find(r => r.reasoning === 'default') || runs.reduce((a, b) => (b.accuracy > a.accuracy ? b : a));
+  };
+  const hasBenchmarks = model => BENCHMARKS.some(b => headlineRun(model, b.key));
+
+  // Each benchmark score with how its run was made, for agents: what the
+  // page leaves out of sight.
+  const benchmarkSummaries = model => BENCHMARKS.map(b => {
+    const run = headlineRun(model, b.key);
+    if (!run) return null;
+    const d = new Date(`${run.measuredOn}T00:00:00Z`);
+    const setting = !(model.text && model.text.reasoning) ? ''
+      : run.reasoning === 'default' ? ' at its default reasoning'
+        : run.reasoning === 'off' ? ' with reasoning off' : ` at reasoning_effort ${run.reasoning}`;
+    return [b.name, `${fmtAccuracy(run.accuracy)} \u00b1${run.ci95.toFixed(1)} (95% interval), run by Venice through the API${setting} on ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`];
+  }).filter(Boolean);
+
+  // A run is named with its reasoning setting when that isn't how the API
+  // runs the model by default, as Artificial Analysis names configurations.
+  const runName = (name, model, run) => (model.text && model.text.reasoning && run.reasoning !== 'default' ? `${name} (${run.reasoning})` : name);
+
+  // The comparison card on text pages leads with the model's GPQA Diamond
+  // score, named like its run.
+  const textStanding = model => {
+    const run = headlineRun(model, 'gpqa-diamond');
+    return [{ key: 'gpqa', label: run ? runName('GPQA Diamond', model, run) : 'GPQA Diamond', better: 'higher', lowerIsBetter: false, format: fmtAccuracy }, ...STANDING];
+  };
+  const textStandingValues = model => {
+    const run = headlineRun(model, 'gpqa-diamond');
+    return { ...standingValues(model), gpqa: run ? run.accuracy : null };
+  };
+
+  // Every other scored text model by its score, best first, each family
+  // counted once by its default variant.
+  const benchmarkPeers = (catalog, key, family) => (catalog ? catalog.families
+    .filter(f => f.task === 'chat' && !f.deprecated && f.slug !== family.slug)
+    .map(f => ({ family: f, model: catalog.models[f.primary], run: headlineRun(catalog.models[f.primary], key) }))
+    .filter(e => e.run)
+    .sort((a, b) => b.run.accuracy - a.run.accuracy) : []);
+
+  // Score against blended price, as Artificial Analysis plots intelligence
+  // against price: every text model with both, and the corner of models that
+  // score higher for less shaded. Scores start at chance.
+  const SCORE_FLOOR = 25;
+  const NAMED_DEALS = 3;
+  const PriceChart = ({ run, price, name, points, deals }) => {
+    const prices = points.map(e => e.price).concat([price]);
+    const lo = Math.log10(Math.min(...prices)) - 0.15;
+    const hi = Math.log10(Math.max(...prices)) + 0.15;
+    const x = p => ((Math.log10(p) - lo) / (hi - lo)) * 100;
+    const y = v => ((100 - v) / (100 - SCORE_FLOOR)) * 100;
+    const ticks = [];
+    for (let e = Math.ceil(lo); e <= Math.floor(hi); e++) ticks.push(10 ** e);
+    return (
+      <div className="vxb-chart" role="img" aria-label={`${name}: ${fmtAccuracy(run.accuracy)} at ${usd(price)} per 1M tokens. ${deals.length} of ${points.length} other text models score higher for less.`}>
+        <div className="vxb-plot">
+          {[50, 75, 100].map(v => <span key={v} className="vxb-grid" style={{ top: `${y(v)}%` }}><span>{`${v}%`}</span></span>)}
+          <span className="vxb-deals" style={{ width: `${x(price)}%`, height: `${y(run.accuracy)}%` }} />
+          {points.map(e => (
+            <a key={e.family.slug} className={cls('vxb-dot', deals.includes(e) && 'is-deal')} href={`/models/${e.family.slug}`} tabIndex={-1}
+              title={`${runName(e.family.name, e.model, e.run)}: ${fmtAccuracy(e.run.accuracy)} at ${usd(e.price)}`} style={{ left: `${x(e.price)}%`, top: `${y(e.run.accuracy)}%` }} />
+          ))}
+          <span className="vxb-dot is-current" style={{ left: `${x(price)}%`, top: `${y(run.accuracy)}%` }}><span className={cls('vxb-label', x(price) > 60 && 'is-left')}>{name}</span></span>
+        </div>
+        <div className="vxb-ticks" aria-hidden="true">{ticks.map(t => <span key={t} style={{ left: `${x(t)}%` }}>{`$${t}`}</span>)}</div>
+      </div>
+    );
+  };
+
+  // How many models beat this one on both score and price, naming the best
+  // of them as links.
+  const DealsLine = ({ deals }) => {
+    if (!deals.length) return ' \u00b7 none scores higher for less';
+    const named = deals.slice(0, NAMED_DEALS);
+    const links = named.flatMap((e, i) => [i ? (i === named.length - 1 ? ' and ' : ', ') : null, <a key={e.family.slug} href={`/models/${e.family.slug}`}>{runName(e.family.name, e.model, e.run)}</a>]).filter(Boolean);
+    return deals.length > NAMED_DEALS
+      ? <>{` \u00b7 ${deals.length} score higher for less, including `}{links}</>
+      : <>{' \u00b7 '}{links}{deals.length === 1 ? ' scores higher for less' : ' score higher for less'}</>;
+  };
+
+  const BenchmarkCard = ({ bench, model, family, catalog }) => {
+    const run = headlineRun(model, bench.key);
+    const price = standingValues(model).price;
+    const peers = useMemo(() => benchmarkPeers(catalog, bench.key, family), [catalog, family.slug]);
+    const points = useMemo(() => peers.map(e => ({ ...e, price: standingValues(e.model).price })).filter(e => e.price > 0), [peers]);
+    const deals = price > 0 ? points.filter(e => e.run.accuracy > run.accuracy && e.price < price).sort((a, b) => b.run.accuracy - a.run.accuracy) : [];
+    const rank = 1 + peers.filter(e => e.run.accuracy > run.accuracy).length;
+    return (
+      <div className="vxb-card">
+        <a className="vxb-title" href="/models/methodology#benchmarks">{runName(bench.name, model, run)}</a>
+        <div className="vxb-figure">
+          <span className="vxb-value" title={`95% confidence interval: \u00b1${run.ci95.toFixed(1)} points`}>{fmtAccuracy(run.accuracy)}</span>
+          {catalog ? <span className="vxb-rank">{`${ordinal(rank)} of ${peers.length + 1}`}{price > 0 ? <DealsLine deals={deals} /> : null}</span> : null}
+        </div>
+        {price > 0 ? <PriceChart run={run} price={price} name={runName(family.name, model, run)} points={points} deals={deals} /> : null}
+      </div>
+    );
+  };
+
   const ModelPageNext = ({ data }) => {
     const { family, models, related, counterpart, providers } = data;
     const [variantId, setVariantId] = useState(() => {
@@ -3616,7 +3731,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const supported = TEXT_CAPS.filter(c => c.key !== 'effort' && hasCap(model, c.key));
     const missing = TEXT_CAPS.filter(c => !['effort', 'code'].includes(c.key) && !hasCap(model, c.key));
     const inputs = ['Text', caps.vision && 'Image', caps.videoInput && 'Video', caps.audioInput && 'Audio'].filter(Boolean);
-    const sections = [['capabilities', 'Capabilities'], ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null, ['pricing', 'Pricing'], ['quickstart', 'Quickstart']].filter(Boolean);
+    const benchmarked = hasBenchmarks(model);
+    const sections = [['capabilities', 'Capabilities'], benchmarked ? ['benchmarks', 'Benchmarks'] : null, ['specs', 'Specs'], similar.length || versions.length ? ['compare', 'Compare'] : null, ['pricing', 'Pricing'], ['quickstart', 'Quickstart']].filter(Boolean);
     const activeSection = useScrollSpy(sections.map(([id]) => id));
     const headerHeight = useHeaderHeight();
     const selectVariant = id => {
@@ -3626,8 +3742,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     };
     const blended = item => (item.pricing && item.pricing.input != null ? (3 * item.pricing.input + item.pricing.output) / 4 : null);
     const limits = id => ((catalog && catalog.models[id] && catalog.models[id].text) || {});
-    const compareRows = [{ key: model.id, name: family.name, current: true, pricing: p, text: t, day: dayFigures(fresh, model.id) }]
-      .concat(similar.map(item => ({ key: item.slug, name: item.name, href: `/models/${item.slug}`, pricing: item.pricing || {}, text: limits(item.primary), day: dayFigures(fresh, item.primary) })));
+    const gpqa = m => {
+      const run = headlineRun(m, 'gpqa-diamond');
+      return run ? runName(fmtAccuracy(run.accuracy), m, run) : '—';
+    };
+    const compareRows = [{ key: model.id, name: family.name, current: true, pricing: p, text: t, day: dayFigures(fresh, model.id), gpqa: gpqa(model) }]
+      .concat(similar.map(item => ({ key: item.slug, name: item.name, href: `/models/${item.slug}`, pricing: item.pricing || {}, text: limits(item.primary), day: dayFigures(fresh, item.primary), gpqa: catalog ? gpqa(catalog.models[item.primary]) : '—' })));
 
     return (
       <div className="vx vxn not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
@@ -3679,7 +3799,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             </div>
           </div>
           <div className="vxn-hero-side">
-            <Standing model={model} catalog={catalog} />
+            <Standing model={model} catalog={catalog} metrics={textStanding(model)} valuesOf={textStandingValues} />
           </div>
         </header>
 
@@ -3698,6 +3818,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
           {missing.length ? <p className="vxn-missing"><span>Not supported</span>{listText(missing.map(c => (c.key === 'xSearch' ? c.label : c.label.toLowerCase())))}</p> : null}
         </NextSection>
+
+        {benchmarked ? (
+          <NextSection id="benchmarks" title="Benchmarks">
+            {BENCHMARKS.filter(b => headlineRun(model, b.key)).map(bench => (
+              <BenchmarkCard key={bench.key} bench={bench} model={model} family={family} catalog={catalog} />
+            ))}
+          </NextSection>
+        ) : null}
 
         <NextSection id="specs" title="Specs">
           <dl className="vxn-sheet">
@@ -3721,13 +3849,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {similar.length ? (
               <div className="vx-table-wrap vxn-compare">
                 <table className="vx-dtable">
-                  <thead><tr><th>Model</th><th className="vx-al-right">Input</th><th className="vx-al-right">Output</th><th className="vx-al-right vx-hide-sm">Context</th><th className="vx-al-right vx-hide-sm">Max output</th><th className="vx-al-right vx-hide-sm">First token</th><th className="vx-al-right vx-hide-sm">Speed</th></tr></thead>
+                  <thead><tr><th>Model</th><th className="vx-al-right">Input</th><th className="vx-al-right">Output</th><th className="vx-al-right vx-hide-sm">GPQA Diamond</th><th className="vx-al-right vx-hide-sm">Context</th><th className="vx-al-right vx-hide-sm">Max output</th><th className="vx-al-right vx-hide-sm">First token</th><th className="vx-al-right vx-hide-sm">Speed</th></tr></thead>
                   <tbody>
                     {compareRows.map(row => (
                       <tr key={row.key} className={cls(row.current && 'is-current')}>
                         <td>{row.href ? <a href={row.href}>{row.name}</a> : <strong>{row.name}</strong>}</td>
                         <td className="vx-al-right vx-num">{usd(row.pricing.input)}</td>
                         <td className="vx-al-right vx-num">{usd(row.pricing.output)}</td>
+                        <td className="vx-al-right vx-num vx-hide-sm">{row.gpqa}</td>
                         <td className="vx-al-right vx-num vx-hide-sm">{tokens(row.text.context)}</td>
                         <td className="vx-al-right vx-num vx-hide-sm">{tokens(row.text.maxOutput)}</td>
                         <td className="vx-al-right vx-num vx-hide-sm">{fmtMs(row.day.ttftMs)}</td>
@@ -5518,7 +5647,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   // scripts/build-model-catalog.js writes each page's static text with these,
   // so it reads the same as the page.
-  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable, durationText, safeUrl, weightsName };
+  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable, durationText, safeUrl, weightsName, benchmarkSummaries };
 
   // Hands over a catalog that loaded before the explorer's first render, so
   // the view opens on its results instead of a loading skeleton.
