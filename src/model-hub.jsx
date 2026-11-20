@@ -444,6 +444,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
 
   // One line per variant, as the variant chips and the page's static text show it.
+  // A text model's prices in the order the hub always gives them: input,
+  // output, then cached input when the model caches prompts.
+  const textPrices = p => [p.input, p.output, p.cacheRead].filter(value => value != null);
+  const TEXT_PRICES_HINT = 'Input / output / cached input, per 1M tokens';
+
   const priceSummary = m => (m.modality === 'text' && m.pricing ? `${usd(m.pricing.input)} / ${usd(m.pricing.output)} per 1M`
     : m.modality === 'video' ? (m.pricing && m.pricing.status === 'quoted' ? `from ${usd(m.pricing.fromPerSecond)} / sec` : 'priced by source')
       : m.headline && m.headline.value != null ? `${usd(m.headline.value)} ${headlineUnit(m)}` : '');
@@ -798,6 +803,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     tts: 'Text-to-Speech Models', stt: 'Speech-to-Text Models', music: 'Music & Sound Effects Models', decision: 'Decision Models'
   };
   const UNIT_NOTES = { text: 'prices per 1M tokens' };
+  // A list row gives a text model's prices with no column headers, so the
+  // summary names their order.
+  const LIST_UNIT_NOTES = { all: 'text prices per 1M tokens: input / output / cached input', text: 'prices per 1M tokens: input / output / cached input' };
   // The setting the filters price image and video at, for the count line.
   const settingNote = (modality, f) => {
     if (modality === 'image' && f.res) return `prices at ${f.res}`;
@@ -1465,20 +1473,18 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const rowPrice = row => {
     const { display, offer } = row;
     const p = display.pricing || {};
-    if (display.task === 'chat') return p.input != null ? <>{usd(p.input)} / {usd(p.output)}<span className="vx-muted"> per 1M</span></> : null;
+    if (display.task === 'chat') return p.input != null ? <span title={TEXT_PRICES_HINT}>{textPrices(p).map(usd).join(' / ')}<span className="vx-muted"> per 1M</span></span> : null;
     if (display.modality === 'video' && offer.status !== 'quoted') return <span className="vx-muted">By source</span>;
     return offer.value != null ? <OfferPrice offer={offer} /> : null;
   };
 
-  // The price already leads the row, so text lists limits rather than
-  // repeating it.
+  // The prices, cached input included, lead the row, so text lists limits
+  // rather than repeating them.
   const rowSummary = model => {
     if (model.task !== 'chat' || !model.text) return keySpec(model);
-    const p = model.pricing || {};
     return [
       model.text.context ? `${tokens(model.text.context)} context` : null,
-      model.text.maxOutput ? `${tokens(model.text.maxOutput)} max output` : null,
-      p.cacheRead != null ? `${usd(p.cacheRead)}/M cached input` : null
+      model.text.maxOutput ? `${tokens(model.text.maxOutput)} max output` : null
     ].filter(Boolean).join(' · ');
   };
 
@@ -1716,7 +1722,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const showScope = new Set(rows.map(row => familyScope(row.family))).size > 1;
     const filterCount = activeFilterCount(filters);
     const scopeKey = scope || 'all';
-    const unitNote = settingNote(modality, filters) || (shownView !== 'grid' ? UNIT_NOTES[scopeKey] : null);
+    const unitNote = settingNote(modality, filters) || (shownView === 'list' ? LIST_UNIT_NOTES[scopeKey] : shownView !== 'grid' ? UNIT_NOTES[scopeKey] : null);
 
     const updated = catalog && catalog.generatedAt ? fmtDate(Math.floor(new Date(catalog.generatedAt).getTime() / 1000)) : null;
 
