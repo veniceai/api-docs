@@ -444,6 +444,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   };
 
   // One line per variant, as the variant chips and the page's static text show it.
+  // A text model's prices in the order the hub always gives them: input,
+  // output, then cached input when the model caches prompts.
+  const textPrices = p => [p.input, p.output, p.cacheRead].filter(value => value != null);
+  const TEXT_PRICES_HINT = 'Input / output / cached input, per 1M tokens';
+  // Most cache writes cost a quarter more than input, but a few cost less.
+  const relativeToInput = (price, input) => {
+    if (!input) return 'per 1M tokens';
+    const diff = Math.round((price / input - 1) * 100);
+    return diff > 0 ? `${diff}% above input` : diff < 0 ? `${-diff}% below input` : 'same as input';
+  };
+
   const priceSummary = m => (m.modality === 'text' && m.pricing ? `${usd(m.pricing.input)} / ${usd(m.pricing.output)} per 1M`
     : m.modality === 'video' ? (m.pricing && m.pricing.status === 'quoted' ? `from ${usd(m.pricing.fromPerSecond)} / sec` : 'priced by source')
       : m.headline && m.headline.value != null ? `${usd(m.headline.value)} ${headlineUnit(m)}` : '');
@@ -798,6 +809,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     tts: 'Text-to-Speech Models', stt: 'Speech-to-Text Models', music: 'Music & Sound Effects Models', decision: 'Decision Models'
   };
   const UNIT_NOTES = { text: 'prices per 1M tokens' };
+  // A list row gives a text model's prices with no column headers, so the
+  // summary names their order.
+  const LIST_UNIT_NOTES = { all: 'text prices per 1M tokens: input / output / cached input', text: 'prices per 1M tokens: input / output / cached input' };
   // The setting the filters price image and video at, for the count line.
   const settingNote = (modality, f) => {
     if (modality === 'image' && f.res) return `prices at ${f.res}`;
@@ -1286,9 +1300,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         { key: 'context', label: 'Context', sort: 'context', align: 'right', hide: 'sm', render: row => <span className="vx-num">{tokens(row.display.text && row.display.text.context)}</span> },
         { key: 'input', label: 'Input', sort: 'input', align: 'right', hide: 'md', render: row => <PriceCell value={row.display.pricing && row.display.pricing.input} /> },
         { key: 'output', label: 'Output', sort: 'output', align: 'right', hide: 'md', render: row => <PriceCell value={row.display.pricing && row.display.pricing.output} /> },
-        { key: 'cache', label: 'Cached', align: 'right', hide: 'lg', hint: 'Cached input (prompt cache read)', render: row => <PriceCell value={row.display.pricing && row.display.pricing.cacheRead} /> },
+        { key: 'cache', label: 'Cached', align: 'right', hide: 'md', hint: 'Cached input (prompt cache read)', render: row => <PriceCell value={row.display.pricing && row.display.pricing.cacheRead} /> },
         { key: 'blended', label: 'Blended', sort: 'price', align: 'right', hint: 'Blended = (3 × input + output) / 4, the mix Artificial Analysis uses.', render: row => <PriceCell value={row.price} strong /> },
-        { key: 'caps', label: 'Capabilities', hide: 'md', render: row => <CapIcons model={row.display} /> },
+        { key: 'caps', label: 'Capabilities', hide: 'lg', render: row => <CapIcons model={row.display} /> },
         privacy
       ];
     }
@@ -1465,20 +1479,18 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const rowPrice = row => {
     const { display, offer } = row;
     const p = display.pricing || {};
-    if (display.task === 'chat') return p.input != null ? <>{usd(p.input)} / {usd(p.output)}<span className="vx-muted"> per 1M</span></> : null;
+    if (display.task === 'chat') return p.input != null ? <span title={TEXT_PRICES_HINT}>{textPrices(p).map(usd).join(' / ')}<span className="vx-muted"> per 1M</span></span> : null;
     if (display.modality === 'video' && offer.status !== 'quoted') return <span className="vx-muted">By source</span>;
     return offer.value != null ? <OfferPrice offer={offer} /> : null;
   };
 
-  // The price already leads the row, so text lists limits rather than
-  // repeating it.
+  // The prices, cached input included, lead the row, so text lists limits
+  // rather than repeating them.
   const rowSummary = model => {
     if (model.task !== 'chat' || !model.text) return keySpec(model);
-    const p = model.pricing || {};
     return [
       model.text.context ? `${tokens(model.text.context)} context` : null,
-      model.text.maxOutput ? `${tokens(model.text.maxOutput)} max output` : null,
-      p.cacheRead != null ? `${usd(p.cacheRead)}/M cached input` : null
+      model.text.maxOutput ? `${tokens(model.text.maxOutput)} max output` : null
     ].filter(Boolean).join(' · ');
   };
 
@@ -1716,7 +1728,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const showScope = new Set(rows.map(row => familyScope(row.family))).size > 1;
     const filterCount = activeFilterCount(filters);
     const scopeKey = scope || 'all';
-    const unitNote = settingNote(modality, filters) || (shownView !== 'grid' ? UNIT_NOTES[scopeKey] : null);
+    const unitNote = settingNote(modality, filters) || (shownView === 'list' ? LIST_UNIT_NOTES[scopeKey] : shownView !== 'grid' ? UNIT_NOTES[scopeKey] : null);
 
     const updated = catalog && catalog.generatedAt ? fmtDate(Math.floor(new Date(catalog.generatedAt).getTime() / 1000)) : null;
 
@@ -3158,8 +3170,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     );
   };
 
-  const Figure = ({ value, label, tip }) => (
-    <div className="vxn-fig">
+  // A wide figure takes a row of its own on phones.
+  const Figure = ({ value, label, tip, wide }) => (
+    <div className={cls('vxn-fig', wide && 'is-wide')}>
       <div className="vxn-fig-value">{value}</div>
       <div className="vxn-fig-label">{label}{tip ? <InfoTip text={tip} size={11} /> : null}</div>
     </div>
@@ -3776,7 +3789,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
             <E2eeSummary model={model} />
             <div className="vxn-figs">
-              {p.input != null ? <Figure value={<>{usd(p.input)}<span className="vxn-sep">/</span>{usd(p.output)}</>} label="per 1M in / out" /> : null}
+              {p.input != null ? (
+                <Figure
+                  value={textPrices(p).flatMap((value, i) => (i ? [<span key={i} className="vxn-sep">/</span>, usd(value)] : [usd(value)]))}
+                  label={p.cacheRead != null ? 'per 1M in / out / cached' : 'per 1M in / out'}
+                  wide={p.cacheRead != null}
+                />
+              ) : null}
               {t.context ? <Figure value={tokens(t.context)} label="context window" /> : null}
               {t.maxOutput ? <Figure value={tokens(t.maxOutput)} label="max output" /> : null}
             </div>
@@ -3875,6 +3894,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <div className="vxn-prices">
             <div className="vxn-price"><span className="vxn-price-label">Input</span><span className="vxn-price-value">{usd(p.input)}</span><span className="vx-muted">per 1M tokens</span></div>
             {p.cacheRead != null ? <div className="vxn-price"><span className="vxn-price-label">Cached input</span><span className="vxn-price-value">{usd(p.cacheRead)}</span><span className="vx-muted">{p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens'}</span></div> : null}
+            {p.cacheWrite != null ? <div className="vxn-price"><span className="vxn-price-label">Cache write</span><span className="vxn-price-value">{usd(p.cacheWrite)}</span><span className="vx-muted">{relativeToInput(p.cacheWrite, p.input)}</span></div> : null}
             <div className="vxn-price"><span className="vxn-price-label">Output</span><span className="vxn-price-value">{usd(p.output)}</span><span className="vx-muted">per 1M tokens</span></div>
           </div>
           <div className="vxn-split">
