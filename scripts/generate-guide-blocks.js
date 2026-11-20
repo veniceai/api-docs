@@ -22,7 +22,8 @@ const { ROOT, CATALOG_PATH, readJson, replaceBlock } = require('./guides/shared'
 const GUIDES = [
   require('./guides/image-generation'),
   require('./guides/video-generation'),
-  require('./guides/embeddings')
+  require('./guides/embeddings'),
+  require('./guides/speech-to-text')
 ];
 
 function main() {
