@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Regenerate the parts of the docs home (overview/about-venice.mdx) that come
- * from the model catalog: the newest releases at the top, the featured models
- * and the model count.
+ * from the model catalog: the newest releases at the top, the gallery of real
+ * outputs, the featured models and the model count.
  *
  * The page used to hard-code its models, so it drifted: it kept featuring Kimi
  * K3 and Claude Fable 5 after their successors shipped. Everything here is
@@ -10,9 +10,9 @@
  * families, prices, renders and counts, and data/model-changes.json for what
  * launched when.
  *
- * The featured models are editorial picks, pinned below. Each falls back to
- * the newest live match, so the page never shows a model that can no longer
- * be called.
+ * The featured models and the gallery's renders are editorial picks, pinned
+ * below. Each falls back to the newest live match, so the page never shows a
+ * model that can no longer be called.
  *
  * Usage: node scripts/generate-popular-models.js
  * Output: rewrites the marked blocks in overview/about-venice.mdx
@@ -30,6 +30,7 @@ const CATALOG_HREF = '/models/overview';
 
 const BLOCKS = {
   release: ['{/* release:start */}', '{/* release:end */}'],
+  gallery: ['{/* gallery:start */}', '{/* gallery:end */}'],
   models: ['{/* popular-models:start */}', '{/* popular-models:end */}']
 };
 const COUNT_PATTERN = /(<a className="vh-more" href="\/models\/overview">All )[^<]*( models<\/a>)/;
@@ -58,6 +59,59 @@ const FEATURED = [
   { id: 'minimax-h3-max-text-to-video', type: 'video', patterns: ['minimax'], art: { url: 'https://venice.ai/samples/minimax-h3-max/hero.mp4', poster: 'https://venice.ai/samples/minimax-h3-max/hero-poster.jpg' } },
   { id: 'mai-image-2-7-flash', type: 'image', patterns: ['mai-image'], art: { url: 'https://venice.ai/samples/mai-image-2-7-flash/hero.webp' } }
 ];
+
+// The gallery's tiles, in grid order: a banner of the labs behind the text
+// models, a row of the endpoints the media tiles don't show, then an image and
+// a video. Each tile names what it does over the endpoint that does it. A media
+// tile shows the preferred family's pinned art or render of its prompt, or else
+// the newest family's render, credited to its model; the renders differ wildly
+// in size, so the preferred ones are a few megabytes at most. Every model
+// renders the same prompts, so a pinned hero image keeps a scene from repeating
+// on the page.
+const GALLERY = [
+  { labs: true, href: '/models/text' },
+  { visual: 'embeddings', label: 'Search by meaning', caption: '/embeddings', href: '/guides/features/embeddings' },
+  { visual: 'search', label: 'Search the live web', caption: '/augment/search', href: '/guides/tools/web-retrieval' },
+  { visual: 'transcript', label: 'Transcribe speech', caption: '/audio/transcriptions', href: '/guides/media/speech-to-text' },
+  { visual: 'music', label: 'Compose music', caption: '/audio/queue', href: '/guides/media/music-and-sound-effects' },
+  { size: 'is-half', prompt: 'photoreal', prefer: 'gpt-image-2-6-flare', art: { url: 'https://venice.ai/samples/gpt-image-2-6-flare/hero.webp' }, label: 'Generate images', caption: '/image/generate', href: '/guides/media/image-generation' },
+  { size: 'is-half', prompt: 'ocean-loop', prefer: 'seedance-2-5-flash', label: 'Generate video', caption: '/video/queue', href: '/guides/media/video-generation' }
+];
+
+// Providers of text models that aren't labs Venice integrates: its own models,
+// community fine-tunes, and Pareto, which blends other labs' models.
+const NOT_LABS = new Set(['venice', 'community', 'pareto']);
+
+// An endpoint tile's request, in a field, and the first lines of its response,
+// each keyed by a score, a timestamp or a time.
+function request(text) {
+  return `<span className="vh-ui-q"><b>›</b> ${text}</span>`;
+}
+
+function line(key, text) {
+  return `<span className="vh-ui-row"><b>${key}</b> <span>${text}</span></span>`;
+}
+
+function result(title, url) {
+  return `<span className="vh-ui-res"><span>${title}</span> <span>${url}</span></span>`;
+}
+
+// A track's waveform with its first two-fifths played, from a fixed formula so
+// the page doesn't change between runs.
+function waveform() {
+  const bars = Array.from({ length: 30 }, (_, i) => {
+    const height = Math.min(40, 6 + Math.round(Math.abs(Math.sin(i * 1.7) * 20 + Math.sin(i * 0.6) * 12)));
+    return `<i${i < 12 ? ' className="is-played"' : ''} style={{ height: ${height} }} />`;
+  });
+  return `<span className="vh-ui-wave">${bars.join('')}</span>`;
+}
+
+const VISUALS = {
+  embeddings: [request('cafés by the canal'), line('0.91', 'Caffè on the Fondamenta'), line('0.87', 'A bacaro near Rialto'), line('0.82', 'Spritz by the Arsenale')],
+  search: [request('venice biennale'), result('La Biennale di Venezia', 'labiennale.org'), result('Venice Biennale', 'en.wikipedia.org')],
+  transcript: [request('standup.m4a'), line('00:02', 'Meet at the Rialto.'), line('00:05', 'Bring the drawings.'), line('00:09', 'Take the vaporetto.')],
+  music: [request('lagoon at dusk, strings'), waveform(), line('0:42', 'Lagoon at Dusk · 2:30')]
+};
 
 const PRIVACY = {
   private: ['Private', 'vh-model-privacy'],
@@ -144,11 +198,11 @@ function familyRender(family, catalog, prompts) {
   return null;
 }
 
-function renderMedia(render, { lazy = true } = {}) {
+function renderMedia(render, { lazy = true, pausable = false } = {}) {
   if (render.type !== 'video') {
     return `<img noZoom src="${render.url}"${lazy ? ' loading="lazy"' : ''} alt="" aria-hidden="true" />`;
   }
-  return `<HomeVideo src="${render.url}"${render.poster ? ` poster="${render.poster}"` : ''} />`;
+  return `<HomeVideo src="${render.url}"${render.poster ? ` poster="${render.poster}"` : ''}${pausable ? ' pausable' : ''} />`;
 }
 
 // Pinned art from venice.ai: a clip, with or without its poster, or an image.
@@ -311,6 +365,97 @@ function renderRelease(catalog, recent) {
   ].join('\n');
 }
 
+// The labs behind the text models, most text models first, and how many text
+// models there are.
+function textLabs(catalog) {
+  const families = catalog.families.filter(family => family.modality === 'text' && family.task !== 'decision');
+  const labs = new Map();
+  for (const family of families.filter(family => !NOT_LABS.has(family.provider))) {
+    labs.set(family.provider, (labs.get(family.provider) || 0) + 1);
+  }
+  return {
+    families: families.length,
+    labs: [...labs.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([slug]) => slug)
+  };
+}
+
+// The wall's column count, from five to eight, that leaves the fewest gaps in
+// its last row, which is then centered.
+function wallColumns(count) {
+  const gaps = cols => (cols - (count % cols)) % cols;
+  return [6, 5, 7, 8].reduce((best, cols) => (gaps(cols) < gaps(best) ? cols : best));
+}
+
+// Marks drawn noticeably heavier or lighter than the rest, scaled so the wall
+// reads at one weight.
+const MARK_WEIGHTS = { abliteration: 1.1, alibaba: 0.92, anthropic: 1.1, bytedance: 0.92, deepseek: 0.92, minimax: 1.1, mistral: 0.92, tencent: 0.88, xiaomi: 0.8 };
+
+// The text tile: the section's heading over a wall of the marks of the labs
+// whose text models Venice serves.
+function renderLabs(catalog) {
+  const { families, labs } = textLabs(catalog);
+  const marks = labs.map(slug => ({ slug, mark: labMark(slug, catalog) }));
+  for (const { slug } of marks.filter(({ mark }) => !mark)) {
+    console.warn(`Gallery: ${slug} has no logo, so the lab wall leaves it out.`);
+  }
+  const shown = marks.filter(({ mark }) => mark);
+  const cols = wallColumns(shown.length);
+  const short = shown.length % cols;
+  // Each mark spans two of twice as many tracks, so a short last row can
+  // start half a column in per missing mark.
+  const wall = shown.map(({ slug, mark }, i) => {
+    const start = short && i === shown.length - short ? `, gridColumnStart: ${cols - short + 1}` : '';
+    const weight = MARK_WEIGHTS[slug] ? `, scale: "${MARK_WEIGHTS[slug]}"` : '';
+    return `<span className="vh-lab" style={{ maskImage: "url('${mark}')", WebkitMaskImage: "url('${mark}')"${start}${weight} }} />`;
+  });
+  return {
+    heading: 'The whole frontier',
+    wall: `<span className="vh-labs" style={{ "--vh-lab-tracks": ${cols * 2} }} aria-hidden="true">${wall.join('')}</span>`,
+    label: `Chat with ${families} models from ${labs.length} labs`,
+    caption: '/chat/completions'
+  };
+}
+
+function tileLink(href, label, caption) {
+  return `<a className="vh-tile-link" href="${href}"><span className="vh-tile-label"><span>${escapeJsxText(label)}</span> <span>${escapeJsxText(caption)}</span></span></a>`;
+}
+
+function galleryRender(tile, catalog) {
+  const pinned = tile.art && catalog.families.find(family => family.slug === tile.prefer);
+  if (pinned) return { family: pinned, render: artRender(tile.art) };
+  const live = catalog.families.filter(family => familyRender(family, catalog, [tile.prompt]));
+  const preferred = live.find(family => family.slug === tile.prefer);
+  const family = preferred || live.sort((a, b) => (b.created || 0) - (a.created || 0))[0];
+  if (!family) throw new Error(`No family has a "${tile.prompt}" render for the "${tile.label}" tile.`);
+  if (!preferred) console.warn(`Gallery: "${tile.prefer}" has no "${tile.prompt}" render. Showing ${family.slug} instead.`);
+  return { family, render: familyRender(family, catalog, [tile.prompt]) };
+}
+
+function renderGallery(catalog) {
+  const tiles = GALLERY.map(tile => {
+    const classes = ['vh-tile', tile.size, tile.labs && 'is-labs'].filter(Boolean).join(' ');
+    if (tile.labs) {
+      // The banner's heading is the section's, written in Markdown so the
+      // Markdown export keeps it, which takes lines of its own.
+      const { heading, wall, label, caption } = renderLabs(catalog);
+      return [`<div className="${classes}">`, '', `## ${heading}`, '', wall, '', tileLink(tile.href, label, caption), '', '</div>'].join('\n');
+    }
+    let visual;
+    let credit = '';
+    if (tile.visual) {
+      visual = `<Visibility for="humans"><span className="vh-ui">${VISUALS[tile.visual].join('')}</span></Visibility>`;
+    } else {
+      const { family, render } = galleryRender(tile, catalog);
+      visual = renderMedia(render, { pausable: true });
+      credit = `<Visibility for="humans"><span className="vh-credit">Made with ${escapeJsxText(family.name)}</span></Visibility>`;
+    }
+    // One line, so the parts hidden from the Markdown export leave no line
+    // breaks inside the tile.
+    return `<div className="${classes}">${visual}${tileLink(tile.href, tile.label, tile.caption)}${credit}</div>`;
+  });
+  return [BLOCKS.gallery[0], '<div className="vh-bento">', ...tiles, '</div>', BLOCKS.gallery[1]].join('\n');
+}
+
 function haystack(model) {
   return `${model.id} ${model.name || ''}`.toLowerCase();
 }
@@ -403,6 +548,7 @@ function main() {
 
   const page = fs.readFileSync(PAGE_PATH, 'utf-8');
   let updated = replaceBlock(page, BLOCKS.release, renderRelease(catalog, recent));
+  updated = replaceBlock(updated, BLOCKS.gallery, renderGallery(catalog));
   updated = replaceBlock(updated, BLOCKS.models, renderCards(featured, catalog, recent));
   if (!COUNT_PATTERN.test(updated)) throw new Error('Could not find the "All … models" link in overview/about-venice.mdx');
   updated = updated.replace(COUNT_PATTERN, `$1${catalog.counts.models}$2`);
@@ -412,7 +558,7 @@ function main() {
     return;
   }
   fs.writeFileSync(PAGE_PATH, updated, 'utf-8');
-  console.log(`Updated the docs home: release, ${featured.map(({ model }) => model.id).join(', ')}`);
+  console.log(`Updated the docs home: release, gallery, ${featured.map(({ model }) => model.id).join(', ')}`);
 }
 
 try {
