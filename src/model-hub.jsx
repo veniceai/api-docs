@@ -1294,9 +1294,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         { key: 'context', label: 'Context', sort: 'context', align: 'right', hide: 'sm', render: row => <span className="vx-num">{tokens(row.display.text && row.display.text.context)}</span> },
         { key: 'input', label: 'Input', sort: 'input', align: 'right', hide: 'md', render: row => <PriceCell value={row.display.pricing && row.display.pricing.input} /> },
         { key: 'output', label: 'Output', sort: 'output', align: 'right', hide: 'md', render: row => <PriceCell value={row.display.pricing && row.display.pricing.output} /> },
-        { key: 'cache', label: 'Cached', align: 'right', hide: 'lg', hint: 'Cached input (prompt cache read)', render: row => <PriceCell value={row.display.pricing && row.display.pricing.cacheRead} /> },
+        { key: 'cache', label: 'Cached', align: 'right', hide: 'md', hint: 'Cached input (prompt cache read)', render: row => <PriceCell value={row.display.pricing && row.display.pricing.cacheRead} /> },
         { key: 'blended', label: 'Blended', sort: 'price', align: 'right', hint: 'Blended = (3 × input + output) / 4, the mix Artificial Analysis uses.', render: row => <PriceCell value={row.price} strong /> },
-        { key: 'caps', label: 'Capabilities', hide: 'md', render: row => <CapIcons model={row.display} /> },
+        { key: 'caps', label: 'Capabilities', hide: 'lg', render: row => <CapIcons model={row.display} /> },
         privacy
       ];
     }
