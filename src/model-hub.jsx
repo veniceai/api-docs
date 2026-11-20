@@ -3607,6 +3607,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // runs the model by default, as Artificial Analysis names configurations.
   const runName = (name, model, run) => (model.text && model.text.reasoning && run.reasoning !== 'default' ? `${name} (${run.reasoning})` : name);
 
+  // The comparison card on text pages leads with the model's GPQA Diamond
+  // score, named like its run.
+  const textStanding = model => {
+    const run = headlineRun(model, 'gpqa-diamond');
+    return [{ key: 'gpqa', label: run ? runName('GPQA Diamond', model, run) : 'GPQA Diamond', better: 'higher', lowerIsBetter: false, format: fmtAccuracy }, ...STANDING];
+  };
+  const textStandingValues = model => {
+    const run = headlineRun(model, 'gpqa-diamond');
+    return { ...standingValues(model), gpqa: run ? run.accuracy : null };
+  };
+
   // Every other scored text model by its score, best first, each family
   // counted once by its default variant.
   const benchmarkPeers = (catalog, key, family) => (catalog ? catalog.families
@@ -3771,7 +3782,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             </div>
           </div>
           <div className="vxn-hero-side">
-            <Standing model={model} catalog={catalog} />
+            <Standing model={model} catalog={catalog} metrics={textStanding(model)} valuesOf={textStandingValues} />
           </div>
         </header>
 
