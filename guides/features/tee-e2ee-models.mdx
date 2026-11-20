@@ -1,68 +1,148 @@
 ---
 title: "TEE & E2EE Models"
-description: "Run private inference on Venice with TEE models and end-to-end encryption."
+description: "Run inference inside hardware enclaves, encrypt prompts end to end so only the enclave can read them, and verify the enclave yourself."
 'og:title': "TEE & E2EE Models | Venice API Docs"
-'og:description': "Learn how to use TEE and E2EE models for maximum privacy in your AI applications"
+'og:description': "How Venice TEE and E2EE models work, what each mode protects, how to build an E2EE client, and how to verify attestation and response signatures."
 ---
 
+TEE and E2EE models run inside a Trusted Execution Environment (TEE): a hardware-isolated enclave whose identity and configuration can be proven with remote attestation. The enclaves use Intel TDX and NVIDIA Confidential Computing. During inference, the model weights and your data stay inside the enclave, isolated from the host system. E2EE adds client-side encryption on top, so your prompts stay encrypted until they reach that enclave.
+
 <Info>
-For an overview of the privacy modes and help choosing TEE or E2EE, see [Privacy](/overview/privacy). This guide covers protocol and implementation details.
+For how TEE and E2EE compare with Venice's other privacy modes, see [Privacy](/overview/privacy).
 </Info>
 
 <Note>
 TEE and E2EE are currently available on text models only.
 </Note>
 
-## Available Models
+## TEE mode and E2EE mode
 
-<div id="tee-e2ee-models-placeholder">Loading...</div>
+The same models support both modes. What you send decides which one you get.
 
-Check the [Models page](/overview/models) for the full list with pricing and context limits.
+| | TEE mode | E2EE mode |
+| --- | --- | --- |
+| How you call it | A normal `/chat/completions` request | Encrypt messages, add the `X-Venice-TEE-*` headers, and decrypt the response |
+| Where inference runs | Inside an attested enclave | Inside an attested enclave |
+| Who can read your prompt | The Venice API receives it in plaintext over TLS, then forwards it to the enclave | Only the enclave. Venice relays ciphertext |
+| Who can read the reply | The Venice API relays it in plaintext | Only you. The enclave encrypts it to your key |
+| Client work | None | Key generation, encryption, decryption, attestation checks |
 
-## TEE Models
+Choose TEE mode when you want hardware-isolated inference and are comfortable with your prompt passing through the Venice API, which doesn't store prompt or response content. Choose E2EE mode when nothing outside the enclave should be able to read your prompt or the reply.
 
-TEE models run inside hardware-secured enclaves (Intel TDX, NVIDIA Confidential Computing). During inference, the model weights and your data are protected inside the enclave, isolated from the host system. A TEE-only request still reaches the Venice API as plaintext, the same as a request to any other model. Use [E2EE](#e2ee-models) if Venice should relay only ciphertext.
+## How a request flows
 
-### Basic Usage
+```mermaid
+sequenceDiagram
+    participant C as Your client
+    participant V as Venice API
+    participant T as TEE (enclave)
+    C->>V: GET /tee/attestation?model&nonce
+    V->>T: Fetch attestation evidence
+    T-->>V: TDX quote, GPU evidence, enclave public key
+    V-->>C: Attestation, verified by Venice
+    Note over C: Check the attestation.<br/>Encrypt user and system messages<br/>to the enclave public key.
+    C->>V: POST /chat/completions + X-Venice-TEE-* headers
+    V->>T: Ciphertext, relayed unchanged
+    Note over T: Decrypt, run inference,<br/>encrypt the reply to your key
+    T-->>V: Encrypted reply
+    V-->>C: Encrypted reply
+    Note over C: Decrypt the reply
+```
 
-TEE models work exactly like regular models:
+In TEE mode, skip the attestation and encryption steps and send a normal request. The prompt then reaches the Venice API in plaintext.
+
+## What stays visible in E2EE mode
+
+E2EE protects message content, not the shape of the request. Venice and anyone else who can see the request outside the enclave can still see:
+
+| Visible | Why |
+| --- | --- |
+| Your account, API key, IP address and request timing | Needed to authenticate, bill and route the request |
+| Model ID and request parameters such as `temperature`, `max_tokens` and `stop` | Sent as normal JSON fields. Stop sequences are sent in plaintext |
+| Message roles and the number of messages | Only message content is encrypted |
+| Anything your client sends in plaintext, such as earlier `assistant` replies in the history | Venice forwards E2EE messages unchanged and never encrypts on your behalf. The examples encrypt `user` and `system` messages only |
+| Tool definitions, tool calls and tool results | Not encrypted |
+| Token usage and finish reasons | Returned as normal response fields |
+| Approximate length of each message and reply chunk | Ciphertext is a fixed size larger than the plaintext |
+
+If a conversation history contains sensitive replies, keep in mind that sending earlier `assistant` messages back in plaintext exposes them.
+
+## Find TEE and E2EE models
+
+Check capabilities on `GET /models` rather than relying on the model ID. Every TEE model currently also supports E2EE and uses an `e2ee-` prefix, but that's a naming convention, not a guarantee.
+
+- `model_spec.capabilities.supportsTeeAttestation`: the model runs inside an attested TEE.
+- `model_spec.capabilities.supportsE2EE`: the model accepts encrypted prompts. Implies `supportsTeeAttestation`.
+
+<CodeGroup>
+```bash cURL
+curl -s https://api.venice.ai/api/v1/models \
+  -H "Authorization: Bearer $VENICE_API_KEY" |
+  jq '.data[]
+    | select(.model_spec.capabilities.supportsTeeAttestation)
+    | {id, e2ee: .model_spec.capabilities.supportsE2EE}'
+```
+
+```python Python
+import os
+import requests
+
+res = requests.get(
+    "https://api.venice.ai/api/v1/models",
+    headers={"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"},
+)
+for model in res.json()["data"]:
+    caps = model["model_spec"]["capabilities"]
+    if caps.get("supportsTeeAttestation"):
+        print(model["id"], "E2EE" if caps.get("supportsE2EE") else "TEE only")
+```
+
+```bash Venice CLI
+venice models --e2ee
+```
+</CodeGroup>
+
+You can also filter by **Privacy: E2EE** on the [Models page](/overview/models).
+
+## TEE models
+
+TEE mode works like any other model. No client changes are needed:
 
 <CodeGroup>
 ```python Python
+import os
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="your-venice-api-key",
-    base_url="https://api.venice.ai/api/v1"
+    api_key=os.environ["VENICE_API_KEY"],
+    base_url="https://api.venice.ai/api/v1",
 )
 
 response = client.chat.completions.create(
     model="e2ee-qwen3-6-35b-a3b",
-    messages=[{"role": "user", "content": "Explain quantum computing"}]
+    messages=[{"role": "user", "content": "Explain quantum computing"}],
 )
-
 print(response.choices[0].message.content)
 ```
 
 ```javascript Node.js
-import OpenAI from 'openai';
+import OpenAI from 'openai'
 
 const client = new OpenAI({
-    apiKey: 'your-venice-api-key',
-    baseURL: 'https://api.venice.ai/api/v1'
-});
+  apiKey: process.env.VENICE_API_KEY,
+  baseURL: 'https://api.venice.ai/api/v1',
+})
 
 const response = await client.chat.completions.create({
-    model: 'e2ee-qwen3-6-35b-a3b',
-    messages: [{ role: 'user', content: 'Explain quantum computing' }]
-});
-
-console.log(response.choices[0].message.content);
+  model: 'e2ee-qwen3-6-35b-a3b',
+  messages: [{ role: 'user', content: 'Explain quantum computing' }],
+})
+console.log(response.choices[0].message.content)
 ```
 
 ```bash cURL
 curl https://api.venice.ai/api/v1/chat/completions \
-  -H "Authorization: Bearer $API_KEY_VENICE" \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "e2ee-qwen3-6-35b-a3b",
@@ -71,1128 +151,988 @@ curl https://api.venice.ai/api/v1/chat/completions \
 ```
 </CodeGroup>
 
-### Verifying TEE Attestation
+To check that the model really runs in an enclave, fetch its attestation and verify it. See [Verifying TEE attestation](#verifying-tee-attestation).
 
-You can cryptographically verify that a model is running in a genuine TEE by fetching its attestation report:
+## E2EE models
 
-<CodeGroup>
-```bash cURL
-# Generate a random 32-byte nonce (prevents replay attacks)
-NONCE=$(openssl rand -hex 32)
+E2EE needs client-side cryptography, so a stock OpenAI SDK can't do it on its own. The quickest way to try it is the [Venice CLI](/guides/integrations/venice-cli), which encrypts for any E2EE model and refuses to fall back to plaintext:
 
-# Fetch attestation
-curl "https://api.venice.ai/api/v1/tee/attestation?model=e2ee-qwen3-6-35b-a3b&nonce=$NONCE" \
-  -H "Authorization: Bearer $API_KEY_VENICE"
+```bash
+venice chat -m e2ee-qwen3-6-35b-a3b "This message is end-to-end encrypted"
 ```
 
-```python Python
-import secrets
-import requests
+To build E2EE into your own client, follow the steps below. [E2EE protocol](#e2ee-protocol) has the wire format, and [Build an E2EE client](#build-an-e2ee-client) has complete examples in JavaScript and Python.
 
-nonce = secrets.token_hex(32)
-
-response = requests.get(
-    f"https://api.venice.ai/api/v1/tee/attestation",
-    params={"model": "e2ee-qwen3-6-35b-a3b", "nonce": nonce},
-    headers={"Authorization": f"Bearer {api_key}"}
-)
-
-attestation = response.json()
-print(f"Verified: {attestation['verified']}")
-print(f"TEE Provider: {attestation['tee_provider']}")
-print(f"Model: {attestation['model']}")
-```
-</CodeGroup>
-
-The attestation response includes:
-
-| Field | Description |
-|-------|-------------|
-| `verified` | Whether the attestation passed server-side verification |
-| `nonce` | Your nonce, confirming freshness |
-| `model` | The attested model ID |
-| `tee_provider` | TEE provider identifier |
-| `intel_quote` | Raw Intel TDX quote (base64) for client-side verification |
-| `nvidia_payload` | NVIDIA GPU attestation data (if applicable) |
-| `signing_key` | Public key for verifying response signatures (typically required for E2EE flows; may be omitted for some plain TEE models) |
-| `signing_address` | Ethereum address derived from signing key |
-
-<Tip>
-For production use, verify the attestation client-side by parsing the Intel TDX quote and checking the NVIDIA attestation.
-</Tip>
-
-<Note>
-For plain TEE model verification, `signing_address` and server-side verification fields are sufficient for baseline attestation checks. A `signing_key` is required when you need client-side E2EE key agreement and strict key-binding checks.
-</Note>
-
-### Response Signatures
-
-TEE models can sign their responses, proving the output came from the attested enclave:
-
-<CodeGroup>
-```bash cURL
-# After getting a completion, verify the signature
-curl "https://api.venice.ai/api/v1/tee/signature?model=e2ee-qwen3-6-35b-a3b&request_id=chatcmpl-abc123" \
-  -H "Authorization: Bearer $API_KEY_VENICE"
-```
-
-```python Python
-response = requests.get(
-    f"https://api.venice.ai/api/v1/tee/signature",
-    params={"model": "e2ee-qwen3-6-35b-a3b", "request_id": completion_id},
-    headers={"Authorization": f"Bearer {api_key}"}
-)
-
-signature = response.json()
-# Verify signature matches the signing_address from attestation
-```
-</CodeGroup>
-
-## E2EE Models
-
-E2EE models add client-side encryption on top of TEE protection. Your prompts are encrypted before leaving your device, and only the TEE can decrypt them.
-
-Venice E2EE uses:
-
-- **ECDH (Elliptic Curve Diffie-Hellman)** on secp256k1 for key exchange
-- **HKDF-SHA256** for key derivation
-- **AES-256-GCM** for symmetric encryption
-- **TEE attestation** to verify the model runs in a secure enclave
-
-<Warning>
-E2EE requires client-side implementation. The examples below show the complete protocol.
-</Warning>
-
-### How E2EE Works
+### How E2EE works
 
 <Steps>
-  <Step title="Generate Ephemeral Key Pair">
-    Client generates a secp256k1 key pair for this session.
+  <Step title="Fetch the enclave's public key">
+    Call `GET /tee/attestation` with the model ID and a fresh 32-byte nonce. Check the response, then take the enclave's public key from `signing_key`.
   </Step>
-  <Step title="Fetch TEE Attestation">
-    Client requests `/api/v1/tee/attestation` and receives the model's public key, attestation evidence, and nonce.
+  <Step title="Generate a client key pair">
+    Create a secp256k1 key pair. The enclave encrypts the reply to its public key.
   </Step>
-  <Step title="Verify Attestation">
-    Client checks nonce match, debug mode disabled, and attestation validity.
+  <Step title="Encrypt user and system messages">
+    Encrypt the `content` of every `user` and `system` message to the enclave's public key.
   </Step>
-  <Step title="Encrypt Messages">
-    Client encrypts prompts using ECDH shared secret → HKDF → AES-GCM.
+  <Step title="Send the request">
+    Call `POST /chat/completions` with the three `X-Venice-TEE-*` headers. Streaming is optional.
   </Step>
-  <Step title="Send Request">
-    Client sends request with E2EE headers (`X-Venice-TEE-Client-Pub-Key`, `X-Venice-TEE-Model-Pub-Key`, `X-Venice-TEE-Signing-Algo`).
-  </Step>
-  <Step title="TEE Processing">
-    TEE decrypts request, processes it, and encrypts the response.
-  </Step>
-  <Step title="Decrypt Response">
-    Client receives encrypted chunks and decrypts with private key.
+  <Step title="Decrypt the response">
+    Decrypt `content` and `reasoning_content` with your client private key. Stop if any value isn't encrypted or fails to decrypt.
   </Step>
 </Steps>
 
-### Prerequisites
+### Turning E2EE off for a request
 
-**JavaScript (Node.js ESM):**
+E2EE is on by default when a request to an E2EE model includes the E2EE headers. Set `venice_parameters.enable_e2ee` to `false` to run the request in TEE mode even if the headers are present. Your messages must then be plaintext.
 
-```bash
-npm install elliptic @noble/ciphers @noble/hashes
-```
+### Feature support in E2EE mode
 
-**Python:**
+| Feature | E2EE mode |
+| --- | --- |
+| Streaming | Optional. Streamed and non-streamed replies are both encrypted. When streaming, each chunk is encrypted separately |
+| Reasoning output | Encrypted, in `reasoning_content` |
+| `/responses` endpoint | Not supported. Use `/chat/completions` |
+| Web search and web scraping | Disabled |
+| Venice system prompt | Not added. Send your own system message, encrypted |
+| File and image inputs | Not supported. Encrypted `content` must be a string |
+| Structured output (`response_format`) | Not supported |
+| `reasoning_effort` | Not supported |
+| Prompt caching options | Not supported |
+| Stop sequences | Sent in plaintext |
+| Function calling | Depends on the model (`supportsFunctionCalling`). Tool definitions, calls and results are not encrypted |
 
-```bash
-pip install cryptography ecdsa requests
-```
+## E2EE protocol
 
-### Step 1: Check Model E2EE Support
+### Keys
 
-First, verify the model supports E2EE by checking the `/models` endpoint.
+| Key | Where it comes from | Used for |
+| --- | --- | --- |
+| Enclave public key | `signing_key` in the `GET /tee/attestation` response | Encrypting request fields |
+| Client key pair | Generated by your client, one per request | The enclave encrypts reply chunks to its public key |
+| Ephemeral key pair | Generated for every encrypted field, by whichever side encrypts | ECDH with the recipient's public key |
+
+All keys are on the secp256k1 curve. Public keys are sent as uncompressed points: 65 bytes starting with `0x04`, hex-encoded to 130 characters. Some attestation responses return the enclave key as 64 bytes without the `04` prefix. Add the prefix before you use it.
+
+### Encrypting a field
+
+Each field is encrypted independently:
+
+1. Generate an ephemeral secp256k1 key pair.
+2. Compute the ECDH shared point between the ephemeral private key and the recipient's public key. Take its 32-byte X coordinate.
+3. Derive a 32-byte key with HKDF-SHA256: no salt, `info` set to the ASCII string `ecdsa_encryption`.
+4. Encrypt the UTF-8 plaintext with AES-256-GCM, a random 12-byte nonce and no additional authenticated data.
+5. Concatenate the parts below and hex-encode the result.
+
+| Bytes | Content |
+| --- | --- |
+| 0–64 | Ephemeral public key, uncompressed (65 bytes) |
+| 65–76 | AES-GCM nonce (12 bytes) |
+| 77– | Ciphertext, followed by the 16-byte GCM tag |
+
+An encrypted field is therefore at least 93 bytes, or 186 hex characters. Decryption reverses these steps with the recipient's private key and the ephemeral public key from the first 65 bytes.
+
+The enclave encrypts reply chunks the same way, to the client public key you send in the request.
+
+### Request headers
+
+| Header | Value |
+| --- | --- |
+| `X-Venice-TEE-Client-Pub-Key` | Your client public key, uncompressed hex (130 characters) |
+| `X-Venice-TEE-Model-Pub-Key` | The enclave public key from attestation |
+| `X-Venice-TEE-Signing-Algo` | `ecdsa` |
+
+When these headers are present on a request to an E2EE model, Venice treats the request as E2EE unless `venice_parameters.enable_e2ee` is `false`.
+
+### What is encrypted
+
+| Direction | Encrypted | Not encrypted |
+| --- | --- | --- |
+| Request | `content` of every `user` and `system` message. It must be a string | Model ID, parameters, tool definitions and message roles |
+| Response | `content` and `reasoning_content`: in `choices[].delta` when streaming, or in `choices[].message` otherwise. Each streamed chunk is encrypted separately | IDs, roles, finish reasons and token usage |
+
+When E2EE is active, every `user` and `system` message must be encrypted. A plaintext message in either role fails with `Encrypted field is not valid hex`.
+
+Venice forwards E2EE messages unchanged and never encrypts anything on your behalf. Anything your client sends in plaintext, such as earlier `assistant` replies in the history, stays readable to Venice.
+
+### Security properties
+
+- **Confidentiality depends on the enclave key.** Encryption only helps if the public key you encrypt to belongs to an attested enclave. Venice verifies the attestation server-side and reports the result in `verified`. To check it yourself, see [Verifying TEE attestation](#verifying-tee-attestation).
+- **Each field is authenticated on its own.** AES-GCM detects any change to a single field, but the protocol doesn't bind fields to each other, to their order, or to the request. A missing chunk can't be detected cryptographically, so treat a stream that ends without a `finish_reason` as incomplete.
+- **Use a new client key pair for every request.** Reply chunks are encrypted to the client key from the request headers. A fresh key per request means chunks from any other response can't be decrypted by your client.
+- **Never fall back to plaintext.** If a chunk isn't hex-encoded ciphertext, or fails to decrypt, stop and report an error. Showing it anyway would let a plaintext reply pass as encrypted.
+
+## Build an E2EE client
+
+The examples below are complete and tested. They use established libraries rather than hand-written curve arithmetic: the [noble](https://paulmillr.com/noble/) libraries in JavaScript and [`cryptography`](https://cryptography.io/) in Python.
+
+### Install dependencies
 
 <CodeGroup>
-```javascript JavaScript
-async function getE2EEModels(apiKey) {
-  const response = await fetch('https://api.venice.ai/api/v1/models', {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  })
-  const { data } = await response.json()
-
-  return data.filter(model => model.model_spec?.capabilities?.supportsE2EE === true)
-}
-
-// Example usage
-const models = await getE2EEModels('your-api-key')
-console.log('E2EE Models:', models.map(m => m.id))
-// Output: ['e2ee-qwen3-6-35b-a3b', 'e2ee-glm-5-3-p', ...]
+```bash JavaScript
+# Node.js 20.19 or later
+npm install @noble/curves @noble/ciphers @noble/hashes
 ```
 
-```python Python
-import requests
-
-def get_e2ee_models(api_key: str) -> list:
-    """Get list of models that support E2EE."""
-    response = requests.get(
-        'https://api.venice.ai/api/v1/models',
-        headers={'Authorization': f'Bearer {api_key}'}
-    )
-    models = response.json()['data']
-
-    return [
-        model for model in models
-        if model.get('model_spec', {}).get('capabilities', {}).get('supportsE2EE')
-    ]
-
-# Example usage
-models = get_e2ee_models('your-api-key')
-print('E2EE Models:', [m['id'] for m in models])
+```bash Python
+# Python 3.10 or later
+pip install cryptography requests
 ```
 </CodeGroup>
 
-### Step 2: Generate Ephemeral Key Pair
+### Encryption helpers
 
-Generate a new key pair for each session. The private key should be kept in memory only and securely zeroed after use.
-
-<CodeGroup>
-```javascript JavaScript
-import { ec as EC } from 'elliptic'
-
-function generateEphemeralKeyPair() {
-  const ec = new EC('secp256k1')
-  const keyPair = ec.genKeyPair()
-
-  return {
-    privateKey: new Uint8Array(keyPair.getPrivate().toArray('be', 32)),
-    publicKeyHex: keyPair.getPublic('hex'), // Uncompressed format (65 bytes hex)
-  }
-}
-
-// Security: Zero-fill private key when done
-function zeroFill(arr) {
-  arr.fill(0)
-}
-```
-
-```python Python
-from ecdsa import SECP256k1, SigningKey
-import secrets
-
-def generate_ephemeral_key_pair():
-    """Generate ephemeral secp256k1 key pair for E2EE session."""
-    private_key = SigningKey.generate(curve=SECP256k1)
-    public_key = private_key.get_verifying_key()
-
-    # Get uncompressed public key (04 || x || y)
-    public_key_bytes = b'\x04' + public_key.to_string()
-
-    return {
-        'private_key': private_key.to_string(),  # 32 bytes
-        'public_key_hex': public_key_bytes.hex()  # 130 hex chars
-    }
-```
-</CodeGroup>
-
-#### Validation Helpers
-
-Use these helper functions to validate keys and encrypted content before sending requests.
+Save this module next to your client. It implements the field encryption described above.
 
 <CodeGroup>
-```javascript JavaScript
-function validateClientPubkey(pubkeyHex) {
-  if (pubkeyHex.length !== 130 || !pubkeyHex.startsWith('04')) {
-    throw new Error(`Client pubkey must be 130 hex chars starting with '04' (got ${pubkeyHex.length})`)
-  }
-}
-
-function isValidEncrypted(s) {
-  // Minimum: ephemeral_pub (65) + nonce (12) + tag (16) = 93 bytes = 186 hex chars
-  return s.length >= 186 && /^[0-9a-fA-F]+$/.test(s)
-}
-```
-
-```python Python
-def validate_client_pubkey(pubkey_hex: str) -> None:
-    """Validate client public key format."""
-    if len(pubkey_hex) != 130 or not pubkey_hex.startswith('04'):
-        raise ValueError(f"Client pubkey must be 130 hex chars starting with '04' (got {len(pubkey_hex)})")
-
-def is_valid_encrypted(s: str) -> bool:
-    """Check if string is valid hex-encrypted content."""
-    # Minimum: ephemeral_pub (65) + nonce (12) + tag (16) = 93 bytes = 186 hex chars
-    return len(s) >= 186 and all(c in '0123456789abcdefABCDEF' for c in s)
-```
-</CodeGroup>
-
-### Step 3: Fetch and Verify TEE Attestation
-
-The attestation proves the model is running in a genuine TEE. Always verify the attestation before trusting the model's public key.
-
-<Info>
-**Important: Nonce Length** - The client nonce must be **32 bytes (64 hex characters)**. Some TEE providers require exactly 32 bytes and will reject shorter nonces.
-</Info>
-
-<CodeGroup>
-```javascript JavaScript
-import crypto from 'crypto'
-
-async function fetchAndVerifyAttestation(modelId, apiKey) {
-  // Generate client nonce for replay protection (32 bytes = 64 hex chars)
-  const clientNonce = crypto.randomBytes(32).toString('hex')
-
-  const response = await fetch(
-    `https://api.venice.ai/api/v1/tee/attestation?model=${encodeURIComponent(modelId)}&nonce=${clientNonce}`,
-    { headers: { Authorization: `Bearer ${apiKey}` } }
-  )
-
-  const attestation = await response.json()
-
-  // Verify attestation
-  if (attestation.verified !== true) {
-    throw new Error('TEE attestation verification failed on server')
-  }
-
-  if (attestation.nonce !== clientNonce) {
-    throw new Error('Attestation nonce mismatch - possible replay attack')
-  }
-
-  // Get model's public key for encryption
-  const modelPublicKey = attestation.signing_key || attestation.signing_public_key
-  if (!modelPublicKey) {
-    throw new Error('No signing key in attestation response')
-  }
-
-  return {
-    modelPublicKey,
-    signingAddress: attestation.signing_address,
-    attestation,
-  }
-}
-```
-
-```python Python
-import secrets
-import requests
-
-def fetch_and_verify_attestation(model_id: str, api_key: str) -> dict:
-    """Fetch and verify TEE attestation for a model."""
-    # Generate client nonce for replay protection (32 bytes = 64 hex chars)
-    client_nonce = secrets.token_hex(32)
-
-    response = requests.get(
-        f'https://api.venice.ai/api/v1/tee/attestation',
-        params={'model': model_id, 'nonce': client_nonce},
-        headers={'Authorization': f'Bearer {api_key}'}
-    )
-    attestation = response.json()
-
-    # Verify attestation
-    if attestation.get('verified') != True:
-        raise ValueError('TEE attestation verification failed on server')
-
-    if attestation.get('nonce') != client_nonce:
-        raise ValueError('Attestation nonce mismatch - possible replay attack')
-
-    # Get model's public key for encryption
-    model_public_key = attestation.get('signing_key') or attestation.get('signing_public_key')
-    if not model_public_key:
-        raise ValueError('No signing key in attestation response')
-
-    return {
-        'model_public_key': model_public_key,
-        'signing_address': attestation.get('signing_address'),
-        'attestation': attestation
-    }
-```
-</CodeGroup>
-
-### Step 4: Encrypt Messages
-
-Encrypt user and system messages before sending. Only `user` and `system` role messages need encryption.
-
-<Warning>
-When E2EE headers are present, **all** `user` and `system` role messages must be encrypted. Sending any plaintext content in these roles will result in an "Encrypted field is not valid hex" error.
-</Warning>
-
-<CodeGroup>
-```javascript JavaScript
+```javascript e2ee.mjs
+import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { gcm } from '@noble/ciphers/aes.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { ec as EC } from 'elliptic'
-import crypto from 'crypto'
+import { bytesToHex, hexToBytes, randomBytes, utf8ToBytes } from '@noble/hashes/utils.js'
 
-const HKDF_INFO = new TextEncoder().encode('ecdsa_encryption')
+const HKDF_INFO = utf8ToBytes('ecdsa_encryption')
+const PUBLIC_KEY_BYTES = 65
+const NONCE_BYTES = 12
+const TAG_BYTES = 16
+const MIN_ENCRYPTED_HEX = 2 * (PUBLIC_KEY_BYTES + NONCE_BYTES + TAG_BYTES)
 
-function encryptMessage(plaintext, modelPublicKeyHex) {
-  const ec = new EC('secp256k1')
+// ECDH on secp256k1, then HKDF-SHA256 over the shared point's X coordinate.
+function deriveKey(privateKey, publicKey) {
+  const shared = secp256k1.getSharedSecret(privateKey, publicKey) // 0x02/0x03 || X
+  return hkdf(sha256, shared.subarray(1), undefined, HKDF_INFO, 32)
+}
 
-  // Normalize public key (add 04 prefix if needed)
-  let normalizedKey = modelPublicKeyHex
-  if (!normalizedKey.startsWith('04') && normalizedKey.length === 128) {
-    normalizedKey = '04' + normalizedKey
+export function generateClientKeyPair() {
+  const privateKey = secp256k1.utils.randomSecretKey()
+  const publicKeyHex = bytesToHex(secp256k1.getPublicKey(privateKey, false))
+  return { privateKey, publicKeyHex }
+}
+
+// Accepts 65-byte uncompressed keys, or 64-byte keys without the 0x04 prefix.
+export function parsePublicKey(hex) {
+  const bytes = hexToBytes(hex.replace(/^0x/, ''))
+  const key = bytes.length === 64 ? Uint8Array.of(0x04, ...bytes) : bytes
+  if (key.length !== PUBLIC_KEY_BYTES || !secp256k1.utils.isValidPublicKey(key, false)) {
+    throw new Error('Not a valid uncompressed secp256k1 public key')
   }
-
-  const modelPublicKey = ec.keyFromPublic(normalizedKey, 'hex')
-
-  // Generate ephemeral key pair for this message
-  const ephemeralKeyPair = ec.genKeyPair()
-
-  // ECDH shared secret
-  const sharedSecret = ephemeralKeyPair.derive(modelPublicKey.getPublic())
-  const sharedSecretBytes = new Uint8Array(sharedSecret.toArray('be', 32))
-
-  // Derive AES key using HKDF
-  const aesKey = hkdf(sha256, sharedSecretBytes, undefined, HKDF_INFO, 32)
-
-  // Generate random nonce
-  const nonce = crypto.randomBytes(12)
-
-  // Encrypt with AES-GCM
-  const cipher = gcm(aesKey, nonce)
-  const encrypted = cipher.encrypt(new TextEncoder().encode(plaintext))
-
-  // Get ephemeral public key (uncompressed)
-  const ephemeralPublic = new Uint8Array(ephemeralKeyPair.getPublic(false, 'array'))
-
-  // Combine: ephemeral_public (65 bytes) + nonce (12 bytes) + ciphertext
-  const result = new Uint8Array(65 + 12 + encrypted.length)
-  result.set(ephemeralPublic, 0)
-  result.set(nonce, 65)
-  result.set(encrypted, 65 + 12)
-
-  return Buffer.from(result).toString('hex')
+  return key
 }
 
-function encryptMessagesForE2EE(messages, modelPublicKey) {
-  return messages.map(msg => {
-    if (msg.role === 'user' || msg.role === 'system') {
-      return {
-        ...msg,
-        content: encryptMessage(msg.content, modelPublicKey),
-      }
-    }
-    return msg
-  })
+export function encryptField(plaintext, modelPublicKey) {
+  const ephemeralKey = secp256k1.utils.randomSecretKey()
+  const nonce = randomBytes(NONCE_BYTES)
+  const ciphertext = gcm(deriveKey(ephemeralKey, modelPublicKey), nonce).encrypt(utf8ToBytes(plaintext))
+
+  const out = new Uint8Array(PUBLIC_KEY_BYTES + NONCE_BYTES + ciphertext.length)
+  out.set(secp256k1.getPublicKey(ephemeralKey, false), 0)
+  out.set(nonce, PUBLIC_KEY_BYTES)
+  out.set(ciphertext, PUBLIC_KEY_BYTES + NONCE_BYTES)
+  ephemeralKey.fill(0)
+  return bytesToHex(out)
 }
-```
 
-```python Python
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
-from ecdsa import SECP256k1, VerifyingKey, SigningKey
-import os
-
-HKDF_INFO = b'ecdsa_encryption'
-
-def encrypt_message(plaintext: str, model_public_key_hex: str) -> str:
-    """Encrypt a message using ECDH + HKDF + AES-GCM."""
-    # Normalize public key
-    key_hex = model_public_key_hex
-    if not key_hex.startswith('04') and len(key_hex) == 128:
-        key_hex = '04' + key_hex
-
-    model_public_key_bytes = bytes.fromhex(key_hex)
-
-    # Parse model's public key (skip 04 prefix)
-    model_verifying_key = VerifyingKey.from_string(
-        model_public_key_bytes[1:],
-        curve=SECP256k1
-    )
-
-    # Generate ephemeral key pair for this message
-    ephemeral_private = SigningKey.generate(curve=SECP256k1)
-    ephemeral_public = ephemeral_private.get_verifying_key()
-
-    # ECDH: compute shared secret
-    shared_point = model_verifying_key.pubkey.point * ephemeral_private.privkey.secret_multiplier
-    shared_secret = shared_point.x().to_bytes(32, 'big')
-
-    # Derive AES key using HKDF
-    hkdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=None,
-        info=HKDF_INFO,
-    )
-    aes_key = hkdf.derive(shared_secret)
-
-    # Generate random nonce
-    nonce = os.urandom(12)
-
-    # Encrypt with AES-GCM
-    aesgcm = AESGCM(aes_key)
-    ciphertext = aesgcm.encrypt(nonce, plaintext.encode('utf-8'), None)
-
-    # Get ephemeral public key (uncompressed: 04 || x || y)
-    ephemeral_public_bytes = b'\x04' + ephemeral_public.to_string()
-
-    # Combine: ephemeral_public (65 bytes) + nonce (12 bytes) + ciphertext
-    result = ephemeral_public_bytes + nonce + ciphertext
-
-    return result.hex()
-
-def encrypt_messages_for_e2ee(messages: list, model_public_key: str) -> list:
-    """Encrypt user and system messages."""
-    encrypted_messages = []
-    for msg in messages:
-        if msg['role'] in ('user', 'system'):
-            encrypted_messages.append({
-                **msg,
-                'content': encrypt_message(msg['content'], model_public_key)
-            })
-        else:
-            encrypted_messages.append(msg)
-    return encrypted_messages
-```
-</CodeGroup>
-
-### Step 5: Send Request with E2EE Headers
-
-Include the required headers to enable E2EE processing.
-
-| Header | Description |
-|--------|-------------|
-| `X-Venice-TEE-Client-Pub-Key` | Your ephemeral public key (uncompressed hex, 130 chars) |
-| `X-Venice-TEE-Model-Pub-Key` | Model's public key from attestation |
-| `X-Venice-TEE-Signing-Algo` | Always `ecdsa` |
-
-<CodeGroup>
-```javascript JavaScript
-async function sendE2EERequest(messages, model, e2eeContext, apiKey) {
-  // Encrypt messages
-  const encryptedMessages = encryptMessagesForE2EE(messages, e2eeContext.modelPublicKey)
-
-  const response = await fetch('https://api.venice.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      // E2EE headers
-      'X-Venice-TEE-Client-Pub-Key': e2eeContext.publicKeyHex,
-      'X-Venice-TEE-Model-Pub-Key': e2eeContext.modelPublicKey,
-      'X-Venice-TEE-Signing-Algo': 'ecdsa',
-    },
-    body: JSON.stringify({
-      model,
-      messages: encryptedMessages,
-      stream: true, // Recommended for E2EE
-    }),
-  })
-
-  return response
-}
-```
-
-```python Python
-import requests
-
-def send_e2ee_request(
-    messages: list,
-    model: str,
-    e2ee_context: dict,
-    api_key: str
-) -> requests.Response:
-    """Send an E2EE-encrypted chat completion request."""
-    # Encrypt messages
-    encrypted_messages = encrypt_messages_for_e2ee(
-        messages,
-        e2ee_context['model_public_key']
-    )
-
-    response = requests.post(
-        'https://api.venice.ai/api/v1/chat/completions',
-        headers={
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json',
-            # E2EE headers
-            'X-Venice-TEE-Client-Pub-Key': e2ee_context['public_key_hex'],
-            'X-Venice-TEE-Model-Pub-Key': e2ee_context['model_public_key'],
-            'X-Venice-TEE-Signing-Algo': 'ecdsa'
-        },
-        json={
-            'model': model,
-            'messages': encrypted_messages,
-            'stream': True  # Recommended for E2EE
-        },
-        stream=True
-    )
-
-    return response
-```
-</CodeGroup>
-
-### Step 6: Decrypt Response Chunks
-
-Responses from E2EE models are hex-encoded encrypted chunks. Decrypt each chunk using your private key.
-
-<CodeGroup>
-```javascript JavaScript
-import { gcm } from '@noble/ciphers/aes.js'
-import { hkdf } from '@noble/hashes/hkdf.js'
-import { sha256 } from '@noble/hashes/sha2.js'
-import { ec as EC } from 'elliptic'
-
-const HKDF_INFO = new TextEncoder().encode('ecdsa_encryption')
-
-function hexToBytes(hex) {
-  const h = hex.startsWith('0x') ? hex.slice(2) : hex
-  const bytes = new Uint8Array(h.length / 2)
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(h.substring(i * 2, i * 2 + 2), 16)
+export function decryptField(hex, clientPrivateKey) {
+  if (hex.length < MIN_ENCRYPTED_HEX || !/^(?:[0-9a-fA-F]{2})+$/.test(hex)) {
+    throw new Error('Expected encrypted content but received plaintext')
   }
-  return bytes
-}
-
-function isHexEncrypted(s) {
-  // Minimum: ephemeral_pub (65) + nonce (12) + tag (16) = 93 bytes = 186 hex chars
-  if (s.length < 186) return false
-  return /^[0-9a-fA-F]+$/.test(s)
-}
-
-function decryptChunk(ciphertextHex, clientPrivateKey) {
-  const raw = hexToBytes(ciphertextHex)
-
-  // Parse components
-  const serverEphemeralPubKey = raw.slice(0, 65)
-  const nonce = raw.slice(65, 65 + 12)
-  const ciphertext = raw.slice(65 + 12)
-
-  // ECDH with server's ephemeral key
-  const ec = new EC('secp256k1')
-  const clientKey = ec.keyFromPrivate(Buffer.from(clientPrivateKey))
-  const serverKey = ec.keyFromPublic(Buffer.from(serverEphemeralPubKey))
-  const sharedSecret = clientKey.derive(serverKey.getPublic())
-  const sharedSecretBytes = new Uint8Array(sharedSecret.toArray('be', 32))
-
-  // Derive AES key
-  const aesKey = hkdf(sha256, sharedSecretBytes, undefined, HKDF_INFO, 32)
-
-  // Decrypt
-  const cipher = gcm(aesKey, nonce)
-  const plaintext = cipher.decrypt(ciphertext)
-
+  const raw = hexToBytes(hex)
+  const key = deriveKey(clientPrivateKey, raw.subarray(0, PUBLIC_KEY_BYTES))
+  const nonce = raw.subarray(PUBLIC_KEY_BYTES, PUBLIC_KEY_BYTES + NONCE_BYTES)
+  const plaintext = gcm(key, nonce).decrypt(raw.subarray(PUBLIC_KEY_BYTES + NONCE_BYTES))
   return new TextDecoder().decode(plaintext)
 }
-
-// Process streaming response
-async function processE2EEStream(response, clientPrivateKey) {
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let fullContent = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-
-    const text = decoder.decode(value)
-    const lines = text.split('\n')
-
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue
-      const data = line.slice(6)
-      if (data === '[DONE]') continue
-
-      try {
-        const chunk = JSON.parse(data)
-        const content = chunk.choices?.[0]?.delta?.content
-
-        if (content && isHexEncrypted(content)) {
-          const decrypted = decryptChunk(content, clientPrivateKey)
-          fullContent += decrypted
-          process.stdout.write(decrypted) // Real-time output
-        } else if (content) {
-          fullContent += content
-          process.stdout.write(content)
-        }
-      } catch (e) {
-        // Skip malformed chunks
-      }
-    }
-  }
-
-  return fullContent
-}
 ```
 
-```python Python
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
-from ecdsa import SECP256k1, VerifyingKey, SigningKey
-import json
+```python venice_e2ee.py
+import os
 import re
 
-HKDF_INFO = b'ecdsa_encryption'
-
-def is_hex_encrypted(s: str) -> bool:
-    """Check if string looks like hex-encrypted content."""
-    if len(s) < 186:  # Minimum: 65 + 12 + 16 = 93 bytes = 186 hex
-        return False
-    return bool(re.match(r'^[0-9a-fA-F]+$', s))
-
-def decrypt_chunk(ciphertext_hex: str, client_private_key: bytes) -> str:
-    """Decrypt an E2EE response chunk."""
-    raw = bytes.fromhex(ciphertext_hex)
-
-    # Parse components
-    server_ephemeral_pub = raw[:65]
-    nonce = raw[65:77]
-    ciphertext = raw[77:]
-
-    # Parse server's ephemeral public key (skip 04 prefix)
-    server_verifying_key = VerifyingKey.from_string(
-        server_ephemeral_pub[1:],
-        curve=SECP256k1
-    )
-
-    # Reconstruct client's private key
-    client_signing_key = SigningKey.from_string(client_private_key, curve=SECP256k1)
-
-    # ECDH: compute shared secret
-    shared_point = server_verifying_key.pubkey.point * client_signing_key.privkey.secret_multiplier
-    shared_secret = shared_point.x().to_bytes(32, 'big')
-
-    # Derive AES key
-    hkdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=None,
-        info=HKDF_INFO,
-    )
-    aes_key = hkdf.derive(shared_secret)
-
-    # Decrypt
-    aesgcm = AESGCM(aes_key)
-    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
-
-    return plaintext.decode('utf-8')
-
-def process_e2ee_stream(response, client_private_key: bytes) -> str:
-    """Process streaming E2EE response."""
-    full_content = ''
-
-    for line in response.iter_lines():
-        if not line:
-            continue
-
-        line_str = line.decode('utf-8')
-        if not line_str.startswith('data: '):
-            continue
-
-        data = line_str[6:]
-        if data == '[DONE]':
-            continue
-
-        try:
-            chunk = json.loads(data)
-            content = chunk.get('choices', [{}])[0].get('delta', {}).get('content', '')
-
-            if content and is_hex_encrypted(content):
-                decrypted = decrypt_chunk(content, client_private_key)
-                full_content += decrypted
-                print(decrypted, end='', flush=True)  # Real-time output
-            elif content:
-                full_content += content
-                print(content, end='', flush=True)
-        except json.JSONDecodeError:
-            pass
-
-    print()  # Final newline
-    return full_content
-```
-</CodeGroup>
-
-### Complete Working Example
-
-<Tabs>
-  <Tab title="JavaScript">
-```javascript
-import elliptic from 'elliptic';
-import { gcm } from '@noble/ciphers/aes.js';
-import { hkdf } from '@noble/hashes/hkdf.js';
-import { sha256 } from '@noble/hashes/sha2.js';
-import crypto from 'crypto';
-
-const EC = elliptic.ec;
-
-const API_KEY = process.env.API_KEY_VENICE;
-const BASE_URL = 'https://api.venice.ai/api/v1';
-const MODEL = 'e2ee-qwen3-6-35b-a3b';
-const HKDF_INFO = new TextEncoder().encode('ecdsa_encryption');
-
-function hexToBytes(hex) {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-async function main() {
-  // Step 1: Generate ephemeral key pair
-  console.log('🔑 Generating ephemeral key pair...');
-  const ec = new EC('secp256k1');
-  const keyPair = ec.genKeyPair();
-  const clientPublicKeyHex = keyPair.getPublic('hex');
-
-  // Step 2: Fetch and verify attestation
-  console.log('🔍 Fetching TEE attestation...');
-  const clientNonce = crypto.randomBytes(32).toString('hex'); // 32 bytes required
-  const attestationRes = await fetch(
-    `${BASE_URL}/tee/attestation?model=${MODEL}&nonce=${clientNonce}`,
-    { headers: { Authorization: `Bearer ${API_KEY}` } }
-  );
-  const attestation = await attestationRes.json();
-
-  if (attestation.verified !== true || attestation.nonce !== clientNonce) {
-    throw new Error('Attestation verification failed');
-  }
-
-  const modelPublicKey = attestation.signing_key || attestation.signing_public_key;
-  console.log('✅ TEE attestation verified');
-
-  // Step 3: Encrypt message
-  console.log('🔐 Encrypting message...');
-  const plaintext = 'What is 2+2? Answer briefly.';
-
-  // Normalize and parse model's public key
-  let normalizedKey = modelPublicKey;
-  if (!normalizedKey.startsWith('04') && normalizedKey.length === 128) {
-    normalizedKey = '04' + normalizedKey;
-  }
-
-  const modelKey = ec.keyFromPublic(normalizedKey, 'hex');
-  const ephemeralKeyPair = ec.genKeyPair();
-  const sharedSecret = ephemeralKeyPair.derive(modelKey.getPublic());
-  const sharedSecretBytes = new Uint8Array(sharedSecret.toArray('be', 32));
-  const aesKey = hkdf(sha256, sharedSecretBytes, undefined, HKDF_INFO, 32);
-  const nonce = crypto.randomBytes(12);
-  const cipher = gcm(aesKey, nonce);
-  const encrypted = cipher.encrypt(new TextEncoder().encode(plaintext));
-  const ephemeralPublic = new Uint8Array(ephemeralKeyPair.getPublic(false, 'array'));
-
-  const result = new Uint8Array(65 + 12 + encrypted.length);
-  result.set(ephemeralPublic, 0);
-  result.set(nonce, 65);
-  result.set(encrypted, 77);
-
-  const encryptedContent = Buffer.from(result).toString('hex');
-  const messages = [{ role: 'user', content: encryptedContent }];
-
-  // Step 4: Send E2EE request
-  console.log('📤 Sending encrypted request...');
-  const response = await fetch(`${BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${API_KEY}`,
-      'Content-Type': 'application/json',
-      'X-Venice-TEE-Client-Pub-Key': clientPublicKeyHex,
-      'X-Venice-TEE-Model-Pub-Key': modelPublicKey,
-      'X-Venice-TEE-Signing-Algo': 'ecdsa',
-    },
-    body: JSON.stringify({ model: MODEL, messages, stream: true }),
-  });
-
-  // Step 5: Decrypt response
-  console.log('📥 Decrypting response...\n');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    const text = decoder.decode(value);
-    for (const line of text.split('\n')) {
-      if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
-
-      try {
-        const chunk = JSON.parse(line.slice(6));
-        const content = chunk.choices?.[0]?.delta?.content;
-        if (!content) continue;
-
-        if (/^[0-9a-fA-F]+$/.test(content) && content.length >= 186) {
-          // Decrypt
-          const raw = hexToBytes(content);
-          const serverEphemeralPub = raw.slice(0, 65);
-          const nonce = raw.slice(65, 77);
-          const ciphertext = raw.slice(77);
-
-          const serverKey = ec.keyFromPublic(Buffer.from(serverEphemeralPub));
-          const sharedSecret = keyPair.derive(serverKey.getPublic());
-          const aesKey = hkdf(sha256, new Uint8Array(sharedSecret.toArray('be', 32)), undefined, HKDF_INFO, 32);
-          const cipher = gcm(aesKey, nonce);
-          const plaintext = new TextDecoder().decode(cipher.decrypt(ciphertext));
-          process.stdout.write(plaintext);
-        } else {
-          process.stdout.write(content);
-        }
-      } catch {}
-    }
-  }
-
-  console.log('\n\n🔐 Response decrypted end-to-end');
-}
-
-main().catch(console.error);
-```
-  </Tab>
-  <Tab title="Python">
-```python
-#!/usr/bin/env python3
-"""Complete E2EE implementation example for Venice AI API."""
-
-import os
-import json
-import secrets
-import requests
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
-from ecdsa import SECP256k1, VerifyingKey, SigningKey
 
-API_KEY = os.environ.get('API_KEY_VENICE')
-BASE_URL = 'https://api.venice.ai/api/v1'
-MODEL = 'e2ee-qwen3-6-35b-a3b'
-HKDF_INFO = b'ecdsa_encryption'
+CURVE = ec.SECP256K1()
+HKDF_INFO = b"ecdsa_encryption"
+PUBLIC_KEY_BYTES = 65
+NONCE_BYTES = 12
+TAG_BYTES = 16
+MIN_ENCRYPTED_HEX = 2 * (PUBLIC_KEY_BYTES + NONCE_BYTES + TAG_BYTES)
+HEX_BYTES = re.compile(r"(?:[0-9a-fA-F]{2})+")
 
-def main():
-    # Step 1: Generate ephemeral key pair
-    print('🔑 Generating ephemeral key pair...')
-    private_key = SigningKey.generate(curve=SECP256k1)
-    public_key = private_key.get_verifying_key()
-    client_public_key_hex = (b'\x04' + public_key.to_string()).hex()
 
-    # Step 2: Fetch and verify attestation
-    print('🔍 Fetching TEE attestation...')
-    client_nonce = secrets.token_hex(32)  # 32 bytes required
-    attestation_res = requests.get(
-        f'{BASE_URL}/tee/attestation',
-        params={'model': MODEL, 'nonce': client_nonce},
-        headers={'Authorization': f'Bearer {API_KEY}'},
-        timeout=30
-    )
-    attestation = attestation_res.json()
+def _derive_key(private_key: ec.EllipticCurvePrivateKey, public_key: ec.EllipticCurvePublicKey) -> bytes:
+    shared_x = private_key.exchange(ec.ECDH(), public_key)  # X coordinate of the shared point
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=HKDF_INFO).derive(shared_x)
 
-    if attestation.get('verified') != True or attestation.get('nonce') != client_nonce:
-        raise ValueError('Attestation verification failed')
 
-    model_public_key = attestation.get('signing_key') or attestation.get('signing_public_key')
-    print(f'✅ TEE attestation verified (provider: {attestation.get("tee_provider", "unknown")})')
+def public_key_hex(private_key: ec.EllipticCurvePrivateKey) -> str:
+    return private_key.public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
+    ).hex()
 
-    # Step 3: Encrypt message
-    print('🔐 Encrypting message...')
-    plaintext = 'What is 2+2? Answer briefly.'
 
-    # Normalize public key
-    key_hex = model_public_key
-    if not key_hex.startswith('04') and len(key_hex) == 128:
-        key_hex = '04' + key_hex
+def generate_client_key() -> ec.EllipticCurvePrivateKey:
+    return ec.generate_private_key(CURVE)
 
-    model_key_bytes = bytes.fromhex(key_hex)
-    model_verifying_key = VerifyingKey.from_string(model_key_bytes[1:], curve=SECP256k1)
 
-    # ECDH
-    ephemeral_private = SigningKey.generate(curve=SECP256k1)
-    ephemeral_public = ephemeral_private.get_verifying_key()
-    shared_point = model_verifying_key.pubkey.point * ephemeral_private.privkey.secret_multiplier
-    shared_secret = shared_point.x().to_bytes(32, 'big')
+def parse_public_key(hex_key: str) -> ec.EllipticCurvePublicKey:
+    """Accepts 65-byte uncompressed keys, or 64-byte keys without the 0x04 prefix."""
+    raw = bytes.fromhex(hex_key.removeprefix("0x"))
+    if len(raw) == 64:
+        raw = b"\x04" + raw
+    if len(raw) != PUBLIC_KEY_BYTES:
+        raise ValueError("Not a valid uncompressed secp256k1 public key")
+    return ec.EllipticCurvePublicKey.from_encoded_point(CURVE, raw)
 
-    # Derive AES key
-    hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=HKDF_INFO)
-    aes_key = hkdf.derive(shared_secret)
 
-    # Encrypt
-    nonce = os.urandom(12)
-    aesgcm = AESGCM(aes_key)
-    ciphertext = aesgcm.encrypt(nonce, plaintext.encode('utf-8'), None)
+def encrypt_field(plaintext: str, model_key: ec.EllipticCurvePublicKey) -> str:
+    ephemeral_key = ec.generate_private_key(CURVE)
+    nonce = os.urandom(NONCE_BYTES)
+    ciphertext = AESGCM(_derive_key(ephemeral_key, model_key)).encrypt(nonce, plaintext.encode("utf-8"), None)
+    return (bytes.fromhex(public_key_hex(ephemeral_key)) + nonce + ciphertext).hex()
 
-    ephemeral_public_bytes = b'\x04' + ephemeral_public.to_string()
-    result = ephemeral_public_bytes + nonce + ciphertext
-    encrypted_content = result.hex()
 
-    messages = [{'role': 'user', 'content': encrypted_content}]
-
-    # Step 4: Send E2EE request
-    print('📤 Sending encrypted request...')
-    response = requests.post(
-        f'{BASE_URL}/chat/completions',
-        headers={
-            'Authorization': f'Bearer {API_KEY}',
-            'Content-Type': 'application/json',
-            'X-Venice-TEE-Client-Pub-Key': client_public_key_hex,
-            'X-Venice-TEE-Model-Pub-Key': model_public_key,
-            'X-Venice-TEE-Signing-Algo': 'ecdsa'
-        },
-        json={'model': MODEL, 'messages': messages, 'stream': True},
-        stream=True,
-        timeout=60
-    )
-
-    # Step 5: Decrypt response
-    print('📥 Decrypting response...\n')
-
-    for line in response.iter_lines():
-        if not line:
-            continue
-        line_str = line.decode('utf-8')
-        if not line_str.startswith('data: ') or '[DONE]' in line_str:
-            continue
-
-        try:
-            chunk = json.loads(line_str[6:])
-            content = chunk.get('choices', [{}])[0].get('delta', {}).get('content', '')
-            if not content:
-                continue
-
-            # Check if encrypted
-            if len(content) >= 186 and all(c in '0123456789abcdefABCDEF' for c in content):
-                raw = bytes.fromhex(content)
-                server_ephemeral_pub = raw[:65]
-                nonce = raw[65:77]
-                ciphertext = raw[77:]
-
-                server_verifying_key = VerifyingKey.from_string(server_ephemeral_pub[1:], curve=SECP256k1)
-                shared_point = server_verifying_key.pubkey.point * private_key.privkey.secret_multiplier
-                shared_secret = shared_point.x().to_bytes(32, 'big')
-
-                hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=HKDF_INFO)
-                aes_key = hkdf.derive(shared_secret)
-
-                aesgcm = AESGCM(aes_key)
-                plaintext = aesgcm.decrypt(nonce, ciphertext, None)
-                print(plaintext.decode('utf-8'), end='', flush=True)
-            else:
-                print(content, end='', flush=True)
-        except Exception:
-            pass
-
-    print('\n\n🔐 Response decrypted end-to-end')
-
-if __name__ == '__main__':
-    main()
-```
-  </Tab>
-</Tabs>
-
-### E2EE Limitations
-
-<Warning>
-E2EE has some constraints due to the encryption requirements:
-</Warning>
-
-| Feature | Status |
-|---------|--------|
-| Streaming | **Recommended** |
-| Web search | **Disabled** (would leak content) |
-| File uploads | **Not supported** |
-| Function calling | **Depends on the model** (check `supportsFunctionCalling` in `/models`). Tool definitions are not encrypted. |
-| Venice system prompt | **Disabled** (must be encrypted client-side) |
-
-### Security Best Practices
-
-1. **Generate new key pairs per session** - Don't reuse ephemeral keys
-2. **Zero-fill private keys** - Clear private key bytes from memory when done
-3. **Verify attestation** - Always check `verified: true` and nonce match
-4. **Check for debug mode** - Reject attestations from debug enclaves
-5. **Use streaming** - Streaming is recommended for E2EE requests
-6. **Handle errors gracefully** - Don't expose decryption errors to users
-7. **Use 32-byte nonces** - TEE providers require exactly 32 bytes
-
-## Best Practices
-
-<AccordionGroup>
-  <Accordion title="Always verify attestation in production">
-    Don't just trust the `verified: true` response. Parse the Intel TDX quote client-side and verify the measurements match expected values. For NVIDIA GPUs, check the attestation via NVIDIA's verification service.
-  </Accordion>
-  
-  <Accordion title="Use fresh nonces">
-    Always generate a new random nonce for each attestation request. This prevents replay attacks where an attacker could serve a stale attestation.
-  </Accordion>
-  
-  <Accordion title="Verify key binding">
-    The signing key should be bound to the TDX REPORTDATA field. This proves the key was generated inside the enclave.
-  </Accordion>
-  
-  <Accordion title="Check for debug mode">
-    Verify the TDX attestation doesn't have debug flags set. A debug enclave can be inspected and should not be trusted for production.
-  </Accordion>
-  
-  <Accordion title="Use our SDKs for E2EE">
-    E2EE requires careful cryptographic implementation. Use our official SDKs rather than implementing the protocol yourself.
-  </Accordion>
-</AccordionGroup>
-
-## Checking Model Capabilities
-
-You can check if a model supports TEE or E2EE via the models endpoint:
-
-<CodeGroup>
-```bash cURL
-curl https://api.venice.ai/api/v1/models \
-  -H "Authorization: Bearer $API_KEY_VENICE" | jq '.data[] | select(.model_spec.capabilities.supportsTeeAttestation == true or .model_spec.capabilities.supportsE2EE == true) | {id, tee: .model_spec.capabilities.supportsTeeAttestation, e2ee: .model_spec.capabilities.supportsE2EE}'
-```
-
-```python Python
-models = client.models.list()
-
-for model in models.data:
-    caps = getattr(model, 'model_spec', {}).get('capabilities', {})
-    if caps.get('supportsTeeAttestation') or caps.get('supportsE2EE'):
-        print(f"{model.id}: TEE={caps.get('supportsTeeAttestation')}, E2EE={caps.get('supportsE2EE')}")
+def decrypt_field(hex_text: str, client_key: ec.EllipticCurvePrivateKey) -> str:
+    if len(hex_text) < MIN_ENCRYPTED_HEX or not HEX_BYTES.fullmatch(hex_text):
+        raise ValueError("Expected encrypted content but received plaintext")
+    raw = bytes.fromhex(hex_text)
+    sender_key = ec.EllipticCurvePublicKey.from_encoded_point(CURVE, raw[:PUBLIC_KEY_BYTES])
+    nonce = raw[PUBLIC_KEY_BYTES : PUBLIC_KEY_BYTES + NONCE_BYTES]
+    plaintext = AESGCM(_derive_key(client_key, sender_key)).decrypt(nonce, raw[PUBLIC_KEY_BYTES + NONCE_BYTES :], None)
+    return plaintext.decode("utf-8", errors="replace")
 ```
 </CodeGroup>
 
-## Error Handling
+### Complete example
 
-| Error | Cause | Solution |
-|-------|-------|----------|
-| `TEE attestation verification failed` | Attestation didn't pass validation | Retry or contact support |
-| `Attestation nonce mismatch` | Possible replay attack | Generate a fresh nonce |
-| `TDX debug mode detected` | Enclave is in debug mode | Don't use for production |
-| `Failed to decrypt field` | E2EE decryption failed server-side | Check your encryption implementation |
-| `Encrypted field is not valid hex` | Plaintext sent with E2EE headers | Encrypt all user/system messages |
-| `Invalid public key` | Wrong key format | Use 130 hex chars starting with `04` |
+This script checks the attestation, encrypts the prompt, sends a streaming request and decrypts the reply and any reasoning. It prints the completion ID at the end, which you can use to [fetch a response signature](#verify-a-response-signature).
 
-## Troubleshooting
+<CodeGroup>
+```javascript e2ee-chat.mjs
+// Usage: VENICE_API_KEY=... node e2ee-chat.mjs "Your prompt"
+import { bytesToHex, randomBytes } from '@noble/hashes/utils.js'
+import { decryptField, encryptField, generateClientKeyPair, parsePublicKey } from './e2ee.mjs'
 
-<AccordionGroup>
-  <Accordion title="502 Bad Gateway or 'Nonce must be exactly 32 bytes'">
-    The nonce length is incorrect. TEE providers require exactly **32 bytes (64 hex characters)**.
-    
-    - Use `crypto.randomBytes(32).toString('hex')` (JS) or `secrets.token_hex(32)` (Python)
-    - Common mistake: `secrets.token_hex(16)` produces 32 hex chars (16 bytes), not 32 bytes
-  </Accordion>
-  
-  <Accordion title="Attestation verification failed">
-    - Check that the model supports E2EE (`supportsE2EE: true`)
-    - Verify your API key is valid and has access to the requested model
-    - Verify network connectivity to Venice API
-  </Accordion>
-  
-  <Accordion title="Decryption failed">
-    - Ensure you're using the same private key that generated the public key sent in headers
-    - Check that the response content is actually hex-encoded (E2EE active)
-    - Verify the model public key matches what was used for encryption
-  </Accordion>
-  
-  <Accordion title="Encrypted field is not valid hex">
-    - All `user` and `system` role messages must be encrypted when E2EE headers are present
-    - Verify your encrypted content passes the `isValidEncrypted()` validation (minimum 186 hex characters)
-    - Check that encryption output is lowercase hex without any prefixes
-  </Accordion>
-  
-  <Accordion title="Invalid public key errors">
-    - Client public key must be exactly **130 hex characters** starting with `04`
-    - Use the `validateClientPubkey()` helper to verify format before sending
-    - Ensure you're using uncompressed public key format (65 bytes = 130 hex chars)
-  </Accordion>
-  
-  <Accordion title="Model not found">
-    - Verify the model ID is correct and the model supports E2EE
-    - Use the `/models` endpoint to verify available E2EE models
-  </Accordion>
-</AccordionGroup>
+const BASE_URL = 'https://api.venice.ai/api/v1'
+const API_KEY = process.env.VENICE_API_KEY
+const MODEL = 'e2ee-qwen3-6-35b-a3b'
 
-## Resources
+async function fetchModelKey(model) {
+  const nonce = bytesToHex(randomBytes(32))
+  const res = await fetch(`${BASE_URL}/tee/attestation?${new URLSearchParams({ model, nonce })}`, {
+    headers: { Authorization: `Bearer ${API_KEY}` },
+  })
+  if (!res.ok) throw new Error(`Attestation request failed: ${res.status} ${await res.text()}`)
+  const attestation = await res.json()
 
-- [Intel TDX Documentation](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html)
-- [NVIDIA Confidential Computing](https://developer.nvidia.com/confidential-computing)
+  // Minimum checks. See "Verifying TEE attestation" for stronger ones.
+  if (attestation.verified !== true) throw new Error('Venice did not verify the attestation')
+  if (attestation.nonce !== nonce) throw new Error('Attestation does not echo the nonce you sent')
+  if (attestation.model !== model) throw new Error('Attestation is for a different model')
+
+  const keyHex = attestation.signing_key ?? attestation.signing_public_key
+  if (!keyHex) throw new Error('Attestation has no signing key')
+  return { keyHex, key: parsePublicKey(keyHex) }
+}
+
+async function e2eeChat(model, messages) {
+  const modelKey = await fetchModelKey(model)
+  const client = generateClientKeyPair()
+
+  try {
+    const res = await fetch(`${BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json',
+        'X-Venice-TEE-Client-Pub-Key': client.publicKeyHex,
+        'X-Venice-TEE-Model-Pub-Key': modelKey.keyHex,
+        'X-Venice-TEE-Signing-Algo': 'ecdsa',
+      },
+      body: JSON.stringify({
+        model,
+        stream: true,
+        messages: messages.map((m) =>
+          m.role === 'user' || m.role === 'system' ? { ...m, content: encryptField(m.content, modelKey.key) } : m
+        ),
+      }),
+    })
+    if (!res.ok) throw new Error(`Chat request failed: ${res.status} ${await res.text()}`)
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let reply = ''
+    let reasoning = ''
+    let id
+    let finishReason
+
+    for await (const bytes of res.body) {
+      buffer += decoder.decode(bytes, { stream: true })
+      let end
+      while ((end = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, end).trim()
+        buffer = buffer.slice(end + 1)
+        if (!line.startsWith('data:')) continue
+        const data = line.slice(5).trim()
+        if (data === '[DONE]') continue
+
+        const event = JSON.parse(data)
+        if (event.error) throw new Error(`Stream error: ${JSON.stringify(event.error)}`)
+        id ??= event.id
+        const choice = event.choices?.[0]
+        if (choice?.delta?.reasoning_content) {
+          reasoning += decryptField(choice.delta.reasoning_content, client.privateKey)
+        }
+        if (choice?.delta?.content) {
+          const text = decryptField(choice.delta.content, client.privateKey)
+          reply += text
+          process.stdout.write(text)
+        }
+        finishReason = choice?.finish_reason ?? finishReason
+      }
+    }
+
+    if (!finishReason) throw new Error('Stream ended without a finish reason, so the reply may be truncated')
+    return { id, reply, reasoning }
+  } finally {
+    client.privateKey.fill(0)
+  }
+}
+
+const prompt = process.argv[2] ?? 'What is 2+2? Answer briefly.'
+const { id, reasoning } = await e2eeChat(MODEL, [{ role: 'user', content: prompt }])
+if (reasoning) console.log(`\n\nReasoning: ${reasoning}`)
+console.log(`\n\nCompletion ID: ${id}`)
+```
+
+```python e2ee_chat.py
+# Usage: VENICE_API_KEY=... python e2ee_chat.py "Your prompt"
+import json
+import os
+import secrets
+import sys
+
+import requests
+
+from venice_e2ee import decrypt_field, encrypt_field, generate_client_key, parse_public_key, public_key_hex
+
+BASE_URL = "https://api.venice.ai/api/v1"
+API_KEY = os.environ["VENICE_API_KEY"]
+MODEL = "e2ee-qwen3-6-35b-a3b"
+HEADERS = {"Authorization": f"Bearer {API_KEY}"}
+
+
+def fetch_model_key(model: str) -> str:
+    nonce = secrets.token_hex(32)  # 32 bytes = 64 hex characters
+    res = requests.get(f"{BASE_URL}/tee/attestation", params={"model": model, "nonce": nonce}, headers=HEADERS, timeout=30)
+    res.raise_for_status()
+    attestation = res.json()
+
+    # Minimum checks. See "Verifying TEE attestation" for stronger ones.
+    if attestation.get("verified") is not True:
+        raise RuntimeError("Venice did not verify the attestation")
+    if attestation.get("nonce") != nonce:
+        raise RuntimeError("Attestation does not echo the nonce you sent")
+    if attestation.get("model") != model:
+        raise RuntimeError("Attestation is for a different model")
+
+    key_hex = attestation.get("signing_key") or attestation.get("signing_public_key")
+    if not key_hex:
+        raise RuntimeError("Attestation has no signing key")
+    return key_hex
+
+
+def e2ee_chat(model: str, messages: list[dict]) -> tuple[str | None, str, str]:
+    model_key_hex = fetch_model_key(model)
+    model_key = parse_public_key(model_key_hex)
+    client_key = generate_client_key()
+
+    body = {
+        "model": model,
+        "stream": True,
+        "messages": [
+            {**m, "content": encrypt_field(m["content"], model_key)} if m["role"] in ("user", "system") else m
+            for m in messages
+        ],
+    }
+    headers = {
+        **HEADERS,
+        "X-Venice-TEE-Client-Pub-Key": public_key_hex(client_key),
+        "X-Venice-TEE-Model-Pub-Key": model_key_hex,
+        "X-Venice-TEE-Signing-Algo": "ecdsa",
+    }
+
+    reply, reasoning, completion_id, finish_reason = "", "", None, None
+    with requests.post(f"{BASE_URL}/chat/completions", json=body, headers=headers, stream=True, timeout=120) as res:
+        res.raise_for_status()
+        res.encoding = "utf-8"
+        for line in res.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                continue
+
+            event = json.loads(data)
+            if "error" in event:
+                raise RuntimeError(f"Stream error: {event['error']}")
+            completion_id = completion_id or event.get("id")
+            choice = (event.get("choices") or [{}])[0]
+            delta = choice.get("delta") or {}
+            if delta.get("reasoning_content"):
+                reasoning += decrypt_field(delta["reasoning_content"], client_key)
+            content = delta.get("content")
+            if content:
+                text = decrypt_field(content, client_key)
+                reply += text
+                print(text, end="", flush=True)
+            finish_reason = choice.get("finish_reason") or finish_reason
+
+    if not finish_reason:
+        raise RuntimeError("Stream ended without a finish reason, so the reply may be truncated")
+    return completion_id, reply, reasoning
+
+
+if __name__ == "__main__":
+    prompt = sys.argv[1] if len(sys.argv) > 1 else "What is 2+2? Answer briefly."
+    completion_id, _, reasoning = e2ee_chat(MODEL, [{"role": "user", "content": prompt}])
+    if reasoning:
+        print(f"\n\nReasoning: {reasoning}")
+    print(f"\n\nCompletion ID: {completion_id}")
+```
+</CodeGroup>
+
+Run it with your API key:
+
+<CodeGroup>
+```bash JavaScript
+VENICE_API_KEY=your-key node e2ee-chat.mjs "What is 2+2?"
+```
+
+```bash Python
+VENICE_API_KEY=your-key python e2ee_chat.py "What is 2+2?"
+```
+</CodeGroup>
+
+### Non-streaming responses
+
+With `stream: false`, the reply arrives in one response. Its `content` and `reasoning_content` are each encrypted as a single field:
+
+<CodeGroup>
+```javascript decrypt-completion.mjs
+import { decryptField } from './e2ee.mjs'
+
+// For a request sent with stream: false.
+export function decryptCompletion(completion, clientPrivateKey) {
+  const { message, finish_reason: finishReason } = completion.choices[0]
+  return {
+    finishReason,
+    reply: message.content ? decryptField(message.content, clientPrivateKey) : '',
+    reasoning: message.reasoning_content ? decryptField(message.reasoning_content, clientPrivateKey) : '',
+  }
+}
+```
+
+```python decrypt_completion.py
+from venice_e2ee import decrypt_field
+
+
+def decrypt_completion(completion: dict, client_key) -> dict:
+    """For a request sent with "stream": False."""
+    choice = completion["choices"][0]
+    message = choice["message"]
+    return {
+        "finish_reason": choice.get("finish_reason"),
+        "reply": decrypt_field(message["content"], client_key) if message.get("content") else "",
+        "reasoning": decrypt_field(message["reasoning_content"], client_key) if message.get("reasoning_content") else "",
+    }
+```
+</CodeGroup>
+
+### Multi-turn conversations
+
+Keep the conversation history in plaintext on your side. For each new request, fetch or reuse a recently checked enclave key, generate a new client key pair, and encrypt every `user` and `system` message again. The examples send earlier `assistant` replies as plaintext, which Venice can read, so leave them out of the history if Venice shouldn't see them.
+
+### Production checklist
+
+- Check the attestation before trusting its key: `verified` is `true`, the nonce matches the one you sent, and the model matches the one you asked for. For stronger guarantees, follow [Verifying TEE attestation](#verifying-tee-attestation).
+- Generate a fresh 32-byte nonce for every attestation request.
+- Generate a new client key pair for every request, and discard the private key afterwards. JavaScript can overwrite the key bytes, as the example does. Python can't reliably wipe memory, so keep keys short-lived.
+- Stop on any `content` or `reasoning_content` value that isn't encrypted or fails to decrypt.
+- When streaming, treat a stream without a `finish_reason` as incomplete.
+- Don't log plaintext prompts or decrypted replies.
+
+## Verifying TEE attestation
+
+Attestation is how a TEE proves what it is. Venice exposes two endpoints for this, for any model with `supportsTeeAttestation`:
+
+- **`GET /tee/attestation`** returns hardware evidence for the enclave serving a model, and the public key bound to that enclave. It proves which enclave you're talking to.
+- **`GET /tee/signature`** returns the enclave's signature over a specific completion. It proves that a reply came from that enclave.
+
+### Fetch an attestation
+
+```bash
+NONCE=$(openssl rand -hex 32)
+
+curl "https://api.venice.ai/api/v1/tee/attestation?model=e2ee-qwen3-6-35b-a3b&nonce=$NONCE" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+| Parameter | Description |
+| --- | --- |
+| `model` | Required. A model ID with `supportsTeeAttestation`. |
+| `nonce` | A fresh random value: 32 bytes, hex-encoded to 64 characters. The enclave includes it in its evidence, which proves the attestation was produced for your request and isn't a replay. Some enclaves reject nonces of any other length. |
+
+#### Response fields
+
+| Field | Description |
+| --- | --- |
+| `verified` | `true` if the evidence passed Venice's server-side verification. |
+| `nonce` | The nonce the evidence was produced for. It should equal the one you sent. |
+| `model` | The attested model ID. |
+| `signing_key` | The enclave's secp256k1 public key, hex-encoded. E2EE clients encrypt to this key, and the enclave signs replies with it. May be omitted for some TEE-only models. |
+| `signing_address` | The Ethereum-style address of `signing_key`: the last 20 bytes of the Keccak-256 hash of the uncompressed key without its `04` prefix. |
+| `intel_quote` | The Intel TDX quote, hex-encoded. It contains the enclave's measurements and 64 bytes of report data. |
+| `nvidia_payload` | NVIDIA GPU attestation evidence, as a JSON string with `nonce`, `arch` and `evidence_list`, when the enclave uses a confidential-computing GPU. |
+| `server_verification` | The individual results of Venice's checks: `tdx.valid`, `nvidia.valid`, `signingAddressBinding.bound`, `nonceBinding.bound` and `verifiedAt`. |
+| `tee_provider` | An identifier for the operator running the enclave. |
+
+### Levels of verification
+
+How much you verify yourself decides how much you rely on Venice.
+
+| Level | What you check | What you still rely on Venice for |
+| --- | --- | --- |
+| 1. Venice's result | `verified` is `true`, and `nonce` and `model` match your request | Everything about the evidence |
+| 2. Local consistency | Level 1, plus the TDX quote: debug mode is off, the signing key is bound to the quote's report data, and `signing_address` matches the key | The quote's signature and certificate chain, the GPU evidence, and the nonce binding |
+| 3. Independent verification | Level 2, plus the quote signature and certificate chain, the GPU evidence, and the enclave measurements against reference values | Nothing about the attestation itself |
+
+The [E2EE examples](#complete-example) do level 1. The code below does level 2, the same checks as `venice tee verify` in the [Venice CLI](/guides/integrations/venice-cli).
+
+#### Check the quote locally
+
+An Intel TDX quote starts with a 48-byte header. Version 5 quotes add a 6-byte body descriptor after it. The TD report follows, and the fields used here sit at these offsets from its start:
+
+| Offset | Size | Field | What to check |
+| --- | --- | --- | --- |
+| 120 | 8 | `TDATTRIBUTES` | Bit 0 of the first byte is the debug flag. It must be `0`: a debug enclave can be inspected by its host. |
+| 136 | 48 | `MRTD` | Measurement of the initial enclave image. Compare against reference values for level 3. |
+| 328 | 4 × 48 | `RTMR0`–`RTMR3` | Runtime measurements. Compare against reference values for level 3. |
+| 520 | 64 | `REPORTDATA` | The first 20 bytes must equal `signing_address`, which proves the signing key was created inside this enclave. |
+
+Install the dependencies:
+
+<CodeGroup>
+```bash JavaScript
+npm install @noble/curves @noble/hashes
+```
+
+```bash Python
+pip install requests eth-account
+```
+</CodeGroup>
+
+This module checks an attestation and, [further down](#verify-a-response-signature), a response signature:
+
+<CodeGroup>
+```javascript verify.mjs
+import { secp256k1 } from '@noble/curves/secp256k1.js'
+import { keccak_256 } from '@noble/hashes/sha3.js'
+import { bytesToHex, concatBytes, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js'
+
+const strip0x = (hex) => hex.replace(/^0x/, '').toLowerCase()
+
+// Ethereum-style address of an uncompressed secp256k1 public key.
+export function addressOf(publicKeyHex) {
+  let key = hexToBytes(strip0x(publicKeyHex))
+  if (key.length === 64) key = Uint8Array.of(0x04, ...key)
+  if (key.length !== 65 || key[0] !== 0x04) throw new Error('Expected an uncompressed public key')
+  return bytesToHex(keccak_256(key.subarray(1)).subarray(12))
+}
+
+// Reads the TD report fields from an Intel TDX quote (version 4 or 5).
+export function parseTdxQuote(hex) {
+  const quote = hexToBytes(strip0x(hex))
+  const view = new DataView(quote.buffer, quote.byteOffset, quote.byteLength)
+  if (quote.length < 48 || view.getUint32(4, true) !== 0x81) throw new Error('Not a TDX quote')
+
+  const version = view.getUint16(0, true)
+  if (version !== 4 && version !== 5) throw new Error(`Unsupported quote version ${version}`)
+  const body = version === 5 ? 54 : 48 // v5 adds a 6-byte body descriptor
+  if (quote.length < body + 584) throw new Error('Quote is truncated')
+
+  const field = (offset, length) => quote.subarray(body + offset, body + offset + length)
+  return {
+    tdAttributes: field(120, 8),
+    mrtd: bytesToHex(field(136, 48)),
+    rtmr: [328, 376, 424, 472].map((offset) => bytesToHex(field(offset, 48))),
+    reportData: field(520, 64),
+  }
+}
+
+// Returns a list of failed checks. An empty list means every check passed.
+export function checkAttestation(attestation, { model, nonce }) {
+  const failures = []
+  if (attestation.verified !== true) failures.push('Venice did not verify the attestation')
+  if (attestation.nonce !== nonce) failures.push('Attestation does not echo the nonce you sent')
+  if (attestation.model !== model) failures.push('Attestation is for a different model')
+  if (attestation.server_verification?.nonceBinding?.bound !== true) {
+    failures.push('Nonce is not bound to the attestation evidence')
+  }
+
+  const signingKey = attestation.signing_key ?? attestation.signing_public_key
+  if (!signingKey) return [...failures, 'Attestation has no signing key']
+  if (!attestation.intel_quote) return [...failures, 'Attestation has no TDX quote']
+
+  const quote = parseTdxQuote(attestation.intel_quote)
+  if (quote.tdAttributes[0] & 0x01) failures.push('Enclave is running in debug mode')
+
+  const address = addressOf(signingKey)
+  if (bytesToHex(quote.reportData.subarray(0, 20)) !== address) {
+    failures.push('Signing key is not bound to the quote REPORTDATA')
+  }
+  if (attestation.signing_address && strip0x(attestation.signing_address) !== address) {
+    failures.push('signing_address does not match the signing key')
+  }
+  return failures
+}
+
+// Recovers the address that produced an EIP-191 (personal_sign) signature over `text`.
+export function recoverSigner(text, signatureHex) {
+  const sig = hexToBytes(strip0x(signatureHex))
+  if (sig.length !== 65) throw new Error('Expected a 65-byte r || s || v signature')
+  const message = utf8ToBytes(text)
+  const digest = keccak_256(concatBytes(utf8ToBytes(`\x19Ethereum Signed Message:\n${message.length}`), message))
+  const recovery = sig[64] >= 27 ? sig[64] - 27 : sig[64]
+  const publicKey = secp256k1.Signature.fromBytes(sig.subarray(0, 64), 'compact')
+    .addRecoveryBit(recovery)
+    .recoverPublicKey(digest)
+    .toBytes(false)
+  return bytesToHex(keccak_256(publicKey.subarray(1)).subarray(12))
+}
+
+// Checks a /tee/signature response against the attested signer and the reply you received.
+// For E2EE requests, `reply` is the decrypted reply text.
+// `covers` is 'reply' when the signed text is the reply itself, or 'hashes' when it is a
+// request and response hash pair reported by the enclave.
+export function checkSignature(signatureResponse, { signingAddress, reply }) {
+  const { text } = signatureResponse
+  const signature = typeof signatureResponse.signature === 'string'
+    ? signatureResponse.signature
+    : signatureResponse.signature?.value
+  if (!text || !signature) {
+    const reason = signatureResponse.receipt
+      ? 'This model returns a receipt instead of a signed text'
+      : 'Signature response has no signed text or signature'
+    return { covers: null, failures: [reason] }
+  }
+
+  const failures = []
+  if (recoverSigner(text, signature) !== strip0x(signingAddress)) {
+    failures.push('Signature was not made by the attested signing key')
+  }
+  // Either "requestHash:responseHash" or "model:requestHash:responseHash".
+  if (/(^|:)[0-9a-f]{64}:[0-9a-f]{64}$/.test(text)) return { covers: 'hashes', failures }
+  if (text !== reply) failures.push('Signed text does not match the reply')
+  return { covers: 'reply', failures }
+}
+```
+
+```python venice_verify.py
+import re
+import struct
+
+from eth_account import Account
+from eth_account.messages import encode_defunct
+from eth_utils import keccak
+
+
+def _strip0x(value: str) -> str:
+    return value.lower().removeprefix("0x")
+
+
+def address_of(public_key_hex: str) -> str:
+    """Ethereum-style address of an uncompressed secp256k1 public key."""
+    key = bytes.fromhex(_strip0x(public_key_hex))
+    if len(key) == 64:
+        key = b"\x04" + key
+    if len(key) != 65 or key[0] != 0x04:
+        raise ValueError("Expected an uncompressed public key")
+    return keccak(key[1:])[12:].hex()
+
+
+def parse_tdx_quote(hex_quote: str) -> dict:
+    """Reads the TD report fields from an Intel TDX quote (version 4 or 5)."""
+    quote = bytes.fromhex(_strip0x(hex_quote))
+    if len(quote) < 48 or struct.unpack_from("<I", quote, 4)[0] != 0x81:
+        raise ValueError("Not a TDX quote")
+    version = struct.unpack_from("<H", quote, 0)[0]
+    if version not in (4, 5):
+        raise ValueError(f"Unsupported quote version {version}")
+    body = 54 if version == 5 else 48  # v5 adds a 6-byte body descriptor
+    if len(quote) < body + 584:
+        raise ValueError("Quote is truncated")
+
+    def field(offset: int, length: int) -> bytes:
+        return quote[body + offset : body + offset + length]
+
+    return {
+        "td_attributes": field(120, 8),
+        "mrtd": field(136, 48).hex(),
+        "rtmr": [field(offset, 48).hex() for offset in (328, 376, 424, 472)],
+        "report_data": field(520, 64),
+    }
+
+
+def check_attestation(attestation: dict, model: str, nonce: str) -> list[str]:
+    """Returns a list of failed checks. An empty list means every check passed."""
+    failures = []
+    if attestation.get("verified") is not True:
+        failures.append("Venice did not verify the attestation")
+    if attestation.get("nonce") != nonce:
+        failures.append("Attestation does not echo the nonce you sent")
+    if attestation.get("model") != model:
+        failures.append("Attestation is for a different model")
+    nonce_binding = (attestation.get("server_verification") or {}).get("nonceBinding") or {}
+    if nonce_binding.get("bound") is not True:
+        failures.append("Nonce is not bound to the attestation evidence")
+
+    signing_key = attestation.get("signing_key") or attestation.get("signing_public_key")
+    if not signing_key:
+        return failures + ["Attestation has no signing key"]
+    if not attestation.get("intel_quote"):
+        return failures + ["Attestation has no TDX quote"]
+
+    quote = parse_tdx_quote(attestation["intel_quote"])
+    if quote["td_attributes"][0] & 0x01:
+        failures.append("Enclave is running in debug mode")
+
+    address = address_of(signing_key)
+    if quote["report_data"][:20].hex() != address:
+        failures.append("Signing key is not bound to the quote REPORTDATA")
+    if attestation.get("signing_address") and _strip0x(attestation["signing_address"]) != address:
+        failures.append("signing_address does not match the signing key")
+    return failures
+
+
+def recover_signer(text: str, signature_hex: str) -> str:
+    """Recovers the address that produced an EIP-191 (personal_sign) signature over `text`."""
+    return _strip0x(Account.recover_message(encode_defunct(text=text), signature=signature_hex))
+
+
+def check_signature(signature_response: dict, signing_address: str, reply: str) -> tuple[str | None, list[str]]:
+    """Checks a /tee/signature response against the attested signer and the reply you received.
+
+    For E2EE requests, `reply` is the decrypted reply text. Returns (covers, failures):
+    covers is "reply" when the signed text is the reply itself, or "hashes" when it is a
+    request and response hash pair reported by the enclave.
+    """
+    text = signature_response.get("text")
+    signature = signature_response.get("signature")
+    if isinstance(signature, dict):
+        signature = signature.get("value")
+    if not text or not signature:
+        if signature_response.get("receipt"):
+            return None, ["This model returns a receipt instead of a signed text"]
+        return None, ["Signature response has no signed text or signature"]
+
+    failures = []
+    if recover_signer(text, signature) != _strip0x(signing_address):
+        failures.append("Signature was not made by the attested signing key")
+    # Either "requestHash:responseHash" or "model:requestHash:responseHash".
+    if re.search(r"(^|:)[0-9a-f]{64}:[0-9a-f]{64}$", text):
+        return "hashes", failures
+    if text != reply:
+        failures.append("Signed text does not match the reply")
+    return "reply", failures
+```
+</CodeGroup>
+
+Use it to check a live attestation:
+
+<CodeGroup>
+```javascript check-attestation.mjs
+import { bytesToHex, randomBytes } from '@noble/hashes/utils.js'
+import { checkAttestation, parseTdxQuote } from './verify.mjs'
+
+const BASE_URL = 'https://api.venice.ai/api/v1'
+const MODEL = 'e2ee-qwen3-6-35b-a3b'
+
+const nonce = bytesToHex(randomBytes(32))
+const res = await fetch(`${BASE_URL}/tee/attestation?${new URLSearchParams({ model: MODEL, nonce })}`, {
+  headers: { Authorization: `Bearer ${process.env.VENICE_API_KEY}` },
+})
+const attestation = await res.json()
+
+const failures = checkAttestation(attestation, { model: MODEL, nonce })
+if (failures.length) throw new Error(`Attestation rejected:\n- ${failures.join('\n- ')}`)
+
+const quote = parseTdxQuote(attestation.intel_quote)
+console.log('Attestation passed local checks')
+console.log('Signing address:', attestation.signing_address)
+console.log('MRTD:', quote.mrtd)
+```
+
+```python check_attestation.py
+import os
+import secrets
+
+import requests
+
+from venice_verify import check_attestation, parse_tdx_quote
+
+BASE_URL = "https://api.venice.ai/api/v1"
+MODEL = "e2ee-qwen3-6-35b-a3b"
+
+nonce = secrets.token_hex(32)
+attestation = requests.get(
+    f"{BASE_URL}/tee/attestation",
+    params={"model": MODEL, "nonce": nonce},
+    headers={"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"},
+    timeout=30,
+).json()
+
+failures = check_attestation(attestation, MODEL, nonce)
+if failures:
+    raise SystemExit("Attestation rejected:\n- " + "\n- ".join(failures))
+
+quote = parse_tdx_quote(attestation["intel_quote"])
+print("Attestation passed local checks")
+print("Signing address:", attestation["signing_address"])
+print("MRTD:", quote["mrtd"])
+```
+</CodeGroup>
+
+#### Verify independently
+
+Level 3 removes Venice from the trust path for attestation:
+
+- **TDX quote**: verify the quote signature and its certificate chain back to Intel, using Intel's DCAP quote verification tooling. See the [Intel TDX documentation](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html).
+- **GPU evidence**: verify `nvidia_payload` with NVIDIA's attestation tooling. See [NVIDIA Confidential Computing](https://developer.nvidia.com/confidential-computing).
+- **Nonce binding**: confirm your nonce is part of the signed evidence, not just echoed in the response.
+- **Measurements**: compare `MRTD` and `RTMR0`–`RTMR3` with reference values for the enclave image.
+
+<Note>
+Reference measurements and the enclave's report-data layout for the nonce aren't published in these docs yet. Until they are, level 2 is the strongest check you can do from this page.
+</Note>
+
+### Verify a response signature
+
+After a completion finishes, fetch the enclave's signature for it with the completion ID: the `id` field of the response or of any streamed chunk.
+
+```bash
+curl "https://api.venice.ai/api/v1/tee/signature?model=e2ee-qwen3-6-35b-a3b&request_id=chatcmpl-abc123" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+| Field | Description |
+| --- | --- |
+| `text` | The exact text the enclave signed. |
+| `signature` | An [EIP-191](https://eips.ethereum.org/EIPS/eip-191) (`personal_sign`) signature over `text`: 65 bytes, `r ‖ s ‖ v`, hex-encoded. |
+| `signing_address` | The address of the signing key, as reported by the enclave. |
+| `payload` | `request_hash`, `response_hash` and `timestamp`, as reported by the enclave. |
+| `request_id` | The completion ID the signature belongs to. |
+
+Some models return a `receipt` object instead of `text` and `signature`. The steps and code below don't cover receipts.
+
+To verify a signature:
+
+1. Recover the signer's address from `signature` over `text`.
+2. Check that it equals the `signing_address` from an attestation that passed your checks. Don't rely on the `signing_address` in the signature response for this.
+3. Check what `text` covers. It takes one of two forms:
+   - **The reply text itself.** It must equal the reply you received exactly. For E2EE requests, compare it with the decrypted reply.
+   - **Two hex digests joined by a colon,** sometimes after a model name, as in `model:requestHash:responseHash`. These are request and response hashes reported by the enclave. The signature proves the enclave signed them, but the exact bytes it hashed aren't documented, so you can't recompute them yourself yet. Treat them as reported values, not as proof about your request.
+
+`request_id` isn't covered by the signature, so it doesn't prove by itself that a signature belongs to your request. Only the signed text ties the two together.
+
+The module above includes `checkSignature` (`check_signature` in Python). It also reports which form the signed text took:
+
+<CodeGroup>
+```javascript check-signature.mjs
+import { checkSignature } from './verify.mjs'
+
+const BASE_URL = 'https://api.venice.ai/api/v1'
+const MODEL = 'e2ee-qwen3-6-35b-a3b'
+
+// From your own records: the completion ID, the full (decrypted) reply text, and
+// the signing address from an attestation that passed your checks.
+const [completionId, reply, signingAddress] = process.argv.slice(2)
+
+const res = await fetch(`${BASE_URL}/tee/signature?${new URLSearchParams({ model: MODEL, request_id: completionId })}`, {
+  headers: { Authorization: `Bearer ${process.env.VENICE_API_KEY}` },
+})
+const signature = await res.json()
+
+const { covers, failures } = checkSignature(signature, { signingAddress, reply })
+if (failures.length) throw new Error(`Signature rejected:\n- ${failures.join('\n- ')}`)
+console.log(
+  covers === 'reply'
+    ? 'The attested enclave key signed this exact reply'
+    : `The attested enclave key signed request and response hashes it reported: ${signature.text}`
+)
+```
+
+```python check_signature.py
+import os
+import sys
+
+import requests
+
+from venice_verify import check_signature
+
+BASE_URL = "https://api.venice.ai/api/v1"
+MODEL = "e2ee-qwen3-6-35b-a3b"
+
+# From your own records: the completion ID, the full (decrypted) reply text, and
+# the signing address from an attestation that passed your checks.
+completion_id, reply, signing_address = sys.argv[1:4]
+
+signature = requests.get(
+    f"{BASE_URL}/tee/signature",
+    params={"model": MODEL, "request_id": completion_id},
+    headers={"Authorization": f"Bearer {os.environ['VENICE_API_KEY']}"},
+    timeout=30,
+).json()
+
+covers, failures = check_signature(signature, signing_address, reply)
+if failures:
+    raise SystemExit("Signature rejected:\n- " + "\n- ".join(failures))
+if covers == "reply":
+    print("The attested enclave key signed this exact reply")
+else:
+    print(f"The attested enclave key signed request and response hashes it reported: {signature['text']}")
+```
+</CodeGroup>
+
+### Verify with the Venice CLI
+
+The [Venice CLI](/guides/integrations/venice-cli) wraps both endpoints:
+
+```bash
+# Show the attestation report
+venice tee attestation e2ee-qwen3-6-35b-a3b --verbose
+
+# Run the level 2 checks
+venice tee verify e2ee-qwen3-6-35b-a3b
+
+# Check a response signature against a signing address you trust and the (decrypted) reply you received
+venice tee signature e2ee-qwen3-6-35b-a3b <completion-id> \
+  --verify-signer <signing-address> \
+  --expect-content reply.txt
+```
+
+## Errors and troubleshooting
+
+| Error | Cause | Fix |
+| --- | --- | --- |
+| `Encrypted field is not valid hex` | A `user` or `system` message was sent in plaintext with the E2EE headers | Encrypt every message in both roles |
+| `Failed to decrypt field` | The enclave couldn't decrypt a field | Check that you encrypted to the key from the latest attestation, and that the field follows the wire format above |
+| `Invalid public key` | A key header has the wrong format | Send uncompressed keys: 130 hex characters starting with `04` |
+| `Nonce must be exactly 32 bytes` | The attestation nonce has the wrong length | Use 32 random bytes, hex-encoded to 64 characters. `secrets.token_hex(16)` is only 16 bytes |
+| `502` with `TEE_ATTESTATION_FAILED` or `TEE_SIGNATURE_FAILED` | The request to the enclave failed. Some enclaves fail this way on a nonce of the wrong length. Otherwise, the TEE provider may be temporarily unavailable | Check that the nonce is 32 bytes, then retry. See [Error codes](/api-reference/error-codes) |
+| `TEE attestation verification failed` | The attestation didn't pass Venice's checks | Retry. If it keeps failing, contact support |
+| Decryption fails on the client | The chunk was encrypted to a different key, or isn't ciphertext | Decrypt with the private key that matches `X-Venice-TEE-Client-Pub-Key` on the same request |
