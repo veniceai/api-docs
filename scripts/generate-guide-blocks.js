@@ -20,7 +20,8 @@ const path = require('path');
 const { ROOT, CATALOG_PATH, readJson, replaceBlock } = require('./guides/shared');
 
 const GUIDES = [
-  require('./guides/image-generation')
+  require('./guides/image-generation'),
+  require('./guides/video-generation')
 ];
 
 function main() {

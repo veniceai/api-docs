@@ -41,6 +41,11 @@ function usd(value) {
   return `$${Number(value.toFixed(4))}`;
 }
 
+// A rate per second, minute or hour, to two or three significant figures.
+function rate(value) {
+  return value >= 0.1 ? `$${value.toFixed(2)}` : `$${Number(value.toFixed(3))}`;
+}
+
 // Newest first, so a fallback is the most recent match.
 function newestFirst(a, b) {
   return (b.created || 0) - (a.created || 0) || a.id.localeCompare(b.id);
@@ -125,6 +130,7 @@ module.exports = {
   modelHref,
   modelLink,
   privacyLabel,
+  rate,
   readJson,
   renderMedia,
   renderOf,
