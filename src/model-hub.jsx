@@ -3028,6 +3028,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
       model.privacy === 'e2ee' ? '- The request below sends the prompt as plaintext, so it runs TEE-only. For end-to-end encryption, send encrypted messages with the E2EE headers: https://docs.venice.ai/guides/features/tee-e2ee-models#e2ee-models' : null,
       measured,
+      ...benchmarkSummaries(model).map(([name, text]) => `- ${name}: ${text}. How it's run: https://docs.venice.ai/models/methodology#benchmarks`),
       `- Docs: https://docs.venice.ai/models/${family.slug}`,
       '',
       '```bash',
@@ -3602,6 +3603,18 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return runs.find(r => r.reasoning === 'default') || runs.reduce((a, b) => (b.accuracy > a.accuracy ? b : a));
   };
   const hasBenchmarks = model => BENCHMARKS.some(b => headlineRun(model, b.key));
+
+  // Each benchmark score with how its run was made, for agents: what the
+  // page leaves out of sight.
+  const benchmarkSummaries = model => BENCHMARKS.map(b => {
+    const run = headlineRun(model, b.key);
+    if (!run) return null;
+    const d = new Date(`${run.measuredOn}T00:00:00Z`);
+    const setting = !(model.text && model.text.reasoning) ? ''
+      : run.reasoning === 'default' ? ' at its default reasoning'
+        : run.reasoning === 'off' ? ' with reasoning off' : ` at reasoning_effort ${run.reasoning}`;
+    return [b.name, `${fmtAccuracy(run.accuracy)} \u00b1${run.ci95.toFixed(1)} (95% interval), run by Venice through the API${setting} on ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`];
+  }).filter(Boolean);
 
   // A run is named with its reasoning setting when that isn't how the API
   // runs the model by default, as Artificial Analysis names configurations.
