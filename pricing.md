@@ -76,7 +76,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Gemini 4 Hydrogen | `gemini-4-hydrogen` | $1.875 | $9.375 | $0.09375 | — | Anonymized |
 | Gemini 4 Neon | `gemini-4-neon` | $3.75 | $18.75 | $0.1875 | — | Anonymized |
 | Gemma 4 26B A4B Uncensored | `e2ee-gemma-4-26b-a4b-uncensored-p` | $0.19 | $0.88 | — | — | E2EE |
-| Gemma 4 Uncensored | `gemma-4-uncensored` | $0.1625 | $0.50 | — | — | Private |
+| Gemma 4 Uncensored (Retiring) | `gemma-4-uncensored` | $0.1625 | $0.50 | — | — | Private |
 | GLM 4.6 | `zai-org-glm-4.6` | $0.43 | $1.75 | $0.08 | — | Private |
 | GLM 4.7 | `zai-org-glm-4.7` | $0.55 | $2.65 | $0.11 | — | Private |
 | GLM 4.7 Flash Heretic | `olafangensan-glm-4.7-flash-heretic` | $0.07 | $0.40 | $0.035 | — | Private |
