@@ -817,6 +817,35 @@ function relatedFor(family, families, modelsById) {
   return { similar, versions };
 }
 
+// An uncensored build named for its base model ("GLM 5.3 Flash Uncensored")
+// and that model link to each other. The build keeps a page of its own, since
+// its weights, price and limits differ.
+const UNCENSORED_BUILD = /\s+(?:uncensored|abliterated|heretic)$/i;
+const nameKey = name => name.toLowerCase().replace(/[()]/g, '').replace(/\s+/g, ' ').trim();
+
+function uncensoredLinks(families) {
+  const links = Object.fromEntries(families.map(f => [f.slug, { base: null, builds: [] }]));
+  const bases = new Map();
+  for (const family of families.filter(f => f.task === 'chat' && !f.uncensored)) {
+    const key = nameKey(family.name);
+    bases.set(key, bases.has(key) ? null : family);
+  }
+  for (const build of families.filter(f => f.task === 'chat' && f.uncensored)) {
+    const stem = build.name.replace(/ E2EE$/, '');
+    const base = UNCENSORED_BUILD.test(stem) && bases.get(nameKey(stem.replace(UNCENSORED_BUILD, '')));
+    if (!base) continue;
+    links[build.slug].base = base.slug;
+    links[base.slug].builds.push(build.slug);
+  }
+  Object.values(links).forEach(link => link.builds.sort());
+  return links;
+}
+
+function relatedBySlugFor(families, modelsById) {
+  const uncensored = uncensoredLinks(families);
+  return Object.fromEntries(families.map(f => [f.slug, { ...relatedFor(f, families, modelsById), ...uncensored[f.slug] }]));
+}
+
 // ---------------------------------------------------------------- pages
 
 function compactFamily(family) {
@@ -1046,7 +1075,11 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   const article = /^[aeiou]/i.test(kind) ? 'an' : 'a';
   const counterpart = familiesBySlug[family.counterpart];
   const also = counterpart ? ` It is also available ${counterpart.privacy.includes('e2ee') ? 'end-to-end encrypted' : 'without end-to-end encryption'}, as [${mdxText(counterpart.name)}](/models/${counterpart.slug}).` : '';
-  lines.push(`${name} is ${article} ${mdxText(kind)} model${f.provider ? ` by ${mdxText(f.provider)}` : ''}, available on the Venice API as \`${primary.id}\`. ${privacySentence(family.privacy || [primary.privacy])}${also}`);
+  const base = related.base && familiesBySlug[related.base];
+  const builds = related.builds.map(slug => familiesBySlug[slug]);
+  const uncensored = base ? ` It is an uncensored build of [${mdxText(base.name)}](/models/${base.slug}).`
+    : builds.length ? ` It is also available uncensored, as ${listPhrase(builds.map(b => `[${mdxText(b.name)}](/models/${b.slug})`))}.` : '';
+  lines.push(`${name} is ${article} ${mdxText(kind)} model${f.provider ? ` by ${mdxText(f.provider)}` : ''}, available on the Venice API as \`${primary.id}\`. ${privacySentence(family.privacy || [primary.privacy])}${also}${uncensored}`);
   if (family.description) lines.push('', mdxText(family.description));
 
   lines.push('', `### ${name} API pricing`, '', '| Model ID | Variant | Privacy | Price |', '|---|---|---|---|');
@@ -1171,7 +1204,9 @@ function pageDataFor(family, variants, related, providers, familiesBySlug, model
     models: variants.map(stripForPage),
     related: {
       similar: relatedSummary(related.similar, familiesBySlug, modelsById),
-      versions: relatedSummary(related.versions, familiesBySlug, modelsById)
+      versions: relatedSummary(related.versions, familiesBySlug, modelsById),
+      base: related.base ? relatedSummary([related.base], familiesBySlug, modelsById)[0] : undefined,
+      builds: related.builds.length ? relatedSummary(related.builds, familiesBySlug, modelsById) : undefined
     },
     counterpart: family.counterpart
       ? { ...relatedSummary([family.counterpart], familiesBySlug, modelsById)[0], primary: familiesBySlug[family.counterpart].primary }
@@ -1397,7 +1432,7 @@ async function renderOffline() {
     });
     return page.family;
   });
-  const relatedBySlug = Object.fromEntries(families.map(f => [f.slug, relatedFor(f, families, modelsById)]));
+  const relatedBySlug = relatedBySlugFor(families, modelsById);
   const removed = writeSite(families, modelsById, catalog.providers, relatedBySlug);
   console.log(`Rendered ${PAGE_FILTER ? PAGE_FILTER.size : families.length} family pages from data/model-catalog.json`);
   if (removed) console.log(`Removed ${removed} stale family pages`);
@@ -1433,7 +1468,7 @@ async function main() {
   }
 
   families.sort((a, b) => (b.updated || 0) - (a.updated || 0) || a.name.localeCompare(b.name));
-  const relatedBySlug = Object.fromEntries(families.map(f => [f.slug, relatedFor(f, families, modelsById)]));
+  const relatedBySlug = relatedBySlugFor(families, modelsById);
 
   const usedProviders = new Set(families.map(f => f.provider));
   const counts = { models: models.length, families: families.length, byModality: {} };

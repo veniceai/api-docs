@@ -3569,20 +3569,28 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </ul>
   ) : null);
 
-  // The same model called the other way: a model's E2EE build, or an E2EE
-  // build's model.
-  const Counterpart = ({ item }) => {
+  // Without a label, the same model called the other way: a model's E2EE
+  // build, or an E2EE build's model.
+  const Counterpart = ({ item, label }) => {
     if (!item) return null;
     const e2ee = item.privacy.includes('e2ee');
     return (
       <a className="vxn-counterpart" href={`/models/${item.slug}`}>
         {e2ee ? <Icon name="lock" size={12} /> : null}
-        <span className="vxn-counterpart-name">{e2ee ? 'Also available end-to-end encrypted' : 'Also available without end-to-end encryption'}</span>
+        <span className="vxn-counterpart-name">{label || (e2ee ? 'Also available end-to-end encrypted' : 'Also available without end-to-end encryption')}</span>
         <span className="vxn-counterpart-sub">{relatedPrice(item)}</span>
         <Icon name="arrowRight" size={12} />
       </a>
     );
   };
+
+  // An uncensored build's base model, or a model's uncensored builds.
+  const UncensoredLinks = ({ base, builds }) => (
+    <>
+      {base ? <Counterpart item={base} label={`Uncensored build of ${base.name}`} /> : null}
+      {(builds || []).map(item => <Counterpart key={item.slug} item={item} label={`Also available uncensored, as ${item.name}`} />)}
+    </>
+  );
 
   /* ------------------------------------------------------------ benchmarks */
 
@@ -3793,6 +3801,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               </div>
             ) : null}
             <Counterpart item={counterpart} />
+            <UncensoredLinks base={related && related.base} builds={related && related.builds} />
             <div className="vxn-ctas">
               <a className="vxn-btn is-primary" href="https://venice.ai/settings/api" target="_blank" rel="noopener noreferrer">Get an API key</a>
               {model.task === 'chat' ? <a className="vxn-textlink" href={`https://venice.ai/chat?model=${encodeURIComponent(model.id)}`} target="_blank" rel="noopener noreferrer">Try in Venice<Icon name="arrowRight" size={14} /></a> : null}
