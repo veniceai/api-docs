@@ -3729,8 +3729,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     };
     const blended = item => (item.pricing && item.pricing.input != null ? (3 * item.pricing.input + item.pricing.output) / 4 : null);
     const limits = id => ((catalog && catalog.models[id] && catalog.models[id].text) || {});
-    const compareRows = [{ key: model.id, name: family.name, current: true, pricing: p, text: t, day: dayFigures(fresh, model.id) }]
-      .concat(similar.map(item => ({ key: item.slug, name: item.name, href: `/models/${item.slug}`, pricing: item.pricing || {}, text: limits(item.primary), day: dayFigures(fresh, item.primary) })));
+    const gpqa = m => {
+      const run = headlineRun(m, 'gpqa-diamond');
+      return run ? runName(fmtAccuracy(run.accuracy), m, run) : '—';
+    };
+    const compareRows = [{ key: model.id, name: family.name, current: true, pricing: p, text: t, day: dayFigures(fresh, model.id), gpqa: gpqa(model) }]
+      .concat(similar.map(item => ({ key: item.slug, name: item.name, href: `/models/${item.slug}`, pricing: item.pricing || {}, text: limits(item.primary), day: dayFigures(fresh, item.primary), gpqa: catalog ? gpqa(catalog.models[item.primary]) : '—' })));
 
     return (
       <div className="vx vxn not-prose" style={{ '--vxn-header': `${headerHeight}px` }}>
@@ -3832,13 +3836,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             {similar.length ? (
               <div className="vx-table-wrap vxn-compare">
                 <table className="vx-dtable">
-                  <thead><tr><th>Model</th><th className="vx-al-right">Input</th><th className="vx-al-right">Output</th><th className="vx-al-right vx-hide-sm">Context</th><th className="vx-al-right vx-hide-sm">Max output</th><th className="vx-al-right vx-hide-sm">First token</th><th className="vx-al-right vx-hide-sm">Speed</th></tr></thead>
+                  <thead><tr><th>Model</th><th className="vx-al-right">Input</th><th className="vx-al-right">Output</th><th className="vx-al-right vx-hide-sm">GPQA Diamond</th><th className="vx-al-right vx-hide-sm">Context</th><th className="vx-al-right vx-hide-sm">Max output</th><th className="vx-al-right vx-hide-sm">First token</th><th className="vx-al-right vx-hide-sm">Speed</th></tr></thead>
                   <tbody>
                     {compareRows.map(row => (
                       <tr key={row.key} className={cls(row.current && 'is-current')}>
                         <td>{row.href ? <a href={row.href}>{row.name}</a> : <strong>{row.name}</strong>}</td>
                         <td className="vx-al-right vx-num">{usd(row.pricing.input)}</td>
                         <td className="vx-al-right vx-num">{usd(row.pricing.output)}</td>
+                        <td className="vx-al-right vx-num vx-hide-sm">{row.gpqa}</td>
                         <td className="vx-al-right vx-num vx-hide-sm">{tokens(row.text.context)}</td>
                         <td className="vx-al-right vx-num vx-hide-sm">{tokens(row.text.maxOutput)}</td>
                         <td className="vx-al-right vx-num vx-hide-sm">{fmtMs(row.day.ttftMs)}</td>
