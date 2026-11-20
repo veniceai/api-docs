@@ -1083,7 +1083,8 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
     const t = primary.text;
     specs.push(['Context window', t.context ? `${fmtTokens(t.context)} tokens` : null], ['Max output', t.maxOutput ? `${fmtTokens(t.maxOutput)} tokens` : null],
       ['Reasoning effort', t.reasoning?.effort?.length ? t.reasoning.effort.join(', ') : t.reasoning ? 'Not adjustable' : null],
-      ['Served precision', t.quantization ? t.quantization.toUpperCase() : null]);
+      ['Served precision', t.quantization ? t.quantization.toUpperCase() : null],
+      ...hub().helpers.benchmarkSummaries(primary).map(([name, text]) => [`[${name}](/models/methodology#benchmarks)`, text]));
   }
   if (primary.video) {
     const v = primary.video;

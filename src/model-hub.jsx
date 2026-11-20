@@ -5647,7 +5647,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   // scripts/build-model-catalog.js writes each page's static text with these,
   // so it reads the same as the page.
-  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable, durationText, safeUrl, weightsName };
+  const helpers = { usd, tokens, fmtDate, listText, heightLabel, VARIANT_LABELS, PRIVACY, videoPrice, DRAFT_CLIP, priceSummary, statusText, clipTable, durationText, safeUrl, weightsName, benchmarkSummaries };
 
   // Hands over a catalog that loaded before the explorer's first render, so
   // the view opens on its results instead of a loading skeleton.
