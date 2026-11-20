@@ -15,7 +15,7 @@
  *   data/model-overrides.json curated metadata the API does not expose yet
  *   data/model-media.json     reference outputs for image and video models
  *   data/model-renders.json   the docs' own renders, for prompts venice.ai has none for
- *   data/model-benchmarks.json  future data feed
+ *   data/model-benchmarks.json  Venice's benchmark scores, from scripts/sync-model-benchmarks.js
  *
  * Refuses to overwrite the catalog if the model count drops by more than 20%
  * against the committed one; --allow-drop accepts a real drop.
@@ -1083,7 +1083,8 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
     const t = primary.text;
     specs.push(['Context window', t.context ? `${fmtTokens(t.context)} tokens` : null], ['Max output', t.maxOutput ? `${fmtTokens(t.maxOutput)} tokens` : null],
       ['Reasoning effort', t.reasoning?.effort?.length ? t.reasoning.effort.join(', ') : t.reasoning ? 'Not adjustable' : null],
-      ['Served precision', t.quantization ? t.quantization.toUpperCase() : null]);
+      ['Served precision', t.quantization ? t.quantization.toUpperCase() : null],
+      ...hub().helpers.benchmarkSummaries(primary).map(([name, text]) => [`[${name}](/models/methodology#benchmarks)`, text]));
   }
   if (primary.video) {
     const v = primary.video;
