@@ -3559,7 +3559,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       day.uptime != null ? `uptime ${fmtUptime(day.uptime)}` : null
     ].filter(Boolean);
     const end = fresh.window.end.slice(0, 16).replace('T', ' ');
-    return parts.length ? `- Measured on Venice traffic in the 24 hours to ${end} UTC: ${parts.join('; ')}. Hourly figures: https://docs.venice.ai/data/model-performance.json` : null;
+    return parts.length ? `- Measured on Venice traffic in the 24 hours to ${end} UTC: ${parts.join('; ')}. Live figures, refreshed every 5 minutes: https://metrics.venice.ai/v1/models/${id}.json` : null;
   };
 
   const E2eeSummary = ({ model }) => (model.privacy === 'e2ee' ? (
