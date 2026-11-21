@@ -61,7 +61,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | DeepSeek V4.1 Flash | `deepseek-v4-1-flash` | $0.30 | $1.20 | $0.0075 | — | Private |
 | DeepSeek v4.1 Flash (1017) | `deepseek-v4-1-flash-1017` | $0.30 | $1.20 | $0.0075 | — | Private |
 | DeepSeek V4.1 Flash 1017 Abliterated | `e2ee-deepseek-v4-1-flash-1017-abliterated` | $0.375 | $1.50 | $0.0075 | — | E2EE |
-| DeepSeek V4.1 Flash 1017 Ultrafast | `deepseek-v4-1-flash-1017-ultrafast` | $3.00 | $12.00 | $0.06 | — | Private |
+| DeepSeek V4.1 Flash 1017 Ultrafast | `deepseek-v4-1-flash-1017-ultrafast` | $1.50 | $6.00 | $0.03 | — | Private |
 | DeepSeek V4.1 Flash 1017 Uncensored | `deepseek-v4-1-flash-1017-uncensored` | $0.33 | $1.32 | $0.00825 | — | Private |
 | DeepSeek V4.1 Flash Uncensored | `deepseek-v4-1-flash-uncensored` | $0.33 | $1.32 | $0.00825 | — | Private |
 | Gemini 3 Flash Preview | `gemini-3-flash-preview` | $0.70 | $3.75 | $0.07 | — | Anonymized |
@@ -76,7 +76,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Gemini 4 Hydrogen | `gemini-4-hydrogen` | $1.875 | $9.375 | $0.09375 | — | Anonymized |
 | Gemini 4 Neon | `gemini-4-neon` | $3.75 | $18.75 | $0.1875 | — | Anonymized |
 | Gemma 4 26B A4B Uncensored | `e2ee-gemma-4-26b-a4b-uncensored-p` | $0.19 | $0.88 | — | — | E2EE |
-| Gemma 4 Uncensored | `gemma-4-uncensored` | $0.1625 | $0.50 | — | — | Private |
+| Gemma 4 Uncensored (Retiring) | `gemma-4-uncensored` | $0.1625 | $0.50 | — | — | Private |
 | GLM 4.6 | `zai-org-glm-4.6` | $0.43 | $1.75 | $0.08 | — | Private |
 | GLM 4.7 | `zai-org-glm-4.7` | $0.55 | $2.65 | $0.11 | — | Private |
 | GLM 4.7 Flash Heretic | `olafangensan-glm-4.7-flash-heretic` | $0.07 | $0.40 | $0.035 | — | Private |
@@ -358,9 +358,9 @@ Prices per edit. The edit price covers the first input image. Models with an ext
 | MAI Image 2.7 Flash | `mai-image-2-7-flash-edit` | 1K: $0.02, 2K: $0.06 | $0.00299 | Anonymized |
 | MiniMax H3 Image | `minimax-h3-image-edit` | 1K: $0.06, 2K: $0.06, 4K: $0.12 | $0.01937405 | Anonymized |
 | Muse Image | `muse-image-edit` | $0.02 | — | Anonymized |
-| Nano Banana 2 | `nano-banana-2-edit` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | — | Anonymized |
-| Nano Banana 2 Lite | `nano-banana-2-lite-edit` | $0.06 | — | Anonymized |
-| Nano Banana 2.1 | `nano-banana-2-1-edit` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | — | Anonymized |
+| Nano Banana 2 | `nano-banana-2-edit` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | $0.000644 | Anonymized |
+| Nano Banana 2 Lite | `nano-banana-2-lite-edit` | $0.06 | $0.000322 | Anonymized |
+| Nano Banana 2.1 | `nano-banana-2-1-edit` | 1K: $0.10, 2K: $0.14, 4K: $0.19 | $0.001932 | Anonymized |
 | Nano Banana Pro | `nano-banana-pro-edit` | 1K: $0.18, 2K: $0.23, 4K: $0.35 | — | Anonymized |
 | Qwen Edit Uncensored | `qwen-edit-uncensored` | $0.04 | — | Private |
 | Qwen Image 2 | `qwen-image-2-edit` | $0.05 | — | Anonymized |
@@ -507,13 +507,13 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | Kling 2.5 Turbo Pro | `kling-2.5-turbo-pro-image-to-video` | Image to video | $0.0775 | Anonymized |
 | Kling 2.6 Pro | `kling-2.6-pro-text-to-video` | Text to video | $0.0775 to $0.154 | Anonymized |
 | Kling 2.6 Pro | `kling-2.6-pro-image-to-video` | Image to video | $0.0775 to $0.154 | Anonymized |
-| Kling 4.0 | `kling-v4-text-to-video` | Text to video | $0.1963 to $0.2938 | Anonymized |
-| Kling 4.0 | `kling-v4-image-to-video` | Image to video | $0.1963 to $0.2938 | Anonymized |
+| Kling 4.0 | `kling-v4-text-to-video` | Text to video | $0.1963 to $0.6863 | Anonymized |
+| Kling 4.0 | `kling-v4-image-to-video` | Image to video | $0.1963 to $0.6863 | Anonymized |
 | Kling 4.0 Flash | `kling-v4-flash-text-to-video` | Text to video | $0.1174 | Anonymized |
 | Kling 4.0 Flash | `kling-v4-flash-image-to-video` | Image to video | $0.1174 | Anonymized |
 | Kling 4.0 Flash Edit | `kling-v4-flash-video-to-video` | Video edit | Priced by source | Anonymized |
 | Kling 4.0 Flash R2V | `kling-v4-flash-reference-to-video` | Reference to video | $0.1175 | Anonymized |
-| Kling 4.0 R2V | `kling-v4-reference-to-video` | Reference to video | $0.1963 to $0.2937 | Anonymized |
+| Kling 4.0 R2V | `kling-v4-reference-to-video` | Reference to video | $0.1963 to $0.6863 | Anonymized |
 | Kling O3 4K | `kling-o3-4k-text-to-video` | Text to video | $0.462 | Anonymized |
 | Kling O3 4K | `kling-o3-4k-image-to-video` | Image to video | $0.462 | Anonymized |
 | Kling O3 4K R2V | `kling-o3-4k-reference-to-video` | Reference to video | $0.462 | Anonymized |

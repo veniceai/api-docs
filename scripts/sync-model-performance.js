@@ -91,8 +91,11 @@ function chart(value, id, name, max) {
 }
 
 // The uptime strip: each quarter hour of the window, oldest first, as one
-// character for the status the job gives it.
-const QUARTER_STATUS = { up: 'u', degraded: 'd', down: 'x', no_data: '-' };
+// character for the status the job gives it. insufficient_data, a low-traffic
+// quarter hour where a request failed but not enough to call the model
+// degraded, draws as up: the methodology keeps one failure among a few
+// requests green.
+const QUARTER_STATUS = { up: 'u', insufficient_data: 'u', degraded: 'd', down: 'x', no_data: '-' };
 
 function quarters(buckets, id) {
   if (buckets == null) return null;
