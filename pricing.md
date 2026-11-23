@@ -267,6 +267,7 @@ Prices per image. Models with resolution options list a price for each resolutio
 | Hunyuan Image 3.0 | `hunyuan-image-v3` | $0.09 | Private |
 | Ideogram V4 | `ideogram-v4` | $0.06 | Anonymized |
 | Ideogram V4.5 | `ideogram-v4-5` | 1K: $0.26, 2K: $0.26 | Anonymized |
+| Ideogram V4.6 | `ideogram-v4-6` | 1K: $0.13, 2K: $0.13, 4K: $0.25 | Anonymized |
 | Kling Image 4.0 | `kling-v4-text-to-image` | 2K: $0.08, 4K: $0.12 | Anonymized |
 | Krea 2 Turbo | `krea-2-turbo` | 1K: $0.04, 2K: $0.06 | Private |
 | Krea 3 | `krea-3` | 1K: $0.07, 2K: $0.10, 4K: $0.15 | Anonymized |
@@ -329,6 +330,9 @@ These models take a `quality` parameter. A request without one is billed at the 
 | Ideogram V4.5 | `ideogram-v4-5` | low | $0.04 | $0.04 | — |
 | Ideogram V4.5 | `ideogram-v4-5` | medium | $0.07 | $0.07 | — |
 | Ideogram V4.5 | `ideogram-v4-5` | high (default) | $0.26 | $0.26 | — |
+| Ideogram V4.6 | `ideogram-v4-6` | low | $0.04 | $0.04 | $0.08 |
+| Ideogram V4.6 | `ideogram-v4-6` | medium | $0.08 | $0.08 | $0.15 |
+| Ideogram V4.6 | `ideogram-v4-6` | high (default) | $0.13 | $0.13 | $0.25 |
 | Krea 3 | `krea-3` | medium | $0.04 | $0.08 | $0.13 |
 | Krea 3 | `krea-3` | high (default) | $0.07 | $0.10 | $0.15 |
 
@@ -350,6 +354,7 @@ Prices per edit. The edit price covers the first input image. Models with an ext
 | Grok Imagine | `grok-imagine-edit` | 1K: $0.03, 2K: $0.04 | $0.0023 | Private |
 | Grok Imagine 2.0 | `grok-imagine-image-2-0-edit` | 1K: $0.07, 2K: $0.10 | $0.0115 | Private |
 | Ideogram V4.5 | `ideogram-v4-5-edit` | 1K: $0.26, 2K: $0.26 | — | Anonymized |
+| Ideogram V4.6 | `ideogram-v4-6-edit` | 1K: $0.28, 2K: $0.28, 4K: $0.75 | — | Anonymized |
 | Kling Image 4.0 | `kling-v4-image-edit` | 2K: $0.08, 4K: $0.12 | $0.00368 | Anonymized |
 | Krea 3 | `krea-3-edit` | 1K: $0.07, 2K: $0.10, 4K: $0.15 | $0.02499985 | Anonymized |
 | Luma Uni-1 | `luma-uni-1-edit` | $0.06 | — | Anonymized |
@@ -401,6 +406,9 @@ A request without a `quality` is billed at the default tier, the price in the ed
 | Ideogram V4.5 | `ideogram-v4-5-edit` | low | $0.04 | $0.04 | — |
 | Ideogram V4.5 | `ideogram-v4-5-edit` | medium | $0.07 | $0.07 | — |
 | Ideogram V4.5 | `ideogram-v4-5-edit` | high (default) | $0.26 | $0.26 | — |
+| Ideogram V4.6 | `ideogram-v4-6-edit` | low | $0.04 | $0.04 | $0.08 |
+| Ideogram V4.6 | `ideogram-v4-6-edit` | medium | $0.08 | $0.08 | $0.25 |
+| Ideogram V4.6 | `ideogram-v4-6-edit` | high (default) | $0.28 | $0.28 | $0.75 |
 | Krea 3 | `krea-3-edit` | medium | $0.04 | $0.08 | $0.13 |
 | Krea 3 | `krea-3-edit` | high (default) | $0.07 | $0.10 | $0.15 |
 
