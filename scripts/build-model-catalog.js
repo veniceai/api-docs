@@ -1084,7 +1084,8 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
     specs.push(['Context window', t.context ? `${fmtTokens(t.context)} tokens` : null], ['Max output', t.maxOutput ? `${fmtTokens(t.maxOutput)} tokens` : null],
       ['Reasoning effort', t.reasoning?.effort?.length ? t.reasoning.effort.join(', ') : t.reasoning ? 'Not adjustable' : null],
       ['Served precision', t.quantization ? t.quantization.toUpperCase() : null],
-      ...hub().helpers.benchmarkSummaries(primary).map(([name, text]) => [`[${name}](/models/methodology#benchmarks)`, text]));
+      ...hub().helpers.benchmarkSummaries(primary).map(([name, text]) => [`[${name}](/models/methodology#benchmarks)`, text]),
+      ['[Live speed and uptime](/models/methodology#machine-readable-data)', `https://metrics.venice.ai/v1/models/${primary.id}.json, refreshed every 5 minutes`]);
   }
   if (primary.video) {
     const v = primary.video;
