@@ -478,8 +478,8 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | Flux 3 | `flux-3-image-to-video` | Image to video | $0.1872 to $0.5112 | Anonymized |
 | Flux 3 Extend | `flux-3-extend-video` | Video edit | Priced by source | Anonymized |
 | Flux 3 First Last Frame | `flux-3-first-last-frame-to-video` | First and last frame | $0.1872 to $0.5112 | Anonymized |
-| Flux 3 Max | `flux-3-max-text-to-video` | Text to video | $0.2551 to $0.435 | Private |
-| Flux 3 Max | `flux-3-max-image-to-video` | Image to video | $0.2551 to $0.435 | Private |
+| Flux 3 Max | `flux-3-max-text-to-video` | Text to video | $0.1658 to $0.2828 | Private |
+| Flux 3 Max | `flux-3-max-image-to-video` | Image to video | $0.1658 to $0.2828 | Private |
 | Gemini Omni Flash | `gemini-omni-flash-text-to-video` | Text to video | $0.1378 | Anonymized |
 | Gemini Omni Flash | `gemini-omni-flash-image-to-video` | Image to video | $0.1427 | Anonymized |
 | Gemini Omni Flash 1.1 | `gemini-omni-flash-1-1-text-to-video` | Text to video | $0.0389 to $0.35 | Anonymized |
