@@ -1504,8 +1504,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               <ProviderLogo provider={provider} size={22} />
               <a className="vx-list-name" href={modelHref(family, display.id)}>{display.privacy === 'e2ee' ? <>{family.name.replace(/ E2EE$/, '')} <Tag tone="e2ee" title={PRIVACY.e2ee.desc}><Icon name="lock" size={10} />E2EE</Tag></> : family.name}</a>
               {showScope ? <TypeBadge family={family} /> : null}
-              <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} className="vx-row-copy" />
               <StatusTags item={family} now={now} />
+              <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} className="vx-row-copy" />
               <span className="vx-list-price">{rowPrice(row)}</span>
             </div>
             {description ? <p className="vx-list-desc">{description}</p> : null}
