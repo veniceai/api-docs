@@ -1,116 +1,278 @@
 ---
 title: "Embeddings"
-description: "Generate vector embeddings with the OpenAI-compatible Venice /embeddings endpoint for semantic search, RAG retrieval, clustering, and similarity."
+description: "Turn text into vectors with Venice's OpenAI-compatible /embeddings endpoint, then search by meaning, ground RAG answers, cluster or deduplicate."
 'og:title': "Embeddings | Venice API Docs"
-'og:description': "Learn how to generate vector embeddings with the Venice API."
+'og:description': "Generate embeddings with the Venice API: a first request, semantic search in a few lines, the right model, and batching for large collections."
 ---
 
-Embeddings convert text into vectors that capture semantic meaning. Use them for search, retrieval-augmented generation (RAG), clustering, recommendations, deduplication, and similarity scoring.
+import { EmbeddingMap } from "/snippets/embedding-map.jsx"
 
-The Venice embeddings endpoint is OpenAI-compatible. Send one string or an array of strings to `/embeddings`, then store the returned vectors in your database or vector index.
+An embedding turns text into a vector, a list of numbers that places similar meanings close together. Search becomes a question of distance: embed your documents once, embed each query, and return the documents nearest to it, whether or not they share any words.
 
-<Warning>
-Venice accepts text only. Send a string or an array of strings. Token ID arrays are rejected with HTTP 400. LangChain `OpenAIEmbeddings` must set `check_embedding_ctx_length=False`, or it tokenizes locally with tiktoken and sends integer arrays.
-</Warning>
+<Visibility for="humans">
+<div className="vg">
+<div className="vg-map">
+<EmbeddingMap />
+<div className="vg-map-side">
+  <span className="vg-panel-label">Query</span>
+  <div className="vg-panel-field"><span>Where should we go for dinner?</span></div>
+  <span className="vg-panel-label">Nearest by meaning</span>
+  <ol>
+    <li><span>1</span><b>A trattoria with tables on the Grand Canal</b></li>
+    <li><span>2</span><b>Cicchetti bars along the Cannaregio canal</b></li>
+    <li><span>3</span><b>Fritto misto in paper cones near Rialto</b></li>
+  </ol>
+</div>
+</div>
+</div>
+</Visibility>
 
-## Basic Usage
+## Your first embedding
+
+The endpoint is OpenAI-compatible, so the OpenAI SDK works once it points at Venice. You need an API key in `VENICE_API_KEY` ([create one](/getting-started/quick-start)).
 
 <CodeGroup>
 ```python Python
 import os
+
 from openai import OpenAI
 
-client = OpenAI(
-    api_key=os.environ["VENICE_API_KEY"],
-    base_url="https://api.venice.ai/api/v1",
-)
+client = OpenAI(api_key=os.environ["VENICE_API_KEY"], base_url="https://api.venice.ai/api/v1")
 
 response = client.embeddings.create(
     model="text-embedding-bge-m3",
-    input="Privacy-first AI infrastructure for semantic search",
+    input="A trattoria with tables on the Grand Canal",
+    encoding_format="float",
 )
 
 vector = response.data[0].embedding
-print(len(vector), vector[:5])
+print(len(vector), vector[:4])
 ```
 
-```javascript Node.js
+```typescript TypeScript
 import OpenAI from "openai";
 
-const client = new OpenAI({
-  apiKey: process.env.VENICE_API_KEY,
-  baseURL: "https://api.venice.ai/api/v1",
-});
+const client = new OpenAI({ apiKey: process.env.VENICE_API_KEY, baseURL: "https://api.venice.ai/api/v1" });
 
 const response = await client.embeddings.create({
   model: "text-embedding-bge-m3",
-  input: "Privacy-first AI infrastructure for semantic search",
+  input: "A trattoria with tables on the Grand Canal",
+  encoding_format: "float",
 });
 
 const vector = response.data[0].embedding;
-console.log(vector.length, vector.slice(0, 5));
+console.log(vector.length, vector.slice(0, 4));
 ```
 
 ```bash cURL
 curl https://api.venice.ai/api/v1/embeddings \
   -H "Authorization: Bearer $VENICE_API_KEY" \
   -H "Content-Type: application/json" \
+  --compressed \
   -d '{
     "model": "text-embedding-bge-m3",
-    "input": "Privacy-first AI infrastructure for semantic search",
-    "encoding_format": "float"
+    "input": "A trattoria with tables on the Grand Canal"
   }'
 ```
 </CodeGroup>
 
-## Batch Inputs
-
-Pass an array of strings to embed multiple texts in one request. Each item must be text, not a token ID array.
-
-Two limits apply, and both are enforced before the request reaches a model:
-
-| Limit | Value | Error when exceeded |
-|---|---|---|
-| Items per request | 2,048 | `400` — *"Array must contain at most 2048 element(s)"* |
-| Tokens per item | 8,192 | `400` — token count is checked per array entry, not across the batch |
-
-Size your ingest batches against the 2,048 cap and chunk long documents below 8,192 tokens per entry. The request body is also strict, so an unrecognized field returns a `400` rather than being ignored.
+The response holds one vector per input, in order, and the tokens it used:
 
 ```json
 {
+  "object": "list",
   "model": "text-embedding-bge-m3",
-  "input": [
-    "Venice supports private chat completions.",
-    "Embeddings help retrieve relevant documents.",
-    "Vector search powers RAG applications."
-  ]
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": [0.0023, -0.0093, 0.0158, ...] }
+  ],
+  "usage": { "prompt_tokens": 11, "total_tokens": 11 }
 }
 ```
 
-The response preserves input order. Store each vector with the source text ID, metadata, and embedding model ID.
+BGE-M3 returns 1,024 numbers per text. The OpenAI SDKs can ask for base64 vectors when you leave `encoding_format` out, so the SDK examples set `"float"` to get plain numbers.
 
-## Common Workflow
+## Search by meaning
 
-1. Split source documents into chunks.
-2. Generate embeddings for each chunk.
-3. Store vectors and metadata in a vector database.
-4. Embed the user's query.
-5. Retrieve nearby chunks.
-6. Send the retrieved context to a chat model.
+Embed the query alongside the documents, score each document by cosine similarity, and sort. This is the search in the picture above:
 
-For a complete implementation, see [Building a Private RAG Bot](/learn/private-rag-bot).
+<CodeGroup>
+```python Python
+import math
+import os
 
-## Model Selection
+from openai import OpenAI
 
-Use the [Embedding Models](/models/embeddings) page to compare current embedding models, dimensions, and pricing.
+client = OpenAI(api_key=os.environ["VENICE_API_KEY"], base_url="https://api.venice.ai/api/v1")
+
+documents = [
+    "A trattoria with tables on the Grand Canal",
+    "Cicchetti bars along the Cannaregio canal",
+    "Fritto misto in paper cones near Rialto",
+    "Gondola builders at work in a squero",
+    "Tintoretto's canvases in the Scuola Grande di San Rocco",
+    "Acqua alta floods St Mark's Square in November",
+]
+query = "Where should we go for dinner?"
+
+response = client.embeddings.create(model="text-embedding-bge-m3", input=[query, *documents], encoding_format="float")
+query_vector, *document_vectors = [item.embedding for item in response.data]
+
+def cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    return dot / (math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b)))
+
+ranked = sorted(zip(documents, document_vectors), key=lambda pair: cosine(query_vector, pair[1]), reverse=True)
+for document, vector in ranked[:3]:
+    print(f"{cosine(query_vector, vector):.2f}  {document}")
+```
+
+```typescript TypeScript
+import OpenAI from "openai";
+
+const client = new OpenAI({ apiKey: process.env.VENICE_API_KEY, baseURL: "https://api.venice.ai/api/v1" });
+
+const documents = [
+  "A trattoria with tables on the Grand Canal",
+  "Cicchetti bars along the Cannaregio canal",
+  "Fritto misto in paper cones near Rialto",
+  "Gondola builders at work in a squero",
+  "Tintoretto's canvases in the Scuola Grande di San Rocco",
+  "Acqua alta floods St Mark's Square in November",
+];
+const query = "Where should we go for dinner?";
+
+const response = await client.embeddings.create({
+  model: "text-embedding-bge-m3",
+  input: [query, ...documents],
+  encoding_format: "float",
+});
+const [queryVector, ...documentVectors] = response.data.map(item => item.embedding);
+
+const cosine = (a: number[], b: number[]) => {
+  const dot = a.reduce((sum, x, i) => sum + x * b[i], 0);
+  return dot / (Math.hypot(...a) * Math.hypot(...b));
+};
+
+documents
+  .map((document, i) => ({ document, score: cosine(queryVector, documentVectors[i]) }))
+  .sort((a, b) => b.score - a.score)
+  .slice(0, 3)
+  .forEach(({ document, score }) => console.log(score.toFixed(2), document));
+```
+</CodeGroup>
+
+For a few thousand documents, scoring in memory like this is fast enough. Beyond that, store the vectors in a vector database, such as pgvector, Qdrant or LanceDB, and let it find the nearest ones.
 
 <Note>
-Use the same embedding model for indexing and querying. Mixing models can make similarity scores unreliable because vector spaces are not interchangeable.
+Index and query with the same model. Each model places text in its own space, so distances between vectors from different models mean nothing. Store the model ID, and `dimensions` if you set it, with every vector, so you know what to re-embed when you upgrade.
 </Note>
 
-## Related Resources
+## Pick a model
 
-- [Embeddings API](/api-reference/endpoint/embeddings/generate)
-- [Embedding Models](/models/embeddings)
-- [LangChain](/guides/integrations/langchain#embeddings)
-- [Private RAG Bot Guide](/learn/private-rag-bot)
+{/* embedding-models:start */}
+| Model | Dimensions | Tokens per input | Price per 1M tokens | Privacy |
+|---|---|---|---|---|
+| [BGE-EN-ICL](/models/bge-en-icl)<br />`text-embedding-bge-en-icl` | 4,096 | 8,192 | $0.0125 | Private |
+| [Multilingual E5 Large Instruct](/models/multilingual-e5-large-instruct)<br />`text-embedding-multilingual-e5-large-instruct` | 1,024 | 512 | $0.0125 | Private |
+| [Nemotron Embed VL 1B v2](/models/nemotron-embed-vl-1b-v2)<br />`text-embedding-nemotron-embed-vl-1b-v2` | 2,048 | 8,192 | $0.0125 | Private |
+| [Qwen3 Embedding 0.6B](/models/qwen3-embedding-0-6b)<br />`text-embedding-qwen3-0-6b` | 1,024, adjustable | 8,192 | $0.0125 | Private |
+| [Qwen3 Embedding 8B](/models/qwen3-embedding-8b)<br />`text-embedding-qwen3-8b` | 4,096, adjustable | 8,192 | $0.0125 | Private |
+| [BGE-M3](/models/bge-m3)<br />`text-embedding-bge-m3` | 1,024 | 8,192 | $0.15 | Private |
+| [Text Embedding 3 Small](/models/text-embedding-3-small)<br />`text-embedding-3-small` | 1,536, adjustable | 8,191 | $0.025 | Anonymized |
+| [Text Embedding 3 Large](/models/text-embedding-3-large)<br />`text-embedding-3-large` | 3,072, adjustable | 8,191 | $0.1625 | Anonymized |
+| [Gemini Embedding 2 Preview](/models/gemini-embedding-2-preview)<br />`gemini-embedding-2-preview` | 3,072, adjustable | 2,048 | $0.25 | Anonymized |
+{/* embedding-models:end */}
+
+Private models keep no record of what you embed. Anonymized models are run by their provider, which receives the text without your identity. An API key restricted to private models gets `403` from the anonymized ones. [Embedding models](/models/embeddings) has each model's details.
+
+## Embed in batches
+
+Send an array of strings to embed many texts in one request. The vectors come back in the same order, each with its `index`.
+
+- **Up to 2,048 strings** per request.
+- **Up to 8,192 tokens per string**, or about 27,500 characters, checked before the request reaches the model. Some models stop sooner: the table's "Tokens per input" column is each model's own limit, so chunk long documents to fit it.
+- **No empty strings.** An empty top-level `input` returns `400`, but empty strings inside an array aren't checked, so filter them out.
+- **Text only.** Token-ID arrays return `400`. To embed an image, describe it with a vision model and embed the description.
+
+Large batches return a lot of JSON. Send `Accept-Encoding: gzip, br` (`--compressed` in cURL) to compress it, or set `encoding_format: "base64"` for vectors that are much smaller on the wire, decoded client-side.
+
+Models marked adjustable take `dimensions` to return shorter vectors, which cost less to store and compare:
+
+```json
+{
+  "model": "text-embedding-qwen3-8b",
+  "input": ["first document", "second document"],
+  "dimensions": 1024
+}
+```
+
+The request body is strict: unknown fields, such as `input_type` or `truncate`, return `400`.
+
+## Build RAG on top
+
+Retrieval-augmented generation answers questions from your own documents: retrieve the most relevant passages, then hand them to a chat model as context.
+
+<Steps>
+  <Step title="Chunk and embed your documents">
+    Split each document into passages of a few hundred tokens, embed them in batches, and store each vector with its text, source and model ID.
+  </Step>
+  <Step title="Embed the question">
+    Use the same model you indexed with.
+  </Step>
+  <Step title="Retrieve the nearest passages">
+    Take the top few by cosine similarity, from memory or your vector database.
+  </Step>
+  <Step title="Answer from them">
+    Send the passages and the question to [chat completions](/api-reference/endpoint/chat/completions), and ask the model to answer only from what you sent.
+  </Step>
+</Steps>
+
+[Building a private RAG bot](/learn/private-rag-bot) builds this end to end.
+
+## Use it from LangChain
+
+LangChain's `OpenAIEmbeddings` splits text into token IDs before sending it, which Venice rejects with `400`. Set `check_embedding_ctx_length=False` to send text instead:
+
+```python
+import os
+
+from langchain_openai import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-bge-m3",
+    base_url="https://api.venice.ai/api/v1",
+    api_key=os.environ["VENICE_API_KEY"],
+    check_embedding_ctx_length=False,
+)
+```
+
+Tools that build `OpenAIEmbeddings` for you without that flag hit the same `400`. The [LangChain guide](/guides/integrations/langchain#embeddings) covers the rest of the integration.
+
+## Errors
+
+| Status | Meaning | What to do |
+|---|---|---|
+| `400` | Invalid input: token IDs, an empty string, more than 2,048 items, an item over the token limit, or an unknown field | `details` in the body names the field. Send text, within the limits above. |
+| `401` | The API key is missing or invalid | Check the `Authorization: Bearer` header. |
+| `402` | Not enough balance, or the key reached its spend limit | Add credits at [venice.ai/settings/api](https://venice.ai/settings/api?utm_source=venice-api-documentation). |
+| `403` | The key only allows private models, and this one is anonymized | Choose a private model from the table. |
+| `404` | The model doesn't exist | Check the ID against `GET /models?type=embedding`. |
+| `429` | Rate limited | Back off and halve the batch before retrying. |
+| `500`, `503` | Embedding failed, or the model is offline | Retry with jitter. |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Build a private RAG bot" icon="database" href="/learn/private-rag-bot">
+    Answer questions from your own documents, end to end.
+  </Card>
+  <Card title="Search the web" icon="world-search" href="/guides/tools/web-retrieval">
+    Find current sources, then embed what you keep.
+  </Card>
+  <Card title="Extract text from files" icon="file-text" href="/guides/tools/document-extraction">
+    Turn PDFs and Office files into text to embed.
+  </Card>
+  <Card title="API reference" icon="code" href="/api-reference/endpoint/embeddings/generate">
+    Every field of POST /embeddings.
+  </Card>
+</CardGroup>
