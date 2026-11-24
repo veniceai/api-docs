@@ -127,7 +127,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Grok 4.5 | `grok-4-5` | $2.27 | $6.80 | $0.34 | — | Private |
 | Grok 4.6 | `grok-4-6` | $2.27 | $6.80 | $0.57 | — | Private |
 | Grok 4.7 | `grok-4-7` | $2.27 | $6.80 | $0.57 | — | Private |
-| Grok Build 0.1 | `grok-build-0-1` | $1.00 | $2.00 | $0.20 | — | Private |
 | Hy4 Preview | `hy4-preview` | $1.0425 | $3.12625 | $0.0525 | — | Private |
 | Kimi K2.6 | `e2ee-kimi-k2-6` | $0.87 | $4.12 | $0.44 | — | E2EE |
 | Kimi K2.6 | `kimi-k2-6` | $0.75 | $3.50 | $0.16 | — | Private |
@@ -172,7 +171,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Qwen 3.8 27B (Beta) | `qwen-3-8-27b` | $0.45 | $3.20 | — | — | Private |
 | Qwen 3.8 Flash | `qwen-3-8-flash` | $0.14 | $0.49 | $0.014 | — | Anonymized |
 | Qwen 3.8 Max | `qwen-3-8-max` | $2.50 | $7.50 | $0.3125 | $3.125 | Anonymized |
-| Qwen 4 Max | `qwen-4-max` | $1.50 | $4.50 | $0.075 | $1.875 | Anonymized |
+| Qwen 4 Max | `qwen-4-max` | $1.875 | $5.625 | $0.09375 | $2.34375 | Anonymized |
 | Qwen3 VL 235B | `qwen3-vl-235b-a22b` | $0.21 | $1.90 | $0.10 | — | Private |
 | Qwen3 VL 30B A3B | `e2ee-qwen3-vl-30b-a3b-p` | $0.25 | $0.90 | — | — | E2EE |
 | Seed 2.1 Turbo | `seed-2-1-turbo` | $0.625 | $3.125 | $0.125 | — | Anonymized |
@@ -214,7 +213,6 @@ These models switch to higher rates once a request's input passes the threshold.
 | Grok 4.5 | `grok-4-5` | 200K tokens | $4.53 | $13.60 | $0.68 | — |
 | Grok 4.6 | `grok-4-6` | 200K tokens | $4.53 | $13.60 | $1.13 | — |
 | Grok 4.7 | `grok-4-7` | 200K tokens | $4.53 | $13.60 | $1.13 | — |
-| Grok Build 0.1 | `grok-build-0-1` | 200K tokens | $2.00 | $4.00 | $0.40 | — |
 | Qwen 3.6 Plus Uncensored | `qwen-3-6-plus` | 256K tokens | $2.50 | $7.50 | $0.0625 | $0.78 |
 | Qwen 3.7 Plus | `qwen-3-7-plus` | 256K tokens | $1.50 | $6.00 | $0.15 | $1.875 |
 
@@ -267,6 +265,7 @@ Prices per image. Models with resolution options list a price for each resolutio
 | Hunyuan Image 3.0 | `hunyuan-image-v3` | $0.09 | Private |
 | Ideogram V4 | `ideogram-v4` | $0.06 | Anonymized |
 | Ideogram V4.5 | `ideogram-v4-5` | 1K: $0.26, 2K: $0.26 | Anonymized |
+| Ideogram V4.6 | `ideogram-v4-6` | 1K: $0.13, 2K: $0.13, 4K: $0.25 | Anonymized |
 | Kling Image 4.0 | `kling-v4-text-to-image` | 2K: $0.08, 4K: $0.12 | Anonymized |
 | Krea 2 Turbo | `krea-2-turbo` | 1K: $0.04, 2K: $0.06 | Private |
 | Krea 3 | `krea-3` | 1K: $0.07, 2K: $0.10, 4K: $0.15 | Anonymized |
@@ -329,6 +328,9 @@ These models take a `quality` parameter. A request without one is billed at the 
 | Ideogram V4.5 | `ideogram-v4-5` | low | $0.04 | $0.04 | — |
 | Ideogram V4.5 | `ideogram-v4-5` | medium | $0.07 | $0.07 | — |
 | Ideogram V4.5 | `ideogram-v4-5` | high (default) | $0.26 | $0.26 | — |
+| Ideogram V4.6 | `ideogram-v4-6` | low | $0.04 | $0.04 | $0.08 |
+| Ideogram V4.6 | `ideogram-v4-6` | medium | $0.08 | $0.08 | $0.15 |
+| Ideogram V4.6 | `ideogram-v4-6` | high (default) | $0.13 | $0.13 | $0.25 |
 | Krea 3 | `krea-3` | medium | $0.04 | $0.08 | $0.13 |
 | Krea 3 | `krea-3` | high (default) | $0.07 | $0.10 | $0.15 |
 
@@ -350,6 +352,7 @@ Prices per edit. The edit price covers the first input image. Models with an ext
 | Grok Imagine | `grok-imagine-edit` | 1K: $0.03, 2K: $0.04 | $0.0023 | Private |
 | Grok Imagine 2.0 | `grok-imagine-image-2-0-edit` | 1K: $0.07, 2K: $0.10 | $0.0115 | Private |
 | Ideogram V4.5 | `ideogram-v4-5-edit` | 1K: $0.26, 2K: $0.26 | — | Anonymized |
+| Ideogram V4.6 | `ideogram-v4-6-edit` | 1K: $0.28, 2K: $0.28, 4K: $0.75 | — | Anonymized |
 | Kling Image 4.0 | `kling-v4-image-edit` | 2K: $0.08, 4K: $0.12 | $0.00368 | Anonymized |
 | Krea 3 | `krea-3-edit` | 1K: $0.07, 2K: $0.10, 4K: $0.15 | $0.02499985 | Anonymized |
 | Luma Uni-1 | `luma-uni-1-edit` | $0.06 | — | Anonymized |
@@ -401,6 +404,9 @@ A request without a `quality` is billed at the default tier, the price in the ed
 | Ideogram V4.5 | `ideogram-v4-5-edit` | low | $0.04 | $0.04 | — |
 | Ideogram V4.5 | `ideogram-v4-5-edit` | medium | $0.07 | $0.07 | — |
 | Ideogram V4.5 | `ideogram-v4-5-edit` | high (default) | $0.26 | $0.26 | — |
+| Ideogram V4.6 | `ideogram-v4-6-edit` | low | $0.04 | $0.04 | $0.08 |
+| Ideogram V4.6 | `ideogram-v4-6-edit` | medium | $0.08 | $0.08 | $0.25 |
+| Ideogram V4.6 | `ideogram-v4-6-edit` | high (default) | $0.28 | $0.28 | $0.75 |
 | Krea 3 | `krea-3-edit` | medium | $0.04 | $0.08 | $0.13 |
 | Krea 3 | `krea-3-edit` | high (default) | $0.07 | $0.10 | $0.15 |
 
@@ -478,8 +484,8 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | Flux 3 | `flux-3-image-to-video` | Image to video | $0.1872 to $0.5112 | Anonymized |
 | Flux 3 Extend | `flux-3-extend-video` | Video edit | Priced by source | Anonymized |
 | Flux 3 First Last Frame | `flux-3-first-last-frame-to-video` | First and last frame | $0.1872 to $0.5112 | Anonymized |
-| Flux 3 Max | `flux-3-max-text-to-video` | Text to video | $0.2551 to $0.435 | Private |
-| Flux 3 Max | `flux-3-max-image-to-video` | Image to video | $0.2551 to $0.435 | Private |
+| Flux 3 Max | `flux-3-max-text-to-video` | Text to video | $0.1658 to $0.2828 | Private |
+| Flux 3 Max | `flux-3-max-image-to-video` | Image to video | $0.1658 to $0.2828 | Private |
 | Gemini Omni Flash | `gemini-omni-flash-text-to-video` | Text to video | $0.1378 | Anonymized |
 | Gemini Omni Flash | `gemini-omni-flash-image-to-video` | Image to video | $0.1427 | Anonymized |
 | Gemini Omni Flash 1.1 | `gemini-omni-flash-1-1-text-to-video` | Text to video | $0.0389 to $0.35 | Anonymized |
