@@ -496,7 +496,7 @@ function normalizeModel(model, ctx) {
     offline: spec.offline === true,
     deprecation: spec.deprecation ? {
       removesAt: spec.deprecation.removesAt || spec.deprecation.date || null,
-      replacement: spec.deprecation.replacement || spec.deprecation.replacementModel || null
+      replacement: spec.deprecation.replacementModelId || null
     } : null,
     traits: (spec.traits || []).filter(Boolean),
     sets: (spec.model_sets || []).filter(Boolean),
