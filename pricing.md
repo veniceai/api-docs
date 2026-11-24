@@ -127,7 +127,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Grok 4.5 | `grok-4-5` | $2.27 | $6.80 | $0.34 | — | Private |
 | Grok 4.6 | `grok-4-6` | $2.27 | $6.80 | $0.57 | — | Private |
 | Grok 4.7 | `grok-4-7` | $2.27 | $6.80 | $0.57 | — | Private |
-| Grok Build 0.1 | `grok-build-0-1` | $1.00 | $2.00 | $0.20 | — | Private |
 | Hy4 Preview | `hy4-preview` | $1.0425 | $3.12625 | $0.0525 | — | Private |
 | Kimi K2.6 | `e2ee-kimi-k2-6` | $0.87 | $4.12 | $0.44 | — | E2EE |
 | Kimi K2.6 | `kimi-k2-6` | $0.75 | $3.50 | $0.16 | — | Private |
@@ -214,7 +213,6 @@ These models switch to higher rates once a request's input passes the threshold.
 | Grok 4.5 | `grok-4-5` | 200K tokens | $4.53 | $13.60 | $0.68 | — |
 | Grok 4.6 | `grok-4-6` | 200K tokens | $4.53 | $13.60 | $1.13 | — |
 | Grok 4.7 | `grok-4-7` | 200K tokens | $4.53 | $13.60 | $1.13 | — |
-| Grok Build 0.1 | `grok-build-0-1` | 200K tokens | $2.00 | $4.00 | $0.40 | — |
 | Qwen 3.6 Plus Uncensored | `qwen-3-6-plus` | 256K tokens | $2.50 | $7.50 | $0.0625 | $0.78 |
 | Qwen 3.7 Plus | `qwen-3-7-plus` | 256K tokens | $1.50 | $6.00 | $0.15 | $1.875 |
 
