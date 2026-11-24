@@ -80,9 +80,9 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | GLM 4.6 | `zai-org-glm-4.6` | $0.43 | $1.75 | $0.08 | — | Private |
 | GLM 4.7 | `zai-org-glm-4.7` | $0.40 | $1.75 | $0.08 | — | Private |
 | GLM 4.7 Flash Heretic | `olafangensan-glm-4.7-flash-heretic` | $0.07 | $0.40 | $0.035 | — | Private |
-| GLM 5 | `zai-org-glm-5` | $1.00 | $3.20 | $0.20 | — | Private |
+| GLM 5 (Retiring) | `zai-org-glm-5` | $1.00 | $3.20 | $0.20 | — | Private |
 | GLM 5 Turbo | `z-ai-glm-5-turbo` | $1.20 | $4.00 | $0.24 | — | Anonymized |
-| GLM 5.1 | `zai-org-glm-5-1` | $1.33 | $4.18 | $0.247 | — | Private |
+| GLM 5.1 (Retiring) | `zai-org-glm-5-1` | $1.33 | $4.18 | $0.247 | — | Private |
 | GLM 5.2 | `e2ee-glm-5-2-p` | $1.75 | $5.75 | $0.30 | — | E2EE |
 | GLM 5.2 | `zai-org-glm-5-2` | $1.40 | $4.40 | $0.26 | — | Private |
 | GLM 5.3 | `e2ee-glm-5-3-p` | $1.75 | $5.50 | $0.325 | — | E2EE |
@@ -131,7 +131,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Inkling 2 Mini | `inkling-2-mini` | $0.12 | $0.50 | $0.024 | — | Private |
 | Kimi K2.6 | `e2ee-kimi-k2-6` | $0.87 | $4.12 | $0.44 | — | E2EE |
 | Kimi K2.6 | `kimi-k2-6` | $0.75 | $3.50 | $0.16 | — | Private |
-| Kimi K2.7 Code | `kimi-k2-7-code` | $0.75 | $3.50 | $0.16 | — | Private |
+| Kimi K2.7 Code (Retiring) | `kimi-k2-7-code` | $0.75 | $3.50 | $0.16 | — | Private |
 | Kimi K3 | `e2ee-kimi-k3-p` | $3.75 | $18.75 | $0.375 | — | E2EE |
 | Kimi K3 | `kimi-k3` | $3.75 | $18.75 | $0.375 | — | Private |
 | Kimi K3 Fast | `kimi-k3-fast-api` | $4.50 | $22.50 | $0.45 | — | Private |
