@@ -51,7 +51,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Claude Sonnet 4.6 | `claude-sonnet-4-6` | $3.00 | $15.00 | $0.30 | $3.75 | Anonymized |
 | Claude Sonnet 5 | `claude-sonnet-5` | $2.00 | $10.00 | $0.20 | $2.50 | Anonymized |
 | Claude Sonnet 5.5 | `claude-sonnet-5-5` | $2.00 | $10.00 | $0.10 | $2.50 | Anonymized |
-| DeepSeek V3.2 | `deepseek-v3.2` | $0.33 | $0.48 | $0.16 | — | Private |
+| DeepSeek V3.2 | `deepseek-v3.2` | $0.26 | $0.38 | $0.13 | — | Private |
 | DeepSeek V4 Flash | `e2ee-deepseek-v4-flash` | $0.182 | $0.373 | $0.038 | — | E2EE |
 | DeepSeek V4 Flash 0423 | `deepseek-v4-flash` | $0.138 | $0.275 | $0.028 | — | Private |
 | DeepSeek V4 Flash 0731 | `deepseek-v4-flash-0731` | $0.13 | $0.26 | $0.028 | — | Private |
@@ -78,11 +78,11 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Gemma 4 26B A4B Uncensored | `e2ee-gemma-4-26b-a4b-uncensored-p` | $0.19 | $0.88 | — | — | E2EE |
 | Gemma 4 Uncensored (Retiring) | `gemma-4-uncensored` | $0.1625 | $0.50 | — | — | Private |
 | GLM 4.6 | `zai-org-glm-4.6` | $0.43 | $1.75 | $0.08 | — | Private |
-| GLM 4.7 | `zai-org-glm-4.7` | $0.55 | $2.65 | $0.11 | — | Private |
+| GLM 4.7 | `zai-org-glm-4.7` | $0.40 | $1.75 | $0.08 | — | Private |
 | GLM 4.7 Flash Heretic | `olafangensan-glm-4.7-flash-heretic` | $0.07 | $0.40 | $0.035 | — | Private |
 | GLM 5 | `zai-org-glm-5` | $1.00 | $3.20 | $0.20 | — | Private |
 | GLM 5 Turbo | `z-ai-glm-5-turbo` | $1.20 | $4.00 | $0.24 | — | Anonymized |
-| GLM 5.1 | `zai-org-glm-5-1` | $1.54 | $4.84 | $0.286 | — | Private |
+| GLM 5.1 | `zai-org-glm-5-1` | $1.33 | $4.18 | $0.247 | — | Private |
 | GLM 5.2 | `e2ee-glm-5-2-p` | $1.75 | $5.75 | $0.30 | — | E2EE |
 | GLM 5.2 | `zai-org-glm-5-2` | $1.40 | $4.40 | $0.26 | — | Private |
 | GLM 5.3 | `e2ee-glm-5-3-p` | $1.75 | $5.50 | $0.325 | — | E2EE |
@@ -93,7 +93,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | GLM 5V Turbo | `z-ai-glm-5v-turbo` | $1.50 | $5.00 | $0.30 | — | Anonymized |
 | Google Gemma 3 27B Instruct | `google-gemma-3-27b-it` | $0.12 | $0.20 | — | — | Private |
 | Google Gemma 4 26B A4B Instruct | `google-gemma-4-26b-a4b-it` | $0.13 | $0.40 | $0.05 | — | Private |
-| Google Gemma 4 31B Instruct | `google-gemma-4-31b-it` | $0.12 | $0.36 | $0.09 | — | Private |
+| Google Gemma 4 31B Instruct | `google-gemma-4-31b-it` | $0.12 | $0.36 | $0.05 | — | Private |
 | GPT OSS 120B | `e2ee-gpt-oss-120b-p` | $0.13 | $0.65 | — | — | E2EE |
 | GPT-4o | `openai-gpt-4o-2024-11-20` | $2.50 | $10.00 | $1.25 | — | Anonymized |
 | GPT-4o Mini | `openai-gpt-4o-mini-2024-07-18` | $0.15 | $0.60 | $0.075 | — | Anonymized |
@@ -141,16 +141,16 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Llama 3.2 3B | `llama-3.2-3b` | $0.15 | $0.60 | — | — | Private |
 | Llama 3.3 70B | `llama-3.3-70b` | $0.70 | $2.80 | — | — | Private |
 | MiMo-V2.5 | `xiaomi-mimo-v2-5` | $0.40 | $2.00 | $0.08 | — | Private |
-| MiMo-V2.6-Flash | `xiaomi-mimo-v2-6-flash` | $0.175 | $0.35 | $0.00375 | — | Private |
+| MiMo-V2.6-Flash | `xiaomi-mimo-v2-6-flash` | $0.14 | $0.28 | $0.0028 | — | Private |
 | MiniMax M2.5 | `minimax-m25` | $0.27 | $0.95 | $0.03 | — | Private |
 | MiniMax M2.7 | `minimax-m27` | $0.375 | $1.50 | $0.06875 | — | Private |
 | MiniMax M3 Preview | `minimax-m3-preview` | $0.30 | $1.20 | $0.06 | — | Private |
 | MiniMax M3.1 Flash | `minimax-m3-1-flash` | $0.1875 | $0.75 | $0.01875 | — | Private |
-| Mistral Small 3.2 24B Instruct | `mistral-small-3-2-24b-instruct` | $0.09375 | $0.25 | — | — | Private |
+| Mistral Small 3.2 24B Instruct | `mistral-small-3-2-24b-instruct` | $0.075 | $0.20 | — | — | Private |
 | Muse Spark Open | `muse-spark-open` | $1.5625 | $5.3125 | $0.1875 | — | Private |
 | Muse Wonder | `muse-wonder` | $5.00 | $25.00 | $0.25 | — | Anonymized |
 | NVIDIA Nemotron 3 Nano 30B | `nvidia-nemotron-3-nano-30b-a3b` | $0.075 | $0.30 | — | — | Private |
-| NVIDIA Nemotron 3 Ultra | `nvidia-nemotron-3-ultra-550b-a55b` | $0.625 | $3.125 | $0.1875 | — | Private |
+| NVIDIA Nemotron 3 Ultra | `nvidia-nemotron-3-ultra-550b-a55b` | $0.50 | $2.20 | $0.10 | — | Private |
 | NVIDIA Nemotron 3.5 Super VL 120B | `nvidia-nemotron-3-5-super-vl-120b-a12b` | $0.20 | $0.50 | $0.04 | — | Private |
 | OpenAI GPT OSS 120B | `openai-gpt-oss-120b` | $0.07 | $0.30 | — | — | Private |
 | Pareto (Beta) | `pareto` | $1.00 | $4.00 | $0.0375 | — | Anonymized |
@@ -161,13 +161,13 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Qwen 3 Next 80b | `qwen3-next-80b` | $0.35 | $1.90 | — | — | Private |
 | Qwen 3.5 35B A3B | `qwen3-5-35b-a3b` | $0.15 | $1.00 | $0.05 | — | Private |
 | Qwen 3.5 397B | `qwen3-5-397b-a17b` | $0.75 | $4.50 | — | — | Anonymized |
-| Qwen 3.6 27B | `qwen3-6-27b` | $0.325 | $3.25 | — | — | Private |
+| Qwen 3.6 27B | `qwen3-6-27b` | $0.32 | $3.20 | — | — | Private |
 | Qwen 3.6 35B A3B (Beta) | `qwen3-6-35b-a3b` | $0.10 | $1.00 | — | — | Private |
 | Qwen 3.6 35B A3B FP8 | `e2ee-qwen3-6-35b-a3b` | $0.182 | $1.18 | $0.06 | — | E2EE |
 | Qwen 3.6 Plus Uncensored | `qwen-3-6-plus` | $0.625 | $3.75 | $0.0625 | $0.78 | Anonymized |
 | Qwen 3.7 Max | `qwen-3-7-max` | $2.70 | $8.05 | $0.27 | $3.35 | Anonymized |
 | Qwen 3.7 Plus | `qwen-3-7-plus` | $0.50 | $2.00 | $0.05 | $0.625 | Anonymized |
-| Qwen 3.8 2.4T | `qwen-3-8-2-4t-a95b` | $2.50 | $7.50 | $0.3125 | — | Private |
+| Qwen 3.8 2.4T | `qwen-3-8-2-4t-a95b` | $2.00 | $6.00 | $0.25 | — | Private |
 | Qwen 3.8 27B | `e2ee-qwen3-8-27b` | $0.47 | $3.53 | $0.047 | — | E2EE |
 | Qwen 3.8 27B (Beta) | `qwen-3-8-27b` | $0.45 | $3.20 | — | — | Private |
 | Qwen 3.8 Flash | `qwen-3-8-flash` | $0.14 | $0.49 | $0.014 | — | Anonymized |
