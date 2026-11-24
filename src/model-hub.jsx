@@ -448,6 +448,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // output, then cached input when the model caches prompts.
   const textPrices = p => [p.input, p.output, p.cacheRead].filter(value => value != null);
   const TEXT_PRICES_HINT = 'Input / output / cached input, per 1M tokens';
+  // Most cache writes cost a quarter more than input, but a few cost less.
+  const relativeToInput = (price, input) => {
+    if (!input) return 'per 1M tokens';
+    const diff = Math.round((price / input - 1) * 100);
+    return diff > 0 ? `${diff}% above input` : diff < 0 ? `${-diff}% below input` : 'same as input';
+  };
 
   const priceSummary = m => (m.modality === 'text' && m.pricing ? `${usd(m.pricing.input)} / ${usd(m.pricing.output)} per 1M`
     : m.modality === 'video' ? (m.pricing && m.pricing.status === 'quoted' ? `from ${usd(m.pricing.fromPerSecond)} / sec` : 'priced by source')
@@ -3888,6 +3894,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           <div className="vxn-prices">
             <div className="vxn-price"><span className="vxn-price-label">Input</span><span className="vxn-price-value">{usd(p.input)}</span><span className="vx-muted">per 1M tokens</span></div>
             {p.cacheRead != null ? <div className="vxn-price"><span className="vxn-price-label">Cached input</span><span className="vxn-price-value">{usd(p.cacheRead)}</span><span className="vx-muted">{p.input ? `${Math.round((1 - p.cacheRead / p.input) * 100)}% off input` : 'per 1M tokens'}</span></div> : null}
+            {p.cacheWrite != null ? <div className="vxn-price"><span className="vxn-price-label">Cache write</span><span className="vxn-price-value">{usd(p.cacheWrite)}</span><span className="vx-muted">{relativeToInput(p.cacheWrite, p.input)}</span></div> : null}
             <div className="vxn-price"><span className="vxn-price-label">Output</span><span className="vxn-price-value">{usd(p.output)}</span><span className="vx-muted">per 1M tokens</span></div>
           </div>
           <div className="vxn-split">
