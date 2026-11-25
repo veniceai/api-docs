@@ -584,6 +584,7 @@ function normalizeModel(model, ctx) {
     entry.headline = { value: entry.pricing.perImage, unit: task === 'image-upscale' ? 'per 2x upscale' : task === 'image-edit' ? 'per edit' : 'per image', basis: entry.pricing.defaultResolution || 'flat' };
   } else if (modality === 'video') {
     const mode = videoMode(model);
+    const inputRule = (ctx.overrides.videoInputRules || []).find(rule => matchesRule(entry, rule.match || {}));
     entry.video = {
       mode,
       resolutions: (constraints.resolutions || []).filter(value => !SCALE_FACTOR.test(value)).map(resolutionInfo),
@@ -597,6 +598,7 @@ function normalizeModel(model, ctx) {
         video: Boolean(constraints.video_input),
         audio: Boolean(constraints.audio_input),
         reference: mode === 'r2v',
+        ...inputRule?.videoInputs,
         ...override.videoInputs
       },
       promptLimit: constraints.prompt_character_limit || null,
