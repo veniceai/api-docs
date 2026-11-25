@@ -2,24 +2,24 @@
 title: 自主代理 API 密钥创建
 description: "通过在 Base 上质押 VVV，让链上 agent 铸造 Venice API 密钥。"
 'og:title': "Autonomous Agent API Key | Venice API Docs"
-'og:description': How an autonomous AI agent can mint its own Venice API key by signing a Venice-issued token with a wallet that holds staked VVV on Base.
+'og:description': How an autonomous AI agent can mint its own Venice inference API key by signing a Venice-issued key request with a wallet that holds staked VVV on Base.
 ---
 
-控制 Base 上钱包的 AI agent 可以在无需人类参与的情况下铸造自己的 Venice API 密钥。agent 获取 VVV、质押它、用钱包签署 Venice 发布的短期验证 token，然后将签名后的 token 回传以获得绑定到质押钱包的全新 API 密钥。
+控制 Base 上钱包的 AI agent 可以在无需人类参与的情况下铸造自己的 Venice 推理 API 密钥。agent 获取 VVV、质押它、为其钱包请求一个短期密钥请求、签署该请求的可读消息，然后将签名回传以获得绑定到质押钱包的全新 API 密钥。
 
 本指南从端到端介绍整个流程，并涵盖密钥铸造后用于实际支付推理的资金选项。
 
-## 前置条件
+## 前置条件 {#prerequisites}
 
 * agent 控制的 Base 上的 EVM 钱包（私钥保存在环境变量或密钥管理器中）。
 * Base 上少量 ETH 用于 gas（质押需要两笔交易：`approve` 然后 `stake`）。
-* 任意非零数量的 VVV 用于质押。铸造端点仅要求钱包具备非零 sVVV 余额，因此 1 VVV 足以铸造密钥。请参阅[为推理付费](#为推理付费)了解实际调用付费端点需要什么。
+* 任意非零数量的 VVV 用于质押。铸造端点仅要求钱包具备非零 sVVV 余额，因此 1 VVV 足以铸造密钥。请参阅[为推理付费](#paying-for-inference)了解实际调用付费端点需要什么。
 
 <Tip>
   使用专用的 agent 钱包，而不是金库钱包。该钱包的私钥会签署每个 Venice token 请求，因此其影响范围应保持最小。
 </Tip>
 
-## 步骤
+## 步骤 {#steps}
 
 <Steps>
   <Step title="获取 VVV">
@@ -41,23 +41,40 @@ description: "通过在 Base 上质押 VVV，让链上 agent 铸造 Venice API �
     当第二笔交易确认时，钱包的 VVV 余额减少，其 sVVV 余额相应增加。铸造端点读取 sVVV 余额以确认钱包已质押。
   </Step>
 
-  <Step title="请求验证 token">
-    调用 `GET /api/v1/api_keys/generate_web3_key` 以获取由 Venice 签发的短期 token。此端点无需身份验证。
+  <Step title="为钱包请求密钥请求">
+    使用质押钱包的地址调用 `GET /api/v1/api_keys/generate_web3_key`。此端点无需身份验证。
 
     ```bash
     curl --request GET \
-      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+      --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>'
     ```
 
-    响应包含 `token` 字段。该 token 在签发 15 分钟后过期，因此请尽早签名并提交。
+    响应包含两个字段：
+
+    - `token`，由 Venice 签名并绑定到该钱包的 token。它在签发 15 分钟后过期，因此请尽早签名并提交。
+    - `message`，钱包要签署的可读文本。它列出钱包、密钥类型（`INFERENCE`）、签发方、链、一次性 nonce 以及签发和过期时间：
+
+    ```text
+    Venice API key request
+
+    Sign this only if you are creating a Venice inference API key for this wallet. The key spends from this wallet's Venice account.
+
+    Wallet: <wallet address>
+    Key type: INFERENCE
+    Issued by: api.venice.ai
+    Chain ID: 8453
+    Nonce: <random hex>
+    Issued At: <ISO 8601 time>
+    Expiration Time: <ISO 8601 time>
+    ```
   </Step>
 
-  <Step title="用质押钱包签署 token">
-    用持有质押 VVV 的钱包签署原始 token 字符串。这是对 token 字节的标准 `personal_sign`。`ethers.Wallet.signMessage(token)` 和 `viem` 的 `account.signMessage({ message: token })` 都会产生正确的签名。
+  <Step title="用质押钱包签署消息">
+    用持有质押 VVV 的钱包签署完全相同的 `message` 字符串。这是标准的 `personal_sign`（EIP-191）。`ethers.Wallet.signMessage(message)` 和 `viem` 的 `account.signMessage({ message })` 都能生成正确的签名。不要修改消息：Venice 会根据 token 重建它，签名必须与之完全匹配。
   </Step>
 
   <Step title="铸造 API 密钥">
-    将地址、签名和 token 以及您想要的密钥类型 `POST` 到同一端点。
+    将地址、签名和 token `POST` 到同一端点。
 
     ```bash
     curl --request POST \
@@ -65,14 +82,14 @@ description: "通过在 Base 上质押 VVV，让链上 agent 铸造 Venice API �
       --header 'Content-Type: application/json' \
       --data '{
         "address": "<wallet address>",
-        "signature": "<signed token>",
-        "token": "<unsigned token>",
+        "signature": "<signature of message>",
+        "token": "<token>",
         "apiKeyType": "INFERENCE",
         "description": "Agent key minted on <date>"
       }'
     ```
 
-    必填字段：`address`、`signature`、`token`、`apiKeyType`（`INFERENCE` 或 `ADMIN`）。
+    必填字段：`address`、`signature`、`token`、`apiKeyType`。`apiKeyType` 必须为 `INFERENCE`：钱包签名铸造不会创建 ADMIN 密钥。请在 [API 设置](https://venice.ai/settings/api?utm_source=venice-api-documentation)中创建 ADMIN 密钥。
 
     可选字段：
 
@@ -90,7 +107,7 @@ description: "通过在 Base 上质押 VVV，让链上 agent 铸造 Venice API �
   </Step>
 </Steps>
 
-## 端到端示例
+## 端到端示例 {#end-to-end-example}
 
 下面的示例使用来自环境变量的真实钱包，而不是随机生成的钱包。随机钱包没有质押的 VVV，铸造将被 `Wallet 0x… has no staked VVV on Base` 错误拒绝。
 
@@ -100,10 +117,12 @@ import { ethers } from "ethers"
 const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
 const address = wallet.address
 
-const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
-const { data: { token } } = await tokenResponse.json()
+const tokenResponse = await fetch(
+  `https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=${address}`,
+)
+const { data: { token, message } } = await tokenResponse.json()
 
-const signature = await wallet.signMessage(token)
+const signature = await wallet.signMessage(message)
 
 const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
   method: "POST",
@@ -128,22 +147,29 @@ if (!mintResponse.ok) {
 console.log("Minted key:", result.data.apiKey)
 ```
 
-## 错误参考
+## 错误参考 {#error-reference}
 
 端点返回具体、可操作的错误消息。在 agent 中映射这些错误，以便它可以决定是重试、请求新 token 还是停止。
 
 | 状态 | 错误消息包含 | 含义 | 应对方式 |
 | --- | --- | --- | --- |
-| `400` | `Invalid wallet address` | `address` 字段不是有效的 EVM 地址。 | 修正地址并重新提交。 |
+| `400` | `Invalid wallet address` | `address` 查询参数或字段不是有效的 EVM 地址。 | 修正地址并重新提交。 |
+| `400` | `creates INFERENCE keys only` | `apiKeyType` 为 `ADMIN`。 | 将 `apiKeyType` 设为 `INFERENCE`，或在控制台中创建 ADMIN 密钥。 |
+| `400` | `issued for a different wallet` | 请求 token 时使用的 `address` 与 `POST` 请求体中的不同。 | 请求 token 时将 `?address=` 设为签名钱包。 |
 | `400` | `JWT has expired` | 验证 token 在您签名并提交之前已过期。 | 请求新 token，签名并立即提交。 |
 | `400` | `JWT signature is invalid` | 该 token 不是由 Venice 签发的（可能被篡改或伪造）。 | 始终使用 `GET` 端点返回的新鲜 token。 |
 | `400` | `JWT claims are invalid` | token 的签发者或受众与 Venice 期望的不匹配。 | 使用 `GET` 端点返回的未修改 token。 |
 | `400` | `JWT is malformed` | 提交的 `token` 不是 JWT。 | 确保发送 `GET` 端点返回的确切 `token` 字符串。 |
-| `400` | `Wallet signature does not match` | 给定 `token` 的 `signature` 与 `address` 不匹配。 | 用拥有 `address` 的钱包签署原始 token 字节。 |
+| `400` | `Wallet signature does not match` | `signature` 不是 `address` 钱包对该 token 的 `message` 的签名。 | 用拥有 `address` 的钱包签署随 token 返回的完全相同的 `message`。 |
+| `400` | `Tokens without a wallet address are no longer accepted` | 请求 token 时未提供 `?address=`。这些旧版 token 自 2026 年 12 月 26 日起失效。 | 使用 `?address=` 请求 token 并签署其 `message`。 |
 | `400` | `Could not verify wallet signature` | 验证签名的 RPC 调用失败（瞬态）。 | 退避后重试。 |
 | `400` | `has no staked VVV` | 钱包的 sVVV 余额为零。完整消息为 `Wallet 0x… has no staked VVV on Base`，其中 `0x…` 会替换为您的钱包地址，后面还附有一个链接，因此请匹配 `has no staked VVV`，而不是完整文本。 | 先质押 VVV，然后重试。 |
 
-## 为推理付费
+## 旧版 token {#legacy-tokens}
+
+2026 年 11 月之前，该端点签发不带钱包地址的 token，钱包签署原始 token 字符串。这些 token 在 **2026 年 12 月 26 日 00:00 UTC** 之前仍可铸造密钥，其响应带有 `Deprecation`、`Sunset` 和 `Link` 标头。该日期之后，`POST` 会拒绝它们。请在此之前改用 `?address=` 并签署 `message`。
+
+## 为推理付费 {#paying-for-inference}
 
 铸造密钥与能够用它调用付费端点是两回事。新铸造的密钥可以正确认证，但在钱包的账户具有可花费余额之前，无法调用付费端点（如 `/chat/completions`）。
 
@@ -161,7 +187,7 @@ console.log("Minted key:", result.data.apiKey)
 1. **质押更多 VVV**，使每日 DIEM 分配覆盖 agent 的支出。铸造的密钥会自动接入。
 2. **使用 [x402 钱包流程](/zh/guides/integrations/x402-venice-api) 代替 API 密钥。** 通过 x402，agent 每个请求签署一个 Sign-In-With-X 消息，通过 `POST /api/v1/x402/top-up` 在 Base 或 Solana 上直接用 USDC 充值，并按请求付费。x402 USDC 余额绑定到钱包，而非用户，因此它不会以余额形式出现在铸造的 Bearer 密钥下，但它确实让同一钱包以编程方式为推理付费。
 
-## 相关资源
+## 相关资源 {#related-resources}
 
 <CardGroup cols={2}>
   <Card title="Crypto 与 Agents" icon="link" href="/zh/guides/integrations/crypto-rpc-agents">

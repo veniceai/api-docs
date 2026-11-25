@@ -127,7 +127,8 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Grok 4.5 | `grok-4-5` | $2.27 | $6.80 | $0.34 | — | Private |
 | Grok 4.6 | `grok-4-6` | $2.27 | $6.80 | $0.57 | — | Private |
 | Grok 4.7 | `grok-4-7` | $2.27 | $6.80 | $0.57 | — | Private |
-| Hy4 Preview | `hy4-preview` | $1.0425 | $3.12625 | $0.0525 | — | Private |
+| Hy4 | `hy4` | $1.0425 | $3.12625 | $0.0525 | — | Private |
+| Hy4 Preview (Retiring) | `hy4-preview` | $1.0425 | $3.12625 | $0.0525 | — | Private |
 | Inkling 2 Mini | `inkling-2-mini` | $0.12 | $0.50 | $0.024 | — | Private |
 | Kimi K2.6 | `e2ee-kimi-k2-6` | $0.87 | $4.12 | $0.44 | — | E2EE |
 | Kimi K2.6 | `kimi-k2-6` | $0.75 | $3.50 | $0.16 | — | Private |
@@ -601,6 +602,15 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | Seedance 2.5 Flash Edit | `seedance-2-5-flash-edit-video-basic` | Video edit | Quote per job | Anonymized |
 | Seedance 2.5 Flash R2V | `seedance-2-5-flash-reference-to-video-basic` | Reference to video | $0.0879 to $0.19 | Anonymized |
 | Seedance 2.5 R2V | `seedance-2-5-reference-to-video-basic` | Reference to video | $0.1343 to $1.1421 | Anonymized |
+| Topaz Video Astra | `topaz-video-astra` | Video edit | Priced by source | Anonymized |
+| Topaz Video Colorize | `topaz-video-colorize` | Video edit | Priced by source | Anonymized |
+| Topaz Video Deblur | `topaz-video-deblur` | Video edit | Priced by source | Anonymized |
+| Topaz Video Denoise | `topaz-video-denoise` | Video edit | Priced by source | Anonymized |
+| Topaz Video Hyperion | `topaz-video-hyperion` | Video edit | Priced by source | Anonymized |
+| Topaz Video Interpolate | `topaz-video-interpolate` | Video edit | Priced by source | Anonymized |
+| Topaz Video Precision | `topaz-video-precision` | Video edit | Priced by source | Anonymized |
+| Topaz Video Starlight | `topaz-video-starlight` | Video edit | Priced by source | Anonymized |
+| Topaz Video Starlight Fast | `topaz-video-starlight-fast` | Video edit | Priced by source | Anonymized |
 | Topaz Video Upscale | `topaz-video-upscale` | Upscale | Priced by source | Anonymized |
 | Veo 3.1 Fast | `veo3.1-fast-text-to-video` | Text to video | $0.11 to $0.385 | Anonymized |
 | Veo 3.1 Fast | `veo3.1-fast-image-to-video` | Image to video | $0.11 to $0.385 | Anonymized |
