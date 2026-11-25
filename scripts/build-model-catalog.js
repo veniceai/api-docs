@@ -570,7 +570,8 @@ function normalizeModel(model, ctx) {
     const mode = videoMode(model);
     entry.video = {
       mode,
-      resolutions: (constraints.resolutions || []).map(resolutionInfo),
+      resolutions: (constraints.resolutions || []).filter(value => !SCALE_FACTOR.test(value)).map(resolutionInfo),
+      upscaleFactors: scaleFactors(constraints),
       durations: (constraints.durations || []).map(value => ({ value, seconds: seconds(value) })),
       aspectRatios: Array.isArray(constraints.aspect_ratios) ? constraints.aspect_ratios : (constraints.aspect_ratios ? [constraints.aspect_ratios] : []),
       audio: constraints.audio ? (constraints.audio_configurable ? 'optional' : 'native') : 'none',

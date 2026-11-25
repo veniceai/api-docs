@@ -1891,6 +1891,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       const video = model.video || {};
       const inputs = video.inputs || {};
       const upscale = video.mode === 'upscale';
+      const factors = video.upscaleFactors || [];
       // Source-length models list only "Auto", which /video/queue rejects; they take no duration.
       const timed = (video.durations || []).filter(d => d.seconds);
       const dur = timed.find(d => d.seconds === 5) || timed[0];
@@ -1906,7 +1907,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         prompt ? `"prompt": "${prompt}"` : null,
         dur ? `"duration": "${dur.value}"` : null,
         res ? `"resolution": "${res.value}"` : null,
-        upscale ? '"upscale_factor": 2' : null,
+        factors.length ? `"upscale_factor": ${factors[0]}` : null,
         video.aspectRatios && video.aspectRatios.length ? `"aspect_ratio": "${video.aspectRatios[0]}"` : null,
         video.audio === 'optional' ? '"audio": true' : null,
         inputs.image ? `"image_url": "https://example.com/${video.mode === 'motion' ? 'character' : 'first-frame'}.jpg"` : null,
@@ -4344,6 +4345,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       price,
       timedDurations(video).length ? `- Lengths: ${durationText(video.durations)}; \`duration\` is required` : '- Length: matches the source video; omit `duration`',
       res.length ? `- Resolutions: ${res.map(r => r.value).join(', ')}` : null,
+      (video.upscaleFactors || []).length ? '- Upscale factor: `upscale_factor` 1, 2 or 4, where 1 enhances without enlarging; `resolution` is rejected' : null,
       ratios.length ? `- Aspect ratios: ${ratios.join(', ')}; \`aspect_ratio\` is required` : '- Aspect ratio: set by the input or the model; `aspect_ratio` is rejected',
       `- Audio: ${(AUDIO_TEXT[video.audio] || 'none').toLowerCase()}${video.audio === 'optional' ? ' (`audio`)' : ''}`,
       fields.length ? `- Inputs: ${listText(fields.map(f => `\`${f}\``))}` : null,
@@ -4483,7 +4485,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         ? ['duration', timed.length > 6 ? durationText(video.durations) : <code>{timed.map(d => d.value).join(' | ')}</code>, 'Required']
         : ['duration', 'Omit it', 'Read from the source video'],
       res.length ? ['resolution', <code>{res.map(r => r.value).join(' | ')}</code>, 'Optional'] : null,
-      upscale ? ['upscale_factor', <code>1 | 2 | 4</code>, '1 enhances without enlarging'] : null,
+      (video.upscaleFactors || []).length ? ['upscale_factor', <code>1 | 2 | 4</code>, '1 enhances without enlarging'] : null,
       ratios.length ? ['aspect_ratio', <code>{ratios.join(' | ')}</code>, 'Required'] : null,
       video.audio === 'optional' ? ['audio', <code>true | false</code>, 'Default true'] : null,
       inputs.image ? ['image_url', 'URL or data URL', video.mode === 'motion' ? 'The character to animate' : 'The first frame'] : null,
