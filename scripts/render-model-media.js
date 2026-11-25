@@ -7,10 +7,12 @@
  * at default settings. Edit models get three instructions applied to one
  * source render, and the upscaler gets a 2x detail beside a bicubic
  * enlargement of the same detail. Video models render the cinematic landscape
- * prompt once; models that take a source video restyle, extend, recast or
- * upscale a generated clip. Files are written to images/models/renders/<model id>/,
- * images as WebP and videos as 480p MP4, and listed in data/model-renders.json,
- * which the catalog build uses wherever venice.ai has no samples.
+ * prompt once; models that take a source video restyle, extend, recast,
+ * upscale or enhance a generated clip, enhancers mostly by repairing a copy
+ * degraded the way they fix. Files are written to
+ * images/models/renders/<model id>/, images as WebP and videos as
+ * 480p MP4, and listed in data/model-renders.json, which the catalog build
+ * uses wherever venice.ai has no samples.
  *
  * Usage: VENICE_API_KEY=... node scripts/render-model-media.js <model id> ...
  *          [--source=<model id>] [--video-source=<model id>]
@@ -59,6 +61,32 @@ const VIDEO_RECAST = { id: 'recast', title: 'Recast', prompt: 'Recast the person
 // A centred detail half the frame's width and height, for the upscale
 // comparison; it keeps the frame's shape, so it fills the page's 16:9 frames.
 const VIDEO_DETAIL = 'crop=iw/2:ih/2:iw/4:ih/4';
+// HDR10 output tone-mapped for standard displays, since the renders are 8-bit H.264.
+const HDR_TO_SDR = 'zscale=tin=smpte2084:min=bt2020nc:pin=bt2020:rin=tv:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p';
+// An enhancement model repairs the source clip after a filter degrades it the
+// way the model fixes; one without an input filter takes the clip as it is.
+// Grain barely compresses, so its copy is encoded at CRF 33.
+const VIDEO_ENHANCE = {
+  'topaz-video-hyperion': {
+    id: 'hdr', title: 'Converted to HDR', caption: 'The input converted to HDR10, then tone-mapped for this page: a standard screen can\'t show HDR, so it looks close to the input', display: `${HDR_TO_SDR},scale=-2:${VIDEO_HEIGHT}`
+  },
+  'topaz-video-colorize': {
+    id: 'colorized', title: 'Colorized', caption: 'The black and white input after colorizing',
+    input: { id: 'grayscale', title: 'Black and white input', caption: 'with its color removed', filter: 'hue=s=0' }
+  },
+  'topaz-video-deblur': {
+    id: 'deblurred', title: 'Deblurred', caption: 'The blurred input after deblurring',
+    input: { id: 'blurred', title: 'Blurred input', caption: 'with a horizontal blur', filter: 'avgblur=sizeX=4:sizeY=1' }
+  },
+  'topaz-video-denoise': {
+    id: 'denoised', title: 'Denoised', caption: 'The grainy input after denoising at 1x', body: { upscale_factor: 1 },
+    input: { id: 'grainy', title: 'Grainy input', caption: 'with grain added', filter: 'noise=c0s=30:c0f=t', crf: 33 }
+  },
+  'topaz-video-interpolate': {
+    id: 'interpolated', title: 'Interpolated to 60 fps', caption: 'The 12 fps input after interpolating to 60 fps', body: { target_fps: 60 },
+    input: { id: 'choppy', title: 'Input, 12 fps', caption: 'cut to 12 fps', filter: 'fps=12' }
+  }
+};
 const FFMPEG = process.env.FFMPEG || 'ffmpeg';
 
 const args = process.argv.slice(2);
@@ -200,7 +228,7 @@ async function generateVideo(body) {
 }
 
 // Re-encodes to H.264, which keeps a five-second 480p clip around 300 KB.
-function saveVideo(id, name, input, filter = `scale=-2:${VIDEO_HEIGHT}`) {
+function saveVideo(id, name, input, filter = `scale=-2:${VIDEO_HEIGHT}`, crf = 30) {
   const dir = path.join(OUT_DIR, id);
   fs.mkdirSync(dir, { recursive: true });
   let file = input;
@@ -208,7 +236,7 @@ function saveVideo(id, name, input, filter = `scale=-2:${VIDEO_HEIGHT}`) {
     file = path.join(os.tmpdir(), `${id}-${name}-${process.pid}.mp4`);
     fs.writeFileSync(file, input);
   }
-  execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', file, '-vf', filter, '-c:v', 'libx264', '-preset', 'slow', '-crf', '30',
+  execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', file, '-vf', filter, '-c:v', 'libx264', '-preset', 'slow', '-crf', String(crf),
     '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-c:a', 'aac', '-b:a', '64k', path.join(dir, `${name}.mp4`)]);
   if (file !== input) fs.unlinkSync(file);
   return `/images/models/renders/${id}/${name}.mp4`;
@@ -260,6 +288,23 @@ async function renderVideoUpscale(id, source, prompt) {
   ];
 }
 
+// The model gets the whole degraded clip, kept at a higher quality than the
+// page's copy so the encode doesn't smooth the damage away first.
+async function renderVideoEnhance(id, source, demo) {
+  const file = demo.input ? path.join(os.tmpdir(), `${id}-${demo.input.id}-${process.pid}.mp4`) : source.file;
+  if (demo.input) {
+    execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', source.file, '-vf', demo.input.filter, '-c:v', 'libx264', '-crf', '20',
+      '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', file]);
+  }
+  const bytes = await generateVideo({ model: id, video_url: `data:video/mp4;base64,${fs.readFileSync(file).toString('base64')}`, ...demo.body });
+  console.log(`  ${id}: ${demo.id}`);
+  const output = entry(demo.id, demo.title, demo.caption, saveVideo(id, demo.id, bytes, demo.display), 'video', VIDEO_PROMPT);
+  if (!demo.input) return [output, entry('source', `Input, ${VIDEO_HEIGHT}p`, `${source.name} on the cinematic landscape prompt`, source.url, 'video')];
+  const input = entry(demo.input.id, demo.input.title, `${source.name} on the cinematic landscape prompt, ${demo.input.caption}`, saveVideo(id, demo.input.id, file, undefined, demo.input.crf), 'video', VIDEO_PROMPT);
+  fs.unlinkSync(file);
+  return [output, input];
+}
+
 async function main() {
   if (!ids.length) throw new Error('Name the model IDs to render');
   if (!process.env.VENICE_API_KEY) throw new Error('Set VENICE_API_KEY');
@@ -308,6 +353,10 @@ async function main() {
     if (!mode) throw new Error(`${id} isn't in data/model-catalog.json; run node scripts/build-model-catalog.js first`);
     const clip = { ...videoSource, dataUrl: `data:video/mp4;base64,${fs.readFileSync(videoSource.file).toString('base64')}` };
     if (mode === 'upscale') return renderVideoUpscale(id, clip, catalog[id].video.enhancementPrompt && videoPrompt.prompt);
+    if (mode === 'enhance') {
+      if (!VIDEO_ENHANCE[id]) throw new Error(`${id} has no enhancement demo; add one to VIDEO_ENHANCE`);
+      return renderVideoEnhance(id, clip, VIDEO_ENHANCE[id]);
+    }
     return renderVideoEdit(id, model, clip, id.includes('extend') ? VIDEO_EXTEND : VIDEO_RESTYLE);
   };
   // Each group renders at once, since clips take minutes; a failure skips that
