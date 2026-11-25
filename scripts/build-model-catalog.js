@@ -302,15 +302,26 @@ function classify(model) {
   }
 }
 
+// GET /models lists an upscaler's scale factors ("2x", "4x") as its resolutions.
+const SCALE_FACTOR = /^(\d+)x$/i;
+
+function scaleFactors(constraints) {
+  return (constraints.resolutions || []).map(value => Number((String(value).match(SCALE_FACTOR) || [])[1])).filter(Boolean);
+}
+
 function videoMode(model) {
   const id = model.id.toLowerCase();
-  const type = model.model_spec?.constraints?.model_type;
+  const constraints = model.model_spec?.constraints || {};
+  const type = constraints.model_type;
+  const factors = scaleFactors(constraints);
   if (id.includes('reference-to-video')) return 'r2v';
   if (id.includes('first-last-frame')) return 'flf';
   if (id.includes('motion-control')) return 'motion';
   if (id.includes('multi-angle')) return 'multi-angle';
   if (id.includes('transition')) return 'transition';
   if (id.includes('video-to-video')) return 'v2v';
+  // A model that also lists 1x works at the source resolution and upscales on request.
+  if (factors.length && !factors.includes(1)) return 'upscale';
   if (id.includes('upscale')) return 'upscale';
   if (type === 'image-to-video') return 'i2v';
   // GET /models types source-video models as "video": recasts, extensions, edits.

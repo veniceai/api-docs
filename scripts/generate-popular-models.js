@@ -120,7 +120,7 @@ const PRIVACY = {
   anonymized: ['Anonymized', 'vh-model-privacy is-anonymized']
 };
 
-const VIDEO_INPUTS = [['t2v', 'a prompt'], ['i2v', 'an image'], ['r2v', 'a reference'], ['v2v', 'a video']];
+const VIDEO_INPUTS = [['t2v', 'a prompt'], ['i2v', 'an image'], ['r2v', 'a reference'], ['v2v', 'a video'], ['upscale', 'a video']];
 const TASK_LINES = {
   tts: 'Speech from text.',
   stt: 'Text from speech.',
@@ -262,7 +262,7 @@ function launches(catalog, changes) {
 function releaseLine(family, catalog) {
   const kinds = new Set(family.variants.map(id => catalog.models[id] && catalog.models[id].variant));
   if (family.modality === 'video') {
-    const inputs = VIDEO_INPUTS.filter(([kind]) => kinds.has(kind)).map(([, input]) => input);
+    const inputs = [...new Set(VIDEO_INPUTS.filter(([kind]) => kinds.has(kind)).map(([, input]) => input))];
     return `Video from ${joinOr(inputs.length > 0 ? inputs : ['a prompt'])}.`;
   }
   if (family.modality === 'image') {
