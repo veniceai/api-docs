@@ -4351,7 +4351,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       ratios.length ? `- Aspect ratios: ${ratios.join(', ')}; \`aspect_ratio\` is required` : '- Aspect ratio: set by the input or the model; `aspect_ratio` is rejected',
       `- Audio: ${(AUDIO_TEXT[video.audio] || 'none').toLowerCase()}${video.audio === 'optional' ? ' (`audio`)' : ''}`,
       fields.length ? `- Inputs: ${listText(fields.map(f => `\`${f}\``))}` : null,
-      videoPrompt(video) ? `- Prompt: up to ${count(video.promptLimit || 2500)} characters` : null,
+      videoPrompt(video) ? `- Prompt: ${videoPrompt(video) === 'Optional' ? 'optional, ' : ''}up to ${count(video.promptLimit || 2500)} characters` : null,
       PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
       `- Docs: https://docs.venice.ai/models/${family.slug}`,
       '',
