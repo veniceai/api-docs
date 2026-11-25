@@ -322,7 +322,6 @@ function videoMode(model) {
   if (id.includes('video-to-video')) return 'v2v';
   // A model that also lists 1x works at the source resolution and upscales on request.
   if (factors.length && !factors.includes(1)) return 'upscale';
-  if (id.includes('upscale')) return 'upscale';
   if (type === 'image-to-video') return 'i2v';
   // GET /models types source-video models as "video": recasts, extensions, edits.
   if (type === 'video') return 'v2v';
