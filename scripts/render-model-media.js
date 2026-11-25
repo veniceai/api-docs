@@ -35,6 +35,7 @@ const API = 'https://api.venice.ai/api/v1';
 const OUT_DIR = path.join(ROOT, 'images', 'models', 'renders');
 const DATA_PATH = path.join(ROOT, 'data', 'model-renders.json');
 const SUITE_PATH = path.join(ROOT, 'data', 'model-media.json');
+const CATALOG_PATH = path.join(ROOT, 'data', 'model-catalog.json');
 const MAX_SIZE = 1024;
 
 const EDITS = [
@@ -267,6 +268,8 @@ async function main() {
   const videoPrompt = (suites.video || []).find(item => item.id === VIDEO_PROMPT);
   if (!suite.length || !videoPrompt) throw new Error('data/model-media.json is missing the image prompts or the cinematic landscape prompt');
   const data = readJson(DATA_PATH, { source: 'Rendered through the Venice API by scripts/render-model-media.js', models: {} });
+  // A source-video model renders the mode its page describes.
+  const catalog = readJson(CATALOG_PATH, { models: {} }).models;
   const nameOf = id => (models[id] && models[id].model_spec && models[id].model_spec.name) || id;
   const source = {
     file: path.join(OUT_DIR, sourceId, 'photoreal.webp'),
@@ -299,8 +302,10 @@ async function main() {
       return renderVideoRecast(id, model, models[videoSourceId], (suites.video || []).find(item => item.id === VIDEO_RECAST.source), source);
     }
     if (!fs.existsSync(videoSource.file)) throw new Error(`Render ${videoSourceId} before ${id}; its clip is the source`);
+    const mode = catalog[id] && catalog[id].video && catalog[id].video.mode;
+    if (!mode) throw new Error(`${id} isn't in data/model-catalog.json; run node scripts/build-model-catalog.js first`);
     const clip = { ...videoSource, dataUrl: `data:video/mp4;base64,${fs.readFileSync(videoSource.file).toString('base64')}` };
-    return id.includes('upscale') ? renderVideoUpscale(id, clip) : renderVideoEdit(id, model, clip, id.includes('extend') ? VIDEO_EXTEND : VIDEO_RESTYLE);
+    return mode === 'upscale' ? renderVideoUpscale(id, clip) : renderVideoEdit(id, model, clip, id.includes('extend') ? VIDEO_EXTEND : VIDEO_RESTYLE);
   };
   // Each group renders at once, since clips take minutes; a failure skips that
   // model and leaves the others' results.
