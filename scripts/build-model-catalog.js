@@ -586,7 +586,8 @@ function normalizeModel(model, ctx) {
         reference: mode === 'r2v',
         ...override.videoInputs
       },
-      promptLimit: constraints.prompt_character_limit || null
+      promptLimit: constraints.prompt_character_limit || null,
+      enhancementPrompt: Boolean(constraints.topaz?.prompt)
     };
     entry.pricing = videoPricing(model, ctx.videoPricing.models?.[model.id]);
     entry.headline = { value: null, unit: 'per second', basis: 'lens' };

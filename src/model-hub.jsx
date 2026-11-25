@@ -271,8 +271,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return (durations || []).map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ');
   };
   const upperFirst = text => text.charAt(0).toUpperCase() + text.slice(1);
-  // Upscalers and enhancers work from the source video alone.
-  const videoPrompt = video => (['upscale', 'enhance'].includes(video.mode) ? null : video.mode === 'multi-angle' ? 'Optional' : 'Required');
+  // Upscalers and enhancers work from the source video, and the few that read
+  // a prompt take it as optional guidance.
+  const videoPrompt = video => (['upscale', 'enhance'].includes(video.mode) ? (video.enhancementPrompt ? 'Optional' : null)
+    : video.mode === 'multi-angle' ? 'Optional' : 'Required');
   // Seedance's edit model reads its source clip from reference_video_urls
   // instead of video_url.
   const videoInputList = video => {
@@ -1835,6 +1837,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     videoExtend: 'Continue the drone shot as it rises above the clouds into clear sky',
     videoRecast: 'Recast the person in the video as the person in the reference image',
     videoMotion: 'The character follows the movements in the source video',
+    videoEnhance: 'Cinematic look with fine, detailed textures',
     music: 'Warm lo-fi hip hop beat with soft piano and vinyl crackle',
     lyrics: '[Verse]\\nCity lights are calling me home\\n[Chorus]\\nWe are the dreamers',
     sfx: 'Heavy wooden door creaking open in a stone hallway'
@@ -1899,6 +1902,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       const dur = timed.find(d => d.seconds === 5) || timed[0];
       const res = upscale ? null : (video.resolutions || []).find(r => r.height === 720) || (video.resolutions || [])[0];
       const prompt = !videoPrompt(video) ? null
+        : video.enhancementPrompt ? VARIANT_PROMPTS.videoEnhance
         : video.mode === 'motion' ? VARIANT_PROMPTS.videoMotion
         : video.mode !== 'v2v' ? VARIANT_PROMPTS.video
         : inputs.reference ? VARIANT_PROMPTS.videoRecast
@@ -4481,7 +4485,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const ratios = video.aspectRatios || [];
     return [
       ['model', <code>{model.id}</code>, 'Required'],
-      videoPrompt(video) ? ['prompt', `Up to ${count(video.promptLimit || 2500)} characters`, videoPrompt(video)] : null,
+      videoPrompt(video) ? ['prompt', `Up to ${count(video.promptLimit || 2500)} characters`, video.enhancementPrompt ? 'Optional, describes the video or the look you want' : videoPrompt(video)] : null,
       timed.length
         ? ['duration', timed.length > 6 ? durationText(video.durations) : <code>{timed.map(d => d.value).join(' | ')}</code>, 'Required']
         : ['duration', 'Omit it', 'Read from the source video'],
