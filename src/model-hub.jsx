@@ -4339,6 +4339,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       : p.status === 'input-dependent' ? '- Price: billed by the length of the source video; quote it with `POST /video/quote` and its `video_url`'
         : '- Price: quote it with `POST /video/quote`';
     const fields = [videoPrompt(video) ? 'prompt' : null, ...INPUT_FIELDS.filter(([key]) => (video.inputs || {})[key]).map(([, field]) => field)].filter(Boolean);
+    const controls = enhancementParams(video.enhancement || {});
     return [
       `# ${family.name} on the Venice API`,
       '',
@@ -4356,6 +4357,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       `- Audio: ${(AUDIO_TEXT[video.audio] || 'none').toLowerCase()}${video.audio === 'optional' ? ' (`audio`)' : ''}`,
       fields.length ? `- Inputs: ${listText(fields.map(f => `\`${f}\``))}` : null,
       videoPrompt(video) ? `- Prompt: ${videoPrompt(video) === 'Optional' ? 'optional, ' : ''}up to ${count(video.promptLimit || 2500)} characters` : null,
+      ...(controls.length ? ['- Optional Topaz controls:', ...controls.map(([name, values, note]) => `  - \`${name}\`: ${values}${note ? ` (${note})` : ''}`)] : []),
       PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
       `- Docs: https://docs.venice.ai/models/${family.slug}`,
       '',
@@ -4477,6 +4479,17 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </ol>
   );
 
+  // The optional Topaz controls a model lists, as [param, values, note].
+  // target_fps takes any whole number from 16 up to its highest option.
+  const enhancementParams = e => [
+    e.models ? ['enhancement_model', e.models.join(' | '), e.noUpscaleModels ? `${listText(e.noUpscaleModels)} take upscale_factor 1 only` : 'the Topaz model to run'] : null,
+    ...(e.sliders || []).map(s => [s.param, `${s.min} – ${s.max}`, `default ${s.default}${s.onlyFor ? `, used by ${listText(s.onlyFor)} only` : ''}`]),
+    ...(e.selects || []).map(s => (s.param === 'target_fps'
+      ? [s.param, `16 – ${Math.max(...s.options.map(Number))}`, s.default ? `default ${s.default}` : 'omit it to keep the source frame rate']
+      : [s.param, s.options.join(' | '), s.default ? `default ${s.default}` : null])),
+    e.h264Output ? ['h264_output', 'true | false', 'default false, for H.265'] : null
+  ].filter(Boolean);
+
   const videoParams = model => {
     const video = model.video || {};
     const inputs = video.inputs || {};
@@ -4498,7 +4511,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       inputs.reference ? ['reference_image_urls', 'Image URLs', 'Characters or styles to keep'] : null,
       inputs.video ? ['video_url', 'URL or data URL', 'The source video, required'] : null,
       inputs.referenceVideo ? ['reference_video_urls', 'Video URLs', 'Reference clips, or the clip to edit'] : null,
-      inputs.audio ? ['audio_url', 'WAV or MP3 URL', 'Audio for the clip to follow'] : null
+      inputs.audio ? ['audio_url', 'WAV or MP3 URL', 'Audio for the clip to follow'] : null,
+      ...enhancementParams(video.enhancement || {}).map(([name, values, note]) => [name, <code>{values}</code>, note && upperFirst(note)])
     ].filter(Boolean);
   };
 

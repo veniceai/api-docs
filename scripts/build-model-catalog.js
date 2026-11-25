@@ -331,6 +331,19 @@ function videoMode(model) {
   return 't2v';
 }
 
+// The Topaz controls a model takes on /video/queue, besides its prompt. A
+// select's empty option, which keeps the source's value, drops out in compact().
+function enhancementControls(topaz) {
+  if (!topaz) return null;
+  return {
+    models: (topaz.models || []).map(option => option.value),
+    sliders: (topaz.sliders || []).map(slider => ({ param: slider.param, min: slider.min, max: slider.max, default: slider.default, onlyFor: slider.only_for_models })),
+    selects: (topaz.selects || []).map(select => ({ param: select.param, options: select.options, default: select.default })),
+    noUpscaleModels: topaz.no_upscale_models,
+    h264Output: Boolean(topaz.h264_output)
+  };
+}
+
 // Returns the key that groups variants into one family, plus the variant label.
 function familyKeyFor(model, modality, task) {
   const spec = model.model_spec || {};
@@ -587,7 +600,8 @@ function normalizeModel(model, ctx) {
         ...override.videoInputs
       },
       promptLimit: constraints.prompt_character_limit || null,
-      enhancementPrompt: Boolean(constraints.topaz?.prompt)
+      enhancementPrompt: Boolean(constraints.topaz?.prompt),
+      enhancement: enhancementControls(constraints.topaz)
     };
     entry.pricing = videoPricing(model, ctx.videoPricing.models?.[model.id]);
     entry.headline = { value: null, unit: 'per second', basis: 'lens' };
