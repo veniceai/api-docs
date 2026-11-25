@@ -56,8 +56,9 @@ const VIDEO_EXTEND = { id: 'extended', title: 'Extended 5s', prompt: 'Continue t
 // Recasting swaps a person for a reference, so it starts from the urban night
 // clip, which has one, and the portrait the image edits use.
 const VIDEO_RECAST = { id: 'recast', title: 'Recast', prompt: 'Recast the person holding the umbrella as the man in the reference image', source: 'urban-night' };
-// A centred square half the frame's height, for the upscale comparison.
-const VIDEO_DETAIL = 'crop=ih/2:ih/2:(iw-ih/2)/2:ih/4';
+// A centred detail half the frame's width and height, for the upscale
+// comparison; it keeps the frame's shape, so it fills the page's 16:9 frames.
+const VIDEO_DETAIL = 'crop=iw/2:ih/2:iw/4:ih/4';
 const FFMPEG = process.env.FFMPEG || 'ffmpeg';
 
 const args = process.argv.slice(2);
