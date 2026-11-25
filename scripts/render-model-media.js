@@ -249,11 +249,12 @@ async function renderVideoRecast(id, model, sourceModel, sourcePrompt, reference
   ];
 }
 
-async function renderVideoUpscale(id, source) {
-  const bytes = await generateVideo({ model: id, video_url: source.dataUrl, upscale_factor: 2 });
+// A model that reads a prompt gets the clip's own, which describes the video.
+async function renderVideoUpscale(id, source, prompt) {
+  const bytes = await generateVideo({ model: id, video_url: source.dataUrl, upscale_factor: 2, ...(prompt ? { prompt } : {}) });
   console.log(`  ${id}: upscaled`);
   return [
-    entry('upscaled', 'Upscaled 2x', `A detail of the ${VIDEO_HEIGHT}p input after a 2x upscale`, saveVideo(id, 'upscaled', bytes, VIDEO_DETAIL), 'video', VIDEO_PROMPT),
+    entry('upscaled', 'Upscaled 2x', `A detail of the ${VIDEO_HEIGHT}p input after a 2x upscale${prompt ? ', with the clip\'s prompt' : ''}`, saveVideo(id, 'upscaled', bytes, VIDEO_DETAIL), 'video', VIDEO_PROMPT),
     entry('bicubic', 'Bicubic 2x', 'The same detail enlarged with bicubic resampling instead, for comparison', saveVideo(id, 'bicubic', source.file, `scale=iw*2:ih*2:flags=bicubic,${VIDEO_DETAIL}`), 'video', VIDEO_PROMPT),
     entry('source', `Input, ${VIDEO_HEIGHT}p`, `${source.name} on the cinematic landscape prompt`, source.url, 'video')
   ];
@@ -306,7 +307,8 @@ async function main() {
     const mode = catalog[id] && catalog[id].video && catalog[id].video.mode;
     if (!mode) throw new Error(`${id} isn't in data/model-catalog.json; run node scripts/build-model-catalog.js first`);
     const clip = { ...videoSource, dataUrl: `data:video/mp4;base64,${fs.readFileSync(videoSource.file).toString('base64')}` };
-    return mode === 'upscale' ? renderVideoUpscale(id, clip) : renderVideoEdit(id, model, clip, id.includes('extend') ? VIDEO_EXTEND : VIDEO_RESTYLE);
+    if (mode === 'upscale') return renderVideoUpscale(id, clip, catalog[id].video.enhancementPrompt && videoPrompt.prompt);
+    return renderVideoEdit(id, model, clip, id.includes('extend') ? VIDEO_EXTEND : VIDEO_RESTYLE);
   };
   // Each group renders at once, since clips take minutes; a failure skips that
   // model and leaves the others' results.
