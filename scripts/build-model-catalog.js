@@ -128,7 +128,8 @@ const VIDEO_MODES = [
   ['motion', 'Motion control'],
   ['transition', 'Transition'],
   ['multi-angle', 'Multi-angle'],
-  ['upscale', 'Video upscale']
+  ['upscale', 'Video upscale'],
+  ['enhance', 'Video enhancement']
 ];
 const VARIANT_ORDER = ['standard', 'fast', 'e2ee', 'tee', 'generate', 'edit', 'upscale', 'background-removal', ...VIDEO_MODES.map(([key]) => key)];
 
@@ -322,6 +323,8 @@ function videoMode(model) {
   if (id.includes('video-to-video')) return 'v2v';
   // A model that also lists 1x works at the source resolution and upscales on request.
   if (factors.length && !factors.includes(1)) return 'upscale';
+  // GET /models lists an enhancement model's controls under constraints.topaz.
+  if (constraints.topaz || factors.length) return 'enhance';
   if (type === 'image-to-video') return 'i2v';
   // GET /models types source-video models as "video": recasts, extensions, edits.
   if (type === 'video') return 'v2v';
@@ -883,7 +886,8 @@ const TASK_PHRASES = {
 };
 const MODE_PHRASES = {
   t2v: 'text to video', i2v: 'image to video', r2v: 'reference to video', flf: 'first and last frame to video',
-  v2v: 'video editing', motion: 'motion control', transition: 'video transitions', 'multi-angle': 'multi-angle video', upscale: 'video upscaling'
+  v2v: 'video editing', motion: 'motion control', transition: 'video transitions', 'multi-angle': 'multi-angle video', upscale: 'video upscaling',
+  enhance: 'video enhancement'
 };
 // The page's own formatters, from the compiled hub bundle, so the static
 // text reads exactly as the page does.

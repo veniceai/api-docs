@@ -154,9 +154,9 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const VARIANT_LABELS = {
     standard: 'Standard', fast: 'Fast', e2ee: 'E2EE', tee: 'TEE', generate: 'Generate', edit: 'Edit', upscale: 'Upscale',
     'background-removal': 'Background removal', t2v: 'Text to video', i2v: 'Image to video', r2v: 'Reference to video',
-    flf: 'First & last frame', v2v: 'Video edit', motion: 'Motion control', transition: 'Transition', 'multi-angle': 'Multi-angle'
+    flf: 'First & last frame', v2v: 'Video edit', motion: 'Motion control', transition: 'Transition', 'multi-angle': 'Multi-angle', enhance: 'Enhance'
   };
-  const MODE_SHORT = { t2v: 'T2V', i2v: 'I2V', r2v: 'R2V', flf: 'Keyframes', v2v: 'Edit', motion: 'Motion', transition: 'Transition', 'multi-angle': 'Multi-angle', upscale: 'Upscale' };
+  const MODE_SHORT = { t2v: 'T2V', i2v: 'I2V', r2v: 'R2V', flf: 'Keyframes', v2v: 'Edit', motion: 'Motion', transition: 'Transition', 'multi-angle': 'Multi-angle', upscale: 'Upscale', enhance: 'Enhance' };
   const PRIVACY = {
     e2ee: { label: 'E2EE', icon: 'lock', desc: "This model supports end-to-end encryption (E2EE) and runs in a Trusted Execution Environment (TEE). Your prompt is encrypted on your client and decrypted inside a verified TEE. The response is then encrypted and sent back to your client for decryption. Venice's system prompt and web search are disabled to preserve end-to-end encryption. Attestation evidence is available for independent verification." },
     tee: { label: 'TEE', icon: 'shield', desc: 'This model runs in a Trusted Execution Environment (TEE). Attestation evidence is available for independent verification.' },
@@ -271,12 +271,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return (durations || []).map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ');
   };
   const upperFirst = text => text.charAt(0).toUpperCase() + text.slice(1);
-  // Upscalers take no prompt. Seedance's edit model reads its source clip
-  // from reference_video_urls instead of video_url.
+  // Upscalers and enhancers work from the source video alone.
+  const videoPrompt = video => (['upscale', 'enhance'].includes(video.mode) ? null : video.mode === 'multi-angle' ? 'Optional' : 'Required');
+  // Seedance's edit model reads its source clip from reference_video_urls
+  // instead of video_url.
   const videoInputList = video => {
     const inputs = (video && video.inputs) || {};
     return [
-      video && video.mode !== 'upscale' && 'prompt',
+      video && videoPrompt(video) && 'prompt',
       inputs.image && 'image',
       inputs.endImage && 'end frame',
       inputs.reference && 'reference images',
@@ -1042,7 +1044,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           {modality === 'video' ? (
             <>
               <FilterGroup title="Mode" icon="film">
-                {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition', 'multi-angle', 'upscale'].map(mode => option('modes', mode, VARIANT_LABELS[mode]))}
+                {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition', 'multi-angle', 'upscale', 'enhance'].map(mode => option('modes', mode, VARIANT_LABELS[mode]))}
               </FilterGroup>
               {range('audio', 'Audio', 'volume', [['', 'Any'], ['audio', 'Audio', 'Generates audio'], ['silent', 'Silent', 'Can be silent']])}
               {range('res', 'Resolution', 'maximize', [['', 'Any'], ['720', '720p', '720p or higher'], ['1080', '1080p', '1080p or higher'], ['1440', '1440p', '1440p or higher'], ['2160', '4K']])}
@@ -1896,7 +1898,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       const timed = (video.durations || []).filter(d => d.seconds);
       const dur = timed.find(d => d.seconds === 5) || timed[0];
       const res = upscale ? null : (video.resolutions || []).find(r => r.height === 720) || (video.resolutions || [])[0];
-      const prompt = upscale ? null
+      const prompt = !videoPrompt(video) ? null
         : video.mode === 'motion' ? VARIANT_PROMPTS.videoMotion
         : video.mode !== 'v2v' ? VARIANT_PROMPTS.video
         : inputs.reference ? VARIANT_PROMPTS.videoRecast
@@ -4287,8 +4289,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   /* ------------------------------------------------------------ video page, next */
 
-  const MODE_ORDER = ['t2v', 'i2v', 'r2v', 'flf', 'transition', 'motion', 'v2v', 'multi-angle', 'upscale'];
-  const MODE_ICONS = { t2v: 'text', i2v: 'image', r2v: 'layers', flf: 'film', transition: 'film', motion: 'activity', v2v: 'wand', 'multi-angle': 'eye', upscale: 'maximize' };
+  const MODE_ORDER = ['t2v', 'i2v', 'r2v', 'flf', 'transition', 'motion', 'v2v', 'multi-angle', 'upscale', 'enhance'];
+  const MODE_ICONS = { t2v: 'text', i2v: 'image', r2v: 'layers', flf: 'film', transition: 'film', motion: 'activity', v2v: 'wand', 'multi-angle': 'eye', upscale: 'maximize', enhance: 'sparkles' };
   const VIDEO_RENDER_ORDER = ['cinematic-landscape', 'urban-night', 'ocean-loop', 'upscaled', 'recast', 'extended', 'bicubic', 'source'];
   const VIDEO_SUITE = VIDEO_RENDER_ORDER.slice(0, 3);
   const AUDIO_TEXT = { native: 'Generated with every clip', optional: 'Optional, on by default', none: 'None' };
@@ -4332,7 +4334,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         + (p.quotedAt ? `, quoted ${fmtDate(Math.floor(new Date(p.quotedAt).getTime() / 1000))}` : '')
       : p.status === 'input-dependent' ? '- Price: billed by the length of the source video; quote it with `POST /video/quote` and its `video_url`'
         : '- Price: quote it with `POST /video/quote`';
-    const fields = [video.mode !== 'upscale' ? 'prompt' : null, ...INPUT_FIELDS.filter(([key]) => (video.inputs || {})[key]).map(([, field]) => field)].filter(Boolean);
+    const fields = [videoPrompt(video) ? 'prompt' : null, ...INPUT_FIELDS.filter(([key]) => (video.inputs || {})[key]).map(([, field]) => field)].filter(Boolean);
     return [
       `# ${family.name} on the Venice API`,
       '',
@@ -4349,7 +4351,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       ratios.length ? `- Aspect ratios: ${ratios.join(', ')}; \`aspect_ratio\` is required` : '- Aspect ratio: set by the input or the model; `aspect_ratio` is rejected',
       `- Audio: ${(AUDIO_TEXT[video.audio] || 'none').toLowerCase()}${video.audio === 'optional' ? ' (`audio`)' : ''}`,
       fields.length ? `- Inputs: ${listText(fields.map(f => `\`${f}\``))}` : null,
-      video.mode !== 'upscale' ? `- Prompt: up to ${count(video.promptLimit || 2500)} characters` : null,
+      videoPrompt(video) ? `- Prompt: up to ${count(video.promptLimit || 2500)} characters` : null,
       PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
       `- Docs: https://docs.venice.ai/models/${family.slug}`,
       '',
@@ -4474,13 +4476,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const videoParams = model => {
     const video = model.video || {};
     const inputs = video.inputs || {};
-    const upscale = video.mode === 'upscale';
     const res = sortedResolutions(video);
     const timed = timedDurations(video);
     const ratios = video.aspectRatios || [];
     return [
       ['model', <code>{model.id}</code>, 'Required'],
-      upscale ? null : ['prompt', `Up to ${count(video.promptLimit || 2500)} characters`, video.mode === 'multi-angle' ? 'Optional' : 'Required'],
+      videoPrompt(video) ? ['prompt', `Up to ${count(video.promptLimit || 2500)} characters`, videoPrompt(video)] : null,
       timed.length
         ? ['duration', timed.length > 6 ? durationText(video.durations) : <code>{timed.map(d => d.value).join(' | ')}</code>, 'Required']
         : ['duration', 'Omit it', 'Read from the source video'],
@@ -4669,7 +4670,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               ['Aspect ratios', ratios.length ? ratios.join(', ') : 'Set by the input or the model'],
               ['Audio', AUDIO_TEXT[video.audio] || 'None'],
               ['Inputs', upperFirst(listText(videoInputList(video)))],
-              video.mode !== 'upscale' ? ['Prompt limit', `${count(video.promptLimit || 2500)} characters`] : null,
+              videoPrompt(video) ? ['Prompt limit', `${count(video.promptLimit || 2500)} characters`] : null,
               PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
               ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
               ['Added', fmtDate(model.created)]

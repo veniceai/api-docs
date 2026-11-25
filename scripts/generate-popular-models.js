@@ -120,7 +120,7 @@ const PRIVACY = {
   anonymized: ['Anonymized', 'vh-model-privacy is-anonymized']
 };
 
-const VIDEO_INPUTS = [['t2v', 'a prompt'], ['i2v', 'an image'], ['r2v', 'a reference'], ['v2v', 'a video'], ['upscale', 'a video']];
+const VIDEO_INPUTS = [['t2v', 'a prompt'], ['i2v', 'an image'], ['r2v', 'a reference'], ['v2v', 'a video'], ['upscale', 'a video'], ['enhance', 'a video']];
 const TASK_LINES = {
   tts: 'Speech from text.',
   stt: 'Text from speech.',
