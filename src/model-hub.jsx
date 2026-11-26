@@ -676,14 +676,15 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   // The gallery compares models on one reference prompt: a model's render of
   // it, or, for a model that transforms an input, its output from that
   // prompt's render. The displayed variant comes first, then its siblings.
+  // A transform that can't start from that render, such as a recast, which
+  // needs a person in the shot, shows its output from another prompt instead.
   const GALLERY_PROMPTS = { image: 'photoreal', video: 'cinematic-landscape' };
   const galleryMedia = (family, display, catalog) => {
     const prompt = GALLERY_PROMPTS[family.modality];
-    const pick = model => {
-      const media = (model && model.media) || [];
-      return media.find(m => m.prompt === prompt) || media.find(m => m.from === prompt);
-    };
-    return pick(display) || family.variants.map(id => catalog.models[id]).map(pick).find(Boolean) || null;
+    const models = [display, ...family.variants.map(id => catalog.models[id])];
+    const media = model => (model && model.media) || [];
+    const pick = model => media(model).find(m => m.prompt === prompt) || media(model).find(m => m.from === prompt);
+    return models.map(pick).find(Boolean) || models.map(model => media(model).find(m => m.from)).find(Boolean) || null;
   };
 
   // An output that looks like its input, such as an upscale or a denoise,
@@ -1681,25 +1682,40 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   // Families with nothing on the gallery's prompt go in a table under it
   // rather than as tiles of another scene, so the grid compares like with like.
+  // A transform that started from another prompt gets a row under that prompt.
   const Gallery = ({ rows, columns, sort, setSort, providers, now, catalog, modality, showScope, modes }) => {
-    const rendered = rows.filter(row => galleryMedia(row.family, row.display, catalog));
-    const pending = rows.filter(row => !galleryMedia(row.family, row.display, catalog));
-    const prompt = ((catalog.mediaSuite || {})[modality] || []).find(item => item.id === GALLERY_PROMPTS[modality]);
-    const transforms = rendered.some(row => galleryMedia(row.family, row.display, catalog).from);
+    const suite = (catalog.mediaSuite || {})[modality] || [];
+    const sourceOf = row => {
+      const media = galleryMedia(row.family, row.display, catalog);
+      return media ? media.from || media.prompt : null;
+    };
+    const prompt = suite.find(item => item.id === GALLERY_PROMPTS[modality]);
+    const rendered = rows.filter(row => sourceOf(row) === GALLERY_PROMPTS[modality]);
+    const pending = rows.filter(row => !sourceOf(row));
+    const others = [...new Set(rows.map(sourceOf).filter(id => id && id !== GALLERY_PROMPTS[modality]))]
+      .map(id => ({ id, prompt: suite.find(item => item.id === id), rows: rows.filter(row => sourceOf(row) === id) }));
+    const promptLine = (item, list) => (item ? (
+      <p className="vx-gallery-prompt">
+        <span className="vx-gallery-prompt-label">Prompt</span>
+        <q>{item.prompt}</q>
+        {list.some(row => galleryMedia(row.family, row.display, catalog).from) ? <span className="vx-gallery-prompt-note">Models that edit, extend or upscale start from a render of it.</span> : null}
+      </p>
+    ) : null);
+    const cards = list => (
+      <div className={cls('vx-cards', modality === 'video' && 'is-video')}>
+        {list.map(row => <ExplorerCard key={row.family.slug} row={row} now={now} catalog={catalog} showScope={showScope} modes={modes} />)}
+      </div>
+    );
     return (
       <>
-        {rendered.length && prompt ? (
-          <p className="vx-gallery-prompt">
-            <span className="vx-gallery-prompt-label">Prompt</span>
-            <q>{prompt.prompt}</q>
-            {transforms ? <span className="vx-gallery-prompt-note">Models that edit, extend or upscale start from a render of it.</span> : null}
-          </p>
-        ) : null}
-        {rendered.length ? (
-          <div className={cls('vx-cards', modality === 'video' && 'is-video')}>
-            {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} now={now} catalog={catalog} showScope={showScope} modes={modes} />)}
-          </div>
-        ) : null}
+        {rendered.length ? promptLine(prompt, rendered) : null}
+        {rendered.length ? cards(rendered) : null}
+        {others.map(group => (
+          <section key={group.id} className="vx-gallery-more" aria-label={group.prompt ? `${group.prompt.title} prompt` : undefined}>
+            {promptLine(group.prompt, group.rows)}
+            {cards(group.rows)}
+          </section>
+        ))}
         {pending.length ? (
           <section className="vx-unrendered" aria-labelledby="vx-unrendered-title">
             <h3 id="vx-unrendered-title" className="vx-h3">{prompt ? `Not rendered on the ${prompt.title.toLowerCase()} prompt` : 'No reference renders yet'} <span className="vx-muted">{plural(pending.length, 'family')}</span></h3>
