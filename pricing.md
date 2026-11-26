@@ -75,7 +75,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Gemini 4 Carbon | `gemini-4-carbon` | $2.50 | $12.50 | $0.125 | — | Anonymized |
 | Gemini 4 Hydrogen | `gemini-4-hydrogen` | $1.875 | $9.375 | $0.09375 | — | Anonymized |
 | Gemini 4 Neon | `gemini-4-neon` | $3.75 | $18.75 | $0.1875 | — | Anonymized |
-| Gemma 4 26B A4B Uncensored | `e2ee-gemma-4-26b-a4b-uncensored-p` | $0.19 | $0.88 | — | — | E2EE |
 | Gemma 4 Uncensored (Retiring) | `gemma-4-uncensored` | $0.1625 | $0.50 | — | — | Private |
 | GLM 4.6 | `zai-org-glm-4.6` | $0.43 | $1.75 | $0.08 | — | Private |
 | GLM 4.7 | `zai-org-glm-4.7` | $0.40 | $1.75 | $0.08 | — | Private |
@@ -83,7 +82,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | GLM 5 (Retiring) | `zai-org-glm-5` | $1.00 | $3.20 | $0.20 | — | Private |
 | GLM 5 Turbo | `z-ai-glm-5-turbo` | $1.20 | $4.00 | $0.24 | — | Anonymized |
 | GLM 5.1 (Retiring) | `zai-org-glm-5-1` | $1.33 | $4.18 | $0.247 | — | Private |
-| GLM 5.2 | `e2ee-glm-5-2-p` | $1.75 | $5.75 | $0.30 | — | E2EE |
 | GLM 5.2 | `zai-org-glm-5-2` | $1.40 | $4.40 | $0.26 | — | Private |
 | GLM 5.3 | `e2ee-glm-5-3-p` | $1.75 | $5.50 | $0.325 | — | E2EE |
 | GLM 5.3 | `z-ai-glm-5-3` | $1.75 | $5.50 | $0.325 | — | Private |
@@ -94,7 +92,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Google Gemma 3 27B Instruct | `google-gemma-3-27b-it` | $0.12 | $0.20 | — | — | Private |
 | Google Gemma 4 26B A4B Instruct | `google-gemma-4-26b-a4b-it` | $0.13 | $0.40 | $0.05 | — | Private |
 | Google Gemma 4 31B Instruct | `google-gemma-4-31b-it` | $0.12 | $0.36 | $0.05 | — | Private |
-| GPT OSS 120B | `e2ee-gpt-oss-120b-p` | $0.13 | $0.65 | — | — | E2EE |
 | GPT-4o | `openai-gpt-4o-2024-11-20` | $2.50 | $10.00 | $1.25 | — | Anonymized |
 | GPT-4o Mini | `openai-gpt-4o-mini-2024-07-18` | $0.15 | $0.60 | $0.075 | — | Anonymized |
 | GPT-5.2 | `openai-gpt-52` | $1.75 | $14.00 | $0.175 | — | Anonymized |
@@ -155,7 +152,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | NVIDIA Nemotron 3.5 Super VL 120B | `nvidia-nemotron-3-5-super-vl-120b-a12b` | $0.20 | $0.50 | $0.04 | — | Private |
 | OpenAI GPT OSS 120B | `openai-gpt-oss-120b` | $0.07 | $0.30 | — | — | Private |
 | Pareto (Beta) | `pareto` | $1.00 | $4.00 | $0.0375 | — | Anonymized |
-| Qwen 2.5 7B | `e2ee-qwen-2-5-7b-p` | $0.05 | $0.13 | — | — | E2EE |
 | Qwen 3 235B A22B Instruct 2507 | `qwen3-235b-a22b-instruct-2507` | $0.15 | $0.75 | — | — | Private |
 | Qwen 3 235B A22B Thinking 2507 | `qwen3-235b-a22b-thinking-2507` | $0.45 | $3.50 | — | — | Private |
 | Qwen 3 Coder 480B Turbo | `qwen3-coder-480b-a35b-instruct-turbo` | $0.35 | $1.50 | $0.04 | — | Private |
