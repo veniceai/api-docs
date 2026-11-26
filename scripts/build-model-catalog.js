@@ -792,6 +792,7 @@ function buildFamilies(models, rules = []) {
       description: rule?.description || primary.description || variants.find(v => v.description)?.description || null,
       primary: primary.id,
       variants: variants.map(v => v.id),
+      gallery: rule?.gallery ? rule.gallery.filter(id => variants.some(v => v.id === id)) : undefined,
       created: Math.min(...variants.map(v => v.created || Infinity)),
       updated: Math.max(...variants.map(v => v.created || 0)),
       privacy: [...new Set(variants.map(v => v.privacy))],

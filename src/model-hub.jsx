@@ -693,6 +693,40 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return before ? { before, after: item } : null;
   };
 
+  // A family that lists tools for its card, such as Topaz Video, steps
+  // through their before and after, narrowed to the modes filtered for;
+  // another card compares its own render when it names one.
+  const cardPairs = (family, display, media, catalog, modes = []) => {
+    const listed = (family.gallery || [])
+      .map(id => catalog.models[id])
+      .filter(model => model && (!modes.length || modes.includes(model.variant)))
+      .map(model => {
+        const pair = comparePair(model.media, (model.media || []).find(item => item.compare));
+        return pair && { ...pair, name: model.variantName };
+      })
+      .filter(Boolean);
+    if (listed.length) return listed;
+    const owner = [display, ...family.variants.map(id => catalog.models[id])].find(model => model && (model.media || []).includes(media));
+    const pair = owner ? comparePair(owner.media, media) : null;
+    return pair ? [pair] : [];
+  };
+
+  // True once the element comes within 300px of the viewport.
+  const useNear = ref => {
+    const [near, setNear] = useState(false);
+    useEffect(() => {
+      const el = ref.current;
+      if (!el || near) return undefined;
+      if (typeof IntersectionObserver === 'undefined') { setNear(true); return undefined; }
+      const observer = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) { setNear(true); observer.disconnect(); }
+      }, { rootMargin: '300px 0px' });
+      observer.observe(el);
+      return () => observer.disconnect();
+    }, [near]);
+    return near;
+  };
+
   // Sources attach only as a tile nears the viewport, so a gallery doesn't
   // open dozens of video requests at once; a skeleton holds the tile until
   // the first frame paints.
@@ -766,6 +800,52 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <input className="vx-compare-range" type="range" min="0" max="100" value={pos} onChange={e => setPos(Number(e.target.value))}
           aria-label={`Drag to compare ${before.title} with ${after.title}`} />
       </div>
+    );
+  };
+
+  // A card's before and after, split down the middle. With several tools it
+  // steps through them while on screen, and hovering plays the one shown.
+  const CardCompare = ({ pairs }) => {
+    const ref = useRef(null);
+    const near = useNear(ref);
+    const [index, setIndex] = useState(0);
+    const [hover, setHover] = useState(false);
+    useEffect(() => {
+      if (!near || hover || pairs.length < 2 || prefersReducedMotion()) return undefined;
+      const timer = setInterval(() => setIndex(i => (i + 1) % pairs.length), 3200);
+      return () => clearInterval(timer);
+    }, [near, hover, pairs.length]);
+    useEffect(() => {
+      const root = ref.current;
+      if (!root) return;
+      root.querySelectorAll('.vx-card-pair').forEach((pair, i) => {
+        const [after, before] = pair.querySelectorAll('video');
+        if (!after || !before) return;
+        if (hover && i === index) {
+          before.currentTime = after.currentTime;
+          after.play().catch(() => {});
+          before.play().catch(() => {});
+        } else {
+          after.pause();
+          before.pause();
+        }
+      });
+    }, [hover, index]);
+    const media = item => (item.type === 'video'
+      ? <video className="vx-card-el" src={near ? firstFrame(item.url) : undefined} muted loop playsInline preload="metadata" />
+      : <img className="vx-card-el" src={item.url} alt="" loading="lazy" decoding="async" />);
+    return (
+      <span ref={ref} className="vx-card-compare" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+        {pairs.map((pair, i) => (
+          <span key={pair.after.url} className={cls('vx-card-pair', i === index && 'is-active')}>
+            {media(pair.after)}
+            <span className="vx-card-before">{media(pair.before)}</span>
+            <span className="vx-card-split" aria-hidden="true" />
+            <span className="vx-card-tag is-before">{pair.before.title}</span>
+            <span className="vx-card-tag is-after">{pair.name || pair.after.title}</span>
+          </span>
+        ))}
+      </span>
     );
   };
 
@@ -1497,19 +1577,21 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </div>
   );
 
-  const ExplorerCard = ({ row, now, catalog, showScope }) => {
+  const ExplorerCard = ({ row, now, catalog, showScope, modes }) => {
     const { family, display } = row;
     const isVideo = family.modality === 'video';
     const media = galleryMedia(family, display, catalog);
+    const pairs = media ? cardPairs(family, display, media, catalog, modes) : [];
     const { offer } = row;
     const href = modelHref(family, display.id);
     const extra = family.variants.length - 1;
     return (
       <article className="vx-card">
         <a className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} href={href} tabIndex={-1} aria-hidden="true">
-          {media
-            ? (media.type === 'video' ? <HoverVideo src={media.url} className="vx-card-el" /> : <img className="vx-card-el" src={media.url} srcSet={sampleSrcSet(media.url)} sizes={CARD_SIZES} alt="" loading="lazy" decoding="async" />)
-            : <MediaFallback />}
+          {pairs.length ? <CardCompare pairs={pairs} />
+            : media
+              ? (media.type === 'video' ? <HoverVideo src={media.url} className="vx-card-el" /> : <img className="vx-card-el" src={media.url} srcSet={sampleSrcSet(media.url)} sizes={CARD_SIZES} alt="" loading="lazy" decoding="async" />)
+              : <MediaFallback />}
           {isVideo && media ? <span className="vx-card-play"><Icon name="play" size={10} /></span> : null}
         </a>
         <div className="vx-card-body">
@@ -1599,7 +1681,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   // Families with nothing on the gallery's prompt go in a table under it
   // rather than as tiles of another scene, so the grid compares like with like.
-  const Gallery = ({ rows, columns, sort, setSort, providers, now, catalog, modality, showScope }) => {
+  const Gallery = ({ rows, columns, sort, setSort, providers, now, catalog, modality, showScope, modes }) => {
     const rendered = rows.filter(row => galleryMedia(row.family, row.display, catalog));
     const pending = rows.filter(row => !galleryMedia(row.family, row.display, catalog));
     const prompt = ((catalog.mediaSuite || {})[modality] || []).find(item => item.id === GALLERY_PROMPTS[modality]);
@@ -1615,7 +1697,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         ) : null}
         {rendered.length ? (
           <div className={cls('vx-cards', modality === 'video' && 'is-video')}>
-            {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} now={now} catalog={catalog} showScope={showScope} />)}
+            {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} now={now} catalog={catalog} showScope={showScope} modes={modes} />)}
           </div>
         ) : null}
         {pending.length ? (
@@ -1865,7 +1947,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                     <button type="button" className="vx-btn vx-btn-sm" onClick={() => { setFilters(EMPTY_FILTERS); setQuery(''); }}>Clear {query && filterCount ? 'search and filters' : query ? 'search' : 'filters'}</button>
                   </Empty>
                 ) : shownView === 'grid' ? (
-                  <Gallery rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} catalog={catalog} modality={modality} showScope={showScope} />
+                  <Gallery rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} catalog={catalog} modality={modality} showScope={showScope} modes={filters.modes} />
                 ) : shownView === 'table' ? (
                   <ExplorerTable rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} showScope={showScope} />
                 ) : (
