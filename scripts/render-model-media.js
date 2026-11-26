@@ -27,6 +27,7 @@
  * the PATH or the FFMPEG environment variable.
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -137,11 +138,16 @@ async function call(endpoint, body) {
   }
 }
 
+// docs.venice.ai caches media for a day, and a re-render keeps the file's
+// name, so a render's URL carries a hash of the file's contents.
+const versioned = (file, url) => `${url}?v=${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex').slice(0, 8)}`;
+
 async function save(id, name, image) {
   const dir = path.join(OUT_DIR, id);
   fs.mkdirSync(dir, { recursive: true });
-  await image.webp({ quality: 82 }).toFile(path.join(dir, `${name}.webp`));
-  return `/images/models/renders/${id}/${name}.webp`;
+  const file = path.join(dir, `${name}.webp`);
+  await image.webp({ quality: 82 }).toFile(file);
+  return versioned(file, `/images/models/renders/${id}/${name}.webp`);
 }
 
 // A transform's outputs name the reference prompt their input was rendered
@@ -241,7 +247,7 @@ function saveVideo(id, name, input, filter = `scale=-2:${VIDEO_HEIGHT}`, crf = 3
   execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', file, '-vf', filter, '-c:v', 'libx264', '-preset', 'slow', '-crf', String(crf),
     '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-c:a', 'aac', '-b:a', '64k', path.join(dir, `${name}.mp4`)]);
   if (file !== input) fs.unlinkSync(file);
-  return `/images/models/renders/${id}/${name}.mp4`;
+  return versioned(path.join(dir, `${name}.mp4`), `/images/models/renders/${id}/${name}.mp4`);
 }
 
 async function renderVideo(id, model, prompt) {
@@ -320,14 +326,15 @@ async function main() {
   // A source-video model renders the mode its page describes.
   const catalog = readJson(CATALOG_PATH, { models: {} }).models;
   const nameOf = id => (models[id] && models[id].model_spec && models[id].model_spec.name) || id;
+  // Sources may render in this run, so their URLs hash the file when read.
   const source = {
     file: path.join(OUT_DIR, sourceId, 'photoreal.webp'),
-    url: `/images/models/renders/${sourceId}/photoreal.webp`,
+    get url() { return versioned(this.file, `/images/models/renders/${sourceId}/photoreal.webp`); },
     name: nameOf(sourceId)
   };
   const videoSource = {
     file: path.join(OUT_DIR, videoSourceId, `${VIDEO_PROMPT}.mp4`),
-    url: `/images/models/renders/${videoSourceId}/${VIDEO_PROMPT}.mp4`,
+    get url() { return versioned(this.file, `/images/models/renders/${videoSourceId}/${VIDEO_PROMPT}.mp4`); },
     name: nameOf(videoSourceId)
   };
   const takesVideo = model => model.kind === 'video' && model.model_spec.constraints?.video_input;
