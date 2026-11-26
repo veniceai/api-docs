@@ -3577,7 +3577,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   const E2eeSummary = ({ model }) => (model.privacy === 'e2ee' ? (
     <ul className="vxn-e2ee">
-      <li><Icon name="shieldCheck" size={16} /><span>Prompts are decrypted only inside an attested TEE on the GPU.</span></li>
+      <li><Icon name="shieldCheck" size={16} /><span>Prompts are decrypted only inside a verified TEE.</span></li>
       <li><Icon name="terminal" size={16} /><span>Calls need the E2EE handshake. Without it, requests reach Venice as plaintext and run TEE-only. <a href="/guides/features/tee-e2ee-models#e2ee-models">How to call an E2EE model</a></span></li>
     </ul>
   ) : null);
