@@ -90,6 +90,131 @@ See [Error Codes](/api-reference/error-codes) for the full list of billing-relat
 * Set expiration dates and consumption limits for keys used in temporary, shared, or higher-risk environments.
 * Delete unused keys and rotate any key that may have been exposed.
 
+## Calling from a browser
+
+The API sends `access-control-allow-origin: *`, so a browser can call it directly — but the key then lives in your bundle and is public. Put a small proxy in front and keep the key server-side.
+
+A proxy alone is not enough. `access-control-allow-origin` does not authenticate anything: `curl` and other servers ignore CORS entirely, and the Worker hostname is public. A proxy that only injects the key is an open tap on your balance. The caller has to prove itself too.
+
+There are two levels, and it matters which one you are building:
+
+- **A shared secret** gates spending. Every visitor holds the same value, so it stops anonymous use of your Worker but not a visitor forwarding it on. Good for a prototype.
+- **A per-user token** identifies the caller. The browser authenticates to your own backend, which mints a short-lived token, and the Worker validates that. This is the production shape.
+
+Both samples below keep the Venice key server-side. A third rule applies to both: **use an inference-only key**, because an admin key routed through a public proxy can `POST /api_keys` and read the new secret straight back out of the proxied response.
+
+### Level 1: a shared secret
+
+The Worker holds the Venice key and a secret, and rejects anything without the secret. Keep the secret off the browser: have your backend attach it when it calls the Worker, so the browser only ever talks to your backend.
+
+```js index.js
+// Only the paths you need. Add deliberately: an inference key still reads
+// balances through GET /api_keys/rate_limits.
+const ALLOWED = new Set(['/chat/completions', '/image/generate']);
+
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: cors() });
+    }
+    if (!ALLOWED.has(new URL(request.url).pathname)) {
+      return json(404, { error: 'Not found' });
+    }
+    if (request.method !== 'POST') {
+      return json(405, { error: 'Method not allowed' });
+    }
+    if (request.headers.get('x-proxy-key') !== env.PROXY_SECRET) {
+      return json(401, { error: 'Proxy secret required' });
+    }
+    return forward(request, env);
+  },
+};
+
+async function forward(request, env) {
+  const path = new URL(request.url).pathname;
+  const upstream = await fetch(`${env.VENICE_BASE_URL}/api/v1${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${env.VENICE_API_KEY}` },
+    body: await request.text(),
+  });
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: { ...cors(), 'content-type': upstream.headers.get('content-type') ?? 'application/json' },
+  });
+}
+
+const cors = () => ({
+  'access-control-allow-origin': 'https://your-site.example',
+  'access-control-allow-headers': 'content-type,x-proxy-key',
+  'access-control-allow-methods': 'POST,OPTIONS',
+});
+
+const json = (status, body) =>
+  new Response(JSON.stringify(body), { status, headers: { ...cors(), 'content-type': 'application/json' } });
+```
+
+```bash Deploy
+npx wrangler deploy index.js --name venice-proxy
+npx wrangler secret put VENICE_API_KEY      # an inference-only key
+npx wrangler secret put PROXY_SECRET        # any long random value
+npx wrangler secret put VENICE_BASE_URL     # https://api.venice.ai
+```
+
+Call it from your backend, where the secret stays:
+
+```js Server
+await fetch('https://venice-proxy.<account>.workers.dev/chat/completions', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-proxy-key': process.env.PROXY_SECRET },
+  body: JSON.stringify({ model: 'venice-uncensored-1-2', messages: [{ role: 'user', content: 'Hi' }] }),
+});
+```
+
+Paths are appended directly, so `/chat/completions` reaches `/api/v1/chat/completions` upstream. Keep `/v1` out of the base URL in any OpenAI client you point here.
+
+A shared secret is still a shared credential: rate-limit the route with Cloudflare's rate limiting rules before it takes public traffic.
+
+### Level 2: a per-user token
+
+When the browser must call the Worker directly, put your own auth in front of it. Your backend verifies the session it already has, signs a short-lived token, and the Worker checks that token instead of a shared value. It reuses `ALLOWED`, `forward`, `cors` and `json` from the Level 1 Worker:
+
+```js index.js
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: cors() });
+    }
+    if (!ALLOWED.has(new URL(request.url).pathname) || request.method !== 'POST') {
+      return json(404, { error: 'Not found' });
+    }
+    if (!(await validToken(request.headers.get('authorization')?.replace(/^Bearer /, ''), env))) {
+      return json(401, { error: 'Token required' });
+    }
+    return forward(request, env);
+  },
+};
+
+// Verify a token issued by your backend: its signature, expiry and subject.
+// Any HMAC over `sub.exp` works; this is the shape, not a full implementation.
+async function validToken(token, env) {
+  if (!token) return false;
+  // The payload itself contains a dot, so split on the last one only.
+  const cut = token.lastIndexOf('.');
+  if (cut < 1) return false;
+  const payload = token.slice(0, cut);
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(env.PROXY_SIGNING_KEY),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'],
+  );
+  const ok = await crypto.subtle.verify('HMAC', key, hexToBytes(token.slice(cut + 1)), new TextEncoder().encode(payload));
+  return ok && Number(payload.slice(payload.lastIndexOf('.') + 1)) > Date.now();
+}
+
+const hexToBytes = (hex) => new Uint8Array(hex.match(/../g).map((b) => parseInt(b, 16)));
+```
+
+Mint the token on the backend after your own session check, so the Worker never holds user state. That gives you per-user rate limits, revocation, and an attributable bill.
+
 ## Programmatic key management
 
 For a walkthrough of creating capped keys, tracking their usage, changing their limits, and revoking them, see [Managing API Keys](/guides/getting-started/managing-api-keys).
