@@ -154,9 +154,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
   const VARIANT_LABELS = {
     standard: 'Standard', fast: 'Fast', e2ee: 'E2EE', tee: 'TEE', generate: 'Generate', edit: 'Edit', upscale: 'Upscale',
     'background-removal': 'Background removal', t2v: 'Text to video', i2v: 'Image to video', r2v: 'Reference to video',
-    flf: 'First & last frame', v2v: 'Video edit', motion: 'Motion control', transition: 'Transition', 'multi-angle': 'Multi-angle'
+    flf: 'First & last frame', v2v: 'Video edit', motion: 'Motion control', transition: 'Transition', 'multi-angle': 'Multi-angle', enhance: 'Enhance'
   };
-  const MODE_SHORT = { t2v: 'T2V', i2v: 'I2V', r2v: 'R2V', flf: 'Keyframes', v2v: 'Edit', motion: 'Motion', transition: 'Transition', 'multi-angle': 'Multi-angle', upscale: 'Upscale' };
+  const MODE_SHORT = { t2v: 'T2V', i2v: 'I2V', r2v: 'R2V', flf: 'Keyframes', v2v: 'Edit', motion: 'Motion', transition: 'Transition', 'multi-angle': 'Multi-angle', upscale: 'Upscale', enhance: 'Enhance' };
+  // A family that groups distinct models, such as Topaz Video's tools, names
+  // each one; the others label a variant by its mode.
+  const variantLabel = m => m.variantName || VARIANT_LABELS[m.variant] || m.variant;
+  const moreText = (display, extra) => `+${extra} ${display.variantName ? (extra === 1 ? 'tool' : 'tools') : (extra === 1 ? 'variant' : 'variants')}`;
   const PRIVACY = {
     e2ee: { label: 'E2EE', icon: 'lock', desc: "This model supports end-to-end encryption (E2EE) and runs in a Trusted Execution Environment (TEE). Your prompt is encrypted on your client and decrypted inside a verified TEE. The response is then encrypted and sent back to your client for decryption. Venice's system prompt and web search are disabled to preserve end-to-end encryption. Attestation evidence is available for independent verification." },
     tee: { label: 'TEE', icon: 'shield', desc: 'This model runs in a Trusted Execution Environment (TEE). Attestation evidence is available for independent verification.' },
@@ -271,12 +275,16 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return (durations || []).map(d => (d.seconds ? `${d.seconds}s` : d.value)).join(', ');
   };
   const upperFirst = text => text.charAt(0).toUpperCase() + text.slice(1);
-  // Upscalers take no prompt. Seedance's edit model reads its source clip
-  // from reference_video_urls instead of video_url.
+  // Upscalers and enhancers work from the source video, and the few that read
+  // a prompt take it as optional guidance.
+  const videoPrompt = video => (['upscale', 'enhance'].includes(video.mode) ? (video.enhancementPrompt ? 'Optional' : null)
+    : video.mode === 'multi-angle' ? 'Optional' : 'Required');
+  // Seedance's edit model reads its source clip from reference_video_urls
+  // instead of video_url.
   const videoInputList = video => {
     const inputs = (video && video.inputs) || {};
     return [
-      video && video.mode !== 'upscale' && 'prompt',
+      video && videoPrompt(video) && 'prompt',
       inputs.image && 'image',
       inputs.endImage && 'end frame',
       inputs.reference && 'reference images',
@@ -522,6 +530,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     server: <><rect x="2" y="3" width="20" height="8" rx="2" /><rect x="2" y="13" width="20" height="8" rx="2" /><path d="M6 7h.01M6 17h.01" /></>,
     terminal: <path d="m4 17 6-6-6-6M12 19h8" />,
     book: <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" />,
+    split: <path d="m9 7-5 5 5 5M15 7l5 5-5 5" />,
     maximize: <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />,
     dollar: <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />,
     bolt: <path d="M13 2 3 14h9l-1 8 10-12h-9z" />,
@@ -677,6 +686,47 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return pick(display) || family.variants.map(id => catalog.models[id]).map(pick).find(Boolean) || null;
   };
 
+  // An output that looks like its input, such as an upscale or a denoise,
+  // names the render it compares with, and the two show side by side.
+  const comparePair = (media, item) => {
+    const before = item && item.compare && (media || []).find(m => m.prompt === item.compare);
+    return before ? { before, after: item } : null;
+  };
+
+  // A family that lists tools for its card, such as Topaz Video, steps
+  // through their before and after, narrowed to the modes filtered for;
+  // another card compares its own render when it names one.
+  const cardPairs = (family, display, media, catalog, modes = []) => {
+    const listed = (family.gallery || [])
+      .map(id => catalog.models[id])
+      .filter(model => model && (!modes.length || modes.includes(model.variant)))
+      .map(model => {
+        const pair = comparePair(model.media, (model.media || []).find(item => item.compare));
+        return pair && { ...pair, name: model.variantName };
+      })
+      .filter(Boolean);
+    if (listed.length) return listed;
+    const owner = [display, ...family.variants.map(id => catalog.models[id])].find(model => model && (model.media || []).includes(media));
+    const pair = owner ? comparePair(owner.media, media) : null;
+    return pair ? [pair] : [];
+  };
+
+  // True once the element comes within 300px of the viewport.
+  const useNear = ref => {
+    const [near, setNear] = useState(false);
+    useEffect(() => {
+      const el = ref.current;
+      if (!el || near) return undefined;
+      if (typeof IntersectionObserver === 'undefined') { setNear(true); return undefined; }
+      const observer = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) { setNear(true); observer.disconnect(); }
+      }, { rootMargin: '300px 0px' });
+      observer.observe(el);
+      return () => observer.disconnect();
+    }, [near]);
+    return near;
+  };
+
   // Sources attach only as a tile nears the viewport, so a gallery doesn't
   // open dozens of video requests at once; a skeleton holds the tile until
   // the first frame paints.
@@ -705,6 +755,97 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <video ref={ref} className={cls(className, !ready && 'is-loading')} src={near ? url : undefined} poster={poster} muted loop playsInline preload="metadata"
           autoPlay={autoPlay} onLoadedData={show} onError={show} onMouseEnter={play} onMouseLeave={stop} onFocus={play} onBlur={stop} />
       </>
+    );
+  };
+
+  const firstFrame = url => (/#t=/.test(url) ? url : `${url}#t=0.1`);
+
+  // Before and after in one frame, split by a divider to drag. Videos play in
+  // step, so both sides show the same moment.
+  const CompareMedia = ({ before, after, caption }) => {
+    const [pos, setPos] = useState(50);
+    const beforeRef = useRef(null);
+    const afterRef = useRef(null);
+    const isVideo = after.type === 'video';
+    useEffect(() => {
+      const a = afterRef.current;
+      const b = beforeRef.current;
+      if (!isVideo || !a || !b) return undefined;
+      const sync = () => { if (Math.abs(b.currentTime - a.currentTime) > 0.15) b.currentTime = a.currentTime; };
+      const play = () => { sync(); b.play().catch(() => {}); };
+      const pause = () => b.pause();
+      a.addEventListener('timeupdate', sync);
+      a.addEventListener('seeked', sync);
+      a.addEventListener('play', play);
+      a.addEventListener('pause', pause);
+      if (!prefersReducedMotion()) a.play().catch(() => {});
+      return () => {
+        a.removeEventListener('timeupdate', sync);
+        a.removeEventListener('seeked', sync);
+        a.removeEventListener('play', play);
+        a.removeEventListener('pause', pause);
+      };
+    }, [isVideo, after.url, before.url]);
+    const media = (item, ref) => (isVideo
+      ? <video ref={ref} className="vx-compare-el" src={firstFrame(item.url)} muted loop playsInline preload="auto" />
+      : <img ref={ref} className="vx-compare-el" src={item.url} alt={item.caption || item.title} />);
+    return (
+      <div className={cls('vx-compare', isVideo ? 'is-video' : 'is-image')} style={{ '--vx-compare': `${pos}%` }}>
+        {media(after, afterRef)}
+        <span className="vx-compare-before">{media(before, beforeRef)}</span>
+        <span className="vx-compare-line" aria-hidden="true"><span className="vx-compare-handle"><Icon name="split" size={14} /></span></span>
+        <span className="vx-compare-tag is-before">{before.title}</span>
+        <span className="vx-compare-tag is-after">{after.title}</span>
+        {caption ? <span className="vxi-feature-cap vx-compare-cap"><strong>{after.title}</strong><span>{after.caption}</span></span> : null}
+        <input className="vx-compare-range" type="range" min="0" max="100" value={pos} onChange={e => setPos(Number(e.target.value))}
+          aria-label={`Drag to compare ${before.title} with ${after.title}`} />
+      </div>
+    );
+  };
+
+  // A card's before and after, split down the middle. With several tools it
+  // steps through them while on screen, and hovering plays the one shown.
+  const CardCompare = ({ pairs }) => {
+    const ref = useRef(null);
+    const near = useNear(ref);
+    const [index, setIndex] = useState(0);
+    const [hover, setHover] = useState(false);
+    useEffect(() => {
+      if (!near || hover || pairs.length < 2 || prefersReducedMotion()) return undefined;
+      const timer = setInterval(() => setIndex(i => (i + 1) % pairs.length), 3200);
+      return () => clearInterval(timer);
+    }, [near, hover, pairs.length]);
+    useEffect(() => {
+      const root = ref.current;
+      if (!root) return;
+      root.querySelectorAll('.vx-card-pair').forEach((pair, i) => {
+        const [after, before] = pair.querySelectorAll('video');
+        if (!after || !before) return;
+        if (hover && i === index) {
+          before.currentTime = after.currentTime;
+          after.play().catch(() => {});
+          before.play().catch(() => {});
+        } else {
+          after.pause();
+          before.pause();
+        }
+      });
+    }, [hover, index]);
+    const media = item => (item.type === 'video'
+      ? <video className="vx-card-el" src={near ? firstFrame(item.url) : undefined} muted loop playsInline preload="metadata" />
+      : <img className="vx-card-el" src={item.url} alt="" loading="lazy" decoding="async" />);
+    return (
+      <span ref={ref} className="vx-card-compare" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+        {pairs.map((pair, i) => (
+          <span key={pair.after.url} className={cls('vx-card-pair', i === index && 'is-active')}>
+            {media(pair.after)}
+            <span className="vx-card-before">{media(pair.before)}</span>
+            <span className="vx-card-split" aria-hidden="true" />
+            <span className="vx-card-tag is-before">{pair.before.title}</span>
+            <span className="vx-card-tag is-after">{pair.name || pair.after.title}</span>
+          </span>
+        ))}
+      </span>
     );
   };
 
@@ -780,10 +921,21 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     if (!media.length) {
       return <p className="vx-text">This variant has not been rendered on the reference prompts yet.</p>;
     }
+    const pairs = media.map(item => comparePair(media, item)).filter(Boolean);
+    const paired = new Set(pairs.flatMap(pair => [pair.before.url, pair.after.url]));
     return (
       <>
         <div className={cls('vx-gallery', isVideo ? 'vx-gallery-video' : 'vx-gallery-image', !isVideo && media.length === 4 && 'is-four')}>
-          {media.map(item => (
+          {pairs.map(pair => (
+            <figure key={pair.after.url} className="vx-shot is-compare">
+              <CompareMedia before={pair.before} after={pair.after} />
+              <figcaption>
+                <span className="vx-shot-title">{pair.after.title}</span>
+                <span className="vx-shot-caption" title={pair.after.caption}>Drag to compare with {pair.before.title.toLowerCase()}. {pair.after.caption}</span>
+              </figcaption>
+            </figure>
+          ))}
+          {media.filter(item => !paired.has(item.url)).map(item => (
             <figure key={item.url} className="vx-shot">
               <button type="button" className="vx-shot-media" onClick={() => setOpen(item)} aria-label={`Open ${item.title} sample`}>
                 {item.type === 'video'
@@ -1042,7 +1194,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           {modality === 'video' ? (
             <>
               <FilterGroup title="Mode" icon="film">
-                {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition'].map(mode => option('modes', mode, VARIANT_LABELS[mode]))}
+                {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition', 'multi-angle', 'upscale', 'enhance'].map(mode => option('modes', mode, VARIANT_LABELS[mode]))}
               </FilterGroup>
               {range('audio', 'Audio', 'volume', [['', 'Any'], ['audio', 'Audio', 'Generates audio'], ['silent', 'Silent', 'Can be silent']])}
               {range('res', 'Resolution', 'maximize', [['', 'Any'], ['720', '720p', '720p or higher'], ['1080', '1080p', '1080p or higher'], ['1440', '1440p', '1440p or higher'], ['2160', '4K']])}
@@ -1275,14 +1427,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} className="vx-row-copy" />
             <StatusTags item={family} now={now} />
           </div>
-          {extra > 0 ? <div className="vx-mcell-sub"><span className="vx-mcell-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span></div> : null}
+          {extra > 0 ? <div className="vx-mcell-sub"><span className="vx-mcell-more" title={family.variants.join('\n')}>{moreText(display, extra)}</span></div> : null}
           <div className="vx-mcell-mobile">{[keySpec(display), privacySummary(family.privacy)].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
     );
   };
 
-  const modeChips = (family, catalog) => (family.variants || []).map(id => catalog.models[id]).filter(Boolean).map(m => m.variant);
+  const modeChips = (family, catalog) => [...new Set((family.variants || []).map(id => catalog.models[id]).filter(Boolean).map(m => m.variant))];
 
   const ModeList = ({ modes, active, labels }) => (
     <span className="vx-modes">
@@ -1425,19 +1577,21 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </div>
   );
 
-  const ExplorerCard = ({ row, now, catalog, showScope }) => {
+  const ExplorerCard = ({ row, now, catalog, showScope, modes }) => {
     const { family, display } = row;
     const isVideo = family.modality === 'video';
     const media = galleryMedia(family, display, catalog);
+    const pairs = media ? cardPairs(family, display, media, catalog, modes) : [];
     const { offer } = row;
     const href = modelHref(family, display.id);
     const extra = family.variants.length - 1;
     return (
       <article className="vx-card">
         <a className={cls('vx-card-media', isVideo ? 'is-video' : 'is-image')} href={href} tabIndex={-1} aria-hidden="true">
-          {media
-            ? (media.type === 'video' ? <HoverVideo src={media.url} className="vx-card-el" /> : <img className="vx-card-el" src={media.url} srcSet={sampleSrcSet(media.url)} sizes={CARD_SIZES} alt="" loading="lazy" decoding="async" />)
-            : <MediaFallback />}
+          {pairs.length ? <CardCompare pairs={pairs} />
+            : media
+              ? (media.type === 'video' ? <HoverVideo src={media.url} className="vx-card-el" /> : <img className="vx-card-el" src={media.url} srcSet={sampleSrcSet(media.url)} sizes={CARD_SIZES} alt="" loading="lazy" decoding="async" />)
+              : <MediaFallback />}
           {isVideo && media ? <span className="vx-card-play"><Icon name="play" size={10} /></span> : null}
         </a>
         <div className="vx-card-body">
@@ -1448,7 +1602,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-card-variants">
-            {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
+            {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>{moreText(display, extra)}</span> : null}
           </div>
           <div className="vx-card-foot">
             {isVideo && offer.status !== 'quoted' ? <span className="vx-card-price vx-muted">Priced by source length</span> : (
@@ -1516,7 +1670,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             </div>
             {description ? <p className="vx-list-desc">{description}</p> : null}
             <div className="vx-list-sum">
-              {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
+              {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>{moreText(display, extra)}</span> : null}
               <span>{details}</span>
             </div>
           </li>
@@ -1527,7 +1681,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   // Families with nothing on the gallery's prompt go in a table under it
   // rather than as tiles of another scene, so the grid compares like with like.
-  const Gallery = ({ rows, columns, sort, setSort, providers, now, catalog, modality, showScope }) => {
+  const Gallery = ({ rows, columns, sort, setSort, providers, now, catalog, modality, showScope, modes }) => {
     const rendered = rows.filter(row => galleryMedia(row.family, row.display, catalog));
     const pending = rows.filter(row => !galleryMedia(row.family, row.display, catalog));
     const prompt = ((catalog.mediaSuite || {})[modality] || []).find(item => item.id === GALLERY_PROMPTS[modality]);
@@ -1543,7 +1697,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         ) : null}
         {rendered.length ? (
           <div className={cls('vx-cards', modality === 'video' && 'is-video')}>
-            {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} now={now} catalog={catalog} showScope={showScope} />)}
+            {rendered.map(row => <ExplorerCard key={row.family.slug} row={row} now={now} catalog={catalog} showScope={showScope} modes={modes} />)}
           </div>
         ) : null}
         {pending.length ? (
@@ -1793,7 +1947,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
                     <button type="button" className="vx-btn vx-btn-sm" onClick={() => { setFilters(EMPTY_FILTERS); setQuery(''); }}>Clear {query && filterCount ? 'search and filters' : query ? 'search' : 'filters'}</button>
                   </Empty>
                 ) : shownView === 'grid' ? (
-                  <Gallery rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} catalog={catalog} modality={modality} showScope={showScope} />
+                  <Gallery rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} catalog={catalog} modality={modality} showScope={showScope} modes={filters.modes} />
                 ) : shownView === 'table' ? (
                   <ExplorerTable rows={page} columns={columns} sort={sort} setSort={setSort} providers={providers} now={now} showScope={showScope} />
                 ) : (
@@ -1833,6 +1987,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     videoExtend: 'Continue the drone shot as it rises above the clouds into clear sky',
     videoRecast: 'Recast the person in the video as the person in the reference image',
     videoMotion: 'The character follows the movements in the source video',
+    videoEnhance: 'Cinematic look with fine, detailed textures',
     music: 'Warm lo-fi hip hop beat with soft piano and vinyl crackle',
     lyrics: '[Verse]\\nCity lights are calling me home\\n[Chorus]\\nWe are the dreamers',
     sfx: 'Heavy wooden door creaking open in a stone hallway'
@@ -1891,11 +2046,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       const video = model.video || {};
       const inputs = video.inputs || {};
       const upscale = video.mode === 'upscale';
+      const factors = video.upscaleFactors || [];
       // Source-length models list only "Auto", which /video/queue rejects; they take no duration.
       const timed = (video.durations || []).filter(d => d.seconds);
       const dur = timed.find(d => d.seconds === 5) || timed[0];
       const res = upscale ? null : (video.resolutions || []).find(r => r.height === 720) || (video.resolutions || [])[0];
-      const prompt = upscale ? null
+      const prompt = !videoPrompt(video) ? null
+        : video.enhancementPrompt ? VARIANT_PROMPTS.videoEnhance
         : video.mode === 'motion' ? VARIANT_PROMPTS.videoMotion
         : video.mode !== 'v2v' ? VARIANT_PROMPTS.video
         : inputs.reference ? VARIANT_PROMPTS.videoRecast
@@ -1906,7 +2063,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         prompt ? `"prompt": "${prompt}"` : null,
         dur ? `"duration": "${dur.value}"` : null,
         res ? `"resolution": "${res.value}"` : null,
-        upscale ? '"upscale_factor": 2' : null,
+        factors.length ? `"upscale_factor": ${factors[0]}` : null,
         video.aspectRatios && video.aspectRatios.length ? `"aspect_ratio": "${video.aspectRatios[0]}"` : null,
         video.audio === 'optional' ? '"audio": true' : null,
         inputs.image ? `"image_url": "https://example.com/${video.mode === 'motion' ? 'character' : 'first-frame'}.jpg"` : null,
@@ -4286,8 +4443,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
 
   /* ------------------------------------------------------------ video page, next */
 
-  const MODE_ORDER = ['t2v', 'i2v', 'r2v', 'flf', 'transition', 'motion', 'v2v', 'multi-angle', 'upscale'];
-  const MODE_ICONS = { t2v: 'text', i2v: 'image', r2v: 'layers', flf: 'film', transition: 'film', motion: 'activity', v2v: 'wand', 'multi-angle': 'eye', upscale: 'maximize' };
+  const MODE_ORDER = ['t2v', 'i2v', 'r2v', 'flf', 'transition', 'motion', 'v2v', 'multi-angle', 'upscale', 'enhance'];
+  const MODE_ICONS = { t2v: 'text', i2v: 'image', r2v: 'layers', flf: 'film', transition: 'film', motion: 'activity', v2v: 'wand', 'multi-angle': 'eye', upscale: 'maximize', enhance: 'sparkles' };
   const VIDEO_RENDER_ORDER = ['cinematic-landscape', 'urban-night', 'ocean-loop', 'upscaled', 'recast', 'extended', 'bicubic', 'source'];
   const VIDEO_SUITE = VIDEO_RENDER_ORDER.slice(0, 3);
   const AUDIO_TEXT = { native: 'Generated with every clip', optional: 'Optional, on by default', none: 'None' };
@@ -4331,12 +4488,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         + (p.quotedAt ? `, quoted ${fmtDate(Math.floor(new Date(p.quotedAt).getTime() / 1000))}` : '')
       : p.status === 'input-dependent' ? '- Price: billed by the length of the source video; quote it with `POST /video/quote` and its `video_url`'
         : '- Price: quote it with `POST /video/quote`';
-    const fields = [video.mode !== 'upscale' ? 'prompt' : null, ...INPUT_FIELDS.filter(([key]) => (video.inputs || {})[key]).map(([, field]) => field)].filter(Boolean);
+    const fields = [videoPrompt(video) ? 'prompt' : null, ...INPUT_FIELDS.filter(([key]) => (video.inputs || {})[key]).map(([, field]) => field)].filter(Boolean);
+    const controls = enhancementParams(video.enhancement || {});
     return [
       `# ${family.name} on the Venice API`,
       '',
       modes.length > 1
-        ? `- Model IDs: ${modes.map(m => `\`${m.id}\` (${(VARIANT_LABELS[m.variant] || m.variant).toLowerCase()})`).join(', ')}`
+        ? `- Model IDs: ${modes.map(m => `\`${m.id}\` (${m.variantName ? `${m.variantName}, ` : ''}${(VARIANT_LABELS[m.variant] || m.variant).toLowerCase()})`).join(', ')}`
         : `- Model ID: \`${model.id}\``,
       `- Flow: \`POST ${API}/video/queue\` returns a \`queue_id\`. Poll \`POST ${API}/video/retrieve\` with the \`model\` and \`queue_id\` until it returns the MP4. When the queue response has a \`download_url\`, retrieve reports \`COMPLETED\` instead and the MP4 is at that URL. \`POST ${API}/video/quote\` prices a job without charging for it.`,
       '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
@@ -4344,10 +4502,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       price,
       timedDurations(video).length ? `- Lengths: ${durationText(video.durations)}; \`duration\` is required` : '- Length: matches the source video; omit `duration`',
       res.length ? `- Resolutions: ${res.map(r => r.value).join(', ')}` : null,
+      (video.upscaleFactors || []).length ? '- Upscale factor: `upscale_factor` 1, 2 or 4, where 1 enhances without enlarging; `resolution` is rejected' : null,
       ratios.length ? `- Aspect ratios: ${ratios.join(', ')}; \`aspect_ratio\` is required` : '- Aspect ratio: set by the input or the model; `aspect_ratio` is rejected',
       `- Audio: ${(AUDIO_TEXT[video.audio] || 'none').toLowerCase()}${video.audio === 'optional' ? ' (`audio`)' : ''}`,
       fields.length ? `- Inputs: ${listText(fields.map(f => `\`${f}\``))}` : null,
-      video.mode !== 'upscale' ? `- Prompt: up to ${count(video.promptLimit || 2500)} characters` : null,
+      videoPrompt(video) ? `- Prompt: ${videoPrompt(video) === 'Optional' ? 'optional, ' : ''}up to ${count(video.promptLimit || 2500)} characters` : null,
+      ...(controls.length ? ['- Optional Topaz controls:', ...controls.map(([name, values, note]) => `  - \`${name}\`: ${values}${note ? ` (${note})` : ''}`)] : []),
       PRIVACY[model.privacy] ? `- Privacy: ${PRIVACY[model.privacy].label}. ${PRIVACY[model.privacy].desc}` : null,
       `- Docs: https://docs.venice.ai/models/${family.slug}`,
       '',
@@ -4469,21 +4629,31 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     </ol>
   );
 
+  // The optional Topaz controls a model lists, as [param, values, note].
+  // target_fps takes any whole number from 16 up to its highest option.
+  const enhancementParams = e => [
+    e.models ? ['enhancement_model', e.models.join(' | '), e.noUpscaleModels ? `${listText(e.noUpscaleModels)} take upscale_factor 1 only` : 'the Topaz model to run'] : null,
+    ...(e.sliders || []).map(s => [s.param, `${s.min} – ${s.max}`, `default ${s.default}${s.onlyFor ? `, used by ${listText(s.onlyFor)} only` : ''}`]),
+    ...(e.selects || []).map(s => (s.param === 'target_fps'
+      ? [s.param, `16 – ${Math.max(...s.options.map(Number))}`, s.default ? `default ${s.default}` : 'omit it to keep the source frame rate']
+      : [s.param, s.options.join(' | '), s.default ? `default ${s.default}` : null])),
+    e.h264Output ? ['h264_output', 'true | false', 'default false, for H.265'] : null
+  ].filter(Boolean);
+
   const videoParams = model => {
     const video = model.video || {};
     const inputs = video.inputs || {};
-    const upscale = video.mode === 'upscale';
     const res = sortedResolutions(video);
     const timed = timedDurations(video);
     const ratios = video.aspectRatios || [];
     return [
       ['model', <code>{model.id}</code>, 'Required'],
-      upscale ? null : ['prompt', `Up to ${count(video.promptLimit || 2500)} characters`, video.mode === 'multi-angle' ? 'Optional' : 'Required'],
+      videoPrompt(video) ? ['prompt', `Up to ${count(video.promptLimit || 2500)} characters`, video.enhancementPrompt ? 'Optional, describes the video or the look you want' : videoPrompt(video)] : null,
       timed.length
         ? ['duration', timed.length > 6 ? durationText(video.durations) : <code>{timed.map(d => d.value).join(' | ')}</code>, 'Required']
         : ['duration', 'Omit it', 'Read from the source video'],
       res.length ? ['resolution', <code>{res.map(r => r.value).join(' | ')}</code>, 'Optional'] : null,
-      upscale ? ['upscale_factor', <code>1 | 2 | 4</code>, '1 enhances without enlarging'] : null,
+      (video.upscaleFactors || []).length ? ['upscale_factor', <code>1 | 2 | 4</code>, '1 enhances without enlarging'] : null,
       ratios.length ? ['aspect_ratio', <code>{ratios.join(' | ')}</code>, 'Required'] : null,
       video.audio === 'optional' ? ['audio', <code>true | false</code>, 'Default true'] : null,
       inputs.image ? ['image_url', 'URL or data URL', video.mode === 'motion' ? 'The character to animate' : 'The first frame'] : null,
@@ -4491,7 +4661,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       inputs.reference ? ['reference_image_urls', 'Image URLs', 'Characters or styles to keep'] : null,
       inputs.video ? ['video_url', 'URL or data URL', 'The source video, required'] : null,
       inputs.referenceVideo ? ['reference_video_urls', 'Video URLs', 'Reference clips, or the clip to edit'] : null,
-      inputs.audio ? ['audio_url', 'WAV or MP3 URL', 'Audio for the clip to follow'] : null
+      inputs.audio ? ['audio_url', 'WAV or MP3 URL', 'Audio for the clip to follow'] : null,
+      ...enhancementParams(video.enhancement || {}).map(([name, values, note]) => [name, <code>{values}</code>, note && upperFirst(note)])
     ].filter(Boolean);
   };
 
@@ -4519,11 +4690,18 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const res = sortedResolutions(video);
     const timed = timedDurations(video);
     const ratios = video.aspectRatios || [];
-    const renders = [...(primary.media || [])].filter(item => item.type === 'video').sort(byVideoOrder);
+    // A variant with renders of its own, such as each Topaz tool, shows them;
+    // the others share the primary's.
+    const ownRenders = (model.media || []).filter(item => item.type === 'video');
+    const renders = [...(ownRenders.length ? ownRenders : (primary.media || []).filter(item => item.type === 'video'))].sort(byVideoOrder);
+    const named = modes.some(m => m.variantName);
     const suite = renders.filter(item => VIDEO_SUITE.includes(item.prompt));
-    const [promptId, setPromptId] = useState(renders[0] ? renders[0].prompt : null);
+    // A render another one compares with shows inside that comparison.
+    const shown = renders.filter(item => !renders.some(other => other.compare === item.prompt));
+    const [promptId, setPromptId] = useState(shown[0] ? shown[0].prompt : null);
     const [opened, setOpened] = useState(null);
-    const render = renders.find(item => item.prompt === promptId) || renders[0];
+    const render = shown.find(item => item.prompt === promptId) || shown[0];
+    const pair = comparePair(renders, render);
     const compared = suite.find(item => item.prompt === promptId) || suite[0];
     const selectRender = item => setPromptId(item.prompt);
     const selectMode = id => {
@@ -4541,7 +4719,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       timed.length ? <Figure key="length" value={`${maxVideoSeconds(model)}s`} label={timed.length > 1 ? `longest clip, from ${minVideoSeconds(model)}s` : 'clip length'} /> : null
     ].filter(Boolean);
     const tiles = [
-      ...modes.map(m => ({ key: m.id, icon: MODE_ICONS[m.variant] || 'video', name: VARIANT_LABELS[m.variant] || m.variant, active: m.id === model.id && modes.length > 1,
+      ...modes.map(m => ({ key: m.id, icon: MODE_ICONS[m.variant] || 'video', name: variantLabel(m), active: m.id === model.id && modes.length > 1,
         detail: <><code>{m.id}</code><br />Takes {listText(videoInputList(m.video))}</> })),
       { key: 'audio', icon: video.audio === 'none' ? 'mute' : 'volume', name: video.audio === 'none' ? 'Silent' : 'Audio', detail: video.audio === 'optional' ? <code>audio: true | false</code> : AUDIO_TEXT[video.audio] || 'None' }
     ];
@@ -4572,7 +4750,16 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             </div>
             {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
             {figures.length ? <div className="vxn-figs">{figures}</div> : null}
-            {modes.length > 1 ? (
+            {modes.length > 1 && named ? [...new Set(modes.map(m => m.variant))].map(mode => (
+              <div key={mode} className="vxn-variants vxv-modes is-grouped">
+                <span className="vxn-variants-label">{VARIANT_LABELS[mode] || mode}</span>
+                <div className="vxn-switch is-wrap" role="radiogroup" aria-label={VARIANT_LABELS[mode] || mode}>
+                  {modes.filter(m => m.variant === mode).map(m => (
+                    <button key={m.id} type="button" role="radio" aria-checked={m.id === model.id} className={cls(m.id === model.id && 'is-active')} onClick={() => selectMode(m.id)}>{variantLabel(m)}</button>
+                  ))}
+                </div>
+              </div>
+            )) : modes.length > 1 ? (
               <div className="vxn-variants vxv-modes">
                 <span className="vxn-variants-label">Mode</span>
                 <div className="vxn-switch" role="radiogroup" aria-label="Mode">
@@ -4589,8 +4776,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
           {render ? (
             <div className="vxv-hero-side">
-              <RenderFeature item={render} onOpen={setOpened} />
-              {renders.length > 1 ? <VideoThumbs items={renders} active={render} onSelect={selectRender} /> : null}
+              {pair ? <CompareMedia key={render.url} before={pair.before} after={pair.after} caption /> : <RenderFeature item={render} onOpen={setOpened} />}
+              {shown.length > 1 ? <VideoThumbs items={shown} active={render} onSelect={selectRender} /> : null}
             </div>
           ) : null}
         </header>
@@ -4638,7 +4825,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           )}
         </NextSection>
 
-        <NextSection id="capabilities" title="Capabilities" lead={modes.length > 1 ? `${modes.length} modes, each with its own model ID.` : 'What the model takes in and renders.'}>
+        <NextSection id="capabilities" title="Capabilities" lead={modes.length > 1 ? `${modes.length} ${named ? 'tools' : 'modes'}, each with its own model ID.` : 'What the model takes in and renders.'}>
           <div className="vxn-tiles">
             {tiles.map(tile => (
               <div key={tile.key} className={cls('vxn-tile', tile.active && 'is-active')}>
@@ -4667,7 +4854,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
               ['Aspect ratios', ratios.length ? ratios.join(', ') : 'Set by the input or the model'],
               ['Audio', AUDIO_TEXT[video.audio] || 'None'],
               ['Inputs', upperFirst(listText(videoInputList(video)))],
-              video.mode !== 'upscale' ? ['Prompt limit', `${count(video.promptLimit || 2500)} characters`] : null,
+              videoPrompt(video) ? ['Prompt limit', `${count(video.promptLimit || 2500)} characters`] : null,
               PRIVACY[model.privacy] ? ['Privacy', <>{PRIVACY[model.privacy].label}<InfoTip text={PRIVACY[model.privacy].desc} /></>] : null,
               ['Weights', model.openWeights ? (source ? <a href={source} target="_blank" rel="noopener noreferrer">{weightsName(source)}<Icon name="external" size={12} /></a> : 'Open') : 'Closed'],
               ['Added', fmtDate(model.created)]

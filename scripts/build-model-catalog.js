@@ -128,7 +128,8 @@ const VIDEO_MODES = [
   ['motion', 'Motion control'],
   ['transition', 'Transition'],
   ['multi-angle', 'Multi-angle'],
-  ['upscale', 'Video upscale']
+  ['upscale', 'Video upscale'],
+  ['enhance', 'Video enhancement']
 ];
 const VARIANT_ORDER = ['standard', 'fast', 'e2ee', 'tee', 'generate', 'edit', 'upscale', 'background-removal', ...VIDEO_MODES.map(([key]) => key)];
 
@@ -302,20 +303,56 @@ function classify(model) {
   }
 }
 
+// GET /models lists an upscaler's scale factors ("2x", "4x") as its resolutions.
+const SCALE_FACTOR = /^(\d+)x$/i;
+
+function scaleFactors(constraints) {
+  return (constraints.resolutions || []).map(value => Number((String(value).match(SCALE_FACTOR) || [])[1])).filter(Boolean);
+}
+
 function videoMode(model) {
   const id = model.id.toLowerCase();
-  const type = model.model_spec?.constraints?.model_type;
+  const constraints = model.model_spec?.constraints || {};
+  const type = constraints.model_type;
+  const factors = scaleFactors(constraints);
   if (id.includes('reference-to-video')) return 'r2v';
   if (id.includes('first-last-frame')) return 'flf';
   if (id.includes('motion-control')) return 'motion';
   if (id.includes('multi-angle')) return 'multi-angle';
   if (id.includes('transition')) return 'transition';
   if (id.includes('video-to-video')) return 'v2v';
-  if (id.includes('upscale')) return 'upscale';
+  // A model that also lists 1x works at the source resolution and upscales on request.
+  if (factors.length && !factors.includes(1)) return 'upscale';
+  // GET /models lists an enhancement model's controls under constraints.topaz.
+  if (constraints.topaz || factors.length) return 'enhance';
   if (type === 'image-to-video') return 'i2v';
   // GET /models types source-video models as "video": recasts, extensions, edits.
   if (type === 'video') return 'v2v';
   return 't2v';
+}
+
+// The Topaz controls a model takes on /video/queue, besides its prompt. A
+// select's empty option, which keeps the source's value, drops out in compact().
+function enhancementControls(topaz) {
+  if (!topaz) return null;
+  return {
+    models: (topaz.models || []).map(option => option.value),
+    sliders: (topaz.sliders || []).map(slider => ({ param: slider.param, min: slider.min, max: slider.max, default: slider.default, onlyFor: slider.only_for_models })),
+    selects: (topaz.selects || []).map(select => ({ param: select.param, options: select.options, default: select.default })),
+    noUpscaleModels: topaz.no_upscale_models,
+    h264Output: Boolean(topaz.h264_output)
+  };
+}
+
+// A family rule groups models whose names differ by more than a mode suffix.
+function familyRuleFor(entry, overrides) {
+  return (overrides.familyRules || []).find(rule => matchesRule(entry, rule.match || {})) || null;
+}
+
+// A model's name within a rule's family: "Topaz Video Precision" is
+// "Precision" in Topaz Video.
+function memberName(name, familyName) {
+  return name.startsWith(`${familyName} `) ? name.slice(familyName.length + 1) : name;
 }
 
 // Returns the key that groups variants into one family, plus the variant label.
@@ -473,6 +510,7 @@ function normalizeModel(model, ctx) {
   const family = familyKeyFor(model, modality, task);
   const override = ctx.overrides.models?.[model.id] || {};
   const provider = override.provider || detectProvider(model);
+  const familyRule = familyRuleFor({ id: model.id, provider, modality, task }, ctx.overrides);
   const tier = privacyTier(model);
   const quantization = caps.quantization && caps.quantization !== 'not-available' ? caps.quantization : null;
   const source = spec.modelSource || null;
@@ -483,9 +521,10 @@ function normalizeModel(model, ctx) {
     type: model.type,
     modality,
     task,
-    familyKey: family.key,
-    familyName: override.familyName || family.familyName,
+    familyKey: familyRule ? `${modality}:${slugify(familyRule.family)}` : family.key,
+    familyName: override.familyName || (familyRule ? familyRule.family : family.familyName),
     variant: override.variant || family.variant,
+    variantName: familyRule ? memberName(spec.name || model.id, familyRule.family) : null,
     provider: provider || null,
     created: model.created || null,
     description: spec.description || null,
@@ -558,9 +597,11 @@ function normalizeModel(model, ctx) {
     entry.headline = { value: entry.pricing.perImage, unit: task === 'image-upscale' ? 'per 2x upscale' : task === 'image-edit' ? 'per edit' : 'per image', basis: entry.pricing.defaultResolution || 'flat' };
   } else if (modality === 'video') {
     const mode = videoMode(model);
+    const inputRule = (ctx.overrides.videoInputRules || []).find(rule => matchesRule(entry, rule.match || {}));
     entry.video = {
       mode,
-      resolutions: (constraints.resolutions || []).map(resolutionInfo),
+      resolutions: (constraints.resolutions || []).filter(value => !SCALE_FACTOR.test(value)).map(resolutionInfo),
+      upscaleFactors: scaleFactors(constraints),
       durations: (constraints.durations || []).map(value => ({ value, seconds: seconds(value) })),
       aspectRatios: Array.isArray(constraints.aspect_ratios) ? constraints.aspect_ratios : (constraints.aspect_ratios ? [constraints.aspect_ratios] : []),
       audio: constraints.audio ? (constraints.audio_configurable ? 'optional' : 'native') : 'none',
@@ -570,9 +611,12 @@ function normalizeModel(model, ctx) {
         video: Boolean(constraints.video_input),
         audio: Boolean(constraints.audio_input),
         reference: mode === 'r2v',
+        ...inputRule?.videoInputs,
         ...override.videoInputs
       },
-      promptLimit: constraints.prompt_character_limit || null
+      promptLimit: constraints.prompt_character_limit || null,
+      enhancementPrompt: Boolean(constraints.topaz?.prompt),
+      enhancement: enhancementControls(constraints.topaz)
     };
     entry.pricing = videoPricing(model, ctx.videoPricing.models?.[model.id]);
     entry.headline = { value: null, unit: 'per second', basis: 'lens' };
@@ -721,7 +765,7 @@ function matchesRule(entry, match) {
 // calling it takes the E2EE handshake, and its limits and price differ.
 const E2EE_KEY = ':e2ee';
 
-function buildFamilies(models) {
+function buildFamilies(models, rules = []) {
   const groups = new Map();
   for (const model of models) {
     const key = model.privacy === 'e2ee' ? model.familyKey + E2EE_KEY : model.familyKey;
@@ -732,7 +776,9 @@ function buildFamilies(models) {
   const families = [];
   const builds = [];
   for (const [key, variants] of groups) {
-    variants.sort((a, b) => VARIANT_ORDER.indexOf(a.variant) - VARIANT_ORDER.indexOf(b.variant) || (a.created || 0) - (b.created || 0));
+    const rule = rules.find(r => variants.some(v => matchesRule(v, r.match || {})));
+    const rank = v => (rule && rule.order && rule.order.includes(v.id) ? rule.order.indexOf(v.id) : Infinity);
+    variants.sort((a, b) => VARIANT_ORDER.indexOf(a.variant) - VARIANT_ORDER.indexOf(b.variant) || rank(a) - rank(b) || (a.created || 0) - (b.created || 0));
     const primary = variants.find(v => ['standard', 'generate', 't2v'].includes(v.variant)) || variants[0];
     const modality = primary.modality;
     const e2ee = key.endsWith(E2EE_KEY);
@@ -743,9 +789,10 @@ function buildFamilies(models) {
       modality,
       task: primary.task,
       provider: primary.provider,
-      description: primary.description || variants.find(v => v.description)?.description || null,
+      description: rule?.description || primary.description || variants.find(v => v.description)?.description || null,
       primary: primary.id,
       variants: variants.map(v => v.id),
+      gallery: rule?.gallery ? rule.gallery.filter(id => variants.some(v => v.id === id)) : undefined,
       created: Math.min(...variants.map(v => v.created || Infinity)),
       updated: Math.max(...variants.map(v => v.created || 0)),
       privacy: [...new Set(variants.map(v => v.privacy))],
@@ -872,7 +919,8 @@ const TASK_PHRASES = {
 };
 const MODE_PHRASES = {
   t2v: 'text to video', i2v: 'image to video', r2v: 'reference to video', flf: 'first and last frame to video',
-  v2v: 'video editing', motion: 'motion control', transition: 'video transitions', 'multi-angle': 'multi-angle video', upscale: 'video upscaling'
+  v2v: 'video editing', motion: 'motion control', transition: 'video transitions', 'multi-angle': 'multi-angle video', upscale: 'video upscaling',
+  enhance: 'video enhancement'
 };
 // The page's own formatters, from the compiled hub bundle, so the static
 // text reads exactly as the page does.
@@ -897,7 +945,7 @@ function listPhrase(items) {
 
 const fmtTokens = n => hub().helpers.tokens(n);
 const heightLabel = h => hub().helpers.heightLabel(h);
-const variantLabel = v => hub().helpers.VARIANT_LABELS[v.variant] || v.variant;
+const variantLabel = v => v.variantName || hub().helpers.VARIANT_LABELS[v.variant] || v.variant;
 const privacyLabel = tier => hub().helpers.PRIVACY[tier]?.label || tier;
 
 function uniq(values) {
@@ -1046,7 +1094,10 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   const article = /^[aeiou]/i.test(kind) ? 'an' : 'a';
   const counterpart = familiesBySlug[family.counterpart];
   const also = counterpart ? ` It is also available ${counterpart.privacy.includes('e2ee') ? 'end-to-end encrypted' : 'without end-to-end encryption'}, as [${mdxText(counterpart.name)}](/models/${counterpart.slug}).` : '';
-  lines.push(`${name} is ${article} ${mdxText(kind)} model${f.provider ? ` by ${mdxText(f.provider)}` : ''}, available on the Venice API as \`${primary.id}\`. ${privacySentence(family.privacy || [primary.privacy])}${also}`);
+  const intro = variants.some(v => v.variantName)
+    ? `${name} is a set of ${variants.length} ${mdxText(kind)} models${f.provider ? ` by ${mdxText(f.provider)}` : ''}, each with its own model ID on the Venice API.`
+    : `${name} is ${article} ${mdxText(kind)} model${f.provider ? ` by ${mdxText(f.provider)}` : ''}, available on the Venice API as \`${primary.id}\`.`;
+  lines.push(`${intro} ${privacySentence(family.privacy || [primary.privacy])}${also}`);
   if (family.description) lines.push('', mdxText(family.description));
 
   lines.push('', `### ${name} API pricing`, '', '| Model ID | Variant | Privacy | Price |', '|---|---|---|---|');
@@ -1418,7 +1469,7 @@ async function main() {
   const raw = await loadModels();
   const models = raw.map(model => normalizeModel(model, ctx));
   const modelsById = Object.fromEntries(models.map(m => [m.id, m]));
-  const families = buildFamilies(models);
+  const families = buildFamilies(models, ctx.overrides.familyRules);
   families.forEach(family => family.variants.forEach(id => { modelsById[id].family = family.slug; }));
 
   const providers = Object.fromEntries(PROVIDERS.map(([slug, name, logo]) => [slug, { slug, name, ...providerLogo(logo) }]));
