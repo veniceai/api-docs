@@ -344,6 +344,17 @@ function enhancementControls(topaz) {
   };
 }
 
+// A family rule groups models whose names differ by more than a mode suffix.
+function familyRuleFor(entry, overrides) {
+  return (overrides.familyRules || []).find(rule => matchesRule(entry, rule.match || {})) || null;
+}
+
+// A model's name within a rule's family: "Topaz Video Precision" is
+// "Precision" in Topaz Video.
+function memberName(name, familyName) {
+  return name.startsWith(`${familyName} `) ? name.slice(familyName.length + 1) : name;
+}
+
 // Returns the key that groups variants into one family, plus the variant label.
 function familyKeyFor(model, modality, task) {
   const spec = model.model_spec || {};
@@ -499,6 +510,7 @@ function normalizeModel(model, ctx) {
   const family = familyKeyFor(model, modality, task);
   const override = ctx.overrides.models?.[model.id] || {};
   const provider = override.provider || detectProvider(model);
+  const familyRule = familyRuleFor({ id: model.id, provider, modality, task }, ctx.overrides);
   const tier = privacyTier(model);
   const quantization = caps.quantization && caps.quantization !== 'not-available' ? caps.quantization : null;
   const source = spec.modelSource || null;
@@ -509,9 +521,10 @@ function normalizeModel(model, ctx) {
     type: model.type,
     modality,
     task,
-    familyKey: family.key,
-    familyName: override.familyName || family.familyName,
+    familyKey: familyRule ? `${modality}:${slugify(familyRule.family)}` : family.key,
+    familyName: override.familyName || (familyRule ? familyRule.family : family.familyName),
     variant: override.variant || family.variant,
+    variantName: familyRule ? memberName(spec.name || model.id, familyRule.family) : null,
     provider: provider || null,
     created: model.created || null,
     description: spec.description || null,
@@ -752,7 +765,7 @@ function matchesRule(entry, match) {
 // calling it takes the E2EE handshake, and its limits and price differ.
 const E2EE_KEY = ':e2ee';
 
-function buildFamilies(models) {
+function buildFamilies(models, rules = []) {
   const groups = new Map();
   for (const model of models) {
     const key = model.privacy === 'e2ee' ? model.familyKey + E2EE_KEY : model.familyKey;
@@ -763,7 +776,9 @@ function buildFamilies(models) {
   const families = [];
   const builds = [];
   for (const [key, variants] of groups) {
-    variants.sort((a, b) => VARIANT_ORDER.indexOf(a.variant) - VARIANT_ORDER.indexOf(b.variant) || (a.created || 0) - (b.created || 0));
+    const rule = rules.find(r => variants.some(v => matchesRule(v, r.match || {})));
+    const rank = v => (rule && rule.order && rule.order.includes(v.id) ? rule.order.indexOf(v.id) : Infinity);
+    variants.sort((a, b) => VARIANT_ORDER.indexOf(a.variant) - VARIANT_ORDER.indexOf(b.variant) || rank(a) - rank(b) || (a.created || 0) - (b.created || 0));
     const primary = variants.find(v => ['standard', 'generate', 't2v'].includes(v.variant)) || variants[0];
     const modality = primary.modality;
     const e2ee = key.endsWith(E2EE_KEY);
@@ -774,7 +789,7 @@ function buildFamilies(models) {
       modality,
       task: primary.task,
       provider: primary.provider,
-      description: primary.description || variants.find(v => v.description)?.description || null,
+      description: rule?.description || primary.description || variants.find(v => v.description)?.description || null,
       primary: primary.id,
       variants: variants.map(v => v.id),
       created: Math.min(...variants.map(v => v.created || Infinity)),
@@ -929,7 +944,7 @@ function listPhrase(items) {
 
 const fmtTokens = n => hub().helpers.tokens(n);
 const heightLabel = h => hub().helpers.heightLabel(h);
-const variantLabel = v => hub().helpers.VARIANT_LABELS[v.variant] || v.variant;
+const variantLabel = v => v.variantName || hub().helpers.VARIANT_LABELS[v.variant] || v.variant;
 const privacyLabel = tier => hub().helpers.PRIVACY[tier]?.label || tier;
 
 function uniq(values) {
@@ -1078,7 +1093,10 @@ function specMarkdown(family, variants, providers, related, familiesBySlug, mode
   const article = /^[aeiou]/i.test(kind) ? 'an' : 'a';
   const counterpart = familiesBySlug[family.counterpart];
   const also = counterpart ? ` It is also available ${counterpart.privacy.includes('e2ee') ? 'end-to-end encrypted' : 'without end-to-end encryption'}, as [${mdxText(counterpart.name)}](/models/${counterpart.slug}).` : '';
-  lines.push(`${name} is ${article} ${mdxText(kind)} model${f.provider ? ` by ${mdxText(f.provider)}` : ''}, available on the Venice API as \`${primary.id}\`. ${privacySentence(family.privacy || [primary.privacy])}${also}`);
+  const intro = variants.some(v => v.variantName)
+    ? `${name} is a set of ${variants.length} ${mdxText(kind)} models${f.provider ? ` by ${mdxText(f.provider)}` : ''}, each with its own model ID on the Venice API.`
+    : `${name} is ${article} ${mdxText(kind)} model${f.provider ? ` by ${mdxText(f.provider)}` : ''}, available on the Venice API as \`${primary.id}\`.`;
+  lines.push(`${intro} ${privacySentence(family.privacy || [primary.privacy])}${also}`);
   if (family.description) lines.push('', mdxText(family.description));
 
   lines.push('', `### ${name} API pricing`, '', '| Model ID | Variant | Privacy | Price |', '|---|---|---|---|');
@@ -1450,7 +1468,7 @@ async function main() {
   const raw = await loadModels();
   const models = raw.map(model => normalizeModel(model, ctx));
   const modelsById = Object.fromEntries(models.map(m => [m.id, m]));
-  const families = buildFamilies(models);
+  const families = buildFamilies(models, ctx.overrides.familyRules);
   families.forEach(family => family.variants.forEach(id => { modelsById[id].family = family.slug; }));
 
   const providers = Object.fromEntries(PROVIDERS.map(([slug, name, logo]) => [slug, { slug, name, ...providerLogo(logo) }]));

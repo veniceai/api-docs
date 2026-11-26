@@ -251,7 +251,7 @@ function launches(catalog, changes) {
   for (const event of changes.events) {
     const family = event.change === 'added' && catalog.models[event.id] ? families.get(event.id) : null;
     const seen = family && latest.get(family.slug);
-    if (family && !(seen && seen.at >= event.at)) latest.set(family.slug, { family, at: event.at });
+    if (family && !(seen && seen.at >= event.at)) latest.set(family.slug, { family, at: event.at, id: event.id });
   }
   return [...latest.values()].sort((a, b) =>
     b.at.slice(0, 10).localeCompare(a.at.slice(0, 10)) || a.family.name.length - b.family.name.length);
@@ -303,7 +303,18 @@ function slideArt(family, catalog, taken) {
   return art;
 }
 
-function renderSlide({ family, at }, catalog, active, taken) {
+// A launch in a family of named tools, such as Topaz Video, is that tool: its
+// own name and ID, linked to it on the family's page.
+function launchFace({ family, id }, catalog) {
+  const model = catalog.models[id];
+  const href = familyHref(family);
+  if (!model || !model.variantName) return { name: family.name, id: family.primary, href };
+  return { name: model.name, id, href: id === family.primary || href === CATALOG_HREF ? href : `${href}?v=${id}` };
+}
+
+function renderSlide(launch, catalog, active, taken) {
+  const { family, at } = launch;
+  const face = launchFace(launch, catalog);
   const { render, maker } = slideArt(family, catalog, taken);
   return [
     `<section className="vh-slide${active ? ' is-active' : ''}${render ? '' : ' is-mark'}">`,
@@ -311,13 +322,13 @@ function renderSlide({ family, at }, catalog, active, taken) {
     '<div className="vh-release-copy">',
     `<span className="vh-eyebrow">New on Venice · ${longDate(at)}</span>`,
     '',
-    `## ${escapeMarkdownText(family.name)}`,
+    `## ${escapeMarkdownText(face.name)}`,
     '',
     releaseLine(family, catalog),
     '',
     '<div className="vh-release-actions">',
-    `  <a className="vh-pill" href="${familyHref(family)}">Explore the release</a>`,
-    `  <code className="vh-chip">${escapeJsxText(family.primary)}</code>`,
+    `  <a className="vh-pill" href="${face.href}">Explore the release</a>`,
+    `  <code className="vh-chip">${escapeJsxText(face.id)}</code>`,
     '</div>',
     '</div>',
     ...(render ? [`<span className="vh-made">Made with ${escapeJsxText(maker.name)} on Venice</span>`] : []),
@@ -341,9 +352,9 @@ function renderRelease(catalog, recent) {
   const taken = new Set();
   const slides = launches.map((launch, i) => renderSlide(launch, catalog, i === 0, taken));
   const tabs = launches.map((launch, i) => [
-    `  <a className="vh-new-item${i === 0 ? ' is-active' : ''}" href="${familyHref(launch.family)}"${i === 0 ? ' aria-current="true"' : ''}>`,
+    `  <a className="vh-new-item${i === 0 ? ' is-active' : ''}" href="${launchFace(launch, catalog).href}"${i === 0 ? ' aria-current="true"' : ''}>`,
     providerMark(catalog, launch.family.provider),
-    `<span className="vh-new-text"><span className="vh-new-name">${escapeJsxText(launch.family.name)}</span> `,
+    `<span className="vh-new-text"><span className="vh-new-name">${escapeJsxText(launchFace(launch, catalog).name)}</span> `,
     `<span className="vh-new-date">${shortDate(launch.at)}</span></span></a>`
   ].join(''));
 

@@ -157,6 +157,10 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     flf: 'First & last frame', v2v: 'Video edit', motion: 'Motion control', transition: 'Transition', 'multi-angle': 'Multi-angle', enhance: 'Enhance'
   };
   const MODE_SHORT = { t2v: 'T2V', i2v: 'I2V', r2v: 'R2V', flf: 'Keyframes', v2v: 'Edit', motion: 'Motion', transition: 'Transition', 'multi-angle': 'Multi-angle', upscale: 'Upscale', enhance: 'Enhance' };
+  // A family that groups distinct models, such as Topaz Video's tools, names
+  // each one; the others label a variant by its mode.
+  const variantLabel = m => m.variantName || VARIANT_LABELS[m.variant] || m.variant;
+  const moreText = (display, extra) => `+${extra} ${display.variantName ? (extra === 1 ? 'tool' : 'tools') : (extra === 1 ? 'variant' : 'variants')}`;
   const PRIVACY = {
     e2ee: { label: 'E2EE', icon: 'lock', desc: "This model supports end-to-end encryption (E2EE) and runs in a Trusted Execution Environment (TEE). Your prompt is encrypted on your client and decrypted inside a verified TEE. The response is then encrypted and sent back to your client for decryption. Venice's system prompt and web search are disabled to preserve end-to-end encryption. Attestation evidence is available for independent verification." },
     tee: { label: 'TEE', icon: 'shield', desc: 'This model runs in a Trusted Execution Environment (TEE). Attestation evidence is available for independent verification.' },
@@ -1279,14 +1283,14 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <CopyButton text={display.id} iconOnly label={`Copy model ID ${display.id}`} className="vx-row-copy" />
             <StatusTags item={family} now={now} />
           </div>
-          {extra > 0 ? <div className="vx-mcell-sub"><span className="vx-mcell-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span></div> : null}
+          {extra > 0 ? <div className="vx-mcell-sub"><span className="vx-mcell-more" title={family.variants.join('\n')}>{moreText(display, extra)}</span></div> : null}
           <div className="vx-mcell-mobile">{[keySpec(display), privacySummary(family.privacy)].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
     );
   };
 
-  const modeChips = (family, catalog) => (family.variants || []).map(id => catalog.models[id]).filter(Boolean).map(m => m.variant);
+  const modeChips = (family, catalog) => [...new Set((family.variants || []).map(id => catalog.models[id]).filter(Boolean).map(m => m.variant))];
 
   const ModeList = ({ modes, active, labels }) => (
     <span className="vx-modes">
@@ -1452,7 +1456,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             <StatusTags item={family} now={now} />
           </div>
           <div className="vx-card-variants">
-            {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
+            {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>{moreText(display, extra)}</span> : null}
           </div>
           <div className="vx-card-foot">
             {isVideo && offer.status !== 'quoted' ? <span className="vx-card-price vx-muted">Priced by source length</span> : (
@@ -1520,7 +1524,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             </div>
             {description ? <p className="vx-list-desc">{description}</p> : null}
             <div className="vx-list-sum">
-              {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>+{extra} {extra === 1 ? 'variant' : 'variants'}</span> : null}
+              {extra > 0 ? <span className="vx-list-more" title={family.variants.join('\n')}>{moreText(display, extra)}</span> : null}
               <span>{details}</span>
             </div>
           </li>
@@ -4344,7 +4348,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       `# ${family.name} on the Venice API`,
       '',
       modes.length > 1
-        ? `- Model IDs: ${modes.map(m => `\`${m.id}\` (${(VARIANT_LABELS[m.variant] || m.variant).toLowerCase()})`).join(', ')}`
+        ? `- Model IDs: ${modes.map(m => `\`${m.id}\` (${m.variantName ? `${m.variantName}, ` : ''}${(VARIANT_LABELS[m.variant] || m.variant).toLowerCase()})`).join(', ')}`
         : `- Model ID: \`${model.id}\``,
       `- Flow: \`POST ${API}/video/queue\` returns a \`queue_id\`. Poll \`POST ${API}/video/retrieve\` with the \`model\` and \`queue_id\` until it returns the MP4. When the queue response has a \`download_url\`, retrieve reports \`COMPLETED\` instead and the MP4 is at that URL. \`POST ${API}/video/quote\` prices a job without charging for it.`,
       '- Auth: `Authorization: Bearer $VENICE_API_KEY`, with a key from https://venice.ai/settings/api',
@@ -4540,7 +4544,11 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const res = sortedResolutions(video);
     const timed = timedDurations(video);
     const ratios = video.aspectRatios || [];
-    const renders = [...(primary.media || [])].filter(item => item.type === 'video').sort(byVideoOrder);
+    // A variant with renders of its own, such as each Topaz tool, shows them;
+    // the others share the primary's.
+    const ownRenders = (model.media || []).filter(item => item.type === 'video');
+    const renders = [...(ownRenders.length ? ownRenders : (primary.media || []).filter(item => item.type === 'video'))].sort(byVideoOrder);
+    const named = modes.some(m => m.variantName);
     const suite = renders.filter(item => VIDEO_SUITE.includes(item.prompt));
     const [promptId, setPromptId] = useState(renders[0] ? renders[0].prompt : null);
     const [opened, setOpened] = useState(null);
@@ -4562,7 +4570,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       timed.length ? <Figure key="length" value={`${maxVideoSeconds(model)}s`} label={timed.length > 1 ? `longest clip, from ${minVideoSeconds(model)}s` : 'clip length'} /> : null
     ].filter(Boolean);
     const tiles = [
-      ...modes.map(m => ({ key: m.id, icon: MODE_ICONS[m.variant] || 'video', name: VARIANT_LABELS[m.variant] || m.variant, active: m.id === model.id && modes.length > 1,
+      ...modes.map(m => ({ key: m.id, icon: MODE_ICONS[m.variant] || 'video', name: variantLabel(m), active: m.id === model.id && modes.length > 1,
         detail: <><code>{m.id}</code><br />Takes {listText(videoInputList(m.video))}</> })),
       { key: 'audio', icon: video.audio === 'none' ? 'mute' : 'volume', name: video.audio === 'none' ? 'Silent' : 'Audio', detail: video.audio === 'optional' ? <code>audio: true | false</code> : AUDIO_TEXT[video.audio] || 'None' }
     ];
@@ -4593,7 +4601,16 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
             </div>
             {model.description || family.description ? <p className="vxn-desc">{model.description || family.description}</p> : null}
             {figures.length ? <div className="vxn-figs">{figures}</div> : null}
-            {modes.length > 1 ? (
+            {modes.length > 1 && named ? [...new Set(modes.map(m => m.variant))].map(mode => (
+              <div key={mode} className="vxn-variants vxv-modes is-grouped">
+                <span className="vxn-variants-label">{VARIANT_LABELS[mode] || mode}</span>
+                <div className="vxn-switch is-wrap" role="radiogroup" aria-label={VARIANT_LABELS[mode] || mode}>
+                  {modes.filter(m => m.variant === mode).map(m => (
+                    <button key={m.id} type="button" role="radio" aria-checked={m.id === model.id} className={cls(m.id === model.id && 'is-active')} onClick={() => selectMode(m.id)}>{variantLabel(m)}</button>
+                  ))}
+                </div>
+              </div>
+            )) : modes.length > 1 ? (
               <div className="vxn-variants vxv-modes">
                 <span className="vxn-variants-label">Mode</span>
                 <div className="vxn-switch" role="radiogroup" aria-label="Mode">
@@ -4659,7 +4676,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           )}
         </NextSection>
 
-        <NextSection id="capabilities" title="Capabilities" lead={modes.length > 1 ? `${modes.length} modes, each with its own model ID.` : 'What the model takes in and renders.'}>
+        <NextSection id="capabilities" title="Capabilities" lead={modes.length > 1 ? `${modes.length} ${named ? 'tools' : 'modes'}, each with its own model ID.` : 'What the model takes in and renders.'}>
           <div className="vxn-tiles">
             {tiles.map(tile => (
               <div key={tile.key} className={cls('vxn-tile', tile.active && 'is-active')}>
