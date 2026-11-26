@@ -5,7 +5,7 @@ description: "通过在 Base 上质押 VVV，让链上 agent 铸造 Venice API �
 'og:description': How an autonomous AI agent can mint its own Venice inference API key by signing a Venice-issued key request with a wallet that holds staked VVV on Base.
 ---
 
-控制 Base 上钱包的 AI agent 可以在无需人类参与的情况下铸造自己的 Venice 推理 API 密钥。agent 获取 VVV、质押它、为其钱包请求一个短期密钥请求、签署该请求的可读消息，然后将签名回传以获得绑定到质押钱包的全新 API 密钥。
+控制 Base 上钱包的 AI agent 可以在无需人类参与的情况下铸造自己的 Venice 推理 API 密钥。agent 获取 VVV、质押它、为其钱包请求一个短期密钥请求、签署该请求的可读消息，然后将签名回传以获得绑定到质押钱包的全新 API 密钥。当钱包签署的消息注明密钥类型为 ADMIN 时，同一流程也可以铸造 ADMIN 密钥。
 
 本指南从端到端介绍整个流程，并涵盖密钥铸造后用于实际支付推理的资金选项。
 
@@ -49,10 +49,12 @@ description: "通过在 Base 上质押 VVV，让链上 agent 铸造 Venice API �
       --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>'
     ```
 
+    可选查询参数 `apiKeyType` 设置钱包授权的密钥类型：`INFERENCE`（默认）或 `ADMIN`。该类型固定在 token 中并在消息中注明，因此请请求你要铸造的类型。参见[铸造 ADMIN 密钥](#minting-an-admin-key)。
+
     响应包含两个字段：
 
     - `token`，由 Venice 签名并绑定到该钱包的 token。它在签发 15 分钟后过期，因此请尽早签名并提交。
-    - `message`，钱包要签署的可读文本。它列出钱包、密钥类型（`INFERENCE`）、签发方、链、一次性 nonce 以及签发和过期时间：
+    - `message`，钱包要签署的可读文本。它列出钱包、密钥类型（`INFERENCE`，除非你请求了 `ADMIN`）、签发方、链、一次性 nonce 以及签发和过期时间：
 
     ```text
     Venice API key request
@@ -89,7 +91,7 @@ description: "通过在 Base 上质押 VVV，让链上 agent 铸造 Venice API �
       }'
     ```
 
-    必填字段：`address`、`signature`、`token`、`apiKeyType`。`apiKeyType` 必须为 `INFERENCE`：钱包签名铸造不会创建 ADMIN 密钥。请在 [API 设置](https://venice.ai/settings/api?utm_source=venice-api-documentation)中创建 ADMIN 密钥。
+    必填字段：`address`、`signature`、`token`、`apiKeyType`。`apiKeyType` 必须与签名消息中注明的密钥类型一致：未带 `apiKeyType` 请求的 token 用 `INFERENCE`，带 `apiKeyType=ADMIN` 请求的 token 用 `ADMIN`。
 
     可选字段：
 
@@ -147,6 +149,37 @@ if (!mintResponse.ok) {
 console.log("Minted key:", result.data.apiKey)
 ```
 
+## 铸造 ADMIN 密钥 {#minting-an-admin-key}
+
+ADMIN 密钥可以创建和删除其他 API 密钥、读取钱包 Venice 账户的账单，并从该账户扣费。要铸造 ADMIN 密钥，请用 `apiKeyType=ADMIN` 请求 token，签署其消息，然后以 `apiKeyType: "ADMIN"` 发送 `POST`：
+
+```bash
+curl --request GET \
+  --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>&apiKeyType=ADMIN'
+```
+
+返回的 `message` 说明它会创建 ADMIN 密钥以及该密钥的权限：
+
+```text
+Venice API key request
+
+Sign this only if you are creating a Venice ADMIN API key for this wallet. An ADMIN key can create and delete other API keys and read billing for this wallet's Venice account, and it spends from this wallet's Venice account.
+
+Wallet: <wallet address>
+Key type: ADMIN
+Issued by: api.venice.ai
+Chain ID: 8453
+Nonce: <random hex>
+Issued At: <ISO 8601 time>
+Expiration Time: <ISO 8601 time>
+```
+
+按上述步骤签名并提交，在 `POST` 请求体中使用 `"apiKeyType": "ADMIN"`。token 的密钥类型无法更改：`INFERENCE` token 不能铸造 ADMIN 密钥，`ADMIN` token 也不能铸造 INFERENCE 密钥。ADMIN 密钥需要可读消息，因此[旧版 token](#legacy-tokens) 无法铸造它们。
+
+<Warning>
+  仅在 agent 需要管理密钥或读取账单时，才让钱包签署 ADMIN 消息。任何持有 ADMIN 密钥的人都可以为该账户创建新密钥，因此请至少像保管钱包私钥一样谨慎地保管它。
+</Warning>
+
 ## 错误参考 {#error-reference}
 
 端点返回具体、可操作的错误消息。在 agent 中映射这些错误，以便它可以决定是重试、请求新 token 还是停止。
@@ -154,7 +187,10 @@ console.log("Minted key:", result.data.apiKey)
 | 状态 | 错误消息包含 | 含义 | 应对方式 |
 | --- | --- | --- | --- |
 | `400` | `Invalid wallet address` | `address` 查询参数或字段不是有效的 EVM 地址。 | 修正地址并重新提交。 |
-| `400` | `creates INFERENCE keys only` | `apiKeyType` 为 `ADMIN`。 | 将 `apiKeyType` 设为 `INFERENCE`，或在控制台中创建 ADMIN 密钥。 |
+| `400` | `Invalid "apiKeyType"` | `apiKeyType` 查询参数既不是 `INFERENCE` 也不是 `ADMIN`。 | 使用 `INFERENCE` 或 `ADMIN`。 |
+| `400` | `ADMIN keys require a readable key request` | `GET` 请求了 `apiKeyType=ADMIN` 但未带 `?address=`。 | 同时带上 `address` 和 `apiKeyType=ADMIN` 请求 token。 |
+| `400` | `This token was issued for an` | `POST` 请求体中的 `apiKeyType` 与签名消息中注明的密钥类型不一致。 | 发送该 token 签发时对应的类型，或用你需要的 `apiKeyType` 请求新 token。错误信息会给出正确的 `GET`。 |
+| `400` | `ADMIN keys cannot be created with a token that has no wallet address` | 旧版 token（未带 `?address=` 请求）与 `apiKeyType: "ADMIN"` 一起使用。 | 用 `?address=<wallet>&apiKeyType=ADMIN` 请求 token 并签署其 `message`。 |
 | `400` | `issued for a different wallet` | 请求 token 时使用的 `address` 与 `POST` 请求体中的不同。 | 请求 token 时将 `?address=` 设为签名钱包。 |
 | `400` | `JWT has expired` | 验证 token 在您签名并提交之前已过期。 | 请求新 token，签名并立即提交。 |
 | `400` | `JWT signature is invalid` | 该 token 不是由 Venice 签发的（可能被篡改或伪造）。 | 始终使用 `GET` 端点返回的新鲜 token。 |
@@ -167,7 +203,7 @@ console.log("Minted key:", result.data.apiKey)
 
 ## 旧版 token {#legacy-tokens}
 
-2026 年 11 月之前，该端点签发不带钱包地址的 token，钱包签署原始 token 字符串。这些 token 在 **2026 年 12 月 26 日 00:00 UTC** 之前仍可铸造密钥，其响应带有 `Deprecation`、`Sunset` 和 `Link` 标头。该日期之后，`POST` 会拒绝它们。请在此之前改用 `?address=` 并签署 `message`。
+2026 年 11 月之前，该端点签发不带钱包地址的 token，钱包签署原始 token 字符串。这些 token 在 **2026 年 12 月 26 日 00:00 UTC** 之前仍可铸造 INFERENCE 密钥，其响应带有 `Deprecation`、`Sunset` 和 `Link` 标头。该日期之后，`POST` 会拒绝它们。请在此之前改用 `?address=` 并签署 `message`。
 
 ## 为推理付费 {#paying-for-inference}
 

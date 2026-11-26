@@ -771,17 +771,34 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
       const a = afterRef.current;
       const b = beforeRef.current;
       if (!isVideo || !a || !b) return undefined;
-      const sync = () => { if (Math.abs(b.currentTime - a.currentTime) > 0.15) b.currentTime = a.currentTime; };
-      const play = () => { sync(); b.play().catch(() => {}); };
+      // A seek into these clips takes longer than a frame or two, since each
+      // has one keyframe, so the before side keeps pace by changing speed. It
+      // seeks only when the after side starts over, or after a stall, at most
+      // once every two seconds.
+      let seekedAt = -Infinity;
+      const seek = () => {
+        if (b.seeking || performance.now() - seekedAt < 2000) return;
+        seekedAt = performance.now();
+        b.playbackRate = 1;
+        b.currentTime = a.currentTime;
+      };
+      const restart = () => { seekedAt = -Infinity; seek(); };
+      const follow = () => {
+        if (b.seeking) return;
+        const drift = a.currentTime - b.currentTime;
+        if (Math.abs(drift) > 1) seek();
+        else b.playbackRate = Math.abs(drift) < 0.05 ? 1 : drift > 0 ? 1.15 : 0.87;
+      };
+      const play = () => { restart(); b.play().catch(() => {}); };
       const pause = () => b.pause();
-      a.addEventListener('timeupdate', sync);
-      a.addEventListener('seeked', sync);
+      a.addEventListener('timeupdate', follow);
+      a.addEventListener('seeked', restart);
       a.addEventListener('play', play);
       a.addEventListener('pause', pause);
       if (!prefersReducedMotion()) a.play().catch(() => {});
       return () => {
-        a.removeEventListener('timeupdate', sync);
-        a.removeEventListener('seeked', sync);
+        a.removeEventListener('timeupdate', follow);
+        a.removeEventListener('seeked', restart);
         a.removeEventListener('play', play);
         a.removeEventListener('pause', pause);
       };

@@ -5,7 +5,7 @@ description: "Gere uma chave de API Venice a partir de um agente on-chain fazend
 'og:description': Como um agente de IA autônomo pode gerar sua própria chave de API de inferência Venice assinando uma solicitação de chave emitida pela Venice com uma carteira que tenha VVV em stake na Base.
 ---
 
-Um agente de IA que controla uma carteira na Base pode gerar sua própria chave de API de inferência Venice sem nenhum humano no processo. O agente adquire VVV, faz stake, solicita uma requisição de chave de curta duração para sua carteira, assina a mensagem legível da requisição e envia a assinatura de volta para receber uma nova chave de API vinculada à carteira de stake.
+Um agente de IA que controla uma carteira na Base pode gerar sua própria chave de API de inferência Venice sem nenhum humano no processo. O agente adquire VVV, faz stake, solicita uma requisição de chave de curta duração para sua carteira, assina a mensagem legível da requisição e envia a assinatura de volta para receber uma nova chave de API vinculada à carteira de stake. O mesmo fluxo pode gerar uma chave ADMIN quando a carteira assina uma mensagem que indica o tipo de chave ADMIN.
 
 Este guia percorre o fluxo completo de ponta a ponta e cobre as opções de financiamento para efetivamente pagar pela inferência depois que a chave é gerada.
 
@@ -49,10 +49,12 @@ Este guia percorre o fluxo completo de ponta a ponta e cobre as opções de fina
       --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>'
     ```
 
+    O parâmetro de consulta opcional `apiKeyType` define o tipo de chave que a carteira autoriza: `INFERENCE` (o padrão) ou `ADMIN`. O tipo fica fixado no token e é indicado na mensagem, então solicite o tipo que você vai gerar. Veja [Gerando uma chave ADMIN](#minting-an-admin-key).
+
     A resposta contém dois campos:
 
     - `token`, um token assinado pela Venice e vinculado a essa carteira. Ele expira 15 minutos após sua emissão, então assine e envie bem antes disso.
-    - `message`, o texto legível que a carteira assina. Ele identifica a carteira, o tipo de chave (`INFERENCE`), o emissor, a chain, um nonce de uso único e os horários de emissão e expiração:
+    - `message`, o texto legível que a carteira assina. Ele identifica a carteira, o tipo de chave (`INFERENCE`, a menos que você tenha solicitado `ADMIN`), o emissor, a chain, um nonce de uso único e os horários de emissão e expiração:
 
     ```text
     Venice API key request
@@ -89,7 +91,7 @@ Este guia percorre o fluxo completo de ponta a ponta e cobre as opções de fina
       }'
     ```
 
-    Campos obrigatórios: `address`, `signature`, `token`, `apiKeyType`. `apiKeyType` deve ser `INFERENCE`: a geração assinada pela carteira não cria chaves ADMIN. Crie chaves ADMIN nas [configurações de API](https://venice.ai/settings/api?utm_source=venice-api-documentation).
+    Campos obrigatórios: `address`, `signature`, `token`, `apiKeyType`. `apiKeyType` deve corresponder ao tipo de chave indicado na mensagem assinada: `INFERENCE` para um token solicitado sem `apiKeyType`, ou `ADMIN` para um token solicitado com `apiKeyType=ADMIN`.
 
     Campos opcionais:
 
@@ -147,6 +149,37 @@ if (!mintResponse.ok) {
 console.log("Minted key:", result.data.apiKey)
 ```
 
+## Gerando uma chave ADMIN {#minting-an-admin-key}
+
+Uma chave ADMIN pode criar e excluir outras chaves de API e ler o faturamento da conta Venice da carteira, e ela gasta dessa conta. Para gerar uma, solicite um token com `apiKeyType=ADMIN`, assine a mensagem dele e faça um `POST` com `apiKeyType: "ADMIN"`:
+
+```bash
+curl --request GET \
+  --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>&apiKeyType=ADMIN'
+```
+
+A `message` retornada declara que cria uma chave ADMIN e o que essa chave pode fazer:
+
+```text
+Venice API key request
+
+Sign this only if you are creating a Venice ADMIN API key for this wallet. An ADMIN key can create and delete other API keys and read billing for this wallet's Venice account, and it spends from this wallet's Venice account.
+
+Wallet: <wallet address>
+Key type: ADMIN
+Issued by: api.venice.ai
+Chain ID: 8453
+Nonce: <random hex>
+Issued At: <ISO 8601 time>
+Expiration Time: <ISO 8601 time>
+```
+
+Assine e envie como nas etapas acima, com `"apiKeyType": "ADMIN"` no corpo do `POST`. O tipo de chave de um token não pode ser alterado: um token `INFERENCE` não pode gerar uma chave ADMIN, e um token `ADMIN` não pode gerar uma chave INFERENCE. Chaves ADMIN exigem a mensagem legível, então [tokens legados](#legacy-tokens) não podem gerá-las.
+
+<Warning>
+  Só peça que uma carteira assine uma mensagem ADMIN quando o agente precisar gerenciar chaves ou ler o faturamento. Qualquer pessoa com a chave ADMIN pode criar novas chaves para a conta, então guarde-a com pelo menos o mesmo cuidado que a chave privada da carteira.
+</Warning>
+
 ## Referência de erros {#error-reference}
 
 O endpoint retorna mensagens de erro específicas e acionáveis. Mapeie-as no agente para que ele possa decidir se deve tentar novamente, solicitar um novo token ou parar.
@@ -154,7 +187,10 @@ O endpoint retorna mensagens de erro específicas e acionáveis. Mapeie-as no ag
 | Status | A mensagem de erro contém | O que significa | O que fazer |
 | --- | --- | --- | --- |
 | `400` | `Invalid wallet address` | O parâmetro de consulta ou o campo `address` não é um endereço EVM válido. | Corrija o endereço e reenvie. |
-| `400` | `creates INFERENCE keys only` | `apiKeyType` era `ADMIN`. | Defina `apiKeyType` como `INFERENCE` ou crie uma chave ADMIN pelo painel. |
+| `400` | `Invalid "apiKeyType"` | O parâmetro de consulta `apiKeyType` não é `INFERENCE` nem `ADMIN`. | Use `INFERENCE` ou `ADMIN`. |
+| `400` | `ADMIN keys require a readable key request` | O `GET` pediu `apiKeyType=ADMIN` sem `?address=`. | Solicite o token com `address` e `apiKeyType=ADMIN`. |
+| `400` | `This token was issued for an` | O `apiKeyType` do corpo do `POST` difere do tipo de chave indicado na mensagem assinada. | Envie o tipo para o qual o token foi emitido, ou solicite um novo token com o `apiKeyType` desejado. O erro indica o `GET` correto. |
+| `400` | `ADMIN keys cannot be created with a token that has no wallet address` | Um token legado (solicitado sem `?address=`) foi usado com `apiKeyType: "ADMIN"`. | Solicite um token com `?address=<wallet>&apiKeyType=ADMIN` e assine a `message` dele. |
 | `400` | `issued for a different wallet` | O token foi solicitado para um `address` diferente do que está no corpo do `POST`. | Solicite um token com `?address=` definido para a carteira que assina. |
 | `400` | `JWT has expired` | O token de validação expirou antes de você assiná-lo e enviá-lo. | Solicite um novo token, assine-o e envie imediatamente. |
 | `400` | `JWT signature is invalid` | O token não foi assinado pela Venice (provavelmente adulterado ou fabricado). | Sempre use um token novo do endpoint `GET`. |
@@ -167,7 +203,7 @@ O endpoint retorna mensagens de erro específicas e acionáveis. Mapeie-as no ag
 
 ## Tokens legados {#legacy-tokens}
 
-Antes de novembro de 2026, o endpoint emitia tokens sem endereço de carteira, e a carteira assinava a string bruta do token. Esses tokens ainda geram chaves até **26 de dezembro de 2026, 00:00 UTC**, e as respostas para eles trazem os cabeçalhos `Deprecation`, `Sunset` e `Link`. Depois dessa data, o `POST` os rejeita. Mude para `?address=` e assine `message` antes disso.
+Antes de novembro de 2026, o endpoint emitia tokens sem endereço de carteira, e a carteira assinava a string bruta do token. Esses tokens ainda geram chaves INFERENCE até **26 de dezembro de 2026, 00:00 UTC**, e as respostas para eles trazem os cabeçalhos `Deprecation`, `Sunset` e `Link`. Depois dessa data, o `POST` os rejeita. Mude para `?address=` e assine `message` antes disso.
 
 ## Pagando pela inferência {#paying-for-inference}
 

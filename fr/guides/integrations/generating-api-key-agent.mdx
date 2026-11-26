@@ -5,7 +5,7 @@ description: "Générez une clé d'API Venice depuis un agent IA on-chain en sta
 'og:description': Comment un agent IA autonome peut générer sa propre clé API d'inférence Venice en signant une demande de clé émise par Venice avec un portefeuille qui détient du VVV staké sur Base.
 ---
 
-Un agent IA qui contrôle un portefeuille sur Base peut générer sa propre clé API d'inférence Venice sans intervention humaine. L'agent acquiert du VVV, le stake, obtient une demande de clé à courte durée de vie pour son portefeuille, signe le message lisible de la demande, et renvoie la signature pour recevoir une nouvelle clé API liée au portefeuille de staking.
+Un agent IA qui contrôle un portefeuille sur Base peut générer sa propre clé API d'inférence Venice sans intervention humaine. L'agent acquiert du VVV, le stake, obtient une demande de clé à courte durée de vie pour son portefeuille, signe le message lisible de la demande, et renvoie la signature pour recevoir une nouvelle clé API liée au portefeuille de staking. Le même flux peut générer une clé ADMIN lorsque le portefeuille signe un message qui indique le type de clé ADMIN.
 
 Ce guide parcourt l'ensemble du flux de bout en bout et couvre les options de financement pour effectivement payer l'inférence une fois la clé créée.
 
@@ -49,10 +49,12 @@ Ce guide parcourt l'ensemble du flux de bout en bout et couvre les options de fi
       --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>'
     ```
 
+    Le paramètre de requête facultatif `apiKeyType` définit le type de clé que le portefeuille autorise : `INFERENCE` (par défaut) ou `ADMIN`. Le type est fixé dans le token et indiqué dans le message, demandez donc le type que vous allez générer. Voir [Générer une clé ADMIN](#minting-an-admin-key).
+
     La réponse contient deux champs :
 
     - `token`, un token signé par Venice et lié à ce portefeuille. Il expire 15 minutes après son émission, signez-le donc et soumettez-le bien avant.
-    - `message`, le texte lisible que le portefeuille signe. Il indique le portefeuille, le type de clé (`INFERENCE`), l'émetteur, la chaîne, un nonce à usage unique, ainsi que les heures d'émission et d'expiration :
+    - `message`, le texte lisible que le portefeuille signe. Il indique le portefeuille, le type de clé (`INFERENCE`, sauf si vous avez demandé `ADMIN`), l'émetteur, la chaîne, un nonce à usage unique, ainsi que les heures d'émission et d'expiration :
 
     ```text
     Venice API key request
@@ -89,7 +91,7 @@ Ce guide parcourt l'ensemble du flux de bout en bout et couvre les options de fi
       }'
     ```
 
-    Champs requis : `address`, `signature`, `token`, `apiKeyType`. `apiKeyType` doit valoir `INFERENCE` : la création signée par portefeuille ne crée pas de clés ADMIN. Créez les clés ADMIN depuis les [paramètres API](https://venice.ai/settings/api?utm_source=venice-api-documentation).
+    Champs requis : `address`, `signature`, `token`, `apiKeyType`. `apiKeyType` doit correspondre au type de clé indiqué dans le message signé : `INFERENCE` pour un token demandé sans `apiKeyType`, ou `ADMIN` pour un token demandé avec `apiKeyType=ADMIN`.
 
     Champs optionnels :
 
@@ -147,6 +149,37 @@ if (!mintResponse.ok) {
 console.log("Minted key:", result.data.apiKey)
 ```
 
+## Générer une clé ADMIN {#minting-an-admin-key}
+
+Une clé ADMIN peut créer et supprimer d'autres clés API et consulter la facturation du compte Venice du portefeuille, et elle dépense depuis ce compte. Pour en générer une, demandez un token avec `apiKeyType=ADMIN`, signez son message, puis envoyez un `POST` avec `apiKeyType: "ADMIN"` :
+
+```bash
+curl --request GET \
+  --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>&apiKeyType=ADMIN'
+```
+
+Le `message` renvoyé indique qu'il crée une clé ADMIN et ce que cette clé peut faire :
+
+```text
+Venice API key request
+
+Sign this only if you are creating a Venice ADMIN API key for this wallet. An ADMIN key can create and delete other API keys and read billing for this wallet's Venice account, and it spends from this wallet's Venice account.
+
+Wallet: <wallet address>
+Key type: ADMIN
+Issued by: api.venice.ai
+Chain ID: 8453
+Nonce: <random hex>
+Issued At: <ISO 8601 time>
+Expiration Time: <ISO 8601 time>
+```
+
+Signez-le et soumettez-le comme dans les étapes ci-dessus, avec `"apiKeyType": "ADMIN"` dans le corps du `POST`. Le type de clé d'un token ne peut pas être modifié : un token `INFERENCE` ne peut pas générer de clé ADMIN, et un token `ADMIN` ne peut pas générer de clé INFERENCE. Les clés ADMIN nécessitent le message lisible, donc les [tokens hérités](#legacy-tokens) ne peuvent pas les générer.
+
+<Warning>
+  Ne faites signer un message ADMIN par un portefeuille que lorsque l'agent doit gérer des clés ou consulter la facturation. Quiconque détient la clé ADMIN peut créer de nouvelles clés pour le compte. Conservez-la donc au moins aussi soigneusement que la clé privée du portefeuille.
+</Warning>
+
 ## Référence des erreurs {#error-reference}
 
 L'endpoint renvoie des messages d'erreur spécifiques et exploitables. Mappez-les dans l'agent pour qu'il puisse décider de réessayer, demander un nouveau token ou s'arrêter.
@@ -154,7 +187,10 @@ L'endpoint renvoie des messages d'erreur spécifiques et exploitables. Mappez-le
 | Statut | Le message d'erreur contient | Ce que cela signifie | Que faire |
 | --- | --- | --- | --- |
 | `400` | `Invalid wallet address` | Le paramètre de requête ou le champ `address` n'est pas une adresse EVM valide. | Corrigez l'adresse et resoumettez. |
-| `400` | `creates INFERENCE keys only` | `apiKeyType` valait `ADMIN`. | Définissez `apiKeyType` sur `INFERENCE`, ou créez une clé ADMIN depuis le tableau de bord. |
+| `400` | `Invalid "apiKeyType"` | Le paramètre de requête `apiKeyType` ne vaut ni `INFERENCE` ni `ADMIN`. | Utilisez `INFERENCE` ou `ADMIN`. |
+| `400` | `ADMIN keys require a readable key request` | Le `GET` a demandé `apiKeyType=ADMIN` sans `?address=`. | Demandez le token avec à la fois `address` et `apiKeyType=ADMIN`. |
+| `400` | `This token was issued for an` | Le `apiKeyType` du corps du `POST` diffère du type de clé indiqué dans le message signé. | Envoyez le type pour lequel le token a été émis, ou demandez un nouveau token avec le `apiKeyType` souhaité. L'erreur indique le bon `GET`. |
+| `400` | `ADMIN keys cannot be created with a token that has no wallet address` | Un token hérité (demandé sans `?address=`) a été utilisé avec `apiKeyType: "ADMIN"`. | Demandez un token avec `?address=<wallet>&apiKeyType=ADMIN` et signez son `message`. |
 | `400` | `issued for a different wallet` | Le token a été demandé pour une autre `address` que celle du corps du `POST`. | Demandez un token avec `?address=` défini sur le portefeuille qui signe. |
 | `400` | `JWT has expired` | Le token de validation a expiré avant que vous ne le signiez et le soumettiez. | Demandez un nouveau token, signez-le et soumettez-le immédiatement. |
 | `400` | `JWT signature is invalid` | Le token n'a pas été signé par Venice (probablement modifié ou fabriqué). | Utilisez toujours un nouveau token de l'endpoint `GET`. |
@@ -167,7 +203,7 @@ L'endpoint renvoie des messages d'erreur spécifiques et exploitables. Mappez-le
 
 ## Tokens hérités {#legacy-tokens}
 
-Avant novembre 2026, l'endpoint émettait des tokens sans adresse de portefeuille, et le portefeuille signait la chaîne brute du token. Ces tokens permettent encore de générer des clés jusqu'au **26 décembre 2026 à 00:00 UTC**, et leurs réponses portent les en-têtes `Deprecation`, `Sunset` et `Link`. Après cette date, `POST` les rejette. Passez à `?address=` et signez `message` avant cette date.
+Avant novembre 2026, l'endpoint émettait des tokens sans adresse de portefeuille, et le portefeuille signait la chaîne brute du token. Ces tokens permettent encore de générer des clés INFERENCE jusqu'au **26 décembre 2026 à 00:00 UTC**, et leurs réponses portent les en-têtes `Deprecation`, `Sunset` et `Link`. Après cette date, `POST` les rejette. Passez à `?address=` et signez `message` avant cette date.
 
 ## Payer pour l'inférence {#paying-for-inference}
 
