@@ -5,7 +5,7 @@ description: "Mint a Venice API key from an on-chain agent by staking VVV on Bas
 'og:description': How an autonomous AI agent can mint its own Venice inference API key by signing a Venice-issued key request with a wallet that holds staked VVV on Base.
 ---
 
-An AI agent that controls a wallet on Base can mint its own Venice inference API key with no human in the loop. The agent acquires VVV, stakes it, requests a short-lived key request for its wallet, signs the request's readable message, and posts the signature back to receive a fresh API key tied to the staking wallet.
+An AI agent that controls a wallet on Base can mint its own Venice inference API key with no human in the loop. The agent acquires VVV, stakes it, requests a short-lived key request for its wallet, signs the request's readable message, and posts the signature back to receive a fresh API key tied to the staking wallet. The same flow can mint an ADMIN key when the wallet signs a message that names the ADMIN key type.
 
 This guide walks through the full flow end to end and covers the funding options for actually paying for inference once the key is minted.
 
@@ -44,17 +44,17 @@ This guide walks through the full flow end to end and covers the funding options
   <Step title="Request a key request for the wallet">
     Call `GET /api/v1/api_keys/generate_web3_key` with the staking wallet's address. The endpoint is unauthenticated.
 
-    The optional `apiKeyType` query parameter sets the type of key the wallet authorizes: `INFERENCE` (the default) or `ADMIN`. To mint an admin key, pass `apiKeyType=ADMIN` together with `address`.
-
     ```bash
     curl --request GET \
       --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>'
     ```
 
+    The optional `apiKeyType` query parameter sets the key type the wallet authorizes: `INFERENCE` (the default) or `ADMIN`. The type is fixed in the token and named in the message, so request the type you will mint. See [Minting an ADMIN key](#minting-an-admin-key).
+
     The response contains two fields:
 
     - `token`, a Venice-signed token bound to that wallet. It expires 15 minutes after issuance, so sign and submit it well before then. Each token mints exactly one API key, so request a new token for every key the agent needs.
-    - `message`, the readable text the wallet signs. It names the wallet, the key type (the requested `apiKeyType`, shown as `INFERENCE` in this example), the issuer, the chain, a one-time nonce, and the issue and expiration times:
+    - `message`, the readable text the wallet signs. It names the wallet, the key type (`INFERENCE` unless you requested `ADMIN`), the issuer, the chain, a one-time nonce, and the issue and expiration times:
 
     ```text
     Venice API key request
@@ -91,7 +91,7 @@ This guide walks through the full flow end to end and covers the funding options
       }'
     ```
 
-    Required fields: `address`, `signature`, `token`, `apiKeyType`. `apiKeyType` must match the key type named in the signed message. To mint an `ADMIN` key, request the token with `?address=<wallet>&apiKeyType=ADMIN`.
+    Required fields: `address`, `signature`, `token`, `apiKeyType`. `apiKeyType` must match the key type named in the signed message: `INFERENCE` for a token requested without `apiKeyType`, or `ADMIN` for a token requested with `apiKeyType=ADMIN`.
 
     Optional fields:
 
@@ -149,6 +149,37 @@ if (!mintResponse.ok) {
 console.log("Minted key:", result.data.apiKey)
 ```
 
+## Minting an ADMIN key
+
+An ADMIN key can create and delete other API keys and read billing for the wallet's Venice account, and it spends from that account. To mint one, request a token with `apiKeyType=ADMIN`, sign its message, and `POST` with `apiKeyType: "ADMIN"`:
+
+```bash
+curl --request GET \
+  --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>&apiKeyType=ADMIN'
+```
+
+The returned `message` states that it creates an ADMIN key and what that key can do:
+
+```text
+Venice API key request
+
+Sign this only if you are creating a Venice ADMIN API key for this wallet. An ADMIN key can create and delete other API keys and read billing for this wallet's Venice account, and it spends from this wallet's Venice account.
+
+Wallet: <wallet address>
+Key type: ADMIN
+Issued by: api.venice.ai
+Chain ID: 8453
+Nonce: <random hex>
+Issued At: <ISO 8601 time>
+Expiration Time: <ISO 8601 time>
+```
+
+Sign and submit it as in the steps above, with `"apiKeyType": "ADMIN"` in the `POST` body. A token's key type cannot be changed: an `INFERENCE` token cannot mint an ADMIN key, and an `ADMIN` token cannot mint an INFERENCE key. ADMIN keys require the readable message, so [legacy tokens](#legacy-tokens) cannot mint them.
+
+<Warning>
+  Have a wallet sign an ADMIN message only when the agent needs to manage keys or read billing. Anyone holding the ADMIN key can create new keys for the account, so store it at least as carefully as the wallet's private key.
+</Warning>
+
 ## Error reference
 
 The endpoint returns specific, actionable error messages. Map these in the agent so it can decide whether to retry, request a new token, or stop.
@@ -156,6 +187,10 @@ The endpoint returns specific, actionable error messages. Map these in the agent
 | Status | Error message contains | What it means | What to do |
 | --- | --- | --- | --- |
 | `400` | `Invalid wallet address` | The `address` query parameter or field is not a valid EVM address. | Fix the address and resubmit. |
+| `400` | `Invalid "apiKeyType"` | The `apiKeyType` query parameter is not `INFERENCE` or `ADMIN`. | Use `INFERENCE` or `ADMIN`. |
+| `400` | `ADMIN keys require a readable key request` | The `GET` asked for `apiKeyType=ADMIN` without `?address=`. | Request the token with both `address` and `apiKeyType=ADMIN`. |
+| `400` | `This token was issued for an` | The `POST` body's `apiKeyType` differs from the key type named in the signed message. | Send the type the token was issued for, or request a new token with the `apiKeyType` you want. The error names the right `GET`. |
+| `400` | `ADMIN keys cannot be created with a token that has no wallet address` | A legacy token (requested without `?address=`) was used with `apiKeyType: "ADMIN"`. | Request a token with `?address=<wallet>&apiKeyType=ADMIN` and sign its `message`. |
 | `400` | `issued for a different wallet` | The token was requested for a different `address` than the one in the `POST` body. | Request a token with `?address=` set to the wallet that signs. |
 | `400` | `JWT has expired` | The validation token expired before you signed and submitted it. | Request a new token, sign it, and submit immediately. |
 | `400` | `JWT signature is invalid` | The token was not signed by Venice (likely tampered with or fabricated). | Always use a fresh token from the `GET` endpoint. |
@@ -168,7 +203,7 @@ The endpoint returns specific, actionable error messages. Map these in the agent
 
 ## Legacy tokens
 
-Before November 2026 the endpoint issued tokens without a wallet address, and the wallet signed the raw token string. Those tokens still mint keys until **December 26, 2026 00:00 UTC**, and responses for them carry `Deprecation`, `Sunset`, and `Link` headers. A legacy token can only create `INFERENCE` keys: `POST` rejects a request for `ADMIN` with one. After that date, `POST` rejects them. Switch to `?address=` and sign `message` before then.
+Before November 2026 the endpoint issued tokens without a wallet address, and the wallet signed the raw token string. Those tokens still mint INFERENCE keys until **December 26, 2026 00:00 UTC**, and responses for them carry `Deprecation`, `Sunset`, and `Link` headers. After that date, `POST` rejects them. Switch to `?address=` and sign `message` before then.
 
 ## Paying for inference
 
