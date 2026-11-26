@@ -30,7 +30,8 @@ const VIDEO_TYPES = {
   'multi-angle': 'Multi-angle',
   v2v: 'Video edit',
   motion: 'Motion control',
-  upscale: 'Upscale'
+  upscale: 'Upscale',
+  enhance: 'Enhance'
 };
 const QUALITY_ORDER = ['low', 'medium', 'high'];
 

@@ -7,10 +7,12 @@
  * at default settings. Edit models get three instructions applied to one
  * source render, and the upscaler gets a 2x detail beside a bicubic
  * enlargement of the same detail. Video models render the cinematic landscape
- * prompt once; models that take a source video restyle, extend, recast or
- * upscale a generated clip. Files are written to images/models/renders/<model id>/,
- * images as WebP and videos as 480p MP4, and listed in data/model-renders.json,
- * which the catalog build uses wherever venice.ai has no samples.
+ * prompt once; models that take a source video restyle, extend, recast,
+ * upscale or enhance a generated clip, enhancers mostly by repairing a copy
+ * degraded the way they fix. Files are written to
+ * images/models/renders/<model id>/, images as WebP and videos as
+ * 480p MP4, and listed in data/model-renders.json, which the catalog build
+ * uses wherever venice.ai has no samples.
  *
  * Usage: VENICE_API_KEY=... node scripts/render-model-media.js <model id> ...
  *          [--source=<model id>] [--video-source=<model id>]
@@ -25,6 +27,7 @@
  * the PATH or the FFMPEG environment variable.
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -35,6 +38,7 @@ const API = 'https://api.venice.ai/api/v1';
 const OUT_DIR = path.join(ROOT, 'images', 'models', 'renders');
 const DATA_PATH = path.join(ROOT, 'data', 'model-renders.json');
 const SUITE_PATH = path.join(ROOT, 'data', 'model-media.json');
+const CATALOG_PATH = path.join(ROOT, 'data', 'model-catalog.json');
 const MAX_SIZE = 1024;
 
 const EDITS = [
@@ -55,8 +59,35 @@ const VIDEO_EXTEND = { id: 'extended', title: 'Extended 5s', prompt: 'Continue t
 // Recasting swaps a person for a reference, so it starts from the urban night
 // clip, which has one, and the portrait the image edits use.
 const VIDEO_RECAST = { id: 'recast', title: 'Recast', prompt: 'Recast the person holding the umbrella as the man in the reference image', source: 'urban-night' };
-// A centred square half the frame's height, for the upscale comparison.
-const VIDEO_DETAIL = 'crop=ih/2:ih/2:(iw-ih/2)/2:ih/4';
+// A centred detail half the frame's width and height, for the upscale
+// comparison; it keeps the frame's shape, so it fills the page's 16:9 frames.
+const VIDEO_DETAIL = 'crop=iw/2:ih/2:iw/4:ih/4';
+// HDR10 output tone-mapped for standard displays, since the renders are 8-bit H.264.
+const HDR_TO_SDR = 'zscale=tin=smpte2084:min=bt2020nc:pin=bt2020:rin=tv:t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p';
+// An enhancement model repairs the source clip after a filter degrades it the
+// way the model fixes; one without an input filter takes the clip as it is.
+// Grain barely compresses, so its copy is encoded at CRF 33.
+const VIDEO_ENHANCE = {
+  'topaz-video-hyperion': {
+    id: 'hdr', title: 'Converted to HDR', caption: 'The input converted to HDR10, then tone-mapped for this page: a standard screen can\'t show HDR, so it looks close to the input', display: `${HDR_TO_SDR},scale=-2:${VIDEO_HEIGHT}`
+  },
+  'topaz-video-colorize': {
+    id: 'colorized', title: 'Colorized', caption: 'The black and white input after colorizing',
+    input: { id: 'grayscale', title: 'Black and white input', caption: 'with its color removed', filter: 'hue=s=0' }
+  },
+  'topaz-video-deblur': {
+    id: 'deblurred', title: 'Deblurred', caption: 'The blurred input after deblurring',
+    input: { id: 'blurred', title: 'Blurred input', caption: 'with a horizontal blur', filter: 'avgblur=sizeX=4:sizeY=1' }
+  },
+  'topaz-video-denoise': {
+    id: 'denoised', title: 'Denoised', caption: 'The grainy input after denoising at 1x', body: { upscale_factor: 1 },
+    input: { id: 'grainy', title: 'Grainy input', caption: 'with grain added', filter: 'noise=c0s=30:c0f=t', crf: 33 }
+  },
+  'topaz-video-interpolate': {
+    id: 'interpolated', title: 'Interpolated to 60 fps', caption: 'The 12 fps input after interpolating to 60 fps', body: { target_fps: 60 },
+    input: { id: 'choppy', title: 'Input, 12 fps', caption: 'cut to 12 fps', filter: 'fps=12' }
+  }
+};
 const FFMPEG = process.env.FFMPEG || 'ffmpeg';
 
 const args = process.argv.slice(2);
@@ -107,16 +138,23 @@ async function call(endpoint, body) {
   }
 }
 
+// docs.venice.ai caches media for a day, and a re-render keeps the file's
+// name, so a render's URL carries a hash of the file's contents.
+const versioned = (file, url) => `${url}?v=${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex').slice(0, 8)}`;
+
 async function save(id, name, image) {
   const dir = path.join(OUT_DIR, id);
   fs.mkdirSync(dir, { recursive: true });
-  await image.webp({ quality: 82 }).toFile(path.join(dir, `${name}.webp`));
-  return `/images/models/renders/${id}/${name}.webp`;
+  const file = path.join(dir, `${name}.webp`);
+  await image.webp({ quality: 82 }).toFile(file);
+  return versioned(file, `/images/models/renders/${id}/${name}.webp`);
 }
 
 // A transform's outputs name the reference prompt their input was rendered
-// from, which the gallery uses to line them up with the other models.
-const entry = (prompt, title, caption, url, type = 'image', from) => ({ prompt, type, url, title, caption, ...(from ? { from } : {}), date: today, page: null });
+// from, which the gallery uses to line them up with the other models. An
+// output that looks like its input names the render it compares with, which
+// the docs show beside it.
+const entry = (prompt, title, caption, url, type = 'image', from, compare) => ({ prompt, type, url, title, caption, ...(from ? { from } : {}), ...(compare ? { compare } : {}), date: today, page: null });
 
 async function renderGeneration(sharp, id, model, suite) {
   const constraints = (model.model_spec && model.model_spec.constraints) || {};
@@ -154,7 +192,7 @@ async function renderUpscale(sharp, id, source) {
     .resize(DETAIL_DISPLAY, DETAIL_DISPLAY, { kernel: 'cubic' });
   console.log(`  ${id}: upscaled`);
   return [
-    entry('upscaled', 'Upscaled 2x', `A ${DETAIL.size} px detail of the ${UPSCALE_INPUT} px input after a 2x upscale, enlarged for display`, await save(id, 'upscaled', detail(upscaled, 2)), 'image', 'photoreal'),
+    entry('upscaled', 'Upscaled 2x', `A ${DETAIL.size} px detail of the ${UPSCALE_INPUT} px input after a 2x upscale, enlarged for display`, await save(id, 'upscaled', detail(upscaled, 2)), 'image', 'photoreal', 'bicubic'),
     entry('bicubic', 'Bicubic 2x', 'The same detail enlarged with bicubic resampling instead, for comparison', await save(id, 'bicubic', detail(input, 1)), 'image', 'photoreal'),
     entry('source', `Input, ${UPSCALE_INPUT} px`, `${source.name} on the photorealism prompt, reduced to ${UPSCALE_INPUT} px`, await save(id, 'source', sharp(input)))
   ];
@@ -198,7 +236,7 @@ async function generateVideo(body) {
 }
 
 // Re-encodes to H.264, which keeps a five-second 480p clip around 300 KB.
-function saveVideo(id, name, input, filter = `scale=-2:${VIDEO_HEIGHT}`) {
+function saveVideo(id, name, input, filter = `scale=-2:${VIDEO_HEIGHT}`, crf = 30) {
   const dir = path.join(OUT_DIR, id);
   fs.mkdirSync(dir, { recursive: true });
   let file = input;
@@ -206,10 +244,10 @@ function saveVideo(id, name, input, filter = `scale=-2:${VIDEO_HEIGHT}`) {
     file = path.join(os.tmpdir(), `${id}-${name}-${process.pid}.mp4`);
     fs.writeFileSync(file, input);
   }
-  execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', file, '-vf', filter, '-c:v', 'libx264', '-preset', 'slow', '-crf', '30',
+  execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', file, '-vf', filter, '-c:v', 'libx264', '-preset', 'slow', '-crf', String(crf),
     '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-c:a', 'aac', '-b:a', '64k', path.join(dir, `${name}.mp4`)]);
   if (file !== input) fs.unlinkSync(file);
-  return `/images/models/renders/${id}/${name}.mp4`;
+  return versioned(path.join(dir, `${name}.mp4`), `/images/models/renders/${id}/${name}.mp4`);
 }
 
 async function renderVideo(id, model, prompt) {
@@ -247,14 +285,32 @@ async function renderVideoRecast(id, model, sourceModel, sourcePrompt, reference
   ];
 }
 
-async function renderVideoUpscale(id, source) {
-  const bytes = await generateVideo({ model: id, video_url: source.dataUrl, upscale_factor: 2 });
+// A model that reads a prompt gets the clip's own, which describes the video.
+async function renderVideoUpscale(id, source, prompt) {
+  const bytes = await generateVideo({ model: id, video_url: source.dataUrl, upscale_factor: 2, ...(prompt ? { prompt } : {}) });
   console.log(`  ${id}: upscaled`);
   return [
-    entry('upscaled', 'Upscaled 2x', `A detail of the ${VIDEO_HEIGHT}p input after a 2x upscale`, saveVideo(id, 'upscaled', bytes, VIDEO_DETAIL), 'video', VIDEO_PROMPT),
+    entry('upscaled', 'Upscaled 2x', `A detail of the ${VIDEO_HEIGHT}p input after a 2x upscale${prompt ? ', with the clip\'s prompt' : ''}`, saveVideo(id, 'upscaled', bytes, VIDEO_DETAIL), 'video', VIDEO_PROMPT, 'bicubic'),
     entry('bicubic', 'Bicubic 2x', 'The same detail enlarged with bicubic resampling instead, for comparison', saveVideo(id, 'bicubic', source.file, `scale=iw*2:ih*2:flags=bicubic,${VIDEO_DETAIL}`), 'video', VIDEO_PROMPT),
     entry('source', `Input, ${VIDEO_HEIGHT}p`, `${source.name} on the cinematic landscape prompt`, source.url, 'video')
   ];
+}
+
+// The model gets the whole degraded clip, kept at a higher quality than the
+// page's copy so the encode doesn't smooth the damage away first.
+async function renderVideoEnhance(id, source, demo) {
+  const file = demo.input ? path.join(os.tmpdir(), `${id}-${demo.input.id}-${process.pid}.mp4`) : source.file;
+  if (demo.input) {
+    execFileSync(FFMPEG, ['-y', '-loglevel', 'error', '-i', source.file, '-vf', demo.input.filter, '-c:v', 'libx264', '-crf', '20',
+      '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', file]);
+  }
+  const bytes = await generateVideo({ model: id, video_url: `data:video/mp4;base64,${fs.readFileSync(file).toString('base64')}`, ...demo.body });
+  console.log(`  ${id}: ${demo.id}`);
+  const output = entry(demo.id, demo.title, demo.caption, saveVideo(id, demo.id, bytes, demo.display), 'video', VIDEO_PROMPT, demo.input ? demo.input.id : 'source');
+  if (!demo.input) return [output, entry('source', `Input, ${VIDEO_HEIGHT}p`, `${source.name} on the cinematic landscape prompt`, source.url, 'video')];
+  const input = entry(demo.input.id, demo.input.title, `${source.name} on the cinematic landscape prompt, ${demo.input.caption}`, saveVideo(id, demo.input.id, file, undefined, demo.input.crf), 'video', VIDEO_PROMPT);
+  fs.unlinkSync(file);
+  return [output, input];
 }
 
 async function main() {
@@ -267,15 +323,18 @@ async function main() {
   const videoPrompt = (suites.video || []).find(item => item.id === VIDEO_PROMPT);
   if (!suite.length || !videoPrompt) throw new Error('data/model-media.json is missing the image prompts or the cinematic landscape prompt');
   const data = readJson(DATA_PATH, { source: 'Rendered through the Venice API by scripts/render-model-media.js', models: {} });
+  // A source-video model renders the mode its page describes.
+  const catalog = readJson(CATALOG_PATH, { models: {} }).models;
   const nameOf = id => (models[id] && models[id].model_spec && models[id].model_spec.name) || id;
+  // Sources may render in this run, so their URLs hash the file when read.
   const source = {
     file: path.join(OUT_DIR, sourceId, 'photoreal.webp'),
-    url: `/images/models/renders/${sourceId}/photoreal.webp`,
+    get url() { return versioned(this.file, `/images/models/renders/${sourceId}/photoreal.webp`); },
     name: nameOf(sourceId)
   };
   const videoSource = {
     file: path.join(OUT_DIR, videoSourceId, `${VIDEO_PROMPT}.mp4`),
-    url: `/images/models/renders/${videoSourceId}/${VIDEO_PROMPT}.mp4`,
+    get url() { return versioned(this.file, `/images/models/renders/${videoSourceId}/${VIDEO_PROMPT}.mp4`); },
     name: nameOf(videoSourceId)
   };
   const takesVideo = model => model.kind === 'video' && model.model_spec.constraints?.video_input;
@@ -299,8 +358,15 @@ async function main() {
       return renderVideoRecast(id, model, models[videoSourceId], (suites.video || []).find(item => item.id === VIDEO_RECAST.source), source);
     }
     if (!fs.existsSync(videoSource.file)) throw new Error(`Render ${videoSourceId} before ${id}; its clip is the source`);
+    const mode = catalog[id] && catalog[id].video && catalog[id].video.mode;
+    if (!mode) throw new Error(`${id} isn't in data/model-catalog.json; run node scripts/build-model-catalog.js first`);
     const clip = { ...videoSource, dataUrl: `data:video/mp4;base64,${fs.readFileSync(videoSource.file).toString('base64')}` };
-    return id.includes('upscale') ? renderVideoUpscale(id, clip) : renderVideoEdit(id, model, clip, id.includes('extend') ? VIDEO_EXTEND : VIDEO_RESTYLE);
+    if (mode === 'upscale') return renderVideoUpscale(id, clip, catalog[id].video.enhancementPrompt && videoPrompt.prompt);
+    if (mode === 'enhance') {
+      if (!VIDEO_ENHANCE[id]) throw new Error(`${id} has no enhancement demo; add one to VIDEO_ENHANCE`);
+      return renderVideoEnhance(id, clip, VIDEO_ENHANCE[id]);
+    }
+    return renderVideoEdit(id, model, clip, id.includes('extend') ? VIDEO_EXTEND : VIDEO_RESTYLE);
   };
   // Each group renders at once, since clips take minutes; a failure skips that
   // model and leaves the others' results.

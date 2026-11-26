@@ -59,7 +59,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | DeepSeek V4 Pro 0813 | `deepseek-v4-pro-0813` | $1.65 | $4.95 | $0.165 | — | Private |
 | DeepSeek V4.1 Flash | `deepseek-v4-1-flash` | $0.30 | $1.20 | $0.0075 | — | Private |
 | DeepSeek v4.1 Flash (1017) | `deepseek-v4-1-flash-1017` | $0.30 | $1.20 | $0.0075 | — | Private |
-| DeepSeek V4.1 Flash 1017 | `e2ee-deepseek-v4-1-flash-1017` | $0.182 | $0.373 | $0.038 | — | E2EE |
+| DeepSeek V4.1 Flash 1017 | `e2ee-deepseek-v4-1-flash-1017` | $0.30 | $1.20 | $0.006 | — | E2EE |
 | DeepSeek V4.1 Flash 1017 Abliterated | `e2ee-deepseek-v4-1-flash-1017-abliterated` | $0.375 | $1.50 | $0.0075 | — | E2EE |
 | DeepSeek V4.1 Flash 1017 Ultrafast | `deepseek-v4-1-flash-1017-ultrafast` | $1.50 | $6.00 | $0.03 | — | Private |
 | DeepSeek V4.1 Flash 1017 Uncensored | `deepseek-v4-1-flash-1017-uncensored` | $0.33 | $1.32 | $0.00825 | — | Private |
@@ -75,6 +75,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Gemini 4 Carbon | `gemini-4-carbon` | $2.50 | $12.50 | $0.125 | — | Anonymized |
 | Gemini 4 Hydrogen | `gemini-4-hydrogen` | $1.875 | $9.375 | $0.09375 | — | Anonymized |
 | Gemini 4 Neon | `gemini-4-neon` | $3.75 | $18.75 | $0.1875 | — | Anonymized |
+| Gemma 4 26B A4B Uncensored | `e2ee-gemma-4-26b-a4b-uncensored-p` | $0.19 | $0.88 | — | — | E2EE |
 | Gemma 4 Uncensored (Retiring) | `gemma-4-uncensored` | $0.1625 | $0.50 | — | — | Private |
 | GLM 4.6 | `zai-org-glm-4.6` | $0.43 | $1.75 | $0.08 | — | Private |
 | GLM 4.7 | `zai-org-glm-4.7` | $0.40 | $1.75 | $0.08 | — | Private |
@@ -82,7 +83,9 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | GLM 5 (Retiring) | `zai-org-glm-5` | $1.00 | $3.20 | $0.20 | — | Private |
 | GLM 5 Turbo | `z-ai-glm-5-turbo` | $1.20 | $4.00 | $0.24 | — | Anonymized |
 | GLM 5.1 (Retiring) | `zai-org-glm-5-1` | $1.33 | $4.18 | $0.247 | — | Private |
+| GLM 5.2 | `e2ee-glm-5-2-p` | $1.75 | $5.75 | $0.30 | — | E2EE |
 | GLM 5.2 | `zai-org-glm-5-2` | $1.40 | $4.40 | $0.26 | — | Private |
+| GLM 5.3 | `e2ee-glm-5-3-p` | $1.75 | $5.50 | $0.325 | — | E2EE |
 | GLM 5.3 | `z-ai-glm-5-3` | $1.75 | $5.50 | $0.325 | — | Private |
 | GLM 5.3 Flash | `e2ee-glm-5-3-flash` | $0.16 | $0.54 | $0.038 | — | E2EE |
 | GLM 5.3 Flash | `z-ai-glm-5-3-flash` | $0.15 | $0.50 | $0.03 | — | Private |
@@ -91,6 +94,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Google Gemma 3 27B Instruct | `google-gemma-3-27b-it` | $0.12 | $0.20 | — | — | Private |
 | Google Gemma 4 26B A4B Instruct | `google-gemma-4-26b-a4b-it` | $0.13 | $0.40 | $0.05 | — | Private |
 | Google Gemma 4 31B Instruct | `google-gemma-4-31b-it` | $0.12 | $0.36 | $0.05 | — | Private |
+| GPT OSS 120B | `e2ee-gpt-oss-120b-p` | $0.13 | $0.65 | — | — | E2EE |
 | GPT-4o | `openai-gpt-4o-2024-11-20` | $2.50 | $10.00 | $1.25 | — | Anonymized |
 | GPT-4o Mini | `openai-gpt-4o-mini-2024-07-18` | $0.15 | $0.60 | $0.075 | — | Anonymized |
 | GPT-5.2 | `openai-gpt-52` | $1.75 | $14.00 | $0.175 | — | Anonymized |
@@ -128,8 +132,10 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Inkling 2 Mini | `inkling-2-mini` | $0.12 | $0.50 | $0.024 | — | Private |
 | Kimi K2.6 | `kimi-k2-6` | $0.75 | $3.50 | $0.16 | — | Private |
 | Kimi K2.7 Code (Retiring) | `kimi-k2-7-code` | $0.75 | $3.50 | $0.16 | — | Private |
+| Kimi K3 | `e2ee-kimi-k3-p` | $3.75 | $18.75 | $0.375 | — | E2EE |
 | Kimi K3 | `kimi-k3` | $3.75 | $18.75 | $0.375 | — | Private |
 | Kimi K3 Fast | `kimi-k3-fast-api` | $4.50 | $22.50 | $0.45 | — | Private |
+| Kimi K3.1 Pro | `e2ee-kimi-k3-1-pro-p` | $2.50 | $12.50 | $0.25 | — | E2EE |
 | Kimi K3.1 Pro | `kimi-k3-1-pro` | $2.00 | $10.00 | $0.20 | — | Private |
 | Kimi K3.1 Pro Highspeed | `kimi-k3-1-pro-highspeed` | $5.00 | $25.00 | $0.375 | — | Anonymized |
 | Llama 3.2 3B | `llama-3.2-3b` | $0.15 | $0.60 | — | — | Private |
@@ -147,7 +153,8 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | NVIDIA Nemotron 3 Ultra | `nvidia-nemotron-3-ultra-550b-a55b` | $0.50 | $2.20 | $0.10 | — | Private |
 | NVIDIA Nemotron 3.5 Super VL 120B | `nvidia-nemotron-3-5-super-vl-120b-a12b` | $0.20 | $0.50 | $0.04 | — | Private |
 | OpenAI GPT OSS 120B | `openai-gpt-oss-120b` | $0.07 | $0.30 | — | — | Private |
-| Pareto (Beta) | `pareto` | $1.00 | $4.00 | $0.0375 | — | Anonymized |
+| Pareto (Beta) (Retiring) | `pareto` | $1.00 | $4.00 | $0.0375 | — | Anonymized |
+| Qwen 2.5 7B | `e2ee-qwen-2-5-7b-p` | $0.05 | $0.13 | — | — | E2EE |
 | Qwen 3 235B A22B Instruct 2507 | `qwen3-235b-a22b-instruct-2507` | $0.15 | $0.75 | — | — | Private |
 | Qwen 3 235B A22B Thinking 2507 | `qwen3-235b-a22b-thinking-2507` | $0.45 | $3.50 | — | — | Private |
 | Qwen 3 Coder 480B Turbo | `qwen3-coder-480b-a35b-instruct-turbo` | $0.35 | $1.50 | $0.04 | — | Private |
@@ -167,7 +174,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Qwen 3.8 Max | `qwen-3-8-max` | $2.50 | $7.50 | $0.3125 | $3.125 | Anonymized |
 | Qwen 4 Max | `qwen-4-max` | $1.875 | $5.625 | $0.09375 | — | Private |
 | Qwen3 VL 235B | `qwen3-vl-235b-a22b` | $0.21 | $1.90 | $0.10 | — | Private |
-| Qwen3 VL 30B A3B | `e2ee-qwen3-vl-30b-a3b` | $0.25 | $0.90 | — | — | E2EE |
+| Qwen3 VL 30B A3B | `e2ee-qwen3-vl-30b-a3b-p` | $0.25 | $0.90 | — | — | E2EE |
 | Seed 2.1 Turbo | `seed-2-1-turbo` | $0.625 | $3.125 | $0.125 | — | Anonymized |
 | Venice Role Play Uncensored | `venice-uncensored-role-play` | $0.50 | $2.00 | — | — | Private |
 | Venice Uncensored 1.2 | `venice-uncensored-1-2` | $0.20 | $0.90 | — | — | Private |
@@ -290,7 +297,7 @@ Prices per image. Models with resolution options list a price for each resolutio
 | Seedream V4.5 | `seedream-v4` | $0.05 | Anonymized |
 | Seedream V5 Lite | `seedream-v5-lite` | $0.05 | Anonymized |
 | Seedream V5 Pro | `seedream-v5-pro` | 1K: $0.06, 2K: $0.11 | Anonymized |
-| Seedream V5.5 | `seedream-v5-5` | 1K: $0.0255, 1.5K: $0.034, 2K: $0.051 | Anonymized |
+| Seedream V5.5 | `seedream-v5-5` | 1K: $0.0255, 1.5K: $0.034, 2K: $0.051, 4K: $0.102 | Anonymized |
 | Venice SD35 | `venice-sd35` | $0.01 | Private |
 | Wan 2.7 | `wan-2-7-text-to-image` | $0.0375 | Anonymized |
 | Wan 2.7 Pro | `wan-2-7-pro-text-to-image` | $0.09375 | Anonymized |
@@ -369,7 +376,7 @@ Prices per edit. The edit price covers the first input image. Models with an ext
 | Seedream V4.5 | `seedream-v4-edit` | $0.05 | — | Anonymized |
 | Seedream V5 Lite | `seedream-v5-lite-edit` | $0.05 | — | Anonymized |
 | Seedream V5 Pro | `seedream-v5-pro-edit` | 1K: $0.06, 2K: $0.11 | $0.00345 | Anonymized |
-| Seedream V5.5 | `seedream-v5-5-edit` | 1K: $0.0255, 1.5K: $0.034, 2K: $0.051 | $0.01019923 | Anonymized |
+| Seedream V5.5 | `seedream-v5-5-edit` | 1K: $0.0255, 1.5K: $0.034, 2K: $0.051, 4K: $0.102 | $0.01019923 | Anonymized |
 | Wan 2.7 Pro | `wan-2-7-pro-edit` | $0.094 | — | Anonymized |
 
 ### Editing price by quality
@@ -594,15 +601,15 @@ Prices per second of video. The rate depends on resolution and audio, so each ro
 | Seedance 2.5 Flash Edit | `seedance-2-5-flash-edit-video-basic` | Video edit | Quote per job | Anonymized |
 | Seedance 2.5 Flash R2V | `seedance-2-5-flash-reference-to-video-basic` | Reference to video | $0.0879 to $0.19 | Anonymized |
 | Seedance 2.5 R2V | `seedance-2-5-reference-to-video-basic` | Reference to video | $0.1343 to $1.1421 | Anonymized |
-| Topaz Video Astra | `topaz-video-astra` | Video edit | Priced by source | Anonymized |
-| Topaz Video Colorize | `topaz-video-colorize` | Video edit | Priced by source | Anonymized |
-| Topaz Video Deblur | `topaz-video-deblur` | Video edit | Priced by source | Anonymized |
-| Topaz Video Denoise | `topaz-video-denoise` | Video edit | Priced by source | Anonymized |
-| Topaz Video Hyperion | `topaz-video-hyperion` | Video edit | Priced by source | Anonymized |
-| Topaz Video Interpolate | `topaz-video-interpolate` | Video edit | Priced by source | Anonymized |
-| Topaz Video Precision | `topaz-video-precision` | Video edit | Priced by source | Anonymized |
-| Topaz Video Starlight | `topaz-video-starlight` | Video edit | Priced by source | Anonymized |
-| Topaz Video Starlight Fast | `topaz-video-starlight-fast` | Video edit | Priced by source | Anonymized |
+| Topaz Video Astra | `topaz-video-astra` | Upscale | Priced by source | Anonymized |
+| Topaz Video Colorize | `topaz-video-colorize` | Enhance | Priced by source | Anonymized |
+| Topaz Video Deblur | `topaz-video-deblur` | Enhance | Priced by source | Anonymized |
+| Topaz Video Denoise | `topaz-video-denoise` | Enhance | Priced by source | Anonymized |
+| Topaz Video Hyperion | `topaz-video-hyperion` | Enhance | Priced by source | Anonymized |
+| Topaz Video Interpolate | `topaz-video-interpolate` | Enhance | Priced by source | Anonymized |
+| Topaz Video Precision | `topaz-video-precision` | Upscale | Priced by source | Anonymized |
+| Topaz Video Starlight | `topaz-video-starlight` | Upscale | Priced by source | Anonymized |
+| Topaz Video Starlight Fast | `topaz-video-starlight-fast` | Upscale | Priced by source | Anonymized |
 | Topaz Video Upscale | `topaz-video-upscale` | Upscale | Priced by source | Anonymized |
 | Veo 3.1 Fast | `veo3.1-fast-text-to-video` | Text to video | $0.11 to $0.385 | Anonymized |
 | Veo 3.1 Fast | `veo3.1-fast-image-to-video` | Image to video | $0.11 to $0.385 | Anonymized |
