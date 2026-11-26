@@ -2,10 +2,10 @@
 title: Autonomous Agent API Key Creation
 description: "Mint a Venice API key from an on-chain agent by staking VVV on Base."
 'og:title': "Autonomous Agent API Key | Venice API Docs"
-'og:description': How an autonomous AI agent can mint its own Venice API key by signing a Venice-issued token with a wallet that holds staked VVV on Base.
+'og:description': How an autonomous AI agent can mint its own Venice inference API key by signing a Venice-issued key request with a wallet that holds staked VVV on Base.
 ---
 
-An AI agent that controls a wallet on Base can mint its own Venice API key with no human in the loop. The agent acquires VVV, stakes it, signs a short-lived validation token issued by Venice, and posts the signed token back to receive a fresh API key tied to the staking wallet.
+An AI agent that controls a wallet on Base can mint its own Venice inference API key with no human in the loop. The agent acquires VVV, stakes it, requests a short-lived key request for its wallet, signs the request's readable message, and posts the signature back to receive a fresh API key tied to the staking wallet.
 
 This guide walks through the full flow end to end and covers the funding options for actually paying for inference once the key is minted.
 
@@ -41,23 +41,40 @@ This guide walks through the full flow end to end and covers the funding options
     When the second transaction confirms, the wallet's VVV balance decreases and its sVVV balance increases by the same amount. The minting endpoint reads the sVVV balance to confirm the wallet is staked.
   </Step>
 
-  <Step title="Request a validation token">
-    Call `GET /api/v1/api_keys/generate_web3_key` to get a short-lived token signed by Venice. The endpoint is unauthenticated.
+  <Step title="Request a key request for the wallet">
+    Call `GET /api/v1/api_keys/generate_web3_key` with the staking wallet's address. The endpoint is unauthenticated.
 
     ```bash
     curl --request GET \
-      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+      --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>'
     ```
 
-    The response contains a `token` field. The token expires 15 minutes after issuance, so sign and submit it well before then. Each token mints exactly one API key, so request a new token for every key the agent needs.
+    The response contains two fields:
+
+    - `token`, a Venice-signed token bound to that wallet. It expires 15 minutes after issuance, so sign and submit it well before then. Each token mints exactly one API key, so request a new token for every key the agent needs.
+    - `message`, the readable text the wallet signs. It names the wallet, the key type (`INFERENCE`), the issuer, the chain, a one-time nonce, and the issue and expiration times:
+
+    ```text
+    Venice API key request
+
+    Sign this only if you are creating a Venice inference API key for this wallet. The key spends from this wallet's Venice account.
+
+    Wallet: <wallet address>
+    Key type: INFERENCE
+    Issued by: api.venice.ai
+    Chain ID: 8453
+    Nonce: <random hex>
+    Issued At: <ISO 8601 time>
+    Expiration Time: <ISO 8601 time>
+    ```
   </Step>
 
-  <Step title="Sign the token with the staking wallet">
-    Sign the raw token string with the wallet that holds the staked VVV. This is a standard `personal_sign` over the token bytes. Both `ethers.Wallet.signMessage(token)` and `viem`'s `account.signMessage({ message: token })` produce the correct signature.
+  <Step title="Sign the message with the staking wallet">
+    Sign the exact `message` string with the wallet that holds the staked VVV. This is a standard `personal_sign` (EIP-191). Both `ethers.Wallet.signMessage(message)` and `viem`'s `account.signMessage({ message })` produce the correct signature. Do not modify the message: Venice rebuilds it from the token, and the signature must match it exactly.
   </Step>
 
   <Step title="Mint the API key">
-    `POST` the address, signature, and token to the same endpoint, along with the type of key you want.
+    `POST` the address, signature, and token to the same endpoint.
 
     ```bash
     curl --request POST \
@@ -65,14 +82,14 @@ This guide walks through the full flow end to end and covers the funding options
       --header 'Content-Type: application/json' \
       --data '{
         "address": "<wallet address>",
-        "signature": "<signed token>",
-        "token": "<unsigned token>",
+        "signature": "<signature of message>",
+        "token": "<token>",
         "apiKeyType": "INFERENCE",
         "description": "Agent key minted on <date>"
       }'
     ```
 
-    Required fields: `address`, `signature`, `token`, `apiKeyType` (`INFERENCE` or `ADMIN`).
+    Required fields: `address`, `signature`, `token`, `apiKeyType`. `apiKeyType` must be `INFERENCE`: wallet-signed minting does not create ADMIN keys. Create ADMIN keys from [API settings](https://venice.ai/settings/api?utm_source=venice-api-documentation).
 
     Optional fields:
 
@@ -100,10 +117,12 @@ import { ethers } from "ethers"
 const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
 const address = wallet.address
 
-const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
-const { data: { token } } = await tokenResponse.json()
+const tokenResponse = await fetch(
+  `https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=${address}`,
+)
+const { data: { token, message } } = await tokenResponse.json()
 
-const signature = await wallet.signMessage(token)
+const signature = await wallet.signMessage(message)
 
 const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
   method: "POST",
@@ -134,14 +153,21 @@ The endpoint returns specific, actionable error messages. Map these in the agent
 
 | Status | Error message contains | What it means | What to do |
 | --- | --- | --- | --- |
-| `400` | `Invalid wallet address` | The `address` field is not a valid EVM address. | Fix the address and resubmit. |
+| `400` | `Invalid wallet address` | The `address` query parameter or field is not a valid EVM address. | Fix the address and resubmit. |
+| `400` | `creates INFERENCE keys only` | `apiKeyType` was `ADMIN`. | Set `apiKeyType` to `INFERENCE`, or create an ADMIN key from the dashboard. |
+| `400` | `issued for a different wallet` | The token was requested for a different `address` than the one in the `POST` body. | Request a token with `?address=` set to the wallet that signs. |
 | `400` | `JWT has expired` | The validation token expired before you signed and submitted it. | Request a new token, sign it, and submit immediately. |
 | `400` | `JWT signature is invalid` | The token was not signed by Venice (likely tampered with or fabricated). | Always use a fresh token from the `GET` endpoint. |
 | `400` | `JWT claims are invalid` | The token's issuer or audience does not match what Venice expects. | Use the unmodified token returned by the `GET` endpoint. |
 | `400` | `JWT is malformed` | The submitted `token` is not a JWT. | Ensure you are sending the exact `token` string returned by the `GET` endpoint. |
-| `400` | `Wallet signature does not match` | The `signature` does not match the `address` for the given `token`. | Sign the raw token bytes with the wallet that owns `address`. |
+| `400` | `Wallet signature does not match` | The `signature` is not the `address` wallet's signature of the token's `message`. | Sign the exact `message` returned with the token, using the wallet that owns `address`. |
+| `400` | `Tokens without a wallet address are no longer accepted` | The token was requested without `?address=`. These legacy tokens stop working on December 26, 2026. | Request a token with `?address=` and sign its `message`. |
 | `400` | `Could not verify wallet signature` | RPC call to verify the signature failed (transient). | Retry with backoff. |
 | `400` | `has no staked VVV` | The wallet has zero sVVV balance. The full message is `Wallet 0x… has no staked VVV on Base` with your wallet address in place of `0x…`, followed by a link, so match on `has no staked VVV` rather than the full text. | Stake VVV first, then retry. |
+
+## Legacy tokens
+
+Before November 2026 the endpoint issued tokens without a wallet address, and the wallet signed the raw token string. Those tokens still mint keys until **December 26, 2026 00:00 UTC**, and responses for them carry `Deprecation`, `Sunset`, and `Link` headers. After that date, `POST` rejects them. Switch to `?address=` and sign `message` before then.
 
 ## Paying for inference
 
