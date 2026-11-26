@@ -175,7 +175,7 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Qwen 3.8 Max | `qwen-3-8-max` | $2.50 | $7.50 | $0.3125 | $3.125 | Anonymized |
 | Qwen 4 Max | `qwen-4-max` | $1.875 | $5.625 | $0.09375 | — | Private |
 | Qwen3 VL 235B | `qwen3-vl-235b-a22b` | $0.21 | $1.90 | $0.10 | — | Private |
-| Qwen3 VL 30B A3B | `e2ee-qwen3-vl-30b-a3b-p` | $0.25 | $0.90 | — | — | E2EE |
+| Qwen3 VL 30B A3B | `e2ee-qwen3-vl-30b-a3b` | $0.25 | $0.90 | — | — | E2EE |
 | Seed 2.1 Turbo | `seed-2-1-turbo` | $0.625 | $3.125 | $0.125 | — | Anonymized |
 | Venice Role Play Uncensored | `venice-uncensored-role-play` | $0.50 | $2.00 | — | — | Private |
 | Venice Uncensored 1.2 | `venice-uncensored-1-2` | $0.20 | $0.90 | — | — | Private |
