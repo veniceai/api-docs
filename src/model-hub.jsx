@@ -1042,7 +1042,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           {modality === 'video' ? (
             <>
               <FilterGroup title="Mode" icon="film">
-                {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition'].map(mode => option('modes', mode, VARIANT_LABELS[mode]))}
+                {['t2v', 'i2v', 'r2v', 'v2v', 'flf', 'motion', 'transition', 'multi-angle', 'upscale'].map(mode => option('modes', mode, VARIANT_LABELS[mode]))}
               </FilterGroup>
               {range('audio', 'Audio', 'volume', [['', 'Any'], ['audio', 'Audio', 'Generates audio'], ['silent', 'Silent', 'Can be silent']])}
               {range('res', 'Resolution', 'maximize', [['', 'Any'], ['720', '720p', '720p or higher'], ['1080', '1080p', '1080p or higher'], ['1440', '1440p', '1440p or higher'], ['2160', '4K']])}
