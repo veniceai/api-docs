@@ -145,8 +145,10 @@ async function save(id, name, image) {
 }
 
 // A transform's outputs name the reference prompt their input was rendered
-// from, which the gallery uses to line them up with the other models.
-const entry = (prompt, title, caption, url, type = 'image', from) => ({ prompt, type, url, title, caption, ...(from ? { from } : {}), date: today, page: null });
+// from, which the gallery uses to line them up with the other models. An
+// output that looks like its input names the render it compares with, which
+// the docs show beside it.
+const entry = (prompt, title, caption, url, type = 'image', from, compare) => ({ prompt, type, url, title, caption, ...(from ? { from } : {}), ...(compare ? { compare } : {}), date: today, page: null });
 
 async function renderGeneration(sharp, id, model, suite) {
   const constraints = (model.model_spec && model.model_spec.constraints) || {};
@@ -184,7 +186,7 @@ async function renderUpscale(sharp, id, source) {
     .resize(DETAIL_DISPLAY, DETAIL_DISPLAY, { kernel: 'cubic' });
   console.log(`  ${id}: upscaled`);
   return [
-    entry('upscaled', 'Upscaled 2x', `A ${DETAIL.size} px detail of the ${UPSCALE_INPUT} px input after a 2x upscale, enlarged for display`, await save(id, 'upscaled', detail(upscaled, 2)), 'image', 'photoreal'),
+    entry('upscaled', 'Upscaled 2x', `A ${DETAIL.size} px detail of the ${UPSCALE_INPUT} px input after a 2x upscale, enlarged for display`, await save(id, 'upscaled', detail(upscaled, 2)), 'image', 'photoreal', 'bicubic'),
     entry('bicubic', 'Bicubic 2x', 'The same detail enlarged with bicubic resampling instead, for comparison', await save(id, 'bicubic', detail(input, 1)), 'image', 'photoreal'),
     entry('source', `Input, ${UPSCALE_INPUT} px`, `${source.name} on the photorealism prompt, reduced to ${UPSCALE_INPUT} px`, await save(id, 'source', sharp(input)))
   ];
@@ -282,7 +284,7 @@ async function renderVideoUpscale(id, source, prompt) {
   const bytes = await generateVideo({ model: id, video_url: source.dataUrl, upscale_factor: 2, ...(prompt ? { prompt } : {}) });
   console.log(`  ${id}: upscaled`);
   return [
-    entry('upscaled', 'Upscaled 2x', `A detail of the ${VIDEO_HEIGHT}p input after a 2x upscale${prompt ? ', with the clip\'s prompt' : ''}`, saveVideo(id, 'upscaled', bytes, VIDEO_DETAIL), 'video', VIDEO_PROMPT),
+    entry('upscaled', 'Upscaled 2x', `A detail of the ${VIDEO_HEIGHT}p input after a 2x upscale${prompt ? ', with the clip\'s prompt' : ''}`, saveVideo(id, 'upscaled', bytes, VIDEO_DETAIL), 'video', VIDEO_PROMPT, 'bicubic'),
     entry('bicubic', 'Bicubic 2x', 'The same detail enlarged with bicubic resampling instead, for comparison', saveVideo(id, 'bicubic', source.file, `scale=iw*2:ih*2:flags=bicubic,${VIDEO_DETAIL}`), 'video', VIDEO_PROMPT),
     entry('source', `Input, ${VIDEO_HEIGHT}p`, `${source.name} on the cinematic landscape prompt`, source.url, 'video')
   ];
@@ -298,7 +300,7 @@ async function renderVideoEnhance(id, source, demo) {
   }
   const bytes = await generateVideo({ model: id, video_url: `data:video/mp4;base64,${fs.readFileSync(file).toString('base64')}`, ...demo.body });
   console.log(`  ${id}: ${demo.id}`);
-  const output = entry(demo.id, demo.title, demo.caption, saveVideo(id, demo.id, bytes, demo.display), 'video', VIDEO_PROMPT);
+  const output = entry(demo.id, demo.title, demo.caption, saveVideo(id, demo.id, bytes, demo.display), 'video', VIDEO_PROMPT, demo.input ? demo.input.id : 'source');
   if (!demo.input) return [output, entry('source', `Input, ${VIDEO_HEIGHT}p`, `${source.name} on the cinematic landscape prompt`, source.url, 'video')];
   const input = entry(demo.input.id, demo.input.title, `${source.name} on the cinematic landscape prompt, ${demo.input.caption}`, saveVideo(id, demo.input.id, file, undefined, demo.input.crf), 'video', VIDEO_PROMPT);
   fs.unlinkSync(file);

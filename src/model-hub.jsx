@@ -530,6 +530,7 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     server: <><rect x="2" y="3" width="20" height="8" rx="2" /><rect x="2" y="13" width="20" height="8" rx="2" /><path d="M6 7h.01M6 17h.01" /></>,
     terminal: <path d="m4 17 6-6-6-6M12 19h8" />,
     book: <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" />,
+    split: <path d="m9 7-5 5 5 5M15 7l5 5-5 5" />,
     maximize: <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />,
     dollar: <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />,
     bolt: <path d="M13 2 3 14h9l-1 8 10-12h-9z" />,
@@ -685,6 +686,13 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     return pick(display) || family.variants.map(id => catalog.models[id]).map(pick).find(Boolean) || null;
   };
 
+  // An output that looks like its input, such as an upscale or a denoise,
+  // names the render it compares with, and the two show side by side.
+  const comparePair = (media, item) => {
+    const before = item && item.compare && (media || []).find(m => m.prompt === item.compare);
+    return before ? { before, after: item } : null;
+  };
+
   // Sources attach only as a tile nears the viewport, so a gallery doesn't
   // open dozens of video requests at once; a skeleton holds the tile until
   // the first frame paints.
@@ -713,6 +721,51 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
         <video ref={ref} className={cls(className, !ready && 'is-loading')} src={near ? url : undefined} poster={poster} muted loop playsInline preload="metadata"
           autoPlay={autoPlay} onLoadedData={show} onError={show} onMouseEnter={play} onMouseLeave={stop} onFocus={play} onBlur={stop} />
       </>
+    );
+  };
+
+  const firstFrame = url => (/#t=/.test(url) ? url : `${url}#t=0.1`);
+
+  // Before and after in one frame, split by a divider to drag. Videos play in
+  // step, so both sides show the same moment.
+  const CompareMedia = ({ before, after, caption }) => {
+    const [pos, setPos] = useState(50);
+    const beforeRef = useRef(null);
+    const afterRef = useRef(null);
+    const isVideo = after.type === 'video';
+    useEffect(() => {
+      const a = afterRef.current;
+      const b = beforeRef.current;
+      if (!isVideo || !a || !b) return undefined;
+      const sync = () => { if (Math.abs(b.currentTime - a.currentTime) > 0.15) b.currentTime = a.currentTime; };
+      const play = () => { sync(); b.play().catch(() => {}); };
+      const pause = () => b.pause();
+      a.addEventListener('timeupdate', sync);
+      a.addEventListener('seeked', sync);
+      a.addEventListener('play', play);
+      a.addEventListener('pause', pause);
+      if (!prefersReducedMotion()) a.play().catch(() => {});
+      return () => {
+        a.removeEventListener('timeupdate', sync);
+        a.removeEventListener('seeked', sync);
+        a.removeEventListener('play', play);
+        a.removeEventListener('pause', pause);
+      };
+    }, [isVideo, after.url, before.url]);
+    const media = (item, ref) => (isVideo
+      ? <video ref={ref} className="vx-compare-el" src={firstFrame(item.url)} muted loop playsInline preload="auto" />
+      : <img ref={ref} className="vx-compare-el" src={item.url} alt={item.caption || item.title} />);
+    return (
+      <div className={cls('vx-compare', isVideo ? 'is-video' : 'is-image')} style={{ '--vx-compare': `${pos}%` }}>
+        {media(after, afterRef)}
+        <span className="vx-compare-before">{media(before, beforeRef)}</span>
+        <span className="vx-compare-line" aria-hidden="true"><span className="vx-compare-handle"><Icon name="split" size={14} /></span></span>
+        <span className="vx-compare-tag is-before">{before.title}</span>
+        <span className="vx-compare-tag is-after">{after.title}</span>
+        {caption ? <span className="vxi-feature-cap vx-compare-cap"><strong>{after.title}</strong><span>{after.caption}</span></span> : null}
+        <input className="vx-compare-range" type="range" min="0" max="100" value={pos} onChange={e => setPos(Number(e.target.value))}
+          aria-label={`Drag to compare ${before.title} with ${after.title}`} />
+      </div>
     );
   };
 
@@ -788,10 +841,21 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     if (!media.length) {
       return <p className="vx-text">This variant has not been rendered on the reference prompts yet.</p>;
     }
+    const pairs = media.map(item => comparePair(media, item)).filter(Boolean);
+    const paired = new Set(pairs.flatMap(pair => [pair.before.url, pair.after.url]));
     return (
       <>
         <div className={cls('vx-gallery', isVideo ? 'vx-gallery-video' : 'vx-gallery-image', !isVideo && media.length === 4 && 'is-four')}>
-          {media.map(item => (
+          {pairs.map(pair => (
+            <figure key={pair.after.url} className="vx-shot is-compare">
+              <CompareMedia before={pair.before} after={pair.after} />
+              <figcaption>
+                <span className="vx-shot-title">{pair.after.title}</span>
+                <span className="vx-shot-caption" title={pair.after.caption}>Drag to compare with {pair.before.title.toLowerCase()}. {pair.after.caption}</span>
+              </figcaption>
+            </figure>
+          ))}
+          {media.filter(item => !paired.has(item.url)).map(item => (
             <figure key={item.url} className="vx-shot">
               <button type="button" className="vx-shot-media" onClick={() => setOpen(item)} aria-label={`Open ${item.title} sample`}>
                 {item.type === 'video'
@@ -4550,9 +4614,12 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
     const renders = [...(ownRenders.length ? ownRenders : (primary.media || []).filter(item => item.type === 'video'))].sort(byVideoOrder);
     const named = modes.some(m => m.variantName);
     const suite = renders.filter(item => VIDEO_SUITE.includes(item.prompt));
-    const [promptId, setPromptId] = useState(renders[0] ? renders[0].prompt : null);
+    // A render another one compares with shows inside that comparison.
+    const shown = renders.filter(item => !renders.some(other => other.compare === item.prompt));
+    const [promptId, setPromptId] = useState(shown[0] ? shown[0].prompt : null);
     const [opened, setOpened] = useState(null);
-    const render = renders.find(item => item.prompt === promptId) || renders[0];
+    const render = shown.find(item => item.prompt === promptId) || shown[0];
+    const pair = comparePair(renders, render);
     const compared = suite.find(item => item.prompt === promptId) || suite[0];
     const selectRender = item => setPromptId(item.prompt);
     const selectMode = id => {
@@ -4627,8 +4694,8 @@ export const createModelHub = ({ h: createElement, Fragment: __Fragment, useStat
           </div>
           {render ? (
             <div className="vxv-hero-side">
-              <RenderFeature item={render} onOpen={setOpened} />
-              {renders.length > 1 ? <VideoThumbs items={renders} active={render} onSelect={selectRender} /> : null}
+              {pair ? <CompareMedia key={render.url} before={pair.before} after={pair.after} caption /> : <RenderFeature item={render} onOpen={setOpened} />}
+              {shown.length > 1 ? <VideoThumbs items={shown} active={render} onSelect={selectRender} /> : null}
             </div>
           ) : null}
         </header>
