@@ -67,6 +67,21 @@ Venice API 요청은 Bearer API 키로 인증됩니다. 이 가이드에서는 V
   Venice 앱에서 API 키를 생성할 때 USD 지출을 비활성화하면 해당 API 키의 USD 지출 한도가 0으로 설정됩니다. 계정에 USD 잔액이 있더라도, 사용 가능한 DIEM 또는 번들 크레딧이 요청 비용을 감당할 수 없는 경우 API 호출이 잔액 부족 오류로 실패할 수 있습니다.
 </Warning>
 
+## 키 형식 {#key-format}
+
+새 키는 유형 접두사로 시작하고 그 뒤에 URL에 안전한 문자 42자가 이어집니다:
+
+| 접두사 | 키 유형 |
+| --- | --- |
+| `VENICE_INFERENCE_KEY_` | Inference Only |
+| `VENICE_ADMIN_KEY_` | Admin |
+
+이전 키는 발급된 그대로 계속 작동합니다. 일부는 접두사에 하이픈을 사용하며(`VENICE-INFERENCE-KEY-`, `VENICE-ADMIN-KEY-`), 가장 오래된 키에는 접두사가 없습니다.
+
+키는 발급된 그대로 정확히 사용하세요. API는 전체 문자열을 확인하므로, 도구가 소문자로 바꾸거나 구두점을 바꾸거나 접두사를 제거하거나 다른 접두사를 붙인 키는 `401` 및 `Authentication failed`로 실패합니다. 일부 커뮤니티 페이지에서는 Venice 키가 `vapi_`로 시작한다고 말합니다. 그렇지 않으며, 키에 `vapi_`를 붙이면 키가 작동하지 않습니다.
+
+접두사는 키 유형을 나타냅니다. Admin 키는 더 넓은 유형이므로 모델 엔드포인트에서도 작동합니다. Inference Only 키로 키 목록 조회나 생성, 잔액 조회 같은 관리자 엔드포인트를 호출하면 `401` 및 `Admin API key required`로 실패합니다. `GET /api_keys/rate_limits`는 두 유형 모두 허용합니다.
+
 ## 지출 한도 오류 해결하기 {#troubleshooting-spend-limit-errors}
 
 키별 지출 한도는 계정 잔액과는 별개입니다. 계정에 아직 충전된 USD 크레딧, DIEM 또는 번들 크레딧이 남아 있어도 특정 키는 지출이 차단될 수 있습니다. 요청이 다음 코드 중 하나와 함께 402를 반환하는 경우, 원인은 계정 잔액이 아니라 해당 키 자체의 한도입니다:
@@ -88,6 +103,131 @@ Venice API 요청은 Bearer API 키로 인증됩니다. 이 가이드에서는 V
 * API 키를 소스 컨트롤에 커밋하거나 클라이언트 측 코드에 노출하지 마십시오.
 * 임시, 공유 또는 위험도가 높은 환경에서 사용되는 키에는 만료 날짜와 소비 한도를 설정하십시오.
 * 사용하지 않는 키는 삭제하고, 노출되었을 가능성이 있는 키는 교체하십시오.
+
+## 브라우저에서 호출하기 {#calling-from-a-browser}
+
+API는 `access-control-allow-origin: *`를 보내므로 브라우저에서 직접 호출할 수 있습니다. 하지만 그러면 키가 번들에 포함되어 공개됩니다. 앞단에 작은 프록시를 두고 키는 서버 측에 보관하세요.
+
+프록시만으로는 충분하지 않습니다. `access-control-allow-origin`은 아무것도 인증하지 않습니다. `curl`과 다른 서버는 CORS를 완전히 무시하며, Worker 호스트 이름은 공개되어 있습니다. 키만 주입하는 프록시는 잔액으로 이어지는 열린 수도꼭지와 같습니다. 호출자도 스스로를 증명해야 합니다.
+
+두 가지 수준이 있으며, 어느 쪽을 만드는지가 중요합니다:
+
+- **공유 시크릿**은 지출을 통제합니다. 모든 방문자가 같은 값을 가지므로 Worker의 익명 사용은 막지만, 방문자가 이를 다른 곳에 전달하는 것은 막지 못합니다. 프로토타입에 적합합니다.
+- **사용자별 토큰**은 호출자를 식별합니다. 브라우저가 자체 백엔드에 인증하면 백엔드가 수명이 짧은 토큰을 발급하고, Worker가 이를 검증합니다. 프로덕션에 맞는 구조입니다.
+
+아래 두 예제 모두 Venice 키를 서버 측에 보관합니다. 두 경우 모두에 세 번째 규칙이 적용됩니다. **inference-only 키를 사용하세요**. 공개 프록시를 거치는 admin 키는 `POST /api_keys`를 호출하고 프록시된 응답에서 새 시크릿을 그대로 읽어 낼 수 있기 때문입니다.
+
+### 수준 1: 공유 시크릿 {#level-1-a-shared-secret}
+
+Worker는 Venice 키와 시크릿을 보관하고, 시크릿이 없는 요청은 모두 거부합니다. 시크릿은 브라우저에 두지 마세요. 백엔드가 Worker를 호출할 때 시크릿을 첨부하게 하면 브라우저는 백엔드와만 통신합니다.
+
+```js index.js
+// Only the paths you need. Add deliberately: an inference key still reads
+// balances through GET /api_keys/rate_limits.
+const ALLOWED = new Set(['/chat/completions', '/image/generate']);
+
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: cors() });
+    }
+    if (!ALLOWED.has(new URL(request.url).pathname)) {
+      return json(404, { error: 'Not found' });
+    }
+    if (request.method !== 'POST') {
+      return json(405, { error: 'Method not allowed' });
+    }
+    if (request.headers.get('x-proxy-key') !== env.PROXY_SECRET) {
+      return json(401, { error: 'Proxy secret required' });
+    }
+    return forward(request, env);
+  },
+};
+
+async function forward(request, env) {
+  const path = new URL(request.url).pathname;
+  const upstream = await fetch(`${env.VENICE_BASE_URL}/api/v1${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${env.VENICE_API_KEY}` },
+    body: await request.text(),
+  });
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: { ...cors(), 'content-type': upstream.headers.get('content-type') ?? 'application/json' },
+  });
+}
+
+const cors = () => ({
+  'access-control-allow-origin': 'https://your-site.example',
+  'access-control-allow-headers': 'content-type,x-proxy-key',
+  'access-control-allow-methods': 'POST,OPTIONS',
+});
+
+const json = (status, body) =>
+  new Response(JSON.stringify(body), { status, headers: { ...cors(), 'content-type': 'application/json' } });
+```
+
+```bash Deploy
+npx wrangler deploy index.js --name venice-proxy
+npx wrangler secret put VENICE_API_KEY      # an inference-only key
+npx wrangler secret put PROXY_SECRET        # any long random value
+npx wrangler secret put VENICE_BASE_URL     # https://api.venice.ai
+```
+
+시크릿이 보관된 백엔드에서 호출하세요:
+
+```js Server
+await fetch('https://venice-proxy.<account>.workers.dev/chat/completions', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-proxy-key': process.env.PROXY_SECRET },
+  body: JSON.stringify({ model: 'venice-uncensored-1-2', messages: [{ role: 'user', content: 'Hi' }] }),
+});
+```
+
+경로는 그대로 덧붙여지므로 `/chat/completions`는 업스트림의 `/api/v1/chat/completions`에 도달합니다. 여기로 향하는 OpenAI 클라이언트의 기본 URL에는 `/v1`을 넣지 마세요.
+
+공유 시크릿도 결국 공유 자격 증명입니다. 공개 트래픽을 받기 전에 Cloudflare의 속도 제한 규칙으로 해당 경로의 속도를 제한하세요.
+
+### 수준 2: 사용자별 토큰 {#level-2-a-per-user-token}
+
+브라우저가 Worker를 직접 호출해야 한다면 앞단에 자체 인증을 두세요. 백엔드는 이미 가진 세션을 확인하고 수명이 짧은 토큰에 서명하며, Worker는 공유 값 대신 그 토큰을 검사합니다. 수준 1 Worker의 `ALLOWED`, `forward`, `cors`, `json`을 재사용합니다:
+
+```js index.js
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: cors() });
+    }
+    if (!ALLOWED.has(new URL(request.url).pathname) || request.method !== 'POST') {
+      return json(404, { error: 'Not found' });
+    }
+    if (!(await validToken(request.headers.get('authorization')?.replace(/^Bearer /, ''), env))) {
+      return json(401, { error: 'Token required' });
+    }
+    return forward(request, env);
+  },
+};
+
+// Verify a token issued by your backend: its signature, expiry and subject.
+// Any HMAC over `sub.exp` works; this is the shape, not a full implementation.
+async function validToken(token, env) {
+  if (!token) return false;
+  // The payload itself contains a dot, so split on the last one only.
+  const cut = token.lastIndexOf('.');
+  if (cut < 1) return false;
+  const payload = token.slice(0, cut);
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(env.PROXY_SIGNING_KEY),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'],
+  );
+  const ok = await crypto.subtle.verify('HMAC', key, hexToBytes(token.slice(cut + 1)), new TextEncoder().encode(payload));
+  return ok && Number(payload.slice(payload.lastIndexOf('.') + 1)) > Date.now();
+}
+
+const hexToBytes = (hex) => new Uint8Array(hex.match(/../g).map((b) => parseInt(b, 16)));
+```
+
+자체 세션 확인을 마친 뒤 백엔드에서 토큰을 발급하면 Worker가 사용자 상태를 보관할 필요가 없습니다. 이렇게 하면 사용자별 속도 제한, 취소, 그리고 출처를 추적할 수 있는 청구가 가능해집니다.
 
 ## 프로그래밍 방식 키 관리 {#programmatic-key-management}
 

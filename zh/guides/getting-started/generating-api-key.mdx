@@ -67,6 +67,21 @@ Venice API 请求使用 Bearer API 密钥进行身份验证。本指南介绍如
   在 Venice 应用中创建 API 密钥时禁用 USD 支出会将该 API 密钥的 USD 支出上限设置为零。当您可用的 DIEM 或捆绑积分无法支付请求时,API 调用可能会因余额不足错误而失败,即使您的账户中有 USD 余额也是如此。
 </Warning>
 
+## 密钥格式 {#key-format}
+
+新密钥以类型前缀开头，后跟 42 个 URL 安全字符：
+
+| 前缀 | 密钥类型 |
+| --- | --- |
+| `VENICE_INFERENCE_KEY_` | Inference Only |
+| `VENICE_ADMIN_KEY_` | Admin |
+
+旧密钥按签发时的形式继续有效：有些在前缀中使用连字符（`VENICE-INFERENCE-KEY-`、`VENICE-ADMIN-KEY-`），最早的密钥则没有前缀。
+
+请完全按照签发时的形式使用密钥。API 会校验整个字符串，因此被工具转成小写、改动了标点、去掉了前缀或换成其他前缀的密钥都会失败，并返回 `401` 和 `Authentication failed`。一些社区页面称 Venice 密钥以 `vapi_` 开头。事实并非如此，给密钥加上 `vapi_` 会使其失效。
+
+前缀标识密钥类型。Admin 密钥也可用于模型端点，因为它是范围更广的类型。在管理端点（例如列出或创建密钥、读取余额）上使用 Inference Only 密钥会失败，并返回 `401` 和 `Admin API key required`。`GET /api_keys/rate_limits` 接受两种类型。
+
 ## 排查支出限额错误 {#troubleshooting-spend-limit-errors}
 
 每个密钥的支出限额与账户余额是相互独立的。即使账户中仍有已充值的 USD 积分、DIEM 或捆绑积分,某个密钥仍可能因自身限额而被阻止消费。如果请求返回 402 状态码,并附带以下代码之一,则原因是该密钥自身的限额,而非账户余额:
@@ -88,6 +103,131 @@ Venice API 请求使用 Bearer API 密钥进行身份验证。本指南介绍如
 * 切勿将 API 密钥提交到源代码管理系统,或暴露在客户端代码中。
 * 对于在临时、共享或高风险环境中使用的密钥,请设置过期日期和消费限额。
 * 删除未使用的密钥,并轮换可能已被泄露的任何密钥。
+
+## 从浏览器调用 {#calling-from-a-browser}
+
+API 会发送 `access-control-allow-origin: *`，因此浏览器可以直接调用它。但这样密钥就会留在你的前端打包代码中，等于公开。请在前面放一个小型代理，并把密钥保留在服务器端。
+
+仅有代理还不够。`access-control-allow-origin` 不做任何认证：`curl` 和其他服务器完全忽略 CORS，而且 Worker 的主机名是公开的。只负责注入密钥的代理，相当于为你的余额敞开了水龙头。调用方也必须证明自己的身份。
+
+有两个级别，你需要清楚自己在构建哪一种：
+
+- **共享机密**用于管控支出。每个访问者持有相同的值，因此它能阻止匿名使用你的 Worker，但无法阻止访问者把它转交给他人。适合原型。
+- **按用户签发的令牌**用于识别调用方。浏览器向你自己的后端认证，后端签发一个短期令牌，再由 Worker 校验。这是生产环境的做法。
+
+下面两个示例都把 Venice 密钥保留在服务器端。两者还都适用第三条规则：**使用 inference-only 密钥**，因为通过公共代理转发的 admin 密钥可以调用 `POST /api_keys`，并直接从代理返回的响应中读取新密钥。
+
+### 级别 1：共享机密 {#level-1-a-shared-secret}
+
+Worker 保存 Venice 密钥和一个共享机密，并拒绝所有不带该机密的请求。不要让机密进入浏览器：由你的后端在调用 Worker 时附加它，这样浏览器只与你的后端通信。
+
+```js index.js
+// Only the paths you need. Add deliberately: an inference key still reads
+// balances through GET /api_keys/rate_limits.
+const ALLOWED = new Set(['/chat/completions', '/image/generate']);
+
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: cors() });
+    }
+    if (!ALLOWED.has(new URL(request.url).pathname)) {
+      return json(404, { error: 'Not found' });
+    }
+    if (request.method !== 'POST') {
+      return json(405, { error: 'Method not allowed' });
+    }
+    if (request.headers.get('x-proxy-key') !== env.PROXY_SECRET) {
+      return json(401, { error: 'Proxy secret required' });
+    }
+    return forward(request, env);
+  },
+};
+
+async function forward(request, env) {
+  const path = new URL(request.url).pathname;
+  const upstream = await fetch(`${env.VENICE_BASE_URL}/api/v1${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${env.VENICE_API_KEY}` },
+    body: await request.text(),
+  });
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: { ...cors(), 'content-type': upstream.headers.get('content-type') ?? 'application/json' },
+  });
+}
+
+const cors = () => ({
+  'access-control-allow-origin': 'https://your-site.example',
+  'access-control-allow-headers': 'content-type,x-proxy-key',
+  'access-control-allow-methods': 'POST,OPTIONS',
+});
+
+const json = (status, body) =>
+  new Response(JSON.stringify(body), { status, headers: { ...cors(), 'content-type': 'application/json' } });
+```
+
+```bash Deploy
+npx wrangler deploy index.js --name venice-proxy
+npx wrangler secret put VENICE_API_KEY      # an inference-only key
+npx wrangler secret put PROXY_SECRET        # any long random value
+npx wrangler secret put VENICE_BASE_URL     # https://api.venice.ai
+```
+
+从保存机密的后端调用它：
+
+```js Server
+await fetch('https://venice-proxy.<account>.workers.dev/chat/completions', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-proxy-key': process.env.PROXY_SECRET },
+  body: JSON.stringify({ model: 'venice-uncensored-1-2', messages: [{ role: 'user', content: 'Hi' }] }),
+});
+```
+
+路径会被直接追加，因此 `/chat/completions` 在上游会到达 `/api/v1/chat/completions`。在指向这里的任何 OpenAI 客户端中，基础 URL 都不要包含 `/v1`。
+
+共享机密仍然是一种共享凭据：在该路由接收公共流量之前，请用 Cloudflare 的速率限制规则对其限流。
+
+### 级别 2：按用户签发的令牌 {#level-2-a-per-user-token}
+
+当浏览器必须直接调用 Worker 时，请在其前面加上你自己的认证。你的后端验证已有的会话并签发一个短期令牌，Worker 校验该令牌，而不是校验共享值。它复用级别 1 Worker 中的 `ALLOWED`、`forward`、`cors` 和 `json`：
+
+```js index.js
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: cors() });
+    }
+    if (!ALLOWED.has(new URL(request.url).pathname) || request.method !== 'POST') {
+      return json(404, { error: 'Not found' });
+    }
+    if (!(await validToken(request.headers.get('authorization')?.replace(/^Bearer /, ''), env))) {
+      return json(401, { error: 'Token required' });
+    }
+    return forward(request, env);
+  },
+};
+
+// Verify a token issued by your backend: its signature, expiry and subject.
+// Any HMAC over `sub.exp` works; this is the shape, not a full implementation.
+async function validToken(token, env) {
+  if (!token) return false;
+  // The payload itself contains a dot, so split on the last one only.
+  const cut = token.lastIndexOf('.');
+  if (cut < 1) return false;
+  const payload = token.slice(0, cut);
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(env.PROXY_SIGNING_KEY),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'],
+  );
+  const ok = await crypto.subtle.verify('HMAC', key, hexToBytes(token.slice(cut + 1)), new TextEncoder().encode(payload));
+  return ok && Number(payload.slice(payload.lastIndexOf('.') + 1)) > Date.now();
+}
+
+const hexToBytes = (hex) => new Uint8Array(hex.match(/../g).map((b) => parseInt(b, 16)));
+```
+
+在后端完成你自己的会话检查后再签发令牌，这样 Worker 永远不需要保存用户状态。由此你可以获得按用户的速率限制、撤销能力以及可归属的账单。
 
 ## 以编程方式管理密钥 {#programmatic-key-management}
 
