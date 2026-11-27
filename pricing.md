@@ -83,7 +83,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | GLM 5 (Retiring) | `zai-org-glm-5` | $1.00 | $3.20 | $0.20 | — | Private |
 | GLM 5 Turbo | `z-ai-glm-5-turbo` | $1.20 | $4.00 | $0.24 | — | Anonymized |
 | GLM 5.1 (Retiring) | `zai-org-glm-5-1` | $1.33 | $4.18 | $0.247 | — | Private |
-| GLM 5.2 | `e2ee-glm-5-2-p` | $1.75 | $5.75 | $0.30 | — | E2EE |
 | GLM 5.2 | `zai-org-glm-5-2` | $1.40 | $4.40 | $0.26 | — | Private |
 | GLM 5.3 | `e2ee-glm-5-3-p` | $1.75 | $5.50 | $0.325 | — | E2EE |
 | GLM 5.3 | `z-ai-glm-5-3` | $1.75 | $5.50 | $0.325 | — | Private |
@@ -94,7 +93,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Google Gemma 3 27B Instruct | `google-gemma-3-27b-it` | $0.12 | $0.20 | — | — | Private |
 | Google Gemma 4 26B A4B Instruct | `google-gemma-4-26b-a4b-it` | $0.13 | $0.40 | $0.05 | — | Private |
 | Google Gemma 4 31B Instruct | `google-gemma-4-31b-it` | $0.12 | $0.36 | $0.05 | — | Private |
-| GPT OSS 120B | `e2ee-gpt-oss-120b-p` | $0.13 | $0.65 | — | — | E2EE |
 | GPT-4o | `openai-gpt-4o-2024-11-20` | $2.50 | $10.00 | $1.25 | — | Anonymized |
 | GPT-4o Mini | `openai-gpt-4o-mini-2024-07-18` | $0.15 | $0.60 | $0.075 | — | Anonymized |
 | GPT-5.2 | `openai-gpt-52` | $1.75 | $14.00 | $0.175 | — | Anonymized |
@@ -132,7 +130,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Inkling 2 Mini | `inkling-2-mini` | $0.12 | $0.50 | $0.024 | — | Private |
 | Kimi K2.6 | `kimi-k2-6` | $0.75 | $3.50 | $0.16 | — | Private |
 | Kimi K2.7 Code (Retiring) | `kimi-k2-7-code` | $0.75 | $3.50 | $0.16 | — | Private |
-| Kimi K3 | `e2ee-kimi-k3-p` | $3.75 | $18.75 | $0.375 | — | E2EE |
 | Kimi K3 | `kimi-k3` | $3.75 | $18.75 | $0.375 | — | Private |
 | Kimi K3 Fast | `kimi-k3-fast-api` | $4.50 | $22.50 | $0.45 | — | Private |
 | Kimi K3.1 Pro | `e2ee-kimi-k3-1-pro-p` | $2.50 | $12.50 | $0.25 | — | E2EE |
