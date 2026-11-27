@@ -455,9 +455,9 @@
 
     if (deprecatingModels.length === 0) {
       return `<table class="vpt-table vpt-deprecation-table"><thead><tr>
-        <th>Model</th><th>Model ID</th><th>Removal Date</th><th>Status</th>
+        <th>Model</th><th>Removal Date</th><th>Status</th>
       </tr></thead><tbody>
-        <tr><td colspan="4" style="text-align: center; opacity: 0.6; padding: 24px;">No models are currently scheduled for deprecation.</td></tr>
+        <tr><td colspan="3" style="text-align: center; opacity: 0.6; padding: 24px;">No models are currently scheduled for deprecation.</td></tr>
       </tbody></table>`;
     }
 
@@ -465,17 +465,17 @@
       const depDate = getModelRemovalDate(model);
       const status = getDeprecationStatus(depDate);
       const isRetiring = status === 'retiring';
-      const name = escapeHtml(model.model_spec?.name || model.id);
+      const name = model.model_spec?.name;
+      const id = `<code>${escapeHtml(model.id)}</code>`;
       return `<tr>
-        <td>${name}</td>
-        <td><code>${escapeHtml(model.id)}</code></td>
+        <td>${name ? `${escapeHtml(name)}<br>${id}` : id}</td>
         <td>${formatDeprecationDate(depDate)}</td>
         <td><span class="${isRetiring ? 'vpt-status-retiring' : 'vpt-status-deprecated'}">${isRetiring ? 'Retiring Soon' : 'Deprecated'}</span></td>
       </tr>`;
     }).join('');
 
     return `<table class="vpt-table vpt-deprecation-table"><thead><tr>
-      <th>Model</th><th>Model ID</th><th>Removal Date</th><th>Status</th>
+      <th>Model</th><th>Removal Date</th><th>Status</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
   }
 

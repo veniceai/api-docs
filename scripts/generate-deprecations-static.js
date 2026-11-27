@@ -108,12 +108,12 @@ function renderDeprecationTable(models, now = new Date()) {
     .sort((a, b) => new Date(getModelRemovalDate(a)) - new Date(getModelRemovalDate(b)));
 
   const header = [
-    '| Model | Model ID | Removal Date | Status |',
-    '|---|---|---|---|'
+    '| Model | Removal Date | Status |',
+    '|---|---|---|'
   ];
 
   if (rows.length === 0) {
-    return [...header, '| No models are currently scheduled for deprecation. | — | — | — |'].join('\n');
+    return [...header, '| No models are currently scheduled for deprecation. | — | — |'].join('\n');
   }
 
   return [
@@ -121,9 +121,10 @@ function renderDeprecationTable(models, now = new Date()) {
     ...rows.map(model => {
       const removalDate = getModelRemovalDate(model);
       const status = getDeprecationStatus(removalDate, now);
-      const name = tableCell(model.model_spec?.name || model.id);
+      const name = model.model_spec?.name;
+      const modelCell = name ? `${tableCell(name)}<br />${inlineCode(model.id)}` : inlineCode(model.id);
       const label = status === 'retiring' ? 'Retiring Soon' : 'Deprecated';
-      return `| ${name} | ${inlineCode(model.id)} | ${formatDeprecationDate(removalDate)} | ${label} |`;
+      return `| ${modelCell} | ${formatDeprecationDate(removalDate)} | ${label} |`;
     })
   ].join('\n');
 }
