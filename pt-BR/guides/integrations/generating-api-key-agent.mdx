@@ -2,24 +2,24 @@
 title: Criação autônoma de chave de API por agente
 description: "Gere uma chave de API Venice a partir de um agente on-chain fazendo stake de VVV na Base."
 'og:title': "Chave de API autônoma por agente | Documentação da API Venice"
-'og:description': Como um agente de IA autônomo pode gerar sua própria chave de API Venice assinando um token emitido pela Venice com uma carteira que tenha VVV em stake na Base.
+'og:description': Como um agente de IA autônomo pode gerar sua própria chave de API de inferência Venice assinando uma solicitação de chave emitida pela Venice com uma carteira que tenha VVV em stake na Base.
 ---
 
-Um agente de IA que controla uma carteira na Base pode gerar sua própria chave de API Venice sem nenhum humano no processo. O agente adquire VVV, faz stake, assina um token de validação de curta duração emitido pela Venice e envia o token assinado de volta para receber uma nova chave de API vinculada à carteira de stake.
+Um agente de IA que controla uma carteira na Base pode gerar sua própria chave de API de inferência Venice sem nenhum humano no processo. O agente adquire VVV, faz stake, solicita uma requisição de chave de curta duração para sua carteira, assina a mensagem legível da requisição e envia a assinatura de volta para receber uma nova chave de API vinculada à carteira de stake. O mesmo fluxo pode gerar uma chave ADMIN quando a carteira assina uma mensagem que indica o tipo de chave ADMIN.
 
 Este guia percorre o fluxo completo de ponta a ponta e cobre as opções de financiamento para efetivamente pagar pela inferência depois que a chave é gerada.
 
-## Pré-requisitos
+## Pré-requisitos {#prerequisites}
 
 * Uma carteira EVM na Base controlada pelo agente (chave privada em uma variável de ambiente ou gerenciador de segredos).
 * Uma pequena quantidade de ETH na Base para gás (o staking são duas transações: `approve` e depois `stake`).
-* Qualquer quantidade diferente de zero de VVV para fazer stake. O endpoint de geração exige apenas que a carteira tenha saldo de sVVV diferente de zero, então 1 VVV é suficiente para gerar uma chave. Veja [Pagando pela inferência](#pagando-pela-inferência) para saber o que você precisa para realmente chamar endpoints pagos.
+* Qualquer quantidade diferente de zero de VVV para fazer stake. O endpoint de geração exige apenas que a carteira tenha saldo de sVVV diferente de zero, então 1 VVV é suficiente para gerar uma chave. Veja [Pagando pela inferência](#paying-for-inference) para saber o que você precisa para realmente chamar endpoints pagos.
 
 <Tip>
   Use uma carteira de agente dedicada em vez de uma carteira de tesouraria. A chave privada da carteira assina cada requisição de token Venice, portanto seu raio de impacto deve ser pequeno.
 </Tip>
 
-## Passos
+## Passos {#steps}
 
 <Steps>
   <Step title="Adquira VVV">
@@ -41,23 +41,42 @@ Este guia percorre o fluxo completo de ponta a ponta e cobre as opções de fina
     Quando a segunda transação for confirmada, o saldo de VVV da carteira diminui e o saldo de sVVV aumenta na mesma quantia. O endpoint de geração lê o saldo de sVVV para confirmar que a carteira está com stake.
   </Step>
 
-  <Step title="Solicite um token de validação">
-    Chame `GET /api/v1/api_keys/generate_web3_key` para obter um token de curta duração assinado pela Venice. O endpoint não exige autenticação.
+  <Step title="Solicite uma requisição de chave para a carteira">
+    Chame `GET /api/v1/api_keys/generate_web3_key` com o endereço da carteira de stake. O endpoint não exige autenticação.
 
     ```bash
     curl --request GET \
-      --url https://api.venice.ai/api/v1/api_keys/generate_web3_key
+      --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>'
     ```
 
-    A resposta contém um campo `token`. O token expira 15 minutos após sua emissão, então assine e envie bem antes disso.
+    O parâmetro de consulta opcional `apiKeyType` define o tipo de chave que a carteira autoriza: `INFERENCE` (o padrão) ou `ADMIN`. O tipo fica fixado no token e é indicado na mensagem, então solicite o tipo que você vai gerar. Veja [Gerando uma chave ADMIN](#minting-an-admin-key).
+
+    A resposta contém dois campos:
+
+    - `token`, um token assinado pela Venice e vinculado a essa carteira. Ele expira 15 minutos após sua emissão, então assine e envie bem antes disso.
+    - `message`, o texto legível que a carteira assina. Ele identifica a carteira, o tipo de chave (`INFERENCE`, a menos que você tenha solicitado `ADMIN`), o emissor, a chain, um nonce de uso único e os horários de emissão e expiração:
+
+    ```text
+    Venice API key request
+
+    Sign this only if you are creating a Venice inference API key for this wallet. The key spends from this wallet's Venice account.
+
+    Wallet: <wallet address>
+    Key type: INFERENCE
+    Issued by: api.venice.ai
+    Chain ID: 8453
+    Nonce: <random hex>
+    Issued At: <ISO 8601 time>
+    Expiration Time: <ISO 8601 time>
+    ```
   </Step>
 
-  <Step title="Assine o token com a carteira de stake">
-    Assine a string bruta do token com a carteira que detém o VVV em stake. Esse é um `personal_sign` padrão sobre os bytes do token. Tanto `ethers.Wallet.signMessage(token)` quanto `account.signMessage({ message: token })` do `viem` produzem a assinatura correta.
+  <Step title="Assine a mensagem com a carteira de stake">
+    Assine exatamente a string `message` com a carteira que detém o VVV em stake. Esse é um `personal_sign` padrão (EIP-191). Tanto `ethers.Wallet.signMessage(message)` quanto `account.signMessage({ message })` do `viem` produzem a assinatura correta. Não modifique a mensagem: a Venice a reconstrói a partir do token, e a assinatura precisa corresponder a ela exatamente.
   </Step>
 
   <Step title="Gere a chave de API">
-    Faça `POST` com o endereço, a assinatura e o token para o mesmo endpoint, junto com o tipo de chave que você quer.
+    Faça `POST` com o endereço, a assinatura e o token para o mesmo endpoint.
 
     ```bash
     curl --request POST \
@@ -65,14 +84,14 @@ Este guia percorre o fluxo completo de ponta a ponta e cobre as opções de fina
       --header 'Content-Type: application/json' \
       --data '{
         "address": "<wallet address>",
-        "signature": "<signed token>",
-        "token": "<unsigned token>",
+        "signature": "<signature of message>",
+        "token": "<token>",
         "apiKeyType": "INFERENCE",
         "description": "Agent key minted on <date>"
       }'
     ```
 
-    Campos obrigatórios: `address`, `signature`, `token`, `apiKeyType` (`INFERENCE` ou `ADMIN`).
+    Campos obrigatórios: `address`, `signature`, `token`, `apiKeyType`. `apiKeyType` deve corresponder ao tipo de chave indicado na mensagem assinada: `INFERENCE` para um token solicitado sem `apiKeyType`, ou `ADMIN` para um token solicitado com `apiKeyType=ADMIN`.
 
     Campos opcionais:
 
@@ -90,7 +109,7 @@ Este guia percorre o fluxo completo de ponta a ponta e cobre as opções de fina
   </Step>
 </Steps>
 
-## Exemplo de ponta a ponta
+## Exemplo de ponta a ponta {#end-to-end-example}
 
 O exemplo abaixo usa uma carteira real obtida de uma variável de ambiente, em vez de uma gerada aleatoriamente. Uma carteira aleatória não tem VVV em stake e a geração será rejeitada com o erro `Wallet 0x… has no staked VVV on Base`.
 
@@ -100,10 +119,12 @@ import { ethers } from "ethers"
 const wallet = new ethers.Wallet(process.env.WALLET_PRIVATE_KEY!)
 const address = wallet.address
 
-const tokenResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key")
-const { data: { token } } = await tokenResponse.json()
+const tokenResponse = await fetch(
+  `https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=${address}`,
+)
+const { data: { token, message } } = await tokenResponse.json()
 
-const signature = await wallet.signMessage(token)
+const signature = await wallet.signMessage(message)
 
 const mintResponse = await fetch("https://api.venice.ai/api/v1/api_keys/generate_web3_key", {
   method: "POST",
@@ -128,22 +149,63 @@ if (!mintResponse.ok) {
 console.log("Minted key:", result.data.apiKey)
 ```
 
-## Referência de erros
+## Gerando uma chave ADMIN {#minting-an-admin-key}
+
+Uma chave ADMIN pode criar e excluir outras chaves de API e ler o faturamento da conta Venice da carteira, e ela gasta dessa conta. Para gerar uma, solicite um token com `apiKeyType=ADMIN`, assine a mensagem dele e faça um `POST` com `apiKeyType: "ADMIN"`:
+
+```bash
+curl --request GET \
+  --url 'https://api.venice.ai/api/v1/api_keys/generate_web3_key?address=<wallet address>&apiKeyType=ADMIN'
+```
+
+A `message` retornada declara que cria uma chave ADMIN e o que essa chave pode fazer:
+
+```text
+Venice API key request
+
+Sign this only if you are creating a Venice ADMIN API key for this wallet. An ADMIN key can create and delete other API keys and read billing for this wallet's Venice account, and it spends from this wallet's Venice account.
+
+Wallet: <wallet address>
+Key type: ADMIN
+Issued by: api.venice.ai
+Chain ID: 8453
+Nonce: <random hex>
+Issued At: <ISO 8601 time>
+Expiration Time: <ISO 8601 time>
+```
+
+Assine e envie como nas etapas acima, com `"apiKeyType": "ADMIN"` no corpo do `POST`. O tipo de chave de um token não pode ser alterado: um token `INFERENCE` não pode gerar uma chave ADMIN, e um token `ADMIN` não pode gerar uma chave INFERENCE. Chaves ADMIN exigem a mensagem legível, então [tokens legados](#legacy-tokens) não podem gerá-las.
+
+<Warning>
+  Só peça que uma carteira assine uma mensagem ADMIN quando o agente precisar gerenciar chaves ou ler o faturamento. Qualquer pessoa com a chave ADMIN pode criar novas chaves para a conta, então guarde-a com pelo menos o mesmo cuidado que a chave privada da carteira.
+</Warning>
+
+## Referência de erros {#error-reference}
 
 O endpoint retorna mensagens de erro específicas e acionáveis. Mapeie-as no agente para que ele possa decidir se deve tentar novamente, solicitar um novo token ou parar.
 
 | Status | A mensagem de erro contém | O que significa | O que fazer |
 | --- | --- | --- | --- |
-| `400` | `Invalid wallet address` | O campo `address` não é um endereço EVM válido. | Corrija o endereço e reenvie. |
+| `400` | `Invalid wallet address` | O parâmetro de consulta ou o campo `address` não é um endereço EVM válido. | Corrija o endereço e reenvie. |
+| `400` | `Invalid "apiKeyType"` | O parâmetro de consulta `apiKeyType` não é `INFERENCE` nem `ADMIN`. | Use `INFERENCE` ou `ADMIN`. |
+| `400` | `ADMIN keys require a readable key request` | O `GET` pediu `apiKeyType=ADMIN` sem `?address=`. | Solicite o token com `address` e `apiKeyType=ADMIN`. |
+| `400` | `This token was issued for an` | O `apiKeyType` do corpo do `POST` difere do tipo de chave indicado na mensagem assinada. | Envie o tipo para o qual o token foi emitido, ou solicite um novo token com o `apiKeyType` desejado. O erro indica o `GET` correto. |
+| `400` | `ADMIN keys cannot be created with a token that has no wallet address` | Um token legado (solicitado sem `?address=`) foi usado com `apiKeyType: "ADMIN"`. | Solicite um token com `?address=<wallet>&apiKeyType=ADMIN` e assine a `message` dele. |
+| `400` | `issued for a different wallet` | O token foi solicitado para um `address` diferente do que está no corpo do `POST`. | Solicite um token com `?address=` definido para a carteira que assina. |
 | `400` | `JWT has expired` | O token de validação expirou antes de você assiná-lo e enviá-lo. | Solicite um novo token, assine-o e envie imediatamente. |
 | `400` | `JWT signature is invalid` | O token não foi assinado pela Venice (provavelmente adulterado ou fabricado). | Sempre use um token novo do endpoint `GET`. |
 | `400` | `JWT claims are invalid` | O emissor ou audiência do token não corresponde ao que a Venice espera. | Use o token sem modificações retornado pelo endpoint `GET`. |
 | `400` | `JWT is malformed` | O `token` enviado não é um JWT. | Garanta que você está enviando exatamente a string `token` retornada pelo endpoint `GET`. |
-| `400` | `Wallet signature does not match` | A `signature` não corresponde ao `address` para o `token` informado. | Assine os bytes brutos do token com a carteira proprietária de `address`. |
+| `400` | `Wallet signature does not match` | A `signature` não é a assinatura da carteira `address` sobre a `message` do token. | Assine exatamente a `message` retornada com o token, usando a carteira proprietária de `address`. |
+| `400` | `Tokens without a wallet address are no longer accepted` | O token foi solicitado sem `?address=`. Esses tokens legados deixam de funcionar em 26 de dezembro de 2026. | Solicite um token com `?address=` e assine sua `message`. |
 | `400` | `Could not verify wallet signature` | A chamada RPC para verificar a assinatura falhou (transitório). | Tente novamente com backoff. |
 | `400` | `has no staked VVV` | A carteira tem saldo de sVVV zero. A mensagem completa é `Wallet 0x… has no staked VVV on Base`, com o endereço da sua carteira no lugar de `0x…`, seguida de um link, então faça a correspondência com `has no staked VVV` em vez do texto completo. | Faça stake de VVV primeiro e tente novamente. |
 
-## Pagando pela inferência
+## Tokens legados {#legacy-tokens}
+
+Antes de novembro de 2026, o endpoint emitia tokens sem endereço de carteira, e a carteira assinava a string bruta do token. Esses tokens ainda geram chaves INFERENCE até **26 de dezembro de 2026, 00:00 UTC**, e as respostas para eles trazem os cabeçalhos `Deprecation`, `Sunset` e `Link`. Depois dessa data, o `POST` os rejeita. Mude para `?address=` e assine `message` antes disso.
+
+## Pagando pela inferência {#paying-for-inference}
 
 Gerar uma chave e ser capaz de chamar endpoints pagos com ela são duas coisas separadas. Uma chave recém-gerada autentica corretamente, mas não pode chamar endpoints pagos (como `/chat/completions`) até que a conta da carteira tenha um saldo gastável.
 
@@ -161,7 +223,7 @@ Se o agente precisar de um caminho de financiamento totalmente cripto-nativo e h
 1. **Fazer stake de mais VVV** para que a alocação diária de DIEM cubra o gasto do agente. A chave gerada usa isso automaticamente.
 2. **Usar o [fluxo de carteira x402](/pt-BR/guides/integrations/x402-venice-api) em vez da chave de API.** Com o x402 o agente assina uma mensagem Sign-In-With-X por requisição, faz recarga diretamente com USDC na Base ou Solana via `POST /api/v1/x402/top-up` e paga por requisição. O saldo de USDC do x402 é vinculado à carteira, não ao usuário, portanto não aparece como saldo para a chave Bearer gerada, mas permite que a mesma carteira pague pela inferência programaticamente.
 
-## Recursos relacionados
+## Recursos relacionados {#related-resources}
 
 <CardGroup cols={2}>
   <Card title="Cripto e agentes" icon="link" href="/pt-BR/guides/integrations/crypto-rpc-agents">

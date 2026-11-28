@@ -5,11 +5,11 @@ description: "Riduci costi e latenza dell'API Venice memorizzando in cache syste
 "og:description": "Scopri come usare il prompt caching per ridurre costi e latenza per i contenuti ripetuti nelle tue richieste API."
 ---
 
-Il prompt caching memorizza i token di input elaborati in modo che le richieste successive con prefissi identici possano riutilizzarli invece di rielaborarli. Questo riduce la latenza (fino all'80% per i prompt lunghi) e i costi (fino al 90% di sconto sui token in cache).
+Il prompt caching memorizza i token di input elaborati in modo che le richieste successive con prefissi identici possano riutilizzarli invece di rielaborarli. Questo riduce la latenza sui prompt lunghi e taglia i costi: le letture dalla cache sono fatturate a una frazione del prezzo di input, spesso il 10% o meno.
 
 Venice gestisce il caching automaticamente per i modelli supportati, ma capire come ciascun provider implementa il caching ti aiuta a massimizzare i tassi di cache hit e a minimizzare i costi.
 
-## Come funziona il caching
+## Come funziona il caching {#how-caching-works}
 
 Il caching opera su **prefix matching**: il sistema memorizza i token elaborati e li riutilizza quando le richieste successive iniziano con lo stesso contenuto.
 
@@ -43,36 +43,39 @@ Considera un chatbot con un system prompt da 2.000 token:
 Il caching funziona solo sul **prefisso**. Qualsiasi modifica all'inizio del tuo prompt invalida la cache per tutto ciò che segue. Metti sempre il contenuto statico (system prompt, documenti, esempi) prima del contenuto dinamico (messaggi dell'utente).
 </Warning>
 
-## Prezzi
+## Prezzi {#pricing}
 
 La maggior parte dei modelli di testo supporta il caching. I prezzi di lettura e scrittura in cache di ogni modello sono nella sua pagina in [Modelli di testo](/it/models/text), oltre che in `model_spec.pricing.cache_input` e `model_spec.pricing.cache_write` nella risposta di [Elenca modelli](/it/api-reference/endpoint/models/list).
 
 <Note>
-Alcuni modelli, tra cui Claude, addebitano di più per le scritture in cache rispetto all'input regolare. La prima richiesta che popola la cache costa di più, mentre i successivi cache hit vengono fatturati al prezzo più basso di lettura dalla cache.
+Alcuni modelli, tra cui Claude e GPT-5.6 e successivi, addebitano di più per le scritture in cache rispetto all'input regolare. La prima richiesta che popola la cache costa di più, mentre i successivi cache hit vengono fatturati al prezzo più basso di lettura dalla cache.
 </Note>
 
-## Comportamento specifico dei provider
+I modelli che prezzano separatamente le [scritture in cache di un'ora](#one-hour-cache-lifetime) elencano anche `model_spec.pricing.cache_write_1h`. Su questi modelli, `cache_write` copre le scritture di cinque minuti e `cache_write_1h` quelle di un'ora.
 
-Venice normalizza il caching tra i provider. Per la maggior parte dei modelli, il caching è automatico. Basta inviare le richieste e controllare la risposta per le statistiche della cache. **Claude** richiede marker espliciti di cache a livello di protocollo, ma Venice li aggiunge automaticamente per i system prompt e la cronologia delle conversazioni.
+## Comportamento specifico dei provider {#provider-specific-behavior}
+
+Venice normalizza il caching tra i provider. Per la maggior parte dei modelli, il caching è automatico. Basta inviare le richieste e controllare la risposta per le statistiche della cache. Alcuni provider memorizzano in cache solo i contenuti contrassegnati con `cache_control`, e Venice aggiunge questi marker per te.
 
 Il comportamento del caching è in ultima analisi controllato da ciascun provider e può cambiare, quindi consulta i doc dei provider per gli ultimi dettagli.
 
-| Modello | Provider | Min token | Durata cache | Costo scrittura | Sconto in lettura | Marker espliciti |
-|-------|----------|------------|----------------|------------|---------------|------------------|
-| Claude Opus 4.5 | Anthropic | ~4.000 | 5 min | +25% | 90% | Richiesti |
-| GPT-5.2 | OpenAI | 1.024 | 5-10 min | Nessuno | 90% | Non necessari |
-| Gemini | Google | ~1.024 | 1 ora | Nessuno | 75-90% | Non necessari |
-| Grok | xAI | ~1.024 | 5 min | Nessuno | 75-88% | Non necessari |
-| DeepSeek | DeepSeek | ~1.024 | 5 min | Nessuno | 50% | Non necessari |
-| MiniMax | MiniMax | ~1.024 | 5 min | Nessuno | 90% | Non necessari |
-| Kimi | Moonshot | ~1.024 | 5 min | Nessuno | 50% | Non necessari |
+| Modelli | Chi inserisce i marker di cache | Scritture in cache |
+|--------|--------------------------|--------------|
+| Claude | Venice, automaticamente. Puoi aggiungere i tuoi. | 1,25x l'input per le scritture di cinque minuti, 2x per quelle di un'ora |
+| Qwen 3.6 Plus, Qwen 3.7 Plus, Qwen 3.7 Max, Qwen 3.8 Max, Qwen 4 Max e Gemini 3.x | Venice, automaticamente | Al prezzo `cache_write` del modello, se ne indica uno |
+| GPT-5.6 e successivi, incluso GPT-6 | OpenAI, alla fine dell'ultimo messaggio | 1,25x l'input. Le voci durano almeno 30 minuti. |
+| Modelli GPT precedenti | Nessuno necessario | Non fatturate |
+| Tutti gli altri modelli | Nessuno necessario. Il provider memorizza in cache automaticamente. | Non fatturate, a meno che il modello non indichi `cache_write` |
 
-### Claude Opus 4.5 (Anthropic)
+I prezzi di lettura dalla cache variano per modello, da pochi punti percentuali del prezzo di input a circa la metà. Controlla `model_spec.pricing.cache_input` per il modello che usi.
+
+### Claude (Anthropic) {#claude-anthropic}
 
 Claude richiede breakpoint di cache espliciti a livello di protocollo. Venice li gestisce automaticamente:
 
-- I **system prompt** vengono memorizzati automaticamente in cache
-- La **cronologia delle conversazioni** viene memorizzata in cache mettendo un breakpoint sul penultimo messaggio dell'utente
+- **System prompt**: Venice contrassegna la fine del system prompt. I messaggi `developer` iniziali vengono inviati a Claude come parte del system prompt, quindi vengono memorizzati in cache insieme a esso.
+- **Cronologia della conversazione**: Venice contrassegna la tua precedente risposta dell'assistente, quindi tutto ciò che precede il messaggio utente più recente viene letto dalla cache.
+- **Loop di tool**: quando una richiesta termina con risultati di tool, Venice contrassegna invece il risultato di tool più recente. Ogni round viene scritto in cache una volta e letto nel round successivo.
 
 Questo significa che la cronologia della conversazione viene letta dalla cache e solo l'ultimo turno viene elaborato come nuovo input:
 
@@ -86,10 +89,9 @@ Questo significa che la cronologia della conversazione viene letta dalla cache e
 
 - **Fino a 4 breakpoint per richiesta**: il sistema usa il prefisso corrispondente più lungo
 - **La chiave di cache è byte-exact**: modifiche degli spazi, codifiche diverse di immagini o tool riordinati interrompono i cache hit
-- **Rate limit consapevoli della cache**: i token in cache non contano contro il limite ITPM, abilitando un throughput effettivo più alto
-- **Premio di scrittura del 25%**: la prima richiesta costa di più, ma 90% di risparmio sulle letture successive
+- **Le scritture in cache costano più dell'input**: 1,25x il prezzo di input per le scritture di cinque minuti e 2x per quelle di un'ora. Le letture dalla cache costano il 10% del prezzo di input sulla maggior parte dei modelli Claude, il 5% su Claude Opus 5.5 e Sonnet 5.5, e il 2,5% su Claude Fable 5.1 e 5.2.
 
-#### Controllo manuale della cache
+#### Controllo manuale della cache {#manual-cache-control}
 
 Per casi speciali come memorizzare un documento grande nel primo turno, puoi aggiungere breakpoint espliciti:
 
@@ -120,32 +122,58 @@ Per casi speciali come memorizzare un documento grande nel primo turno, puoi agg
 
 Questo garantisce che sia il system prompt sia il documento siano memorizzati in cache dalla prima richiesta. Per conversazioni tipiche, non servono marker manuali.
 
-### Tutti gli altri modelli
+#### Come i tuoi marker si combinano con quelli di Venice {#how-your-markers-combine-with-venice’s}
 
-Il caching è **automatico**. Non servono parametri speciali. Basta assicurarti che i tuoi prompt superino ~1.024 token e usa `prompt_cache_key` per un routing coerente.
+- Una richiesta può avere al massimo quattro breakpoint di cache. Se ne invii di più, Venice mantiene gli ultimi quattro, che coprono i prefissi più lunghi.
+- Venice aggiunge i suoi marker automatici solo negli slot che lasci liberi e non ne aggiunge uno a un system prompt che hai già contrassegnato.
+- Venice mantiene `cache_control` sui blocchi di contenuto di sistema e utente, sui messaggi di tool (sul messaggio stesso o nel suo contenuto) e sui blocchi `tool_result` in stile Anthropic.
+- Claude accetta i valori di `ttl` `"5m"` (predefinito) e `"1h"`, e richiede che i blocchi di un'ora precedano quelli di cinque minuti, contando dal system prompt. I marker automatici di Venice seguono i tuoi TTL, e Venice rimuove i marker sui risultati di tool che violano una delle due regole. Se altri blocchi le violano, Claude rifiuta la richiesta.
 
-## Parametri della richiesta
+#### Durata della cache di un'ora {#one-hour-cache-lifetime}
+
+Per impostazione predefinita, le voci della cache di Claude durano cinque minuti. Per mantenere un blocco in cache per un'ora, imposta `ttl` su `"1h"` nel suo oggetto `cache_control`:
+
+```json
+{
+  "type": "text",
+  "text": "[Long contract document...]",
+  "cache_control": { "type": "ephemeral", "ttl": "1h" }
+}
+```
+
+`ttl` accetta `"5m"` (predefinito) o `"1h"`. Le scritture di un'ora sono fatturate al prezzo `cache_write_1h` del modello quando il suo listino lo prevede (Anthropic applica 2x il prezzo di input). La risposta le riporta in `prompt_tokens_details.cache_creation_1h_input_tokens`.
+
+### Qwen e Gemini 3.x {#qwen-and-gemini-3-x}
+
+Venice contrassegna la fine del system prompt e il messaggio che precede il tuo messaggio utente più recente, di solito la tua precedente risposta dell'assistente. Sui modelli Qwen ospitati da Alibaba, contrassegna il risultato di tool più recente nei loop di tool. I marker che aggiungi nel contenuto dei messaggi di sistema, utente o assistente vengono inoltrati; quelli sui messaggi di tool no.
+
+### Tutti gli altri modelli {#all-other-models}
+
+Il caching è **automatico** e non serve `cache_control`. I modelli GPT-5.6 e successivi di OpenAI inseriscono un proprio breakpoint alla fine dell'ultimo messaggio e mantengono le voci di cache per almeno 30 minuti. Mantieni i prompt sopra la [lunghezza minima](#meet-minimum-token-thresholds) e usa `prompt_cache_key` per un routing coerente.
+
+## Parametri della richiesta {#request-parameters}
 
 | Parametro | Tipo | Modelli | Descrizione |
 |-----------|------|--------|-------------|
-| `prompt_cache_key` | string | Tutti | Suggerimento di routing per affinità di cache. Le richieste con la stessa chiave hanno maggiori probabilità di colpire lo stesso server con cache calda. |
-| `cache_control` | object | Claude | Contrassegna i blocchi di contenuto per il caching. Vedi la sezione Claude Opus 4.5. |
+| `prompt_cache_key` | string | Tutti | Suggerimento di routing per affinità di cache. Venice mantiene le richieste con la stessa chiave sullo stesso provider e passa la chiave ai provider che la usano per il routing della cache. |
+| `prompt_cache_retention` | string | Modelli GPT precedenti | `"extended"` o `"24h"` mantiene i prefissi in cache fino a 24 ore sui modelli che supportano la conservazione estesa, come GPT-5.2, GPT-5.4 e GPT-5.5. |
+| `cache_control` | object | Claude | Contrassegna i blocchi di contenuto per il caching. Vedi [Claude](#claude-anthropic). |
 
-### prompt_cache_key
+### `prompt_cache_key` {#prompt_cache_key}
 
 Per conversazioni o workflow agentici, usa un `prompt_cache_key` coerente per migliorare i tassi di cache hit:
 
 ```json
 {
-  "model": "claude-opus-4-5",
+  "model": "claude-sonnet-5-5",
   "prompt_cache_key": "session-abc-123",
   "messages": [...]
 }
 ```
 
-Questo instrada le richieste verso server che probabilmente hanno già il tuo contesto in cache. Usa un ID di sessione, ID di conversazione o ID utente come chiave.
+Venice mantiene le richieste che condividono una chiave sullo stesso provider e passa la chiave ai provider che la usano per instradare verso una cache calda, come OpenAI. Se non ne invii una, Venice instrada in base al tuo primo messaggio utente e invia ai provider una chiave basata sul tuo account. Impostane quindi una tua quando esegui molte conversazioni in parallelo o riscrivi i messaggi precedenti tra un turno e l'altro. Usa un ID di sessione o un ID di conversazione come chiave.
 
-## Campi della risposta
+## Campi della risposta {#response-fields}
 
 L'oggetto `usage` della risposta include statistiche sulla cache:
 
@@ -156,8 +184,7 @@ L'oggetto `usage` della risposta include statistiche sulla cache:
     "completion_tokens": 200,
     "total_tokens": 5700,
     "prompt_tokens_details": {
-      "cached_tokens": 5000,
-      "cache_creation_input_tokens": 0
+      "cached_tokens": 5000
     }
   }
 }
@@ -165,18 +192,23 @@ L'oggetto `usage` della risposta include statistiche sulla cache:
 
 | Campo | Descrizione |
 |-------|-------------|
-| `prompt_tokens` | Totale dei token di input nella richiesta |
+| `prompt_tokens` | Totale dei token di input, inclusi quelli letti dalla cache e scritti in cache |
 | `prompt_tokens_details.cached_tokens` | Token serviti dalla cache (fatturati al prezzo scontato) |
-| `prompt_tokens_details.cache_creation_input_tokens` | Token scritti in cache (possono comportare un premio su Claude) |
+| `prompt_tokens_details.cache_creation_input_tokens` | Token scritti in cache, fatturati al prezzo di scrittura in cache del modello (più alto dell'input su Claude e su GPT-5.6 e successivi) |
+| `prompt_tokens_details.cache_write_tokens` | Stesso valore di `cache_creation_input_tokens`, con il nome di campo letto dai client compatibili con OpenRouter |
+| `prompt_tokens_details.cache_creation_5m_input_tokens` | Token di scrittura in cache memorizzati con TTL di cinque minuti. Presente quando il provider riporta le scritture per TTL. |
+| `prompt_tokens_details.cache_creation_1h_input_tokens` | Token di scrittura in cache memorizzati con TTL di un'ora (`"ttl": "1h"`). Presente quando il provider riporta le scritture per TTL. |
 
-**Dettaglio fatturazione** (usando Claude Opus 4.5 come esempio):
-- 5.000 token in cache × \$0,50/1M = \$0,0025
-- 500 token non in cache × \$5,00/1M = \$0,0025
-- Totale: \$0,005 (vs \$0,0275 senza caching, risparmio dell'82%)
+I campi di scrittura in cache compaiono solo quando la richiesta ha scritto in cache.
 
-## Best practice
+**Dettaglio fatturazione** (usando Claude Sonnet 5.5 come esempio):
+- 5.000 token in cache × \$0,10/1M = \$0,0005
+- 500 token non in cache × \$2,00/1M = \$0,001
+- Totale: \$0,0015 (vs \$0,011 senza caching, risparmio dell'86%)
 
-### Struttura i prompt per il caching
+## Best practice {#best-practices}
+
+### Struttura i prompt per il caching {#structure-prompts-for-caching}
 
 Metti il contenuto statico all'inizio, il contenuto dinamico alla fine.
 
@@ -197,7 +229,7 @@ Metti il contenuto statico all'inizio, il contenuto dinamico alla fine.
 | 2 | Istruzioni di sistema | No |
 | 3 | Query utente | No |
 
-### Mantieni i prefissi byte-identici
+### Mantieni i prefissi byte-identici {#keep-prefixes-byte-identical}
 
 Le chiavi di cache sono calcolate da sequenze di byte esatte. Anche differenze triviali interrompono i cache hit:
 
@@ -206,15 +238,15 @@ Le chiavi di cache sono calcolate da sequenze di byte esatte. Anche differenze t
 - Ordinamento randomizzato di esempi few-shot
 - Formattazione diversa dello stesso contenuto
 
-### Soddisfa le soglie minime di token
+### Soddisfa le soglie minime di token {#meet-minimum-token-thresholds}
 
-Se i tuoi prompt sono sotto il minimo (tipicamente 1.024 token), il caching non si attiverà. Per prompt piccoli, considera:
+Ogni modello ha una lunghezza minima del prefisso sotto la quale nulla viene memorizzato in cache, e non viene restituito alcun errore. Su Claude è di 512 token per Opus 5.5, Opus 5, Sonnet 5.5, Fable 5, Fable 5.1, Fable 5.2 e Haiku 5.5, 1.024 per Opus 4.8, Sonnet 5 e Sonnet 4.6, 2.048 per Opus 4.7 e 4.096 per Opus 4.6 e Opus 4.5. I modelli OpenAI richiedono 1.024 token, e gli altri provider in genere circa 1.024. Per prompt piccoli, considera:
 
 - Aggiungere più contesto o esempi per raggiungere la soglia
 - Raggruppare più piccole richieste in prompt in batch
 - Accettare che il caching non si applicherà per query semplici
 
-### Usa prompt_cache_key per le conversazioni
+### Usa `prompt_cache_key` per le conversazioni {#use-prompt_cache_key-for-conversations}
 
 Per conversazioni in corso, imposta un `prompt_cache_key` coerente:
 
@@ -231,7 +263,7 @@ Per conversazioni in corso, imposta un `prompt_cache_key` coerente:
 
 Questo migliora la probabilità che tutti i turni colpiscano lo stesso server con cache calda.
 
-### Monitora le prestazioni della cache
+### Monitora le prestazioni della cache {#monitor-cache-performance}
 
 Traccia queste metriche:
 - **Tasso di cache hit**: `cached_tokens / prompt_tokens`
@@ -244,18 +276,19 @@ Se `cached_tokens` è costantemente 0:
 3. Le richieste potrebbero colpire server diversi (usa `prompt_cache_key`)
 4. La cache potrebbe essere scaduta (richieste troppo poco frequenti)
 
-### Considera l'economia della cache
+### Considera l'economia della cache {#consider-cache-economics}
 
-**Premio di scrittura cache Claude Opus 4.5**: la prima richiesta costa il 25% in più, ma 90% di risparmio sulle letture successive.
+**Scritture in cache di Claude**: una scrittura di cinque minuti costa il 25% in più dell'input regolare, e una di un'ora costa il doppio. Le letture costano poi il 10% del prezzo di input o meno.
 
 | Scenario | Conviene il premio di scrittura cache? |
 |----------|-------------------------------|
-| 1 richiesta con questo prompt | No (paghi il 25% in più senza beneficio) |
-| 2+ richieste con lo stesso prefisso | Sì (pareggio alla seconda richiesta) |
+| 1 richiesta con questo prompt | No (paghi il premio di scrittura e non la leggi mai) |
+| 2+ richieste con lo stesso prefisso entro cinque minuti | Sì (una scrittura di cinque minuti si ripaga alla 2ª richiesta) |
+| Richieste con lo stesso prefisso distribuite nell'arco di un'ora | Usa `"ttl": "1h"` (una scrittura di un'ora si ripaga alla 3ª richiesta) |
 | Prompt che cambiano rapidamente | No (costi di scrittura costanti) |
 | System prompt stabile, molte query | Sì (ammortizzato su molte letture) |
 
-## Durata della cache
+## Durata della cache {#cache-lifetime}
 
 Le cache scadono dopo un periodo di inattività (tipicamente 5-10 minuti). Questo significa:
 
@@ -265,13 +298,15 @@ Le cache scadono dopo un periodo di inattività (tipicamente 5-10 minuti). Quest
 | Traffico a raffica (gap > 10 min) | Limitato: la cache scade tra le raffiche |
 | Richieste sporadiche (a ore di distanza) | Nessuno: la cache è sempre fredda |
 
-## Caching con tool e funzioni
+Con Claude puoi estendere una voce di cache a un'ora con una [durata della cache di un'ora](#one-hour-cache-lifetime). GPT-5.6 e successivi di OpenAI mantengono le voci per almeno 30 minuti. Sui modelli GPT precedenti che supportano la conservazione estesa, imposta `prompt_cache_retention` su `"24h"` per mantenere le voci fino a 24 ore.
+
+## Caching con tool e funzioni {#caching-with-tools-and-functions}
 
 Le definizioni delle funzioni possono essere memorizzate in cache insieme ai system prompt:
 
 ```json
 {
-  "model": "claude-opus-4-5",
+  "model": "claude-sonnet-5-5",
   "tools": [
     {
       "type": "function",
@@ -300,13 +335,35 @@ Le definizioni delle funzioni possono essere memorizzate in cache insieme ai sys
 
 Le definizioni dei tool diventano parte del prefisso in cache. Se hai molti tool, questo può ridurre significativamente i costi per richiesta.
 
-## Caching con immagini e documenti
+### Loop di tool {#tool-loops}
+
+In un loop agentico, ogni richiesta termina con i risultati delle chiamate di tool precedenti. Su Claude, e sui modelli Qwen ospitati da Alibaba, Venice inserisce il marker automatico sul risultato di tool più recente, così ogni round viene scritto in cache una volta e letto dal round successivo. Non servono marker tuoi.
+
+Per contrassegnare tu stesso un risultato di tool su Claude, imposta `cache_control` sul messaggio di tool o nel suo contenuto:
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "call_1",
+  "content": [
+    {
+      "type": "text",
+      "text": "[Large file contents...]",
+      "cache_control": { "type": "ephemeral" }
+    }
+  ]
+}
+```
+
+Anche i blocchi `tool_result` in stile Anthropic all'interno di un messaggio utente mantengono il loro `cache_control`.
+
+## Caching con immagini e documenti {#caching-with-images-and-documents}
 
 Per i modelli vision, le immagini possono essere incluse nel contenuto in cache:
 
 ```json
 {
-  "model": "claude-opus-4-5",
+  "model": "claude-sonnet-5-5",
   "messages": [
     {
       "role": "user",
@@ -336,13 +393,13 @@ Per i modelli vision, le immagini possono essere incluse nel contenuto in cache:
 
 L'immagine e il contesto iniziale sono memorizzati in cache, in modo che le domande di follow-up sulla stessa immagine non la rielaborino.
 
-## Risoluzione problemi
+## Risoluzione problemi {#troubleshooting}
 
 <Accordion title="cached_tokens è sempre 0">
 
 | Causa | Soluzione |
 |-------|----------|
-| Prompt troppo corto | Assicurati che il prompt superi ~1.024 token (4.000 per Claude) |
+| Prompt troppo corto | Rendi il prefisso in cache più lungo del [minimo](#meet-minimum-token-thresholds) del modello |
 | Prefisso cambiato | Controlla contenuti dinamici all'inizio del tuo prompt |
 | Prima richiesta | Atteso: la prima richiesta scrive in cache, le successive leggono |
 | Cache scaduta | Riduci il tempo tra le richieste a meno di 5 minuti |
@@ -355,8 +412,7 @@ L'immagine e il contesto iniziale sono memorizzati in cache, in modo che le doma
 | Causa | Soluzione |
 |-------|----------|
 | Prompt che cambia | Rimuovi timestamp, ID di richiesta o altri contenuti dinamici dal prefisso |
-| cache_control mancante | Per Claude, assicurati che il marker `cache_control` sia presente sui blocchi di contenuto |
-| Sotto soglia | I prompt sotto il conteggio minimo di token non attivano il caching |
+| Marker su contenuto che cambia | Metti il tuo `cache_control` sull'ultimo blocco che resta uguale tra le richieste, non su contenuto che cambia ogni volta |
 | Singolo messaggio utente | Atteso per il primo turno. La cache cresce con la cronologia della conversazione. |
 
 </Accordion>
@@ -365,7 +421,8 @@ L'immagine e il contesto iniziale sono memorizzati in cache, in modo che le doma
 
 | Causa | Soluzione |
 |-------|----------|
-| Premio di scrittura cache | Claude addebita il 25% in più per le scritture. Conviene solo se riutilizzi il prompt. |
+| Premio di scrittura cache | Claude addebita 1,25x l'input per le scritture di cinque minuti e 2x per quelle di un'ora, e GPT-5.6 e successivi addebitano 1,25x. Le scritture convengono solo se riutilizzi il prefisso. |
+| TTL di un'ora su prompt di breve durata | Usa il TTL predefinito di cinque minuti per i prefissi che riutilizzi entro pochi minuti; `"ttl": "1h"` costa il doppio del prezzo di input in scrittura |
 | Basso riutilizzo | Se ogni prompt è unico, paghi i costi di scrittura senza i benefici di lettura |
 | Cattiva struttura del prompt | Sposta i contenuti dinamici alla fine in modo che il prefisso rimanga stabile |
 

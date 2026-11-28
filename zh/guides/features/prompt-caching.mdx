@@ -5,11 +5,11 @@ description: "通过在请求之间缓存重复的 prompt 内容（如系统 pro
 "og:description": "Learn how to use prompt caching to reduce costs and latency for repeated content in your API requests."
 ---
 
-Prompt 缓存会存储已处理的输入 token，使后续具有相同前缀的请求可以复用它们，而无需重新处理。这降低了延迟（长 prompt 最高可降低 80%）和成本（缓存 token 最高可享 90% 折扣）。
+Prompt 缓存会存储已处理的输入 token，使后续具有相同前缀的请求可以复用它们，而无需重新处理。这可以降低长 prompt 的延迟并削减成本：缓存读取按输入价格的一小部分计费，通常为 10% 或更低。
 
 Venice 会为支持的模型自动处理缓存，但了解每个提供商如何实现缓存有助于您最大化缓存命中率并最小化成本。
 
-## 缓存的工作方式
+## 缓存的工作方式 {#how-caching-works}
 
 缓存基于**前缀匹配**：系统存储已处理的 token，并在后续请求以相同内容开头时复用它们。
 
@@ -43,36 +43,39 @@ Venice 会为支持的模型自动处理缓存，但了解每个提供商如何�
 缓存仅对**前缀**有效。prompt 开头的任何更改都会使其后所有内容的缓存失效。请始终将静态内容（系统 prompt、文档、示例）放在动态内容（用户消息）之前。
 </Warning>
 
-## 定价
+## 定价 {#pricing}
 
 大多数文本模型都支持缓存。每个模型的缓存读取和缓存写入价格均列在[文本模型](/zh/models/text)下的各模型页面中，也可以在[列出模型](/zh/api-reference/endpoint/models/list)响应的 `model_spec.pricing.cache_input` 和 `model_spec.pricing.cache_write` 中查看。
 
 <Note>
-包括 Claude 在内的部分模型对缓存写入收取的费用高于常规输入。首次填充缓存的请求成本更高，之后的缓存命中则按更便宜的缓存读取价格计费。
+包括 Claude 以及 GPT-5.6 及更高版本在内的部分模型，对缓存写入收取的费用高于常规输入。首次填充缓存的请求成本更高，之后的缓存命中则按更便宜的缓存读取价格计费。
 </Note>
 
-## 各提供商的特定行为
+对[一小时缓存写入](#one-hour-cache-lifetime)单独定价的模型还会列出 `model_spec.pricing.cache_write_1h`。在这些模型上，`cache_write` 对应五分钟写入，`cache_write_1h` 对应一小时写入。
 
-Venice 跨提供商统一缓存行为。对于大多数模型，缓存是自动的。只需发送请求并在响应中查看缓存统计信息。**Claude** 需要在协议层显式设置缓存标记，但 Venice 会自动为系统 prompt 和对话历史添加这些标记。
+## 各提供商的特定行为 {#provider-specific-behavior}
+
+Venice 跨提供商统一缓存行为。对于大多数模型，缓存是自动的。只需发送请求并在响应中查看缓存统计信息。少数提供商只缓存带有 `cache_control` 标记的内容，Venice 会为您添加这些标记。
 
 缓存行为最终由各提供商控制，可能会变化，因此请查阅提供商文档以获取最新细节。
 
-| 模型 | 提供商 | 最小 Tokens | 缓存生命周期 | 写入成本 | 读取折扣 | 显式标记 |
-|-------|----------|------------|----------------|------------|---------------|------------------|
-| Claude Opus 4.5 | Anthropic | ~4,000 | 5 分钟 | +25% | 90% | 必需 |
-| GPT-5.2 | OpenAI | 1,024 | 5-10 分钟 | 无 | 90% | 不需要 |
-| Gemini | Google | ~1,024 | 1 小时 | 无 | 75-90% | 不需要 |
-| Grok | xAI | ~1,024 | 5 分钟 | 无 | 75-88% | 不需要 |
-| DeepSeek | DeepSeek | ~1,024 | 5 分钟 | 无 | 50% | 不需要 |
-| MiniMax | MiniMax | ~1,024 | 5 分钟 | 无 | 90% | 不需要 |
-| Kimi | Moonshot | ~1,024 | 5 分钟 | 无 | 50% | 不需要 |
+| 模型 | 由谁放置缓存标记 | 缓存写入 |
+|--------|--------------------------|--------------|
+| Claude | Venice 自动放置。您也可以添加自己的标记。 | 五分钟写入为输入价格的 1.25 倍，一小时写入为 2 倍 |
+| Qwen 3.6 Plus、Qwen 3.7 Plus、Qwen 3.7 Max、Qwen 3.8 Max、Qwen 4 Max 和 Gemini 3.x | Venice 自动放置 | 按模型的 `cache_write` 价格计费（如有列出） |
+| GPT-5.6 及更高版本，包括 GPT-6 | OpenAI，放在最新消息末尾 | 输入价格的 1.25 倍。条目至少保留 30 分钟。 |
+| 更早的 GPT 模型 | 无需标记 | 不计费 |
+| 所有其他模型 | 无需标记。提供商自动缓存。 | 不计费，除非模型列出了 `cache_write` |
 
-### Claude Opus 4.5 (Anthropic)
+缓存读取价格因模型而异，从输入价格的百分之几到约一半不等。请查看您所用模型的 `model_spec.pricing.cache_input`。
+
+### Claude (Anthropic) {#claude-anthropic}
 
 Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 
-- **系统 prompt** 自动被缓存
-- **对话历史**通过在倒数第二条用户消息上放置断点进行缓存
+- **系统 prompt**：Venice 会标记系统 prompt 的末尾。开头的 `developer` 消息会作为系统 prompt 的一部分发送给 Claude，因此会与其一起被缓存。
+- **对话历史**：Venice 会标记您上一条助手回复，因此最新用户消息之前的所有内容都从缓存读取。
+- **工具循环**：当请求以工具结果结尾时，Venice 会改为标记最新的工具结果。每一轮写入缓存一次，并在下一轮被读取。
 
 这意味着您的对话历史从缓存中读取，只有最新一轮作为新输入被处理：
 
@@ -86,10 +89,9 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 
 - **每个请求最多 4 个断点**：系统使用最长的匹配前缀
 - **缓存键为字节精确**：空白字符变化、不同的图像编码或工具重排序都会破坏缓存命中
-- **缓存感知速率限制**：缓存的 token 不计入您的 ITPM 限制，可实现更高的有效吞吐量
-- **25% 写入溢价**：首个请求成本更高，但后续读取可节省 90%
+- **缓存写入比输入更贵**：五分钟写入为输入价格的 1.25 倍，一小时写入为 2 倍。在大多数 Claude 模型上，缓存读取为输入价格的 10%；在 Claude Opus 5.5 和 Sonnet 5.5 上为 5%；在 Claude Fable 5.1 和 5.2 上为 2.5%。
 
-#### 手动缓存控制
+#### 手动缓存控制 {#manual-cache-control}
 
 对于在首轮缓存大型文档等特殊情况，您可以添加显式断点：
 
@@ -120,32 +122,58 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 
 这确保系统 prompt 和文档从首次请求开始就被缓存。对于典型对话，您不需要手动标记。
 
-### 所有其他模型
+#### 您的标记如何与 Venice 的标记组合 {#how-your-markers-combine-with-venice’s}
 
-缓存是**自动的**。无需特殊参数。只需确保您的 prompt 超过约 1,024 个 token，并使用 `prompt_cache_key` 保持路由一致。
+- 每个请求最多可以有四个缓存断点。如果您发送的更多，Venice 会保留最后四个，它们覆盖最长的前缀。
+- Venice 只会在您留出的空位中添加自动标记，也不会为您已标记的系统 prompt 再添加标记。
+- Venice 会保留系统和用户内容块上、工具消息上（消息本身或其内容中）以及 Anthropic 风格 `tool_result` 块上的 `cache_control`。
+- Claude 接受 `ttl` 值 `"5m"`（默认）和 `"1h"`，并要求从系统 prompt 开始计算时，一小时的块必须位于五分钟的块之前。Venice 的自动标记会遵循您的 TTL，并且 Venice 会丢弃违反任一规则的工具结果上的标记。其他违反规则的块会导致 Claude 拒绝该请求。
 
-## 请求参数
+#### 一小时缓存有效期 {#one-hour-cache-lifetime}
+
+默认情况下，Claude 的缓存条目保留五分钟。要将某个块缓存一小时，请在其 `cache_control` 对象中将 `ttl` 设为 `"1h"`：
+
+```json
+{
+  "type": "text",
+  "text": "[Long contract document...]",
+  "cache_control": { "type": "ephemeral", "ttl": "1h" }
+}
+```
+
+`ttl` 接受 `"5m"`（默认）或 `"1h"`。当模型定价中列出 `cache_write_1h` 时，一小时写入按该价格计费（Anthropic 收取输入价格的 2 倍）。响应会在 `prompt_tokens_details.cache_creation_1h_input_tokens` 中报告这些写入。
+
+### Qwen 和 Gemini 3.x {#qwen-and-gemini-3-x}
+
+Venice 会标记系统 prompt 的末尾，以及最新用户消息之前的那条消息（通常是您上一条助手回复）。在由 Alibaba 托管的 Qwen 模型上，Venice 会在工具循环中标记最新的工具结果。您在系统、用户或助手消息内容中添加的标记会被透传；工具消息上的标记则不会。
+
+### 所有其他模型 {#all-other-models}
+
+缓存是**自动的**，您不需要 `cache_control`。OpenAI 的 GPT-5.6 及更高版本模型会在最新消息末尾放置自己的断点，并将缓存条目保留至少 30 分钟。请让 prompt 保持在[最小长度](#meet-minimum-token-thresholds)以上，并使用 `prompt_cache_key` 保持路由一致。
+
+## 请求参数 {#request-parameters}
 
 | 参数 | 类型 | 模型 | 说明 |
 |-----------|------|--------|-------------|
-| `prompt_cache_key` | string | 全部 | 缓存亲和性的路由提示。具有相同键的请求更有可能命中具有热缓存的相同服务器。 |
-| `cache_control` | object | Claude | 标记要缓存的内容块。请参阅 Claude Opus 4.5 部分。 |
+| `prompt_cache_key` | string | 全部 | 缓存亲和性的路由提示。Venice 会将具有相同键的请求保持在同一提供商上，并将该键传递给使用它进行缓存路由的提供商。 |
+| `prompt_cache_retention` | string | 更早的 GPT 模型 | `"extended"` 或 `"24h"` 可在支持扩展保留的模型（如 GPT-5.2、GPT-5.4 和 GPT-5.5）上将缓存前缀保留最多 24 小时。 |
+| `cache_control` | object | Claude | 标记要缓存的内容块。请参阅 [Claude](#claude-anthropic)。 |
 
-### prompt_cache_key
+### `prompt_cache_key` {#prompt_cache_key}
 
 对于对话或 agent 工作流，使用一致的 `prompt_cache_key` 来提高缓存命中率：
 
 ```json
 {
-  "model": "claude-opus-4-5",
+  "model": "claude-sonnet-5-5",
   "prompt_cache_key": "session-abc-123",
   "messages": [...]
 }
 ```
 
-这会将请求路由到可能已经缓存了您上下文的服务器。可使用 session ID、对话 ID 或用户 ID 作为键。
+Venice 会将共享同一键的请求保持在同一提供商上，并将该键传递给使用它路由到热缓存的提供商，例如 OpenAI。如果您不发送键，Venice 会根据您的第一条用户消息进行路由，并向提供商发送基于您账户的键。因此，当您并行运行大量对话或在轮次之间改写较早的消息时，请设置自己的键。可使用 session ID 或对话 ID 作为键。
 
-## 响应字段
+## 响应字段 {#response-fields}
 
 响应的 `usage` 对象包含缓存统计信息：
 
@@ -156,8 +184,7 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
     "completion_tokens": 200,
     "total_tokens": 5700,
     "prompt_tokens_details": {
-      "cached_tokens": 5000,
-      "cache_creation_input_tokens": 0
+      "cached_tokens": 5000
     }
   }
 }
@@ -165,18 +192,23 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 
 | 字段 | 说明 |
 |-------|-------------|
-| `prompt_tokens` | 请求中的输入 token 总数 |
+| `prompt_tokens` | 输入 token 总数，包括从缓存读取和写入缓存的 token |
 | `prompt_tokens_details.cached_tokens` | 从缓存提供的 token（按折扣费率计费） |
-| `prompt_tokens_details.cache_creation_input_tokens` | 写入缓存的 token（在 Claude 上可能产生溢价） |
+| `prompt_tokens_details.cache_creation_input_tokens` | 写入缓存的 token，按模型的缓存写入价格计费（在 Claude 以及 GPT-5.6 及更高版本上高于输入价格） |
+| `prompt_tokens_details.cache_write_tokens` | 与 `cache_creation_input_tokens` 的值相同，字段名为兼容 OpenRouter 的客户端所读取的名称 |
+| `prompt_tokens_details.cache_creation_5m_input_tokens` | 以五分钟 TTL 存储的缓存写入 token。当提供商按 TTL 报告写入时出现。 |
+| `prompt_tokens_details.cache_creation_1h_input_tokens` | 以一小时 TTL（`"ttl": "1h"`）存储的缓存写入 token。当提供商按 TTL 报告写入时出现。 |
 
-**计费明细**（以 Claude Opus 4.5 为例）：
-- 5000 个缓存 token × \$0.50/1M = \$0.0025
-- 500 个非缓存 token × \$5.00/1M = \$0.0025
-- 总计：\$0.005（相比无缓存时的 \$0.0275，节省 82%）
+仅当请求写入了缓存时，才会出现缓存写入字段。
 
-## 最佳实践
+**计费明细**（以 Claude Sonnet 5.5 为例）：
+- 5000 个缓存 token × \$0.10/1M = \$0.0005
+- 500 个非缓存 token × \$2.00/1M = \$0.001
+- 总计：\$0.0015（相比无缓存时的 \$0.011，节省 86%）
 
-### 为缓存构建 prompt 结构
+## 最佳实践 {#best-practices}
+
+### 为缓存构建 prompt 结构 {#structure-prompts-for-caching}
 
 将静态内容放在开头，动态内容放在结尾。
 
@@ -197,7 +229,7 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 | 2 | 系统指令 | 否 |
 | 3 | 用户查询 | 否 |
 
-### 保持前缀字节级一致
+### 保持前缀字节级一致 {#keep-prefixes-byte-identical}
 
 缓存键是从精确的字节序列计算的。即使是微小的差异也会破坏缓存命中：
 
@@ -206,15 +238,15 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 - 随机化的 few-shot 示例顺序
 - 相同内容的不同格式
 
-### 满足最小 token 阈值
+### 满足最小 token 阈值 {#meet-minimum-token-thresholds}
 
-如果您的 prompt 低于最小值（通常为 1,024 个 token），缓存不会激活。对于小型 prompt，可以考虑：
+每个模型都有一个最小前缀长度，低于该长度时不会缓存任何内容，也不会返回错误。在 Claude 上，Opus 5.5、Opus 5、Sonnet 5.5、Fable 5、Fable 5.1、Fable 5.2 和 Haiku 5.5 为 512 个 token；Opus 4.8、Sonnet 5 和 Sonnet 4.6 为 1,024；Opus 4.7 为 2,048；Opus 4.6 和 Opus 4.5 为 4,096。OpenAI 模型需要 1,024 个 token，其他提供商通常需要约 1,024 个。对于小型 prompt，可以考虑：
 
 - 添加更多上下文或示例以达到阈值
 - 将多个小请求合并为批量 prompt
 - 接受简单查询不会应用缓存的事实
 
-### 对对话使用 prompt_cache_key
+### 对对话使用 `prompt_cache_key` {#use-prompt_cache_key-for-conversations}
 
 对于持续对话，设置一致的 `prompt_cache_key`：
 
@@ -231,7 +263,7 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 
 这提高了所有轮次命中具有热缓存的相同服务器的可能性。
 
-### 监控缓存性能
+### 监控缓存性能 {#monitor-cache-performance}
 
 跟踪以下指标：
 - **缓存命中率**：`cached_tokens / prompt_tokens`
@@ -244,18 +276,19 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 3. 请求可能命中不同服务器（使用 `prompt_cache_key`）
 4. 缓存可能已过期（请求过于稀疏）
 
-### 考虑缓存经济性
+### 考虑缓存经济性 {#consider-cache-economics}
 
-**Claude Opus 4.5 缓存写入溢价**：首个请求成本多 25%，但后续读取节省 90%。
+**Claude 缓存写入**：五分钟写入比常规输入贵 25%，一小时写入则为两倍。之后的读取费用为输入价格的 10% 或更低。
 
 | 场景 | 缓存写入溢价是否值得？ |
 |----------|-------------------------------|
-| 此 prompt 只有 1 个请求 | 否（多付 25%，无收益） |
-| 2 个及以上请求使用相同前缀 | 是（在第 2 个请求时收支平衡） |
+| 此 prompt 只有 1 个请求 | 否（支付了写入溢价却从未读取） |
+| 五分钟内 2 个及以上请求使用相同前缀 | 是（五分钟写入在第 2 个请求时回本） |
+| 相同前缀的请求分散在一小时内 | 使用 `"ttl": "1h"`（一小时写入在第 3 个请求时回本） |
 | 快速变化的 prompt | 否（持续的写入成本） |
 | 稳定的系统 prompt、大量查询 | 是（分摊到多次读取上） |
 
-## 缓存生命周期
+## 缓存生命周期 {#cache-lifetime}
 
 缓存在一段不活动时间后过期（通常为 5-10 分钟）。这意味着：
 
@@ -265,13 +298,15 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 | 突发流量（间隔 > 10 分钟） | 有限：缓存在突发之间过期 |
 | 稀疏请求（数小时间隔） | 无：缓存始终冷 |
 
-## 在工具和函数中使用缓存
+对于 Claude，你可以通过[一小时缓存有效期](#one-hour-cache-lifetime)将缓存条目延长至一小时。OpenAI 的 GPT-5.6 及更高版本会将条目保留至少 30 分钟。在支持扩展保留的更早 GPT 模型上，将 `prompt_cache_retention` 设为 `"24h"` 可将条目保留最多 24 小时。
+
+## 在工具和函数中使用缓存 {#caching-with-tools-and-functions}
 
 函数定义可以与系统 prompt 一起被缓存：
 
 ```json
 {
-  "model": "claude-opus-4-5",
+  "model": "claude-sonnet-5-5",
   "tools": [
     {
       "type": "function",
@@ -300,13 +335,35 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 
 工具定义会成为缓存前缀的一部分。如果您有许多工具，这可以显著降低每个请求的成本。
 
-## 在图像和文档中使用缓存
+### 工具循环 {#tool-loops}
+
+在智能体循环中，每个请求都以之前工具调用的结果结尾。在 Claude 以及由 Alibaba 托管的 Qwen 模型上，Venice 会把自动标记放在最新的工具结果上，因此每一轮写入缓存一次，并由下一轮读取。您不需要自己的标记。
+
+要在 Claude 上自行标记工具结果，请在工具消息上或其内容中设置 `cache_control`：
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "call_1",
+  "content": [
+    {
+      "type": "text",
+      "text": "[Large file contents...]",
+      "cache_control": { "type": "ephemeral" }
+    }
+  ]
+}
+```
+
+用户消息中的 Anthropic 风格 `tool_result` 块也会保留其 `cache_control`。
+
+## 在图像和文档中使用缓存 {#caching-with-images-and-documents}
 
 对于视觉模型，图像可以包含在缓存内容中：
 
 ```json
 {
-  "model": "claude-opus-4-5",
+  "model": "claude-sonnet-5-5",
   "messages": [
     {
       "role": "user",
@@ -336,13 +393,13 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 
 图像和初始上下文被缓存，因此关于同一图像的后续问题不会重新处理它。
 
-## 故障排查
+## 故障排查 {#troubleshooting}
 
 <Accordion title="cached_tokens 始终为 0">
 
 | 原因 | 解决方案 |
 |-------|----------|
-| Prompt 过短 | 确保 prompt 超过约 1,024 个 token（Claude 为 4,000） |
+| Prompt 过短 | 让缓存前缀长于模型的[最小值](#meet-minimum-token-thresholds) |
 | 前缀已更改 | 检查 prompt 开头是否有动态内容 |
 | 首次请求 | 预期行为：首个请求写入缓存，后续请求读取 |
 | 缓存已过期 | 将请求间隔缩短至 5 分钟以内 |
@@ -355,8 +412,7 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 | 原因 | 解决方案 |
 |-------|----------|
 | Prompt 正在变化 | 从前缀中移除时间戳、请求 ID 或其他动态内容 |
-| 缺少 cache_control | 对于 Claude，确保内容块上存在 `cache_control` 标记 |
-| 低于阈值 | 低于最小 token 数的 prompt 不会触发缓存 |
+| 标记放在变化的内容上 | 将您自己的 `cache_control` 放在各请求间保持不变的最后一个块上，而不是每次都变化的内容上 |
 | 单条用户消息 | 首轮预期。缓存会随对话历史增长。 |
 
 </Accordion>
@@ -365,7 +421,8 @@ Claude 要求在协议层显式设置缓存断点。Venice 会自动处理：
 
 | 原因 | 解决方案 |
 |-------|----------|
-| 缓存写入溢价 | Claude 对写入收取 25% 更多。仅当您复用 prompt 时才值得。 |
+| 缓存写入溢价 | Claude 对五分钟写入收取输入价格的 1.25 倍，对一小时写入收取 2 倍，GPT-5.6 及更高版本收取 1.25 倍。只有复用前缀时写入才划算。 |
+| 短期 prompt 使用一小时 TTL | 对于几分钟内复用的前缀，请使用默认的五分钟 TTL；`"ttl": "1h"` 的写入成本是输入价格的两倍 |
 | 低复用率 | 如果每个 prompt 都是独一无二的，您将支付写入成本而无读取收益 |
 | 糟糕的 prompt 结构 | 将动态内容移至末尾，使前缀保持稳定 |
 

@@ -67,6 +67,21 @@ Les requêtes à l'API Venice sont authentifiées avec des clés API Bearer. Ce 
   Désactiver les dépenses en USD lors de la création d'une clé API dans l'application Venice fixe votre limite de dépense en USD à zéro pour cette clé API. Les appels à l'API peuvent échouer avec une erreur de solde insuffisant lorsque votre DIEM disponible ou vos crédits groupés ne peuvent pas couvrir la requête, même si votre compte dispose d'un solde en USD.
 </Warning>
 
+## Format de la clé {#key-format}
+
+Les nouvelles clés commencent par un préfixe de type suivi de 42 caractères compatibles URL :
+
+| Préfixe | Type de clé |
+| --- | --- |
+| `VENICE_INFERENCE_KEY_` | Inference Only |
+| `VENICE_ADMIN_KEY_` | Admin |
+
+Les clés plus anciennes continuent de fonctionner telles qu'elles ont été émises : certaines utilisent des tirets dans le préfixe (`VENICE-INFERENCE-KEY-`, `VENICE-ADMIN-KEY-`), et les plus anciennes n'ont pas de préfixe.
+
+Utilisez la clé exactement telle qu'elle a été émise. L'API vérifie la chaîne entière : une clé qu'un outil a mise en minuscules, re-ponctuée, privée de son préfixe ou dotée d'un autre préfixe échoue avec `401` et `Authentication failed`. Certaines pages communautaires affirment que les clés Venice commencent par `vapi_`. Ce n'est pas le cas, et ajouter `vapi_` à une clé la rend inutilisable.
+
+Le préfixe identifie le type de clé. Une clé Admin fonctionne aussi sur les endpoints de modèles, car c'est le type le plus large. Une clé Inference Only sur un endpoint d'administration, par exemple pour lister ou créer des clés ou lire le solde, échoue avec `401` et `Admin API key required`. `GET /api_keys/rate_limits` accepte les deux types.
+
 ## Résolution des erreurs de limite de dépense {#troubleshooting-spend-limit-errors}
 
 Les limites de dépense par clé sont distinctes du solde de votre compte. Une clé peut être empêchée de dépenser même lorsque votre compte dispose encore de crédits USD financés, de DIEM ou de crédits groupés. Si une requête renvoie une erreur 402 avec l'un de ces codes, la cause est la limite propre à la clé plutôt que le solde du compte :
@@ -88,6 +103,131 @@ Consultez [Codes d'erreur](/api-reference/error-codes) pour la liste complète d
 * Ne committez jamais de clés API dans un système de gestion de versions et ne les exposez jamais dans du code côté client.
 * Définissez des dates d'expiration et des limites de consommation pour les clés utilisées dans des environnements temporaires, partagés ou à plus haut risque.
 * Supprimez les clés inutilisées et faites tourner toute clé susceptible d'avoir été exposée.
+
+## Appels depuis un navigateur {#calling-from-a-browser}
+
+L'API envoie `access-control-allow-origin: *`, un navigateur peut donc l'appeler directement. Mais la clé se retrouve alors dans votre bundle et devient publique. Placez un petit proxy devant et gardez la clé côté serveur.
+
+Un proxy seul ne suffit pas. `access-control-allow-origin` n'authentifie rien : `curl` et les autres serveurs ignorent complètement CORS, et le nom d'hôte du Worker est public. Un proxy qui se contente d'injecter la clé est un robinet ouvert sur votre solde. L'appelant doit lui aussi prouver son identité.
+
+Il existe deux niveaux, et il importe de savoir lequel vous construisez :
+
+- **Un secret partagé** protège les dépenses. Chaque visiteur détient la même valeur : il empêche donc l'utilisation anonyme de votre Worker, mais pas qu'un visiteur le transmette à d'autres. Convient à un prototype.
+- **Un jeton par utilisateur** identifie l'appelant. Le navigateur s'authentifie auprès de votre propre backend, qui émet un jeton de courte durée, et le Worker le valide. C'est l'architecture de production.
+
+Les deux exemples ci-dessous gardent la clé Venice côté serveur. Une troisième règle s'applique aux deux : **utilisez une clé inference-only**, car une clé admin acheminée par un proxy public peut appeler `POST /api_keys` et lire le nouveau secret directement dans la réponse relayée.
+
+### Niveau 1 : un secret partagé {#level-1-a-shared-secret}
+
+Le Worker détient la clé Venice et un secret, et rejette tout ce qui ne comporte pas le secret. Gardez le secret hors du navigateur : faites en sorte que votre backend l'ajoute lorsqu'il appelle le Worker, afin que le navigateur ne communique qu'avec votre backend.
+
+```js index.js
+// Only the paths you need. Add deliberately: an inference key still reads
+// balances through GET /api_keys/rate_limits.
+const ALLOWED = new Set(['/chat/completions', '/image/generate']);
+
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: cors() });
+    }
+    if (!ALLOWED.has(new URL(request.url).pathname)) {
+      return json(404, { error: 'Not found' });
+    }
+    if (request.method !== 'POST') {
+      return json(405, { error: 'Method not allowed' });
+    }
+    if (request.headers.get('x-proxy-key') !== env.PROXY_SECRET) {
+      return json(401, { error: 'Proxy secret required' });
+    }
+    return forward(request, env);
+  },
+};
+
+async function forward(request, env) {
+  const path = new URL(request.url).pathname;
+  const upstream = await fetch(`${env.VENICE_BASE_URL}/api/v1${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${env.VENICE_API_KEY}` },
+    body: await request.text(),
+  });
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: { ...cors(), 'content-type': upstream.headers.get('content-type') ?? 'application/json' },
+  });
+}
+
+const cors = () => ({
+  'access-control-allow-origin': 'https://your-site.example',
+  'access-control-allow-headers': 'content-type,x-proxy-key',
+  'access-control-allow-methods': 'POST,OPTIONS',
+});
+
+const json = (status, body) =>
+  new Response(JSON.stringify(body), { status, headers: { ...cors(), 'content-type': 'application/json' } });
+```
+
+```bash Deploy
+npx wrangler deploy index.js --name venice-proxy
+npx wrangler secret put VENICE_API_KEY      # an inference-only key
+npx wrangler secret put PROXY_SECRET        # any long random value
+npx wrangler secret put VENICE_BASE_URL     # https://api.venice.ai
+```
+
+Appelez-le depuis votre backend, où le secret reste :
+
+```js Server
+await fetch('https://venice-proxy.<account>.workers.dev/chat/completions', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-proxy-key': process.env.PROXY_SECRET },
+  body: JSON.stringify({ model: 'venice-uncensored-1-2', messages: [{ role: 'user', content: 'Hi' }] }),
+});
+```
+
+Les chemins sont ajoutés directement, donc `/chat/completions` atteint `/api/v1/chat/completions` en amont. N'incluez pas `/v1` dans l'URL de base des clients OpenAI que vous faites pointer ici.
+
+Un secret partagé reste un identifiant partagé : limitez le débit de la route avec les règles de rate limiting de Cloudflare avant qu'elle ne reçoive du trafic public.
+
+### Niveau 2 : un jeton par utilisateur {#level-2-a-per-user-token}
+
+Lorsque le navigateur doit appeler le Worker directement, placez votre propre authentification devant. Votre backend vérifie la session dont il dispose déjà et signe un jeton de courte durée, et le Worker vérifie ce jeton au lieu d'une valeur partagée. Il réutilise `ALLOWED`, `forward`, `cors` et `json` du Worker de niveau 1 :
+
+```js index.js
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: cors() });
+    }
+    if (!ALLOWED.has(new URL(request.url).pathname) || request.method !== 'POST') {
+      return json(404, { error: 'Not found' });
+    }
+    if (!(await validToken(request.headers.get('authorization')?.replace(/^Bearer /, ''), env))) {
+      return json(401, { error: 'Token required' });
+    }
+    return forward(request, env);
+  },
+};
+
+// Verify a token issued by your backend: its signature, expiry and subject.
+// Any HMAC over `sub.exp` works; this is the shape, not a full implementation.
+async function validToken(token, env) {
+  if (!token) return false;
+  // The payload itself contains a dot, so split on the last one only.
+  const cut = token.lastIndexOf('.');
+  if (cut < 1) return false;
+  const payload = token.slice(0, cut);
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(env.PROXY_SIGNING_KEY),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'],
+  );
+  const ok = await crypto.subtle.verify('HMAC', key, hexToBytes(token.slice(cut + 1)), new TextEncoder().encode(payload));
+  return ok && Number(payload.slice(payload.lastIndexOf('.') + 1)) > Date.now();
+}
+
+const hexToBytes = (hex) => new Uint8Array(hex.match(/../g).map((b) => parseInt(b, 16)));
+```
+
+Émettez le jeton sur le backend après votre propre vérification de session, afin que le Worker ne conserve jamais d'état utilisateur. Vous obtenez ainsi des limites de débit par utilisateur, la révocation et une facturation attribuable.
 
 ## Gestion programmatique des clés {#programmatic-key-management}
 

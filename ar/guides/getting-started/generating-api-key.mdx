@@ -67,6 +67,21 @@ description: "دليل خطوة بخطوة لإنشاء مفتاح Venice API م
   تعطيل الإنفاق بالدولار الأمريكي (USD) أثناء إنشاء مفتاح API في تطبيق Venice يضبط حد الإنفاق بالدولار الأمريكي على صفر لمفتاح API المحدد. قد تفشل استدعاءات API مع خطأ رصيد غير كافٍ عندما لا يستطيع رصيدك المتاح من DIEM أو الأرصدة المجمّعة تغطية الطلب، حتى لو كان لدى حسابك رصيد بالدولار الأمريكي.
 </Warning>
 
+## تنسيق المفتاح {#key-format}
+
+تبدأ المفاتيح الجديدة ببادئة تحدد النوع، تليها 42 حرفاً آمناً للاستخدام في عناوين URL:
+
+| البادئة | نوع المفتاح |
+| --- | --- |
+| `VENICE_INFERENCE_KEY_` | Inference Only |
+| `VENICE_ADMIN_KEY_` | Admin |
+
+تظل المفاتيح الأقدم تعمل كما صدرت: يستخدم بعضها الشرطات في البادئة (`VENICE-INFERENCE-KEY-`، `VENICE-ADMIN-KEY-`)، وأقدمها بلا بادئة.
+
+استخدم المفتاح تماماً كما صدر. تتحقق API من السلسلة كاملة، لذا فإن المفتاح الذي حوّلته أداة إلى أحرف صغيرة، أو غيّرت علامات الترقيم فيه، أو أزالت بادئته، أو أعطته بادئة مختلفة، يفشل مع `401` و`Authentication failed`. تذكر بعض صفحات المجتمع أن مفاتيح Venice تبدأ بـ `vapi_`. هذا غير صحيح، وإضافة `vapi_` إلى المفتاح تعطّله.
+
+تحدد البادئة نوع المفتاح. يعمل مفتاح Admin أيضاً على نقاط نهاية النماذج لأنه النوع الأوسع. أما مفتاح Inference Only على نقطة نهاية إدارية، مثل سرد المفاتيح أو إنشائها أو قراءة الرصيد، فيفشل مع `401` و`Admin API key required`. تقبل `GET /api_keys/rate_limits` أياً من النوعين.
+
 ## استكشاف أخطاء حدود الإنفاق وإصلاحها {#troubleshooting-spend-limit-errors}
 
 حدود الإنفاق لكل مفتاح مستقلة عن رصيد حسابك. يمكن حظر مفتاح من الإنفاق حتى عندما يظل حسابك يمتلك رصيداً ممولاً بالدولار الأمريكي (USD) أو DIEM أو أرصدة مجمّعة. إذا أرجع طلب ما رمز الحالة 402 مع أحد الرموز التالية، فإن السبب هو الحد الخاص بالمفتاح نفسه وليس رصيد حسابك:
@@ -88,6 +103,131 @@ description: "دليل خطوة بخطوة لإنشاء مفتاح Venice API م
 * لا ترفع مفاتيح API أبداً إلى نظام التحكم في الإصدارات ولا تكشفها في الكود الذي يعمل على جانب العميل.
 * حدّد تواريخ انتهاء صلاحية وحدود استهلاك للمفاتيح المستخدمة في البيئات المؤقتة أو المشتركة أو الأعلى مخاطرة.
 * احذف المفاتيح غير المستخدمة، وقم بتدوير أي مفتاح قد يكون تعرّض للكشف.
+
+## الاستدعاء من المتصفح {#calling-from-a-browser}
+
+ترسل API الترويسة `access-control-allow-origin: *`، لذا يمكن للمتصفح استدعاؤها مباشرة. لكن المفتاح سيكون حينها داخل حزمة تطبيقك ويصبح علنياً. ضع وكيلاً (proxy) صغيراً أمامها واحتفظ بالمفتاح على الخادم.
+
+الوكيل وحده لا يكفي. لا تقوم `access-control-allow-origin` بأي مصادقة: يتجاهل `curl` والخوادم الأخرى CORS تماماً، واسم مضيف Worker علني. الوكيل الذي يكتفي بحقن المفتاح هو صنبور مفتوح على رصيدك. يجب على المستدعي أيضاً إثبات هويته.
+
+هناك مستويان، ومن المهم معرفة أيهما تبني:
+
+- **السر المشترك** يضبط الإنفاق. يحمل كل زائر القيمة نفسها، لذا يمنع الاستخدام المجهول لـ Worker الخاص بك لكنه لا يمنع زائراً من تمريره إلى غيره. مناسب للنماذج الأولية.
+- **الرمز المميز لكل مستخدم** يحدد هوية المستدعي. يصادق المتصفح لدى الواجهة الخلفية الخاصة بك، التي تصدر رمزاً قصير العمر، ويتحقق Worker منه. هذا هو الشكل المناسب للإنتاج.
+
+يحتفظ المثالان أدناه بمفتاح Venice على الخادم. وتنطبق قاعدة ثالثة على كليهما: **استخدم مفتاح inference-only**، لأن مفتاح admin الذي يمر عبر وكيل عام يمكنه استدعاء `POST /api_keys` وقراءة السر الجديد مباشرة من الاستجابة الممرَّرة.
+
+### المستوى 1: سر مشترك {#level-1-a-shared-secret}
+
+يحتفظ Worker بمفتاح Venice وبسر، ويرفض أي طلب لا يحمل السر. أبقِ السر بعيداً عن المتصفح: اجعل واجهتك الخلفية تضيفه عند استدعاء Worker، بحيث لا يتواصل المتصفح إلا مع واجهتك الخلفية.
+
+```js index.js
+// Only the paths you need. Add deliberately: an inference key still reads
+// balances through GET /api_keys/rate_limits.
+const ALLOWED = new Set(['/chat/completions', '/image/generate']);
+
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: cors() });
+    }
+    if (!ALLOWED.has(new URL(request.url).pathname)) {
+      return json(404, { error: 'Not found' });
+    }
+    if (request.method !== 'POST') {
+      return json(405, { error: 'Method not allowed' });
+    }
+    if (request.headers.get('x-proxy-key') !== env.PROXY_SECRET) {
+      return json(401, { error: 'Proxy secret required' });
+    }
+    return forward(request, env);
+  },
+};
+
+async function forward(request, env) {
+  const path = new URL(request.url).pathname;
+  const upstream = await fetch(`${env.VENICE_BASE_URL}/api/v1${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${env.VENICE_API_KEY}` },
+    body: await request.text(),
+  });
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: { ...cors(), 'content-type': upstream.headers.get('content-type') ?? 'application/json' },
+  });
+}
+
+const cors = () => ({
+  'access-control-allow-origin': 'https://your-site.example',
+  'access-control-allow-headers': 'content-type,x-proxy-key',
+  'access-control-allow-methods': 'POST,OPTIONS',
+});
+
+const json = (status, body) =>
+  new Response(JSON.stringify(body), { status, headers: { ...cors(), 'content-type': 'application/json' } });
+```
+
+```bash Deploy
+npx wrangler deploy index.js --name venice-proxy
+npx wrangler secret put VENICE_API_KEY      # an inference-only key
+npx wrangler secret put PROXY_SECRET        # any long random value
+npx wrangler secret put VENICE_BASE_URL     # https://api.venice.ai
+```
+
+استدعِه من واجهتك الخلفية، حيث يبقى السر:
+
+```js Server
+await fetch('https://venice-proxy.<account>.workers.dev/chat/completions', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-proxy-key': process.env.PROXY_SECRET },
+  body: JSON.stringify({ model: 'venice-uncensored-1-2', messages: [{ role: 'user', content: 'Hi' }] }),
+});
+```
+
+تُلحق المسارات مباشرة، لذا يصل `/chat/completions` إلى `/api/v1/chat/completions` في الخادم الأصلي. لا تضمّن `/v1` في عنوان URL الأساسي لأي عميل OpenAI توجّهه إلى هنا.
+
+يظل السر المشترك بيانات اعتماد مشتركة: قيّد معدل الطلبات على المسار باستخدام قواعد تحديد المعدل في Cloudflare قبل أن يستقبل حركة مرور عامة.
+
+### المستوى 2: رمز مميز لكل مستخدم {#level-2-a-per-user-token}
+
+عندما يجب على المتصفح استدعاء Worker مباشرة، ضع المصادقة الخاصة بك أمامه. تتحقق واجهتك الخلفية من الجلسة الموجودة لديها وتوقّع رمزاً قصير العمر، ويتحقق Worker من هذا الرمز بدلاً من قيمة مشتركة. ويعيد استخدام `ALLOWED` و`forward` و`cors` و`json` من Worker المستوى 1:
+
+```js index.js
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: cors() });
+    }
+    if (!ALLOWED.has(new URL(request.url).pathname) || request.method !== 'POST') {
+      return json(404, { error: 'Not found' });
+    }
+    if (!(await validToken(request.headers.get('authorization')?.replace(/^Bearer /, ''), env))) {
+      return json(401, { error: 'Token required' });
+    }
+    return forward(request, env);
+  },
+};
+
+// Verify a token issued by your backend: its signature, expiry and subject.
+// Any HMAC over `sub.exp` works; this is the shape, not a full implementation.
+async function validToken(token, env) {
+  if (!token) return false;
+  // The payload itself contains a dot, so split on the last one only.
+  const cut = token.lastIndexOf('.');
+  if (cut < 1) return false;
+  const payload = token.slice(0, cut);
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(env.PROXY_SIGNING_KEY),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'],
+  );
+  const ok = await crypto.subtle.verify('HMAC', key, hexToBytes(token.slice(cut + 1)), new TextEncoder().encode(payload));
+  return ok && Number(payload.slice(payload.lastIndexOf('.') + 1)) > Date.now();
+}
+
+const hexToBytes = (hex) => new Uint8Array(hex.match(/../g).map((b) => parseInt(b, 16)));
+```
+
+أصدر الرمز في الواجهة الخلفية بعد التحقق من الجلسة بنفسك، حتى لا يحتفظ Worker أبداً بحالة المستخدم. يمنحك ذلك حدوداً للمعدل لكل مستخدم، وإمكانية الإلغاء، وفاتورة يمكن نسبتها إلى صاحبها.
 
 ## الإدارة البرمجية للمفاتيح {#programmatic-key-management}
 
