@@ -137,23 +137,22 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | Kimi K3.1 Pro Highspeed | `kimi-k3-1-pro-highspeed` | $5.00 | $25.00 | $0.375 | — | Anonymized |
 | Llama 3.2 3B | `llama-3.2-3b` | $0.15 | $0.60 | — | — | Private |
 | Llama 3.3 70B | `llama-3.3-70b` | $0.70 | $2.80 | — | — | Private |
-| MiMo-V2.5 | `xiaomi-mimo-v2-5` | $0.40 | $2.00 | $0.08 | — | Private |
+| MiMo-V2.5 (Retiring) | `xiaomi-mimo-v2-5` | $0.40 | $2.00 | $0.08 | — | Private |
 | MiMo-V2.6-Flash | `xiaomi-mimo-v2-6-flash` | $0.14 | $0.28 | $0.0028 | — | Private |
-| MiniMax M2.5 | `minimax-m25` | $0.27 | $0.95 | $0.03 | — | Private |
-| MiniMax M2.7 | `minimax-m27` | $0.375 | $1.50 | $0.06875 | — | Private |
+| MiniMax M2.5 (Retiring) | `minimax-m25` | $0.27 | $0.95 | $0.03 | — | Private |
+| MiniMax M2.7 (Retiring) | `minimax-m27` | $0.375 | $1.50 | $0.06875 | — | Private |
 | MiniMax M3 Preview | `minimax-m3-preview` | $0.30 | $1.20 | $0.06 | — | Private |
 | MiniMax M3.1 Flash | `minimax-m3-1-flash` | $0.1875 | $0.75 | $0.01875 | — | Private |
 | Mistral Small 3.2 24B Instruct | `mistral-small-3-2-24b-instruct` | $0.075 | $0.20 | — | — | Private |
 | Muse Spark Open | `muse-spark-open` | $1.5625 | $5.3125 | $0.1875 | — | Private |
 | Muse Wonder | `muse-wonder` | $5.00 | $25.00 | $0.25 | — | Anonymized |
-| NVIDIA Nemotron 3 Nano 30B | `nvidia-nemotron-3-nano-30b-a3b` | $0.075 | $0.30 | — | — | Private |
+| NVIDIA Nemotron 3 Nano 30B (Retiring) | `nvidia-nemotron-3-nano-30b-a3b` | $0.075 | $0.30 | — | — | Private |
 | NVIDIA Nemotron 3 Ultra | `nvidia-nemotron-3-ultra-550b-a55b` | $0.50 | $2.20 | $0.10 | — | Private |
 | NVIDIA Nemotron 3.5 Super VL 120B | `nvidia-nemotron-3-5-super-vl-120b-a12b` | $0.20 | $0.50 | $0.04 | — | Private |
 | OpenAI GPT OSS 120B | `openai-gpt-oss-120b` | $0.07 | $0.30 | — | — | Private |
-| Pareto (Beta) (Retiring) | `pareto` | $1.00 | $4.00 | $0.0375 | — | Anonymized |
 | Qwen 2.5 7B | `e2ee-qwen-2-5-7b-p` | $0.05 | $0.13 | — | — | E2EE |
 | Qwen 3 235B A22B Instruct 2507 | `qwen3-235b-a22b-instruct-2507` | $0.15 | $0.75 | — | — | Private |
-| Qwen 3 235B A22B Thinking 2507 | `qwen3-235b-a22b-thinking-2507` | $0.45 | $3.50 | — | — | Private |
+| Qwen 3 235B A22B Thinking 2507 (Retiring) | `qwen3-235b-a22b-thinking-2507` | $0.45 | $3.50 | — | — | Private |
 | Qwen 3 Coder 480B Turbo | `qwen3-coder-480b-a35b-instruct-turbo` | $0.35 | $1.50 | $0.04 | — | Private |
 | Qwen 3 Next 80b | `qwen3-next-80b` | $0.35 | $1.90 | — | — | Private |
 | Qwen 3.5 35B A3B | `qwen3-5-35b-a3b` | $0.15 | $1.00 | $0.05 | — | Private |
