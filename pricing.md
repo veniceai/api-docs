@@ -150,7 +150,6 @@ Prices per 1M tokens. Privacy is the model's [privacy tier](/overview/privacy).
 | NVIDIA Nemotron 3 Ultra | `nvidia-nemotron-3-ultra-550b-a55b` | $0.50 | $2.20 | $0.10 | — | Private |
 | NVIDIA Nemotron 3.5 Super VL 120B | `nvidia-nemotron-3-5-super-vl-120b-a12b` | $0.20 | $0.50 | $0.04 | — | Private |
 | OpenAI GPT OSS 120B | `openai-gpt-oss-120b` | $0.07 | $0.30 | — | — | Private |
-| Pareto (Beta) (Retiring) | `pareto` | $1.00 | $4.00 | $0.0375 | — | Anonymized |
 | Qwen 2.5 7B | `e2ee-qwen-2-5-7b-p` | $0.05 | $0.13 | — | — | E2EE |
 | Qwen 3 235B A22B Instruct 2507 | `qwen3-235b-a22b-instruct-2507` | $0.15 | $0.75 | — | — | Private |
 | Qwen 3 235B A22B Thinking 2507 | `qwen3-235b-a22b-thinking-2507` | $0.45 | $3.50 | — | — | Private |
